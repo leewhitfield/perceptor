@@ -1,0 +1,38 @@
+usn_filters:
+  include:
+    - name: user_profile_path
+      path_contains: "\\Users\\"
+    - name: desktop_path
+      path_contains: "\\Desktop"
+    - name: downloads_path
+      path_contains: "\\Downloads"
+    - name: documents_path
+      path_contains: "\\Documents"
+    - name: common_document_extension
+      extensions: [doc, docx, xls, xlsx, ppt, pptx, pdf, txt, rtf, csv]
+    - name: picture_extension
+      extensions: [jpg, jpeg, png, gif, bmp, heic]
+    - name: archive_extension
+      extensions: [zip, rar, 7z]
+    - name: executable_or_script_extension
+      extensions: [exe, dll, ps1, bat, cmd, vbs, js, lnk]
+    - name: rename_event
+      reason_contains: Rename
+    - name: delete_event
+      reason_contains: Delete
+
+  suppress:
+    - name: browser_cache_chrome
+      path_contains: "\\AppData\\Local\\Google\\Chrome\\User Data"
+    - name: browser_cache_edge
+      path_contains: "\\AppData\\Local\\Microsoft\\Edge\\User Data"
+    - name: teams_service_worker_cache
+      path_contains: "\\AppData\\Roaming\\Microsoft\\Teams\\Service Worker"
+    - name: google_drivefs_logs
+      path_contains: "\\AppData\\Local\\Google\\DriveFS\\Logs"
+    - name: google_drive_sync_db
+      path_contains: "\\AppData\\Local\\Google\\Drive\\user_default"
+    - name: windows_prefetch
+      path_contains: "\\Windows\\Prefetch"
+    - name: srum_database
+      path_contains: "\\Windows\\System32\\sru"

@@ -1,0 +1,31 @@
+reports:
+  - name: mft-recent
+    title: Recent MFT entries
+    description: Recent MFT rows from the DuckDB analytics store.
+    store: duckdb
+    parameters:
+      - case_id
+      - limit
+    columns:
+      - source_csv
+      - file_name
+      - parent_path
+      - entry_number
+      - sequence_number
+      - in_use
+      - row_number
+      - created_at
+    query: |
+      SELECT
+        source_csv,
+        file_name,
+        parent_path,
+        entry_number,
+        sequence_number,
+        in_use,
+        row_number,
+        created_at
+      FROM mft_entries
+      WHERE case_id = ?
+      ORDER BY row_number
+      LIMIT ?

@@ -1,0 +1,341 @@
+interesting_executables:
+  - id: sdelete
+    label: Sysinternals SDelete
+    category: secure_deletion_wiping
+    severity: high
+    filenames:
+      - sdelete.exe
+      - sdelete64.exe
+      - sdelete64a.exe
+    name_contains:
+      - sdelete
+    description: Sysinternals secure deletion and free-space wiping utility.
+
+  - id: eraser
+    label: Eraser
+    category: secure_deletion_wiping
+    severity: high
+    filenames:
+      - eraser.exe
+      - eraserd.exe
+      - eraserl.exe
+    name_contains:
+      - eraser
+    description: Secure deletion utility.
+
+  - id: ccleaner
+    label: CCleaner
+    category: cleanup_privacy
+    severity: medium
+    filenames:
+      - ccleaner.exe
+      - ccleaner64.exe
+    name_contains:
+      - ccleaner
+    description: System cleanup/privacy utility that can remove user activity traces.
+
+  - id: bleachbit
+    label: BleachBit
+    category: cleanup_privacy
+    severity: medium
+    filenames:
+      - bleachbit.exe
+      - bleachbit_console.exe
+    name_contains:
+      - bleachbit
+    description: System cleanup/privacy utility that can remove user activity traces.
+
+  - id: privazer
+    label: PrivaZer
+    category: cleanup_privacy
+    severity: medium
+    filenames:
+      - privazer.exe
+      - privazer_free.exe
+    name_contains:
+      - privazer
+    description: Privacy cleanup utility.
+
+  - id: cipher
+    label: Windows Cipher
+    category: secure_deletion_wiping
+    severity: medium
+    evidence_types: [execution, process_activity]
+    filenames:
+      - cipher.exe
+    description: Windows utility that can wipe deleted-file free space with /w.
+
+  - id: wevtutil
+    label: Windows Event Utility
+    category: log_clearing
+    severity: medium
+    evidence_types: [execution, process_activity]
+    filenames:
+      - wevtutil.exe
+    description: Windows event log utility; notable when used to clear logs.
+
+  - id: vssadmin
+    label: Volume Shadow Copy Admin
+    category: backup_shadow_copy_tampering
+    severity: medium
+    evidence_types: [execution, process_activity]
+    filenames:
+      - vssadmin.exe
+    description: Windows utility often used to list or delete volume shadow copies.
+
+  - id: psexec
+    label: PsExec
+    category: remote_execution_admin
+    severity: medium
+    filenames:
+      - psexec.exe
+      - psexec64.exe
+      - paexec.exe
+    name_contains:
+      - psexec
+    description: Remote execution/admin utility.
+
+  - id: procdump
+    label: ProcDump
+    category: credential_access_memory_dump
+    severity: medium
+    filenames:
+      - procdump.exe
+      - procdump64.exe
+      - procdump64a.exe
+    name_contains:
+      - procdump
+    description: Process dump utility; notable when used against credential-bearing processes.
+
+  - id: mimikatz
+    label: Mimikatz
+    category: credential_access
+    severity: high
+    filenames:
+      - mimikatz.exe
+      - mimilib.dll
+    name_contains:
+      - mimikatz
+    description: Credential access tool.
+
+  - id: lazagne
+    label: LaZagne
+    category: credential_access
+    severity: high
+    filenames:
+      - lazagne.exe
+    name_contains:
+      - lazagne
+    description: Credential recovery tool.
+
+  - id: nirsoft_password_tools
+    label: NirSoft Password Recovery Tools
+    category: credential_access
+    severity: high
+    filenames:
+      - webbrowserpassview.exe
+      - mailpv.exe
+      - netpass.exe
+      - dialupass.exe
+      - chromepass.exe
+      - wirelesskeyview.exe
+    description: Common NirSoft credential recovery utilities.
+
+  - id: anydesk
+    label: AnyDesk
+    category: remote_access
+    severity: medium
+    filenames:
+      - anydesk.exe
+    name_contains:
+      - anydesk
+    description: Remote access application.
+
+  - id: teamviewer
+    label: TeamViewer
+    category: remote_access
+    severity: medium
+    filenames:
+      - teamviewer.exe
+      - tv_w32.exe
+      - tv_x64.exe
+    name_contains:
+      - teamviewer
+    description: Remote access application.
+
+  - id: logmein
+    label: LogMeIn / Rescue
+    category: remote_access
+    severity: medium
+    filenames:
+      - logmein.exe
+      - lmi_rescue.exe
+      - lmi_rescue_srv.exe
+      - lmi_ignition.exe
+    name_contains:
+      - logmein
+      - lmi_rescue
+    description: Remote access/support application.
+
+  - id: goto_remote_support
+    label: GoTo Assist / Resolve
+    category: remote_access
+    severity: medium
+    filenames:
+      - gotoassist.exe
+      - g2ax_comm_customer.exe
+      - g2ax_host_service.exe
+    name_contains:
+      - gotoassist
+      - goto resolve
+      - g2ax_
+    description: Remote access/support application.
+
+  - id: connectwise_control
+    label: ConnectWise Control / ScreenConnect
+    category: remote_access
+    severity: medium
+    filenames:
+      - screenconnect.clientservice.exe
+      - screenconnect.windowsclient.exe
+    name_contains:
+      - screenconnect
+      - connectwise control
+    description: Remote access/support application.
+
+  - id: beyondtrust_bomgar
+    label: BeyondTrust / Bomgar
+    category: remote_access
+    severity: medium
+    filenames:
+      - bomgar-scc.exe
+      - bomgar-rep.exe
+      - beyondtrust.exe
+    name_contains:
+      - bomgar
+      - beyondtrust
+    description: Remote access/support application.
+
+  - id: splashtop
+    label: Splashtop
+    category: remote_access
+    severity: medium
+    filenames:
+      - srserver.exe
+      - srmanager.exe
+      - splashtop.exe
+      - splashtopstreamer.exe
+    name_contains:
+      - splashtop
+    description: Remote access application.
+
+  - id: rustdesk
+    label: RustDesk
+    category: remote_access
+    severity: medium
+    filenames:
+      - rustdesk.exe
+    name_contains:
+      - rustdesk
+    description: Remote access application.
+
+  - id: chrome_remote_desktop
+    label: Chrome Remote Desktop
+    category: remote_access
+    severity: medium
+    filenames:
+      - remoting_host.exe
+      - chromoting.exe
+    name_contains:
+      - chrome remote desktop
+      - chromoting
+    description: Browser-backed remote access application.
+
+  - id: remote_pc
+    label: RemotePC
+    category: remote_access
+    severity: medium
+    filenames:
+      - remotepc.exe
+      - remotepchost.exe
+    name_contains:
+      - remotepc
+    description: Remote access application.
+
+  - id: dameware
+    label: Dameware
+    category: remote_access
+    severity: medium
+    filenames:
+      - dameware.exe
+      - dwrcc.exe
+      - dwrcs.exe
+    name_contains:
+      - dameware
+    description: Remote access/admin application.
+
+  - id: rmm_agents
+    label: RMM Agents
+    category: remote_access
+    severity: medium
+    filenames:
+      - ateraagent.exe
+      - ninjarmmagent.exe
+      - ninjaoneagent.exe
+      - meshagent.exe
+      - dwagent.exe
+    name_contains:
+      - atera
+      - ninjarmm
+      - ninjaone
+      - meshcentral
+      - dwagent
+    description: Remote monitoring and management agents with remote access capability.
+
+  - id: vnc_tools
+    label: VNC Tools
+    category: remote_access
+    severity: medium
+    filenames:
+      - vncviewer.exe
+      - vncserver.exe
+      - winvnc.exe
+      - tvnserver.exe
+      - uvnc_service.exe
+    name_contains:
+      - realvnc
+      - tightvnc
+      - ultravnc
+    description: VNC remote access software.
+
+  - id: parsec
+    label: Parsec
+    category: remote_access
+    severity: medium
+    filenames:
+      - parsecd.exe
+      - parsec.exe
+    name_contains:
+      - parsec
+    description: Remote interactive access application.
+
+  - id: netcat
+    label: Netcat
+    category: network_utility
+    severity: medium
+    filenames:
+      - nc.exe
+      - ncat.exe
+      - netcat.exe
+    name_contains:
+      - netcat
+    description: Network utility often used for ad hoc transfer or shells.
+
+  - id: nmap
+    label: Nmap
+    category: network_scanning
+    severity: medium
+    filenames:
+      - nmap.exe
+      - zenmap.exe
+    description: Network scanning utility.

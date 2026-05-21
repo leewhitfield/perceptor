@@ -1,0 +1,2485 @@
+tools:
+  MFTECmd:
+    enabled: true
+    type: dotnet
+    executable: /opt/eztools/MFTECmd/MFTECmd.dll
+    artifacts:
+      - name: MFT
+        source: "$MFT"
+        inode: "0"
+        destination: "$MFT"
+        process_in_place: true
+    command:
+      - dotnet
+      - "{executable}"
+      - "-f"
+      - "{artifact:MFT}"
+      - "--csv"
+      - "{output}"
+    required_paths:
+      - "{artifact:MFT}"
+    outputs:
+      - csv
+
+  MFTECmdUSN:
+    enabled: true
+    type: dotnet
+    executable: /opt/eztools/MFTECmd/MFTECmd.dll
+    artifacts:
+      - name: MFT
+        source: "$MFT"
+        inode: "0"
+        destination: "$MFT"
+        process_in_place: true
+      - name: UsnJrnlJ
+        source: "$Extend/$UsnJrnl:$J"
+        destination: "$Extend/$J"
+    command:
+      - dotnet
+      - "{executable}"
+      - "-f"
+      - "{artifact:UsnJrnlJ}"
+      - "-m"
+      - "{artifact:MFT}"
+      - "--csv"
+      - "{output}"
+      - "--csvf"
+      - "USNJrnl.csv"
+    required_paths:
+      - "{artifact:UsnJrnlJ}"
+      - "{artifact:MFT}"
+    outputs:
+      - csv
+
+  MFTECmdLogFile:
+    enabled: true
+    type: dotnet
+    executable: /opt/eztools/MFTECmd/MFTECmd.dll
+    artifacts:
+      - name: LogFile
+        source: "$LogFile"
+        inode: "2"
+        destination: "$LogFile"
+        process_in_place: true
+    command:
+      - dotnet
+      - "{executable}"
+      - "-f"
+      - "{artifact:LogFile}"
+      - "--csv"
+      - "{output}"
+      - "--csvf"
+      - "LogFile.csv"
+    required_paths:
+      - "{artifact:LogFile}"
+    outputs:
+      - csv
+
+  NTFSParseLogFile:
+    enabled: true
+    type: internal_ntfs_logfile_ntfsparse
+    artifacts:
+      - name: LogFile
+        source: "$LogFile"
+        inode: "2"
+        destination: "$LogFile"
+        process_in_place: true
+    command:
+      - python3
+      - logfileparse.py
+      - "-f"
+      - "{artifact:LogFile}"
+      - "-t"
+      - "csv"
+      - "-e"
+      - "{output}/LogFile.csv"
+    required_paths:
+      - "{artifact:LogFile}"
+    outputs:
+      - csv
+
+  MFTECmdI30:
+    enabled: true
+    type: internal_ntfs_index_mftecmd
+    executable: /opt/eztools/MFTECmd/MFTECmd.dll
+    command:
+      - dotnet
+      - "{executable}"
+      - "$I30-targeted"
+      - "--csv"
+      - "{output}"
+    outputs:
+      - csv
+
+  SrumECmd:
+    enabled: true
+    type: dotnet
+    executable: /opt/eztools/SrumECmd/SrumECmd.dll
+    artifacts:
+      - name: srum_dir
+        source: "Windows/System32/sru"
+        destination: "Windows/System32/sru"
+        recursive: true
+        optional: true
+      - name: registry_software
+        source: "WINDOWS/system32/config/SOFTWARE"
+        destination: "registry/SOFTWARE"
+    command:
+      - dotnet
+      - "{executable}"
+      - "-f"
+      - "{artifact:srum_dir}/SRUDB.dat"
+      - "-r"
+      - "{artifact:registry_software}"
+      - "--csv"
+      - "{output}"
+    required_paths:
+      - "{artifact:srum_dir}/SRUDB.dat"
+      - "{artifact:registry_software}"
+    outputs:
+      - csv
+
+  SrumParser:
+    enabled: true
+    type: internal_srum
+    executable: esedbexport
+    artifacts:
+      - name: srum_dir
+        source: "Windows/System32/sru"
+        destination: "Windows/System32/sru"
+        recursive: true
+        optional: true
+      - name: registry_software
+        source: "WINDOWS/system32/config/SOFTWARE"
+        destination: "registry/SOFTWARE"
+        optional: true
+      - name: ras_phonebooks
+        source: "Users"
+        destination: "vpn_phonebooks"
+        recursive: true
+        optional: true
+        patterns:
+          - "rasphone.pbk"
+        include_path_patterns:
+          - "*/AppData/Roaming/Microsoft/Network/Connections/Pbk*/rasphone.pbk"
+          - "*/AppData/Roaming/Microsoft/Network/Connections/Pbk*/**/rasphone.pbk"
+    command:
+      - internal-srum-parser
+      - "{artifact:srum_dir}"
+      - "{output}"
+    required_paths:
+      - "{artifact:srum_dir}/SRUDB.dat"
+    outputs:
+      - csv
+
+  UalParser:
+    enabled: true
+    type: internal_ual
+    executable: esedbexport
+    artifacts:
+      - name: ual_sum_dir
+        source: "Windows/System32/LogFiles/SUM"
+        destination: "Windows/System32/LogFiles/SUM"
+        recursive: true
+        optional: true
+        patterns:
+          - "*.mdb"
+    command:
+      - internal-ual-parser
+      - "{artifact:ual_sum_dir}"
+      - "{output}"
+    required_paths: []
+    outputs:
+      - csv
+
+  SIDR:
+    enabled: true
+    type: binary
+    executable: sidr
+    artifacts:
+      - name: windows_search_index
+        source: "ProgramData/Microsoft/Search/Data/Applications/Windows"
+        destination: "WindowsSearch/Applications/Windows"
+        recursive: true
+        optional: true
+    command:
+      - "{executable}"
+      - "-f"
+      - "csv"
+      - "-o"
+      - "{output}"
+      - "{artifact:windows_search_index}"
+    required_paths:
+      - "{artifact:windows_search_index}"
+    outputs:
+      - csv
+
+  WindowsSearchESEParser:
+    enabled: true
+    type: internal_windows_search_ese
+    executable: esedbexport
+    artifacts:
+      - name: windows_search_index
+        source: "ProgramData/Microsoft/Search/Data/Applications/Windows"
+        destination: "WindowsSearch/Applications/Windows"
+        recursive: true
+        optional: true
+    command:
+      - internal-windows-search-ese-parser
+      - "{artifact:windows_search_index}"
+      - "--csv"
+      - "{output}"
+    required_paths: []
+    outputs:
+      - csv
+
+  WindowsSearchGatherParser:
+    enabled: true
+    type: internal_windows_search_gather
+    executable:
+    artifacts:
+      - name: windows_search_gather_logs
+        source: "ProgramData/Microsoft/Search/Data/Applications/Windows/GatherLogs/SystemIndex"
+        destination: "WindowsSearch/Applications/Windows/GatherLogs/SystemIndex"
+        recursive: true
+        optional: true
+    command:
+      - internal-windows-search-gather-parser
+      - "{artifact:windows_search_gather_logs}"
+      - "--csv"
+      - "{output}"
+    required_paths: []
+    outputs:
+      - csv
+
+  WindowsErrorReportingParser:
+    enabled: true
+    type: internal_windows_error_reporting
+    executable:
+    artifacts:
+      - name: windows_error_reporting
+        source: "ProgramData/Microsoft/Windows/WER"
+        destination: "Windows/WER"
+        recursive: true
+        optional: true
+    command:
+      - internal-windows-error-reporting-parser
+      - "{artifact:windows_error_reporting}"
+      - "--csv"
+      - "{output}"
+    required_paths: []
+    outputs:
+      - csv
+
+  WindowsDefenderParser:
+    enabled: true
+    type: internal_windows_defender
+    executable:
+    artifacts:
+      - name: windows_defender_service_history
+        source: "ProgramData/Microsoft/Windows Defender/Scans/History/Service"
+        destination: "WindowsDefender/Scans/History/Service"
+        recursive: true
+        optional: true
+        patterns:
+          - "*.log"
+      - name: windows_defender_support_logs
+        source: "ProgramData/Microsoft/Windows Defender/Support"
+        destination: "WindowsDefender/Support"
+        recursive: true
+        optional: true
+        patterns:
+          - "*.log"
+          - "*.bin"
+      - name: windows_defender_cache_manager
+        source: "ProgramData/Microsoft/Windows Defender/Scans/History/CacheManager"
+        destination: "WindowsDefender/Scans/History/CacheManager"
+        recursive: true
+        optional: true
+        patterns:
+          - "*.bin"
+      - name: windows_defender_scan_cache
+        source: "ProgramData/Microsoft/Windows Defender/Scans"
+        destination: "WindowsDefender/Scans"
+        recursive: false
+        optional: true
+        patterns:
+          - "mpcache-*"
+          - "MpDiag.bin"
+      - name: windows_defender_engine_db
+        source: "ProgramData/Microsoft/Windows Defender/Scans"
+        destination: "WindowsDefender/ScansEngineDb"
+        recursive: false
+        optional: true
+        patterns:
+          - "mpenginedb.db"
+          - "mpenginedb.db-wal"
+          - "mpenginedb.db-shm"
+    command:
+      - internal-windows-defender-parser
+      - "{artifact:windows_defender_service_history}"
+      - "--csv"
+      - "{output}"
+    required_paths: []
+    outputs:
+      - csv
+
+  FileMetadataOffice:
+    enabled: true
+    type: internal_file_metadata
+    artifacts:
+      - name: metadata_files
+        source: ""
+        destination: "FileMetadata/Office"
+        recursive: true
+        patterns:
+          - "*.doc"
+          - "*.docx"
+          - "*.dot"
+          - "*.dotx"
+          - "*.xls"
+          - "*.xlsx"
+          - "*.xlsm"
+          - "*.ppt"
+          - "*.pptx"
+          - "*.pub"
+          - "*.rtf"
+        exclude_patterns:
+          - "Windows/*"
+          - "Windows.old/*"
+          - "Program Files/*"
+          - "Program Files (x86)/*"
+          - "ProgramData/*"
+    command:
+      - internal-file-metadata
+      - "{artifact:metadata_files}"
+      - "{output}"
+    required_paths:
+      - "{artifact:metadata_files}"
+    outputs:
+      - csv
+
+  FileMetadataPictures:
+    enabled: true
+    type: internal_file_metadata
+    artifacts:
+      - name: metadata_files
+        source: ""
+        destination: "FileMetadata/Pictures"
+        recursive: true
+        patterns:
+          - "*.jpg"
+          - "*.jpeg"
+          - "*.png"
+          - "*.gif"
+          - "*.bmp"
+          - "*.tif"
+          - "*.tiff"
+          - "*.heic"
+          - "*.webp"
+          - "*.raw"
+          - "*.cr2"
+          - "*.nef"
+          - "*.arw"
+        exclude_patterns:
+          - "Windows/*"
+          - "Windows.old/*"
+          - "Program Files/*"
+          - "Program Files (x86)/*"
+          - "ProgramData/*"
+    command:
+      - internal-file-metadata
+      - "{artifact:metadata_files}"
+      - "{output}"
+    required_paths:
+      - "{artifact:metadata_files}"
+    outputs:
+      - csv
+
+  FileMetadataPicturesUserContent:
+    enabled: true
+    type: internal_file_metadata
+    artifacts:
+      - name: metadata_files
+        source: ""
+        destination: "FileMetadata/PicturesUserContent"
+        recursive: true
+        patterns:
+          - "*.jpg"
+          - "*.jpeg"
+          - "*.png"
+          - "*.gif"
+          - "*.bmp"
+          - "*.tif"
+          - "*.tiff"
+          - "*.heic"
+          - "*.webp"
+          - "*.raw"
+          - "*.cr2"
+          - "*.nef"
+          - "*.arw"
+        include_path_patterns:
+          - "Users/*/Desktop/*"
+          - "Users/*/Documents/*"
+          - "Users/*/Downloads/*"
+          - "Users/*/Pictures/*"
+          - "Users/*/Videos/*"
+          - "Users/*/OneDrive/*"
+          - "Users/*/Dropbox/*"
+          - "Users/*/iCloud*"
+        exclude_patterns:
+          - "Users/*/Google Drive/*"
+          - "Users/*/AppData/*"
+          - "Windows/*"
+          - "Windows.old/*"
+          - "Program Files/*"
+          - "Program Files (x86)/*"
+          - "ProgramData/*"
+    command:
+      - internal-file-metadata
+      - "{artifact:metadata_files}"
+      - "{output}"
+    required_paths:
+      - "{artifact:metadata_files}"
+    outputs:
+      - csv
+
+  FileMetadataVideos:
+    enabled: true
+    type: internal_file_metadata
+    artifacts:
+      - name: metadata_files
+        source: ""
+        destination: "FileMetadata/Videos"
+        recursive: true
+        patterns:
+          - "*.mp4"
+          - "*.mov"
+          - "*.avi"
+          - "*.mkv"
+          - "*.wmv"
+          - "*.m4v"
+          - "*.3gp"
+        exclude_patterns:
+          - "Windows/*"
+          - "Windows.old/*"
+          - "Program Files/*"
+          - "Program Files (x86)/*"
+          - "ProgramData/*"
+    command:
+      - internal-file-metadata
+      - "{artifact:metadata_files}"
+      - "{output}"
+    required_paths:
+      - "{artifact:metadata_files}"
+    outputs:
+      - csv
+
+  FileMetadataExecutables:
+    enabled: true
+    type: internal_file_metadata
+    artifacts:
+      - name: metadata_files
+        source: ""
+        destination: "FileMetadata/Executables"
+        recursive: true
+        patterns:
+          - "*.exe"
+          - "*.dll"
+          - "*.sys"
+          - "*.msi"
+          - "*.com"
+          - "*.scr"
+          - "*.ps1"
+          - "*.bat"
+          - "*.cmd"
+          - "*.vbs"
+          - "*.js"
+        exclude_patterns:
+          - "Windows/*"
+          - "Windows.old/*"
+          - "Program Files/*"
+          - "Program Files (x86)/*"
+          - "ProgramData/*"
+    command:
+      - internal-file-metadata
+      - "{artifact:metadata_files}"
+      - "{output}"
+    required_paths:
+      - "{artifact:metadata_files}"
+    outputs:
+      - csv
+
+  FileMetadataDocuments:
+    enabled: true
+    type: internal_file_metadata
+    artifacts:
+      - name: metadata_files
+        source: ""
+        destination: "FileMetadata/Documents"
+        recursive: true
+        patterns:
+          - "*.pdf"
+          - "*.txt"
+          - "*.csv"
+          - "*.html"
+          - "*.htm"
+          - "*.xml"
+          - "*.json"
+          - "*.zip"
+          - "*.7z"
+          - "*.rar"
+        exclude_patterns:
+          - "Windows/*"
+          - "Windows.old/*"
+          - "Program Files/*"
+          - "Program Files (x86)/*"
+          - "ProgramData/*"
+    command:
+      - internal-file-metadata
+      - "{artifact:metadata_files}"
+      - "{output}"
+    required_paths:
+      - "{artifact:metadata_files}"
+    outputs:
+      - csv
+
+  FileMetadataExtractor:
+    enabled: true
+    type: internal_file_metadata
+    artifacts:
+      - name: metadata_files
+        source: ""
+        destination: "FileMetadata/All"
+        recursive: true
+        patterns:
+          - "*.doc"
+          - "*.docx"
+          - "*.dot"
+          - "*.dotx"
+          - "*.xls"
+          - "*.xlsx"
+          - "*.xlsm"
+          - "*.ppt"
+          - "*.pptx"
+          - "*.pub"
+          - "*.rtf"
+          - "*.jpg"
+          - "*.jpeg"
+          - "*.png"
+          - "*.gif"
+          - "*.bmp"
+          - "*.tif"
+          - "*.tiff"
+          - "*.heic"
+          - "*.webp"
+          - "*.raw"
+          - "*.cr2"
+          - "*.nef"
+          - "*.arw"
+          - "*.mp4"
+          - "*.mov"
+          - "*.avi"
+          - "*.mkv"
+          - "*.wmv"
+          - "*.m4v"
+          - "*.3gp"
+          - "*.exe"
+          - "*.dll"
+          - "*.sys"
+          - "*.msi"
+          - "*.com"
+          - "*.scr"
+          - "*.ps1"
+          - "*.bat"
+          - "*.cmd"
+          - "*.vbs"
+          - "*.js"
+          - "*.pdf"
+          - "*.txt"
+          - "*.csv"
+          - "*.html"
+          - "*.htm"
+          - "*.xml"
+          - "*.json"
+          - "*.zip"
+          - "*.7z"
+          - "*.rar"
+        exclude_patterns:
+          - "Windows/*"
+          - "Windows.old/*"
+          - "Program Files/*"
+          - "Program Files (x86)/*"
+          - "ProgramData/*"
+    command:
+      - internal-file-metadata
+      - "{artifact:metadata_files}"
+      - "{output}"
+    required_paths:
+      - "{artifact:metadata_files}"
+    outputs:
+      - csv
+
+  EvtxECmd:
+    enabled: true
+    type: dotnet
+    executable: /opt/eztools/EvtxECmd/EvtxECmd.dll
+    artifacts:
+      - name: evtx_logs
+        source: "Windows/System32/winevt/Logs"
+        destination: "Windows/System32/winevt/Logs"
+        recursive: true
+        pattern: "*.evtx"
+        allow_partial: true
+    command:
+      - dotnet
+      - "{executable}"
+      - "-d"
+      - "{artifact:evtx_logs}"
+      - "--csv"
+      - "{output}"
+    required_paths:
+      - "{artifact:evtx_logs}"
+    outputs:
+      - csv
+
+  EvtxECmdTriage:
+    enabled: true
+    type: dotnet
+    executable: /opt/eztools/EvtxECmd/EvtxECmd.dll
+    artifacts:
+      - name: evtx_triage_logs
+        source: "Windows/System32/winevt/Logs"
+        destination: "Windows/System32/winevt/TriageLogs"
+        recursive: true
+        allow_partial: true
+        patterns:
+          - "Application.evtx"
+          - "Security.evtx"
+          - "System.evtx"
+          - "Windows PowerShell.evtx"
+          - "Microsoft-Windows-PowerShell%4Operational.evtx"
+          - "Microsoft-Windows-Sysmon%4Operational.evtx"
+          - "Microsoft-Windows-TaskScheduler%4Operational.evtx"
+          - "Microsoft-Windows-TerminalServices-LocalSessionManager%4Operational.evtx"
+          - "Microsoft-Windows-TerminalServices-RemoteConnectionManager%4Operational.evtx"
+          - "Microsoft-Windows-Windows Defender%4Operational.evtx"
+          - "Microsoft-Windows-WinRM%4Operational.evtx"
+          - "Microsoft-Windows-GroupPolicy%4Operational.evtx"
+    command:
+      - dotnet
+      - "{executable}"
+      - "-d"
+      - "{artifact:evtx_triage_logs}"
+      - "--csv"
+      - "{output}"
+    required_paths:
+      - "{artifact:evtx_triage_logs}"
+    outputs:
+      - csv
+
+  RECmd:
+    enabled: true
+    type: dotnet
+    executable: /opt/eztools/RECmd/RECmd.dll
+    artifacts:
+      - name: registry_system
+        source: "WINDOWS/system32/config/SYSTEM"
+        destination: "registry/SYSTEM"
+      - name: registry_system_log1
+        source: "WINDOWS/system32/config/SYSTEM.LOG1"
+        destination: "registry/SYSTEM.LOG1"
+        optional: true
+      - name: registry_system_log2
+        source: "WINDOWS/system32/config/SYSTEM.LOG2"
+        destination: "registry/SYSTEM.LOG2"
+        optional: true
+      - name: registry_software
+        source: "WINDOWS/system32/config/SOFTWARE"
+        destination: "registry/SOFTWARE"
+      - name: registry_software_log1
+        source: "WINDOWS/system32/config/SOFTWARE.LOG1"
+        destination: "registry/SOFTWARE.LOG1"
+        optional: true
+      - name: registry_software_log2
+        source: "WINDOWS/system32/config/SOFTWARE.LOG2"
+        destination: "registry/SOFTWARE.LOG2"
+        optional: true
+      - name: registry_security
+        source: "WINDOWS/system32/config/SECURITY"
+        destination: "registry/SECURITY"
+      - name: registry_security_log1
+        source: "WINDOWS/system32/config/SECURITY.LOG1"
+        destination: "registry/SECURITY.LOG1"
+        optional: true
+      - name: registry_security_log2
+        source: "WINDOWS/system32/config/SECURITY.LOG2"
+        destination: "registry/SECURITY.LOG2"
+        optional: true
+      - name: registry_sam
+        source: "WINDOWS/system32/config/SAM"
+        destination: "registry/SAM"
+      - name: registry_sam_log1
+        source: "WINDOWS/system32/config/SAM.LOG1"
+        destination: "registry/SAM.LOG1"
+        optional: true
+      - name: registry_sam_log2
+        source: "WINDOWS/system32/config/SAM.LOG2"
+        destination: "registry/SAM.LOG2"
+        optional: true
+      - name: registry_ntuser
+        source: "Users"
+        destination: "registry/users"
+        recursive: true
+        patterns:
+          - "NTUSER.DAT"
+          - "UsrClass.dat"
+      - name: registry_user_logs
+        source: "Users"
+        destination: "registry/users"
+        recursive: true
+        patterns:
+          - "NTUSER.DAT.LOG1"
+          - "NTUSER.DAT.LOG2"
+          - "ntuser.dat.LOG1"
+          - "ntuser.dat.LOG2"
+          - "UsrClass.dat.LOG1"
+          - "UsrClass.dat.LOG2"
+          - "usrclass.dat.LOG1"
+          - "usrclass.dat.LOG2"
+    command:
+      - dotnet
+      - "{executable}"
+      - "-d"
+      - "{artifact_parent:registry_system}"
+      - "--bn"
+      - "{plugins}/recmd_windows_activity.reb"
+      - "--csv"
+      - "{output}"
+      - "--csvf"
+      - "RECmd_WindowsActivity.csv"
+    required_paths:
+      - "{artifact_parent:registry_system}"
+      - "{plugins}/recmd_windows_activity.reb"
+    outputs:
+      - csv
+
+  AmcacheParser:
+    enabled: true
+    type: dotnet
+    executable: /opt/eztools/AmcacheParser/AmcacheParser.dll
+    artifacts:
+      - name: amcache_hive
+        source: "Windows/AppCompat/Programs/Amcache.hve"
+        destination: "registry/Amcache.hve"
+        optional: true
+      - name: amcache_log1
+        source: "Windows/AppCompat/Programs/Amcache.hve.LOG1"
+        destination: "registry/Amcache.hve.LOG1"
+        optional: true
+      - name: amcache_log2
+        source: "Windows/AppCompat/Programs/Amcache.hve.LOG2"
+        destination: "registry/Amcache.hve.LOG2"
+        optional: true
+    command:
+      - dotnet
+      - "{executable}"
+      - "-f"
+      - "{artifact:amcache_hive}"
+      - "--csv"
+      - "{output}"
+    required_paths:
+      - "{artifact:amcache_hive}"
+    outputs:
+      - csv
+
+  AppCompatCacheParser:
+    enabled: true
+    type: dotnet
+    executable: /opt/eztools/AppCompatCacheParser/AppCompatCacheParser.dll
+    artifacts:
+      - name: registry_system
+        source: "WINDOWS/system32/config/SYSTEM"
+        destination: "registry/SYSTEM"
+      - name: registry_system_log1
+        source: "WINDOWS/system32/config/SYSTEM.LOG1"
+        destination: "registry/SYSTEM.LOG1"
+        optional: true
+      - name: registry_system_log2
+        source: "WINDOWS/system32/config/SYSTEM.LOG2"
+        destination: "registry/SYSTEM.LOG2"
+        optional: true
+    command:
+      - dotnet
+      - "{executable}"
+      - "-f"
+      - "{artifact:registry_system}"
+      - "--csv"
+      - "{output}"
+      - "--csvf"
+      - "AppCompatCache.csv"
+    required_paths:
+      - "{artifact:registry_system}"
+    outputs:
+      - csv
+
+  PECmd:
+    enabled: true
+    type: dotnet
+    executable: /opt/eztools/PECmd/PECmd.dll
+    artifacts:
+      - name: prefetch_files
+        source: "Windows/Prefetch"
+        destination: "Windows/Prefetch"
+        recursive: true
+        pattern: "*.pf"
+        process_in_place: true
+    command:
+      - dotnet
+      - "{executable}"
+      - "-d"
+      - "{artifact:prefetch_files}"
+      - "--csv"
+      - "{output}"
+    required_paths:
+      - "{artifact:prefetch_files}"
+    outputs:
+      - csv
+
+  PrefetchParser:
+    enabled: true
+    type: internal_prefetch
+    executable:
+    artifacts:
+      - name: prefetch_files
+        source: "Windows/Prefetch"
+        destination: "Windows/Prefetch"
+        recursive: true
+        pattern: "*.pf"
+    command:
+      - internal-prefetch-parser
+      - "{artifact:prefetch_files}"
+      - "--csv"
+      - "{output}"
+    required_paths:
+      - "{artifact:prefetch_files}"
+    outputs:
+      - csv
+
+  SAMParser:
+    enabled: true
+    type: internal_sam
+    executable:
+    artifacts:
+      - name: sam_hive
+        source: "WINDOWS/system32/config/SAM"
+        destination: "registry/SAM"
+    command:
+      - internal-sam-parser
+      - "{artifact:sam_hive}"
+      - "--csv"
+      - "{output}"
+    required_paths:
+      - "{artifact:sam_hive}"
+    outputs:
+      - csv
+
+  RegistryParser:
+    enabled: true
+    type: internal_registry
+    executable:
+    artifacts:
+      - name: registry_system
+        source: "WINDOWS/system32/config/SYSTEM"
+        destination: "registry/SYSTEM"
+      - name: registry_software
+        source: "WINDOWS/system32/config/SOFTWARE"
+        destination: "registry/SOFTWARE"
+      - name: registry_security
+        source: "WINDOWS/system32/config/SECURITY"
+        destination: "registry/SECURITY"
+      - name: registry_sam
+        source: "WINDOWS/system32/config/SAM"
+        destination: "registry/SAM"
+      - name: registry_amcache
+        source: "Windows/AppCompat/Programs/Amcache.hve"
+        destination: "registry/Amcache.hve"
+        optional: true
+      - name: registry_ntuser
+        source: "Users"
+        destination: "registry/users"
+        recursive: true
+        patterns:
+          - "NTUSER.DAT"
+          - "UsrClass.dat"
+    command:
+      - internal-registry-parser
+      - "{artifact:registry_system}"
+      - "{artifact:registry_software}"
+      - "{artifact:registry_security}"
+      - "{artifact:registry_sam}"
+      - "{artifact:registry_amcache}"
+      - "{artifact:registry_ntuser}"
+      - "--csv"
+      - "{output}"
+    required_paths: []
+    outputs:
+      - csv
+
+  RegistryArtifactParser:
+    enabled: true
+    type: internal_registry_artifacts
+    executable:
+    artifacts:
+      - name: registry_system
+        source: "WINDOWS/system32/config/SYSTEM"
+        destination: "registry/SYSTEM"
+      - name: registry_system_log1
+        source: "WINDOWS/system32/config/SYSTEM.LOG1"
+        destination: "registry/SYSTEM.LOG1"
+        optional: true
+      - name: registry_system_log2
+        source: "WINDOWS/system32/config/SYSTEM.LOG2"
+        destination: "registry/SYSTEM.LOG2"
+        optional: true
+      - name: registry_software
+        source: "WINDOWS/system32/config/SOFTWARE"
+        destination: "registry/SOFTWARE"
+      - name: registry_software_log1
+        source: "WINDOWS/system32/config/SOFTWARE.LOG1"
+        destination: "registry/SOFTWARE.LOG1"
+        optional: true
+      - name: registry_software_log2
+        source: "WINDOWS/system32/config/SOFTWARE.LOG2"
+        destination: "registry/SOFTWARE.LOG2"
+        optional: true
+      - name: registry_sam
+        source: "WINDOWS/system32/config/SAM"
+        destination: "registry/SAM"
+      - name: registry_sam_log1
+        source: "WINDOWS/system32/config/SAM.LOG1"
+        destination: "registry/SAM.LOG1"
+        optional: true
+      - name: registry_sam_log2
+        source: "WINDOWS/system32/config/SAM.LOG2"
+        destination: "registry/SAM.LOG2"
+        optional: true
+      - name: registry_amcache
+        source: "Windows/AppCompat/Programs/Amcache.hve"
+        destination: "registry/Amcache.hve"
+        optional: true
+      - name: registry_amcache_log1
+        source: "Windows/AppCompat/Programs/Amcache.hve.LOG1"
+        destination: "registry/Amcache.hve.LOG1"
+        optional: true
+      - name: registry_amcache_log2
+        source: "Windows/AppCompat/Programs/Amcache.hve.LOG2"
+        destination: "registry/Amcache.hve.LOG2"
+        optional: true
+      - name: registry_ntuser
+        source: "Users"
+        destination: "registry/users/ntuser"
+        recursive: true
+        pattern: "NTUSER.DAT"
+      - name: registry_ntuser_logs
+        source: "Users"
+        destination: "registry/users/ntuser"
+        recursive: true
+        patterns:
+          - "NTUSER.DAT.LOG1"
+          - "NTUSER.DAT.LOG2"
+          - "ntuser.dat.LOG1"
+          - "ntuser.dat.LOG2"
+      - name: registry_usrclass
+        source: "Users"
+        destination: "registry/users/usrclass"
+        recursive: true
+        pattern: "UsrClass.dat"
+      - name: registry_usrclass_logs
+        source: "Users"
+        destination: "registry/users/usrclass"
+        recursive: true
+        patterns:
+          - "UsrClass.dat.LOG1"
+          - "UsrClass.dat.LOG2"
+          - "usrclass.dat.LOG1"
+          - "usrclass.dat.LOG2"
+    command:
+      - internal-registry-artifact-parser
+      - "{artifact:registry_system}"
+      - "{artifact:registry_software}"
+      - "{artifact:registry_sam}"
+      - "{artifact:registry_amcache}"
+      - "{artifact:registry_ntuser}"
+      - "{artifact:registry_usrclass}"
+      - "--csv"
+      - "{output}"
+    required_paths: []
+    outputs:
+      - csv
+
+  RecycleParser:
+    enabled: true
+    type: internal_recycle
+    executable:
+    artifacts:
+      - name: recycle_modern
+        source: "$Recycle.Bin"
+        destination: "RecycleBin/$Recycle.Bin"
+        recursive: true
+      - name: recycle_xp
+        source: "RECYCLER"
+        destination: "RecycleBin/RECYCLER"
+        recursive: true
+      - name: recycled_xp
+        source: "Recycled"
+        destination: "RecycleBin/Recycled"
+        recursive: true
+    command:
+      - internal-recycle-parser
+      - "{artifact:recycle_modern}"
+      - "{artifact:recycle_xp}"
+      - "{artifact:recycled_xp}"
+      - "--csv"
+      - "{output}"
+    required_paths: []
+    outputs:
+      - csv
+
+  FirefoxParser:
+    enabled: true
+    type: internal_firefox
+    executable:
+    artifacts:
+      - name: firefox_profiles
+        source: "Users"
+        destination: "browser/Firefox"
+        recursive: true
+        patterns:
+          - "places.sqlite"
+          - "cookies.sqlite"
+          - "formhistory.sqlite"
+          - "permissions.sqlite"
+          - "extensions.json"
+          - "prefs.js"
+          - "*.jsonlz4"
+    command:
+      - internal-firefox-parser
+      - "{artifact:firefox_profiles}"
+      - "--csv"
+      - "{output}"
+    required_paths:
+      - "{artifact:firefox_profiles}"
+    outputs:
+      - csv
+
+  ChromiumParser:
+    enabled: true
+    type: internal_chromium
+    executable:
+    artifacts:
+      - name: chromium_profiles
+        source: "Users"
+        destination: "browser/Chromium"
+        recursive: true
+        patterns:
+          - "History"
+          - "Cookies"
+          - "Bookmarks"
+          - "Bookmarks.bak"
+          - "Bookmarks.msbak"
+          - "Web Data"
+          - "Shortcuts"
+          - "Network Action Predictor"
+          - "Top Sites"
+          - "Login Data"
+          - "Preferences"
+          - "Secure Preferences"
+          - "manifest.json"
+          - "Platform Notifications"
+          - "collectionsSQLite"
+          - "SyncData.sqlite3"
+          - "Sync Data"
+          - "Session_*"
+          - "Tabs_*"
+          - "Current Session"
+          - "Current Tabs"
+          - "Last Session"
+          - "Last Tabs"
+    command:
+      - internal-chromium-parser
+      - "{artifact:chromium_profiles}"
+      - "--csv"
+      - "{output}"
+    required_paths:
+      - "{artifact:chromium_profiles}"
+    outputs:
+      - csv
+
+  OfficeBackstageParser:
+    enabled: true
+    type: internal_office_backstage
+    executable:
+    artifacts:
+      - name: office_backstage
+        source: "Users"
+        destination: "OfficeBackstage"
+        recursive: true
+        process_in_place: true
+        optional: true
+        patterns:
+          - "*"
+        include_path_patterns:
+          - "*/AppData/Local/Microsoft/Office/**/*"
+          - "*/AppData/Roaming/Microsoft/Office/**/*"
+          - "*/AppData/Local/Packages/Microsoft.Office*/**/*"
+    command:
+      - internal-office-backstage-parser
+      - "{artifact:office_backstage}"
+      - "--csv"
+      - "{output}"
+    required_paths: []
+    outputs:
+      - csv
+
+  UserDictionaryParser:
+    enabled: true
+    type: internal_user_dictionary
+    executable:
+    artifacts:
+      - name: user_dictionaries
+        source: "Users"
+        destination: "UserDictionaries"
+        recursive: true
+        process_in_place: true
+        optional: true
+        patterns:
+          - "RoamingCustom.dic"
+        include_path_patterns:
+          - "*/AppData/Roaming/Microsoft/Office/*/*/Proofing/RoamingCustom.dic"
+    command:
+      - internal-user-dictionary-parser
+      - "{artifact:user_dictionaries}"
+      - "--csv"
+      - "{output}"
+    required_paths: []
+    outputs:
+      - csv
+
+  ZoneIdentifierParser:
+    enabled: true
+    type: internal_zone_identifier
+    executable:
+    artifacts:
+      - name: zone_identifier_ads
+        source: "Users"
+        destination: "ZoneIdentifierADS"
+        recursive: true
+        process_in_place: true
+        optional: true
+        patterns:
+          - "*:Zone.Identifier"
+        include_path_patterns:
+          - "*/Users/**/*:Zone.Identifier"
+          - "Users/**/*:Zone.Identifier"
+    command:
+      - internal-zone-identifier-parser
+      - "{artifact:zone_identifier_ads}"
+      - "--csv"
+      - "{output}"
+    required_paths: []
+    outputs:
+      - csv
+
+  ThumbcacheParser:
+    enabled: true
+    type: internal_thumbcache
+    executable:
+    artifacts:
+      - name: thumbcache
+        source: "Users"
+        destination: "Thumbcache"
+        recursive: true
+        process_in_place: true
+        optional: true
+        patterns:
+          - "thumbcache*.db"
+          - "iconcache*.db"
+        include_path_patterns:
+          - "*/AppData/Local/Microsoft/Windows/Explorer/thumbcache*.db"
+          - "*/AppData/Local/Microsoft/Windows/Explorer/iconcache*.db"
+    command:
+      - internal-thumbcache-parser
+      - "{artifact:thumbcache}"
+      - "--csv"
+      - "{output}"
+    required_paths: []
+    outputs:
+      - csv
+
+  RdpCacheParser:
+    enabled: true
+    type: internal_rdp_cache
+    executable:
+    artifacts:
+      - name: rdp_cache_profiles
+        source: "Users"
+        destination: "RdpBitmapCache"
+        recursive: true
+        process_in_place: true
+        optional: true
+        patterns:
+          - "cache*.bin"
+          - "bcache*.bmc"
+        include_path_patterns:
+          - "*/AppData/Local/Microsoft/Terminal Server Client/Cache/cache*.bin"
+          - "*/AppData/Local/Microsoft/Terminal Server Client/Cache/bcache*.bmc"
+    command:
+      - internal-rdp-cache-parser
+      - "{artifact:rdp_cache_profiles}"
+      - "--csv"
+      - "{output}"
+    required_paths: []
+    outputs:
+      - csv
+
+  RdpVisionReview:
+    enabled: true
+    type: internal_rdp_vision_review
+    executable:
+    artifacts: []
+    command:
+      - internal-rdp-vision-review
+      - "{output}"
+    required_paths: []
+    outputs:
+      - csv
+
+  WebCacheParser:
+    enabled: true
+    type: internal_webcache
+    executable:
+    artifacts:
+      - name: webcache
+        source: "Users"
+        destination: "WebCache"
+        recursive: true
+        optional: true
+        patterns:
+          - "WebCacheV*.dat"
+    command:
+      - internal-webcache-parser
+      - "{artifact:webcache}"
+      - "--csv"
+      - "{output}"
+    required_paths: []
+    outputs:
+      - csv
+
+  BrowserCacheParser:
+    enabled: true
+    type: internal_browser_cache
+    executable:
+    artifacts:
+      - name: browser_cache_profiles
+        source: "Users"
+        destination: "browser/Cache"
+        recursive: true
+        process_in_place: true
+        optional: true
+    command:
+      - internal-browser-cache-parser
+      - "{artifact:browser_cache_profiles}"
+      - "--csv"
+      - "{output}"
+    required_paths: []
+    outputs:
+      - csv
+
+  PackageCacheParser:
+    enabled: true
+    type: internal_package_cache
+    executable:
+    artifacts:
+      - name: package_cache_profiles
+        source: "Users"
+        destination: "packages/CacheStorage"
+        recursive: true
+        process_in_place: true
+        optional: true
+    command:
+      - internal-package-cache-parser
+      - "{artifact:package_cache_profiles}"
+      - "--csv"
+      - "{output}"
+    required_paths: []
+    outputs:
+      - csv
+
+  PackageArtifactsParser:
+    enabled: true
+    type: internal_package_artifacts
+    executable:
+    artifacts:
+      - name: package_artifact_profiles
+        source: ""
+        destination: "packages/Artifacts"
+        recursive: true
+        process_in_place: true
+        optional: true
+    command:
+      - internal-package-artifacts-parser
+      - "{artifact:package_artifact_profiles}"
+      - "--csv"
+      - "{output}"
+    required_paths: []
+    outputs:
+      - csv
+
+  TelemetryParser:
+    enabled: true
+    type: internal_telemetry
+    executable:
+    artifacts:
+      - name: telemetry_artifacts
+        source: ""
+        destination: "telemetry"
+        recursive: true
+        process_in_place: true
+        optional: true
+        patterns:
+          - "OBJECTS.DATA"
+          - "INDEX.BTR"
+          - "MAPPING*.MAP"
+          - "*.dat"
+          - "*.db"
+          - "*.srd"
+          - "*.edb"
+          - "*.cip"
+          - "*.p7b"
+          - "*.policy"
+          - "*.xml"
+          - "*.log"
+        include_path_patterns:
+          - "*/Windows/System32/wbem/Repository/*"
+          - "*/Users/*/AppData/Local/Microsoft/Windows/CloudStore/**/*"
+          - "*/Users/*/AppData/Local/Microsoft/Windows/Notifications/**/*"
+          - "*/ProgramData/Microsoft/Windows/AppRepository/**/*"
+          - "*/Windows/System32/AppLocker/**/*"
+          - "*/Windows/System32/CodeIntegrity/**/*"
+    command:
+      - internal-telemetry-parser
+      - "{artifact:telemetry_artifacts}"
+      - "--csv"
+      - "{output}"
+    required_paths: []
+    outputs:
+      - csv
+
+  SQLECmd:
+    enabled: true
+    type: dotnet
+    executable: /opt/eztools/SQLECmd/SQLECmd.dll
+    artifacts:
+      - name: cloud_sqlite_candidates
+        source: "Users"
+        destination: "CloudSQLite/Users"
+        recursive: true
+        use_tsk: true
+        optional: true
+        patterns:
+          - "*.db"
+          - "*.sqlite"
+          - "*.sqlite3"
+          - "metadata_sqlite_db"
+    command:
+      - dotnet
+      - "{executable}"
+      - "-d"
+      - "{artifact:cloud_sqlite_candidates}"
+      - "--hunt"
+      - "--csv"
+      - "{output}"
+    required_paths:
+      - "{artifact:cloud_sqlite_candidates}"
+    outputs:
+      - csv
+
+  CloudSyncParser:
+    enabled: true
+    type: internal_cloud_sync
+    executable:
+    artifacts:
+      - name: cloud_sync_artifacts
+        source: "Users"
+        destination: "CloudSync/Users"
+        recursive: true
+        process_in_place: true
+        optional: true
+    command:
+      - internal-cloud-sync-parser
+      - "{artifact:cloud_sync_artifacts}"
+      - "--csv"
+      - "{output}"
+    required_paths: []
+    outputs:
+      - csv
+
+  OneDriveExplorer:
+    enabled: true
+    type: internal_onedrive_explorer
+    executable:
+    artifacts:
+      - name: onedrive_profiles
+        source: "Users"
+        destination: "OneDriveExplorer/Users"
+        recursive: true
+        process_in_place: true
+        optional: true
+    command:
+      - internal-onedrive-explorer
+      - "{artifact:onedrive_profiles}"
+      - "--csv"
+      - "{output}"
+    required_paths: []
+    outputs:
+      - csv
+
+  OneDriveOdlParser:
+    enabled: true
+    type: internal_onedrive_odl
+    executable:
+    artifacts:
+      - name: onedrive_logs
+        source: "Users"
+        destination: "OneDriveLogs/Users"
+        recursive: true
+        process_in_place: true
+        optional: true
+    command:
+      - internal-onedrive-odl-parser
+      - "{artifact:onedrive_logs}"
+      - "--csv"
+      - "{output}"
+    required_paths: []
+    outputs:
+      - csv
+
+  WindowsActivitiesParser:
+    enabled: true
+    type: internal_windows_activities
+    executable:
+    artifacts:
+      - name: windows_activities
+        source: "Users"
+        destination: "WindowsActivities"
+        recursive: true
+        optional: true
+        patterns:
+          - "ActivitiesCache.db"
+    command:
+      - internal-windows-activities-parser
+      - "{artifact:windows_activities}"
+      - "--csv"
+      - "{output}"
+    required_paths: []
+    outputs:
+      - csv
+
+  EtlParser:
+    enabled: true
+    type: internal_etl
+    executable:
+    artifacts:
+      - name: etl_files
+        source: "Windows/System32/LogFiles"
+        destination: "Windows/System32/LogFiles"
+        recursive: true
+        process_in_place: true
+        optional: true
+        pattern: "*.etl"
+      - name: etl_panther_files
+        source: "Windows/Panther"
+        destination: "Windows/Panther"
+        recursive: true
+        process_in_place: true
+        optional: true
+        pattern: "*.etl"
+    command:
+      - internal-etl-parser
+      - "{artifact:etl_files}"
+      - "--csv"
+      - "{output}"
+    required_paths: []
+    outputs:
+      - csv
+
+  MailboxParser:
+    enabled: true
+    type: internal_mailbox
+    executable:
+    artifacts:
+      - name: mail_artifacts
+        source: ""
+        destination: "mail"
+        recursive: true
+        optional: true
+        patterns:
+          - "*.pst"
+          - "*.ost"
+          - "*.nst"
+          - "*.msg"
+          - "*.eml"
+          - "*.mbox"
+          - "*.mbx"
+          - "*.olm"
+    command:
+      - internal-mailbox-parser
+      - "{artifact:mail_artifacts}"
+      - "--csv"
+      - "{output}"
+    required_paths: []
+    outputs:
+      - csv
+
+  WindowsMailParser:
+    enabled: true
+    type: internal_windows_mail
+    executable:
+    artifacts:
+      - name: windows_mail_data
+        source: "Users"
+        destination: "windows_mail"
+        recursive: true
+        process_in_place: true
+        optional: true
+        include_path_patterns:
+          - "*/AppData/Local/Comms/UnistoreDB/store.vol"
+          - "*/AppData/Local/Comms/Unistore/data/**/*.dat"
+          - "*/AppData/Local/Packages/microsoft.windowscommunicationsapps_8wekyb3d8bbwe/LocalState/Files/**/EFMData/*.dat"
+    command:
+      - internal-windows-mail-parser
+      - "{artifact:windows_mail_data}"
+      - "--csv"
+      - "{output}"
+    required_paths: []
+    outputs:
+      - csv
+
+  MessagingParser:
+    enabled: true
+    type: internal_messaging
+    executable:
+    artifacts:
+      - name: messaging_app_data
+        source: "Users"
+        destination: "messaging"
+        recursive: true
+        optional: true
+        patterns:
+          - "*.ldb"
+          - "*.log"
+          - "*.sqlite"
+          - "*.sqlite3"
+          - "*.db"
+          - "*.md"
+          - "*.markdown"
+          - "*.json"
+          - "*.txt"
+          - "*.ini"
+          - "*.cfg"
+          - "*.trace"
+          - "*.xml"
+          - "Cookies"
+          - "History"
+          - "Local State"
+          - "Preferences"
+        include_path_patterns:
+          - "Users/*/.codex/*"
+          - "Users/*/.codex/**/*"
+          - "Users/*/AppData/*/ChatGPT/*"
+          - "Users/*/AppData/*/*ChatGPT*/*"
+          - "Users/*/AppData/*/OpenAI/*"
+          - "Users/*/AppData/*/*OpenAI*/*"
+          - "Users/*/AppData/Local/Packages/*OpenAI*/*"
+          - "Users/*/AppData/*/Claude/*"
+          - "Users/*/AppData/*/*Claude*/*"
+          - "Users/*/AppData/*/*Anthropic*/*"
+          - "Users/*/AppData/Local/Packages/*Claude*/*"
+          - "Users/*/AppData/Local/Packages/*Anthropic*/*"
+          - "Users/*/AppData/*/Codex/*"
+          - "Users/*/AppData/*/*Codex*/*"
+          - "Users/*/AppData/*/Obsidian/*"
+          - "Users/*/AppData/*/*Obsidian*/*"
+          - "Users/*/Documents/*/.obsidian/*"
+          - "Users/*/Documents/*/.obsidian/**/*"
+          - "Users/*/Documents/*/*.md"
+          - "Users/*/Documents/*/**/*.md"
+          - "Users/*/OneDrive/*/.obsidian/*"
+          - "Users/*/OneDrive/*/.obsidian/**/*"
+          - "Users/*/OneDrive/*/*.md"
+          - "Users/*/OneDrive/*/**/*.md"
+          - "Users/*/AppData/*/Notion/*"
+          - "Users/*/AppData/*/*Notion*/*"
+          - "Users/*/AppData/Local/Packages/*Notion*/*"
+          - "Users/*/AppData/Local/Packages/*OneNote*/*"
+          - "Users/*/AppData/Local/Packages/*MicrosoftOffice.OneNote*/*"
+          - "Users/*/AppData/*/Microsoft/OneNote/*"
+          - "Users/*/AppData/*/*OneNote*/*"
+          - "Users/*/AppData/*/Evernote/*"
+          - "Users/*/AppData/*/*Evernote*/*"
+          - "Users/*/AppData/*/Adobe/Acrobat/*"
+          - "Users/*/AppData/*/*Adobe*Acrobat*/*"
+          - "Users/*/AppData/*/vlc/*"
+          - "Users/*/AppData/*/*VLC*/*"
+          - "Users/*/AppData/*/FileZilla/*"
+          - "Users/*/AppData/*/*FileZilla*/*"
+          - "Users/*/AppData/*/WinSCP/*"
+          - "Users/*/AppData/*/*WinSCP*/*"
+          - "Users/*/AppData/*/Notepad++/*"
+          - "Users/*/AppData/*/*Notepad++*/*"
+          - "Users/*/AppData/*/AnyDesk/*"
+          - "Users/*/AppData/*/*AnyDesk*/*"
+          - "Users/*/AppData/*/TeamViewer/*"
+          - "Users/*/AppData/*/*TeamViewer*/*"
+          - "Users/*/AppData/*/LogMeIn/*"
+          - "Users/*/AppData/*/*LogMeIn*/*"
+          - "Users/*/AppData/*/GoTo/*"
+          - "Users/*/AppData/*/*GoToAssist*/*"
+          - "Users/*/AppData/*/*GoTo Resolve*/*"
+          - "Users/*/AppData/*/ScreenConnect/*"
+          - "Users/*/AppData/*/*ScreenConnect*/*"
+          - "Users/*/AppData/*/*ConnectWise Control*/*"
+          - "Users/*/AppData/*/Bomgar/*"
+          - "Users/*/AppData/*/*Bomgar*/*"
+          - "Users/*/AppData/*/*BeyondTrust*/*"
+          - "Users/*/AppData/*/Splashtop/*"
+          - "Users/*/AppData/*/*Splashtop*/*"
+          - "Users/*/AppData/*/RustDesk/*"
+          - "Users/*/AppData/*/*RustDesk*/*"
+          - "Users/*/AppData/*/*Chrome Remote Desktop*/*"
+          - "Users/*/AppData/*/*Chromoting*/*"
+          - "Users/*/AppData/*/RemotePC/*"
+          - "Users/*/AppData/*/*RemotePC*/*"
+          - "Users/*/AppData/*/DameWare/*"
+          - "Users/*/AppData/*/*DameWare*/*"
+          - "Users/*/AppData/*/Atera/*"
+          - "Users/*/AppData/*/*Atera*/*"
+          - "Users/*/AppData/*/NinjaRMM/*"
+          - "Users/*/AppData/*/*NinjaOne*/*"
+          - "Users/*/AppData/*/MeshCentral/*"
+          - "Users/*/AppData/*/*MeshCentral*/*"
+          - "Users/*/AppData/*/DWAgent/*"
+          - "Users/*/AppData/*/*DWAgent*/*"
+          - "Users/*/AppData/*/Parsec/*"
+          - "Users/*/AppData/*/*Parsec*/*"
+          - "Users/*/AppData/*/*RealVNC*/*"
+          - "Users/*/AppData/*/*TightVNC*/*"
+          - "Users/*/AppData/*/*UltraVNC*/*"
+          - "Users/*/AppData/*/Microsoft/Teams/*"
+          - "Users/*/AppData/*/*Teams*/*"
+          - "Users/*/AppData/Local/Packages/*Teams*/*"
+          - "Users/*/AppData/Local/Packages/*MSTeams*/*"
+          - "Users/*/AppData/*/Slack/*"
+          - "Users/*/AppData/*/*Slack*/*"
+          - "Users/*/AppData/Local/Packages/*Slack*/*"
+          - "Users/*/AppData/*/discord/*"
+          - "Users/*/AppData/*/*Discord*/*"
+          - "Users/*/AppData/Local/Packages/*Discord*/*"
+          - "Users/*/AppData/*/Microsoft/*WebView*/*"
+          - "Users/*/AppData/*/*WebView*/*"
+          - "Users/*/AppData/*/WhatsApp/*"
+          - "Users/*/AppData/*/*WhatsApp*/*"
+          - "Users/*/AppData/Local/Packages/*WhatsApp*/*"
+          - "Users/*/AppData/*/Signal/*"
+          - "Users/*/AppData/*/*Signal*/*"
+          - "Users/*/AppData/Local/Packages/*Signal*/*"
+          - "Users/*/AppData/*/Telegram Desktop/*"
+          - "Users/*/AppData/*/*Telegram*/*"
+          - "Users/*/AppData/Local/Packages/*Telegram*/*"
+          - "Users/*/AppData/*/Skype/*"
+          - "Users/*/AppData/*/*Skype*/*"
+          - "Users/*/AppData/Local/Packages/*Skype*/*"
+          - "Users/*/AppData/*/Zoom/*"
+          - "Users/*/AppData/*/*Zoom*/*"
+          - "Users/*/AppData/Local/Packages/*Zoom*/*"
+          - "Users/*/AppData/*/Mattermost/*"
+          - "Users/*/AppData/*/*Mattermost*/*"
+          - "Users/*/AppData/Local/Packages/*Mattermost*/*"
+          - "Users/*/AppData/*/ViberPC/*"
+          - "Users/*/AppData/*/*Viber*/*"
+          - "Users/*/AppData/Local/Packages/*Viber*/*"
+    command:
+      - internal-messaging-parser
+      - "{artifact:messaging_app_data}"
+      - "--csv"
+      - "{output}"
+    required_paths: []
+    outputs:
+      - csv
+
+  JLECmd:
+    enabled: true
+    type: dotnet
+    executable: /opt/eztools/JLECmd/JLECmd.dll
+    artifacts:
+      - name: jumplists
+        source: "Users"
+        destination: "jumplists"
+        recursive: true
+        patterns:
+          - "*.automaticDestinations-ms"
+          - "*.customDestinations-ms"
+    command:
+      - dotnet
+      - "{executable}"
+      - "-d"
+      - "{artifact:jumplists}"
+      - "--csv"
+      - "{output}"
+    required_paths:
+      - "{artifact:jumplists}"
+    outputs:
+      - csv
+
+  LECmd:
+    enabled: true
+    type: dotnet
+    executable: /opt/eztools/LECmd/LECmd.dll
+    artifacts:
+      - name: lnk_files
+        source: "Users"
+        destination: "lnk_files"
+        recursive: true
+        pattern: "*.lnk"
+        exclude_patterns:
+          - "*/Start Menu/*"
+    command:
+      - dotnet
+      - "{executable}"
+      - "-d"
+      - "{artifact:lnk_files}"
+      - "--csv"
+      - "{output}"
+    required_paths:
+      - "{artifact:lnk_files}"
+    outputs:
+      - csv
+
+  RBCmd:
+    enabled: false
+    type: dotnet
+    executable: /opt/eztools/RBCmd/RBCmd.dll
+    command: []
+    required_paths: []
+    outputs: []
+
+  SBECmd:
+    enabled: true
+    type: dotnet
+    executable: /opt/eztools/SBECmd/SBECmd.dll
+    artifacts:
+      - name: registry_ntuser
+        source: "Users"
+        destination: "registry/users/ntuser"
+        recursive: true
+        pattern: "NTUSER.DAT"
+      - name: registry_ntuser_logs
+        source: "Users"
+        destination: "registry/users/ntuser"
+        recursive: true
+        patterns:
+          - "NTUSER.DAT.LOG1"
+          - "NTUSER.DAT.LOG2"
+          - "ntuser.dat.LOG1"
+          - "ntuser.dat.LOG2"
+      - name: registry_usrclass
+        source: "Users"
+        destination: "registry/users/usrclass"
+        recursive: true
+        pattern: "UsrClass.dat"
+      - name: registry_usrclass_logs
+        source: "Users"
+        destination: "registry/users/usrclass"
+        recursive: true
+        patterns:
+          - "UsrClass.dat.LOG1"
+          - "UsrClass.dat.LOG2"
+          - "usrclass.dat.LOG1"
+          - "usrclass.dat.LOG2"
+    command:
+      - dotnet
+      - "{executable}"
+      - "-d"
+      - "{artifact_parent:registry_ntuser}"
+      - "--csv"
+      - "{output}"
+      - "--csvf"
+      - "ShellBags.csv"
+    required_paths:
+      - "{artifact_parent:registry_ntuser}"
+    outputs:
+      - csv
+
+profiles:
+  browser-chromium:
+    description: Chromium-family browser artifacts including Chrome and Edge profiles
+    tools:
+      - ChromiumParser
+
+  windows-fast-triage:
+    description: Fast Windows triage without full event log or mailbox processing
+    tools:
+      - MFTECmd
+      - SAMParser
+      - RegistryParser
+      - RECmd
+      - RegistryArtifactParser
+      - SrumParser
+      - UalParser
+      - AmcacheParser
+      - AppCompatCacheParser
+      - SBECmd
+      - PrefetchParser
+      - RecycleParser
+      - FirefoxParser
+      - ChromiumParser
+      - OfficeBackstageParser
+      - UserDictionaryParser
+      - ZoneIdentifierParser
+      - ThumbcacheParser
+      - WebCacheParser
+      - PackageArtifactsParser
+      - TelemetryParser
+      - EtlParser
+      - JLECmd
+      - LECmd
+
+  windows-network-activity:
+    description: Network, VPN, Wi-Fi, browser, cloud, Defender, WER, SRUM, and ETL focused artifacts
+    tools:
+      - RegistryParser
+      - RECmd
+      - RegistryArtifactParser
+      - SrumParser
+      - UalParser
+      - EvtxECmdTriage
+      - FirefoxParser
+      - ChromiumParser
+      - WebCacheParser
+      - BrowserCacheParser
+      - PackageCacheParser
+      - PackageArtifactsParser
+      - TelemetryParser
+      - CloudSyncParser
+      - OneDriveOdlParser
+      - WindowsActivitiesParser
+      - EtlParser
+      - WindowsErrorReportingParser
+      - WindowsDefenderParser
+
+  windows-cloud-email:
+    description: Cloud sync, browser, search, mailbox, Windows Mail, messaging, and indexed content
+    tools:
+      - SIDR
+      - WindowsSearchESEParser
+      - WindowsSearchGatherParser
+      - FirefoxParser
+      - ChromiumParser
+      - WebCacheParser
+      - BrowserCacheParser
+      - PackageCacheParser
+      - PackageArtifactsParser
+      - SQLECmd
+      - CloudSyncParser
+      - OneDriveExplorer
+      - OneDriveOdlParser
+      - MailboxParser
+      - WindowsMailParser
+      - MessagingParser
+
+  windows-no-evtx:
+    description: Windows forensic triage without event log parsing
+    tools:
+      - MFTECmd
+      - MFTECmdUSN
+      - NTFSParseLogFile
+      - MFTECmdI30
+      - SAMParser
+      - RegistryParser
+      - RECmd
+      - RegistryArtifactParser
+      - SrumParser
+      - UalParser
+      - AmcacheParser
+      - AppCompatCacheParser
+      - SBECmd
+      - PrefetchParser
+      - RecycleParser
+      - FirefoxParser
+      - ChromiumParser
+      - OfficeBackstageParser
+      - UserDictionaryParser
+      - ZoneIdentifierParser
+      - ThumbcacheParser
+      - WebCacheParser
+      - PackageCacheParser
+      - PackageArtifactsParser
+      - TelemetryParser
+      - MailboxParser
+      - WindowsMailParser
+      - MessagingParser
+      - EtlParser
+      - JLECmd
+      - LECmd
+
+  windows-basic-evtx:
+    description: Windows forensic triage with selected high-value event logs
+    tools:
+      - MFTECmd
+      - MFTECmdUSN
+      - NTFSParseLogFile
+      - MFTECmdI30
+      - SAMParser
+      - RegistryParser
+      - RECmd
+      - RegistryArtifactParser
+      - SrumParser
+      - UalParser
+      - AmcacheParser
+      - AppCompatCacheParser
+      - SBECmd
+      - EvtxECmdTriage
+      - PrefetchParser
+      - RecycleParser
+      - FirefoxParser
+      - ChromiumParser
+      - OfficeBackstageParser
+      - UserDictionaryParser
+      - ZoneIdentifierParser
+      - ThumbcacheParser
+      - WebCacheParser
+      - PackageCacheParser
+      - PackageArtifactsParser
+      - TelemetryParser
+      - MailboxParser
+      - WindowsMailParser
+      - MessagingParser
+      - EtlParser
+      - JLECmd
+      - LECmd
+
+  windows-full-evtx:
+    description: Windows forensic triage with all event logs
+    tools:
+      - MFTECmd
+      - MFTECmdUSN
+      - NTFSParseLogFile
+      - MFTECmdI30
+      - SAMParser
+      - RegistryParser
+      - RECmd
+      - RegistryArtifactParser
+      - SrumParser
+      - UalParser
+      - AmcacheParser
+      - AppCompatCacheParser
+      - SBECmd
+      - EvtxECmd
+      - PrefetchParser
+      - RecycleParser
+      - FirefoxParser
+      - ChromiumParser
+      - OfficeBackstageParser
+      - UserDictionaryParser
+      - ZoneIdentifierParser
+      - ThumbcacheParser
+      - WebCacheParser
+      - PackageCacheParser
+      - PackageArtifactsParser
+      - TelemetryParser
+      - MailboxParser
+      - WindowsMailParser
+      - MessagingParser
+      - EtlParser
+      - JLECmd
+      - LECmd
+
+  windows-full:
+    description: Complete Windows profile with full event logs, file system metadata, cloud, email, messaging, and browser artifacts
+    include_windows_old: true
+    coverage_categories:
+      application_execution:
+        - AmcacheParser
+        - AppCompatCacheParser
+        - EtlParser
+        - EvtxECmd
+        - JLECmd
+        - LECmd
+        - PECmd
+        - PrefetchParser
+        - RegistryArtifactParser
+        - SrumParser
+        - WindowsActivitiesParser
+      file_folder_opening:
+        - ChromiumParser
+        - FirefoxParser
+        - JLECmd
+        - LECmd
+        - OfficeBackstageParser
+        - RegistryArtifactParser
+        - WebCacheParser
+        - WindowsSearchESEParser
+        - WindowsSearchGatherParser
+        - ZoneIdentifierParser
+      deleted_items_file_existence:
+        - MFTECmd
+        - MFTECmdUSN
+        - MFTECmdLogFile
+        - MFTECmdI30
+        - NTFSParseLogFile
+        - RecycleParser
+        - RegistryArtifactParser
+        - ThumbcacheParser
+        - WindowsSearchESEParser
+        - WindowsSearchGatherParser
+      browser_activity:
+        - BrowserCacheParser
+        - ChromiumParser
+        - FirefoxParser
+        - WebCacheParser
+      cloud_storage:
+        - CloudSyncParser
+        - EtlParser
+        - OneDriveExplorer
+        - OneDriveOdlParser
+        - PackageArtifactsParser
+        - PackageCacheParser
+        - SQLECmd
+      account_usage:
+        - EvtxECmd
+        - RdpCacheParser
+        - RdpVisionReview
+        - RegistryArtifactParser
+        - SAMParser
+      network_activity_location:
+        - EvtxECmd
+        - EtlParser
+        - LECmd
+        - RegistryArtifactParser
+        - SrumParser
+      system_information:
+        - RegistryArtifactParser
+        - RegistryParser
+        - RECmd
+        - UalParser
+        - WindowsDefenderParser
+        - WindowsErrorReportingParser
+      communications_user_content:
+        - MailboxParser
+        - MessagingParser
+        - PackageArtifactsParser
+        - TelemetryParser
+        - UserDictionaryParser
+        - WindowsMailParser
+    tools:
+      - MFTECmd
+      - MFTECmdUSN
+      - MFTECmdLogFile
+      - NTFSParseLogFile
+      - MFTECmdI30
+      - SrumParser
+      - UalParser
+      - SIDR
+      - WindowsSearchESEParser
+      - WindowsSearchGatherParser
+      - WindowsErrorReportingParser
+      - WindowsDefenderParser
+      - EvtxECmd
+      - SAMParser
+      - RegistryParser
+      - RECmd
+      - RegistryArtifactParser
+      - AmcacheParser
+      - AppCompatCacheParser
+      - PECmd
+      - PrefetchParser
+      - RecycleParser
+      - FirefoxParser
+      - ChromiumParser
+      - OfficeBackstageParser
+      - UserDictionaryParser
+      - ZoneIdentifierParser
+      - ThumbcacheParser
+      - RdpCacheParser
+      - RdpVisionReview
+      - WebCacheParser
+      - BrowserCacheParser
+      - PackageCacheParser
+      - PackageArtifactsParser
+      - TelemetryParser
+      - SQLECmd
+      - CloudSyncParser
+      - OneDriveExplorer
+      - OneDriveOdlParser
+      - WindowsActivitiesParser
+      - EtlParser
+      - MailboxParser
+      - WindowsMailParser
+      - MessagingParser
+      - JLECmd
+      - LECmd
+      - SBECmd
+
+  windows-old:
+    description: Parse artifact stores under Windows.old using the existing Windows artifact parsers
+    windows_old: true
+    tools:
+      - SrumParser
+      - UalParser
+      - SIDR
+      - WindowsSearchESEParser
+      - WindowsSearchGatherParser
+      - WindowsErrorReportingParser
+      - WindowsDefenderParser
+      - EvtxECmd
+      - SAMParser
+      - RegistryParser
+      - RECmd
+      - RegistryArtifactParser
+      - AmcacheParser
+      - AppCompatCacheParser
+      - PECmd
+      - PrefetchParser
+      - RecycleParser
+      - FirefoxParser
+      - ChromiumParser
+      - OfficeBackstageParser
+      - UserDictionaryParser
+      - ZoneIdentifierParser
+      - ThumbcacheParser
+      - RdpCacheParser
+      - RdpVisionReview
+      - WebCacheParser
+      - BrowserCacheParser
+      - PackageCacheParser
+      - PackageArtifactsParser
+      - SQLECmd
+      - CloudSyncParser
+      - OneDriveExplorer
+      - OneDriveOdlParser
+      - WindowsActivitiesParser
+      - EtlParser
+      - MailboxParser
+      - WindowsMailParser
+      - MessagingParser
+      - JLECmd
+      - LECmd
+      - SBECmd
+
+  windows-old-evtx:
+    description: Parse Windows.old event logs only
+    windows_old: true
+    tools:
+      - EvtxECmd
+
+  windows-old-recmd:
+    description: Parse Windows.old registry hives with RECmd only
+    windows_old: true
+    tools:
+      - RECmd
+
+  windows-old-amcache:
+    description: Parse Windows.old Amcache hive only
+    windows_old: true
+    tools:
+      - AmcacheParser
+
+  windows-old-appcompat:
+    description: Parse Windows.old AppCompat/ShimCache hives only
+    windows_old: true
+    tools:
+      - AppCompatCacheParser
+
+  windows-old-sqlite:
+    description: Parse Windows.old cloud sync SQLite candidates with SQLECmd only
+    windows_old: true
+    tools:
+      - SQLECmd
+
+  windows-basic:
+    description: Alias for windows-basic-evtx
+    tools:
+      - MFTECmd
+      - MFTECmdUSN
+      - NTFSParseLogFile
+      - MFTECmdI30
+      - SAMParser
+      - RegistryParser
+      - RECmd
+      - RegistryArtifactParser
+      - SrumParser
+      - UalParser
+      - AmcacheParser
+      - AppCompatCacheParser
+      - SBECmd
+      - EvtxECmdTriage
+      - PrefetchParser
+      - RecycleParser
+      - FirefoxParser
+      - ChromiumParser
+      - OfficeBackstageParser
+      - UserDictionaryParser
+      - ZoneIdentifierParser
+      - ThumbcacheParser
+      - WebCacheParser
+      - PackageCacheParser
+      - PackageArtifactsParser
+      - TelemetryParser
+      - MailboxParser
+      - WindowsMailParser
+      - MessagingParser
+      - EtlParser
+      - JLECmd
+      - LECmd
+
+  windows-search-srum:
+    description: Parse SRUM and Windows Search index artifacts
+    tools:
+      - SrumParser
+      - SIDR
+
+  package-cache:
+    description: Parse package app CacheStorage metadata and preserve opaque response bodies
+    tools:
+      - PackageCacheParser
+
+  package-artifacts:
+    description: Parse high-value Microsoft Store app package artifacts
+    tools:
+      - PackageArtifactsParser
+
+  windows-telemetry-artifacts:
+    description: Parse WMI repository, CloudStore, Notifications, AppRepository, AppLocker, and WDAC artifacts
+    tools:
+      - TelemetryParser
+
+  cloud-sqlite:
+    description: Parse cloud sync SQLite databases with SQLECmd maps where available
+    tools:
+      - SQLECmd
+      - CloudSyncParser
+
+  cloud-sync:
+    description: Parse Dropbox, Google Drive, and OneDrive sync artifacts
+    tools:
+      - CloudSyncParser
+      - OneDriveExplorer
+      - OneDriveOdlParser
+      - SQLECmd
+
+  onedrive-complete:
+    description: Parse OneDrive settings databases, dat files, deleted items, hydration state, and logs with OneDriveExplorer where available
+    tools:
+      - OneDriveExplorer
+      - OneDriveOdlParser
+      - CloudSyncParser
+
+  onedrive-logs:
+    description: Parse OneDrive ODL, ODLGZ, ODLSENT, AODL, and AOLD logs
+    tools:
+      - OneDriveOdlParser
+
+  cloud-sync-internal:
+    description: Parse Dropbox, Google Drive, and OneDrive sync artifacts without external cloud tools
+    tools:
+      - CloudSyncParser
+
+  windows-srum:
+    description: Parse SRUM artifacts only
+    tools:
+      - SrumParser
+
+  windows-search:
+    description: Parse Windows Search index artifacts only
+    tools:
+      - SIDR
+      - WindowsSearchESEParser
+      - WindowsSearchGatherParser
+
+  windows-search-ese:
+    description: Parse Windows Search ESE property store using esedbexport
+    tools:
+      - WindowsSearchESEParser
+
+  windows-communications:
+    description: Parse local email containers and common messaging app stores
+    tools:
+      - MailboxParser
+      - WindowsMailParser
+      - MessagingParser
+      - PackageArtifactsParser
+
+  windows-mail:
+    description: Parse Windows Mail store.vol and related body files
+    tools:
+      - WindowsMailParser
+
+  windows-webcache:
+    description: Parse Windows WebCache/WinINet artifacts only
+    tools:
+      - WebCacheParser
+
+  windows-thumbcache:
+    description: Parse Explorer Thumbcache/Iconcache files and correlate them with Windows Search paths where possible
+    tools:
+      - ThumbcacheParser
+      - WindowsSearchESEParser
+
+  thumbcache:
+    description: Parse Explorer Thumbcache/Iconcache files only; use after Windows Search has been parsed for path correlation
+    tools:
+      - ThumbcacheParser
+
+  windows-rdp-cache:
+    description: Inventory and extract Remote Desktop bitmap cache fragments when BMC Tools is configured
+    tools:
+      - RdpCacheParser
+      - RdpVisionReview
+
+  windows-browsers:
+    description: Parse browser history, downloads, cookies, and Windows WebCache artifacts
+    tools:
+      - FirefoxParser
+      - ChromiumParser
+      - BrowserCacheParser
+      - WebCacheParser
+      - WindowsActivitiesParser
+
+  windows-activities:
+    description: Parse Windows 10/11 ActivitiesCache.db timeline artifacts
+    tools:
+      - WindowsActivitiesParser
+
+  windows-etl:
+    description: Parse Windows ETL traces, including AutoLogger process execution evidence where decodable
+    tools:
+      - EtlParser
+
+  windows-wer-defender:
+    description: Parse Windows Error Reporting reports and Microsoft Defender support/cache artifacts
+    tools:
+      - WindowsErrorReportingParser
+      - WindowsDefenderParser
+
+  windows-error-reporting:
+    description: Parse Windows Error Reporting Report.wer crash and problem reports
+    tools:
+      - WindowsErrorReportingParser
+
+  windows-defender:
+    description: Parse Microsoft Defender logs and inventory Defender cache artifacts
+    tools:
+      - WindowsDefenderParser
+
+  ntfs-index-reconcile:
+    description: Targeted MFTECmd $I30 parsing for directories with live-orphan MFT records
+    tools:
+      - MFTECmdI30
+
+  ntfs-filesystem-review:
+    description: Parse NTFS filesystem metadata sources used by the unified filesystem review
+    tools:
+      - MFTECmd
+      - MFTECmdUSN
+      - NTFSParseLogFile
+      - MFTECmdI30
+
+  file-metadata-office:
+    description: Extract embedded metadata from Office and RTF files
+    tools:
+      - FileMetadataOffice
+
+  file-metadata-pictures:
+    description: Extract embedded metadata from likely user-content image files, excluding AppData and Google Drive virtual/cache paths
+    tools:
+      - FileMetadataPicturesUserContent
+
+  file-metadata-pictures-deep:
+    description: Deep extract embedded metadata from image files outside common OS/application roots
+    tools:
+      - FileMetadataPictures
+
+  file-metadata-pictures-user-content:
+    description: Extract embedded metadata from likely user-content image files, excluding AppData and Google Drive virtual/cache paths
+    tools:
+      - FileMetadataPicturesUserContent
+
+  file-metadata-videos:
+    description: Extract embedded metadata from video files
+    tools:
+      - FileMetadataVideos
+
+  file-metadata-executables:
+    description: Extract embedded metadata from executables and scripts
+    tools:
+      - FileMetadataExecutables
+
+  file-metadata-documents:
+    description: Extract embedded metadata from PDFs, text-like documents, and archives
+    tools:
+      - FileMetadataDocuments
+
+  file-metadata-all:
+    description: Extract embedded metadata from common document, media, executable, and archive file types
+    tools:
+      - FileMetadataExtractor
+
+  office-backstage:
+    description: Extract Office Backstage/recent-document cache strings and metadata
+    tools:
+      - OfficeBackstageParser
+      - UserDictionaryParser
+      - ZoneIdentifierParser
+      - ThumbcacheParser
+
+  windows-deep:
+    description: Windows full triage plus SRUM and Windows Search index parsing
+    tools:
+      - MFTECmd
+      - MFTECmdUSN
+      - NTFSParseLogFile
+      - MFTECmdI30
+      - SAMParser
+      - RegistryParser
+      - RECmd
+      - RegistryArtifactParser
+      - SrumParser
+      - AmcacheParser
+      - AppCompatCacheParser
+      - SBECmd
+      - EvtxECmd
+      - PrefetchParser
+      - RecycleParser
+      - FirefoxParser
+      - ChromiumParser
+      - OfficeBackstageParser
+      - UserDictionaryParser
+      - ZoneIdentifierParser
+      - ThumbcacheParser
+      - RdpCacheParser
+      - RdpVisionReview
+      - WebCacheParser
+      - PackageCacheParser
+      - PackageArtifactsParser
+      - MailboxParser
+      - WindowsMailParser
+      - MessagingParser
+      - EtlParser
+      - WindowsErrorReportingParser
+      - WindowsDefenderParser
+      - JLECmd
+      - LECmd
+      - SIDR
+      - WindowsSearchESEParser
+      - WindowsSearchGatherParser
