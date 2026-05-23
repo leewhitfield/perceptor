@@ -1171,6 +1171,14 @@ def test_recycle_and_firefox_outputs_are_normalized(tmp_path):
         "/artifacts/cookies.sqlite,Jean/profile,.example.com,session,abc,/,2026-05-12T13:14:15Z,"
         "2026-05-12T13:15:15Z,2027-05-12T13:14:15Z,0,1\n"
     )
+    downloads_csv = tmp_path / "BrowserDownloads.csv"
+    downloads_csv.write_text(
+        "browser,source_path,profile_path,target_path,tab_url,site_url,referrer,start_time_utc,end_time_utc,"
+        "received_bytes,total_bytes,state,danger_type,interrupt_reason\n"
+        "firefox,/artifacts/places.sqlite,Jean/profile,C:\\Users\\Jean\\Downloads\\file.pdf,"
+        "https://example.com/file.pdf,https://example.com/,,2026-05-12T13:14:15Z,2026-05-12T13:14:16Z,"
+        "123,123,complete,,\n"
+    )
 
     recycle_count = ingest_csv_output(
         db=db,
@@ -1199,14 +1207,25 @@ def test_recycle_and_firefox_outputs_are_normalized(tmp_path):
         tool_name="FirefoxParser",
         path=cookies_csv,
     )
+    download_count = ingest_csv_output(
+        db=db,
+        case_id=case.id,
+        computer_id="computer-1",
+        image_id="image-1",
+        tool_output_id="firefox-download-output",
+        tool_name="FirefoxParser",
+        path=downloads_csv,
+    )
 
     assert recycle_count == 2
     assert history_count == 1
     assert cookie_count == 1
+    assert download_count == 1
     assert db.conn.execute("SELECT COUNT(*) AS count FROM recycle_items").fetchone()["count"] == 1
     assert db.conn.execute("SELECT COUNT(*) AS count FROM recycle_children").fetchone()["count"] == 1
     assert db.conn.execute("SELECT url FROM firefox_history").fetchone()["url"] == "https://example.com/"
     assert db.conn.execute("SELECT host FROM firefox_cookies").fetchone()["host"] == ".example.com"
+    assert db.conn.execute("SELECT target_path FROM browser_downloads").fetchone()["target_path"] == "C:\\Users\\Jean\\Downloads\\file.pdf"
     event_types = [
         row["event_type"]
         for row in db.conn.execute("SELECT event_type FROM timeline_events ORDER BY event_type")

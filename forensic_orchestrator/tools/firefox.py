@@ -43,6 +43,22 @@ FIREFOX_COOKIES_FIELDS = [
     "is_secure",
     "is_http_only",
 ]
+FIREFOX_DOWNLOAD_FIELDS = [
+    "browser",
+    "source_path",
+    "profile_path",
+    "target_path",
+    "tab_url",
+    "site_url",
+    "referrer",
+    "start_time_utc",
+    "end_time_utc",
+    "received_bytes",
+    "total_bytes",
+    "state",
+    "danger_type",
+    "interrupt_reason",
+]
 FIREFOX_ARTIFACT_FIELDS = [
     "browser", "artifact_type", "source_path", "profile_path", "name", "value",
     "url", "title", "host", "local_path", "timestamp_utc", "details_json",
@@ -61,11 +77,13 @@ def parse_firefox_artifacts_to_csv(source: Path, output: Path) -> list[Path]:
     output.mkdir(parents=True, exist_ok=True)
     history_rows = []
     cookie_rows = []
+    download_rows = []
     artifact_rows = []
     session_rows = []
     if source.exists():
         for places in _rglob(source, "places.sqlite"):
             history_rows.extend(_history_rows(places, source))
+            download_rows.extend(_download_rows(places, source))
             artifact_rows.extend(_bookmark_rows(places, source))
         for cookies in _rglob(source, "cookies.sqlite"):
             cookie_rows.extend(_cookie_rows(cookies, source))
@@ -83,13 +101,15 @@ def parse_firefox_artifacts_to_csv(source: Path, output: Path) -> list[Path]:
             session_rows.extend(_session_rows(session, source))
     history_csv = output / "FirefoxHistory.csv"
     cookies_csv = output / "FirefoxCookies.csv"
+    downloads_csv = output / "BrowserDownloads.csv"
     artifacts_csv = output / "FirefoxArtifacts.csv"
     sessions_csv = output / "FirefoxSessionEntries.csv"
     _write_csv(history_csv, FIREFOX_HISTORY_FIELDS, history_rows)
     _write_csv(cookies_csv, FIREFOX_COOKIES_FIELDS, cookie_rows)
+    _write_csv(downloads_csv, FIREFOX_DOWNLOAD_FIELDS, download_rows)
     _write_csv(artifacts_csv, FIREFOX_ARTIFACT_FIELDS, artifact_rows)
     _write_csv(sessions_csv, FIREFOX_SESSION_FIELDS, session_rows)
-    return [history_csv, cookies_csv, artifacts_csv, sessions_csv]
+    return [history_csv, cookies_csv, downloads_csv, artifacts_csv, sessions_csv]
 
 
 def _rglob(root: Path, pattern: str) -> list[Path]:
@@ -179,6 +199,48 @@ def _cookie_rows(path: Path, source_root: Path) -> list[dict[str, object]]:
         }
         for row in rows
     ]
+
+
+def _download_rows(path: Path, source_root: Path) -> list[dict[str, object]]:
+    query = """
+        SELECT moz_places.id AS place_id, moz_places.url, moz_anno_attributes.name AS annotation_name,
+               moz_annos.content, moz_annos.dateAdded, moz_annos.lastModified
+        FROM moz_annos
+        JOIN moz_anno_attributes ON moz_anno_attributes.id = moz_annos.anno_attribute_id
+        JOIN moz_places ON moz_places.id = moz_annos.place_id
+        WHERE moz_anno_attributes.name LIKE 'downloads/%'
+        ORDER BY moz_annos.dateAdded
+    """
+    grouped: dict[int, dict[str, object]] = {}
+    for row in _query(path, query):
+        place_id = row["place_id"]
+        item = grouped.setdefault(
+            place_id,
+            {
+                "browser": "firefox",
+                "source_path": str(path),
+                "profile_path": _profile_path(path, source_root),
+                "tab_url": row["url"] or "",
+                "site_url": _site_url(row["url"]),
+                "start_time_utc": _firefox_time(row["dateAdded"]),
+                "end_time_utc": _firefox_time(row["lastModified"]),
+            },
+        )
+        name = str(row["annotation_name"] or "")
+        content = str(row["content"] or "")
+        if name.endswith("destinationFileURI"):
+            item["target_path"] = _file_uri_to_path(content)
+        elif name.endswith("metaData"):
+            metadata = _parse_download_metadata(content)
+            if metadata:
+                item["state"] = _download_state(metadata.get("state"))
+                item["end_time_utc"] = _unix_millis_time(metadata.get("endTime")) or item.get("end_time_utc")
+                size = metadata.get("fileSize")
+                if size is not None:
+                    item["received_bytes"] = str(size)
+                    item["total_bytes"] = str(size)
+                item["danger_type"] = "deleted" if metadata.get("deleted") is True else ""
+    return [row for row in grouped.values() if row.get("target_path") or row.get("tab_url")]
 
 
 def _bookmark_rows(path: Path, source_root: Path) -> list[dict[str, object]]:
@@ -532,6 +594,56 @@ def _unix_time(value: int | None) -> str | None:
         return dt.isoformat().replace("+00:00", "Z")
     except (OverflowError, ValueError):
         return None
+
+
+def _unix_millis_time(value: object) -> str | None:
+    number = _int(value)
+    if number is None:
+        return None
+    try:
+        dt = UNIX_EPOCH + timedelta(milliseconds=number)
+        return dt.isoformat().replace("+00:00", "Z")
+    except (OverflowError, ValueError):
+        return None
+
+
+def _parse_download_metadata(value: str) -> dict[str, object]:
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _download_state(value: object) -> str:
+    if value is None:
+        return ""
+    states = {0: "in_progress", 1: "complete", 2: "failed", 3: "canceled"}
+    number = _int(value)
+    if number is not None:
+        return states.get(number, str(number))
+    return str(value)
+
+
+def _file_uri_to_path(value: str) -> str:
+    parsed = urlparse(value)
+    if parsed.scheme.lower() != "file":
+        return value
+    path = parsed.path
+    if parsed.netloc:
+        return f"//{parsed.netloc}{path}"
+    if re.match(r"^/[A-Za-z]:/", path):
+        path = path[1:]
+    return path.replace("/", "\\")
+
+
+def _site_url(value: str | None) -> str:
+    if not value:
+        return ""
+    parsed = urlparse(value)
+    if not parsed.scheme or not parsed.netloc:
+        return ""
+    return f"{parsed.scheme}://{parsed.netloc}/"
 
 
 def _read_json(path: Path) -> object:

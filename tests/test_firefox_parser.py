@@ -27,11 +27,14 @@ def test_firefox_parser_writes_history_and_cookie_csvs(tmp_path):
 
     history = (tmp_path / "out" / "FirefoxHistory.csv").read_text()
     cookie_text = (tmp_path / "out" / "FirefoxCookies.csv").read_text()
-    assert len(outputs) == 4
+    download_text = (tmp_path / "out" / "BrowserDownloads.csv").read_text()
+    assert len(outputs) == 5
     assert "https://example.com/" in history
     assert "Example" in history
     assert ".example.com" in cookie_text
     assert "session" in cookie_text
+    assert "C:\\Users\\Jean\\Downloads\\example.pdf" in download_text
+    assert "https://example.com/download.pdf" in download_text
     with (tmp_path / "out" / "FirefoxArtifacts.csv").open(newline="", encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
     assert any(row["artifact_type"] == "bookmark" and row["url"] == "https://example.com/" for row in rows)
@@ -96,9 +99,26 @@ def create_places(path):
           id INTEGER PRIMARY KEY, fk INTEGER, title TEXT, type INTEGER,
           dateAdded INTEGER, lastModified INTEGER
         );
+        CREATE TABLE moz_anno_attributes (
+          id INTEGER PRIMARY KEY, name TEXT
+        );
+        CREATE TABLE moz_annos (
+          id INTEGER PRIMARY KEY, place_id INTEGER, anno_attribute_id INTEGER,
+          content TEXT, dateAdded INTEGER, lastModified INTEGER
+        );
         INSERT INTO moz_places VALUES (1, 'https://example.com/', 'Example', 3, 1, 0, 100, 2);
+        INSERT INTO moz_places VALUES (2, 'https://example.com/download.pdf', 'example.pdf', 1, 0, 0, 10, 1);
         INSERT INTO moz_historyvisits VALUES (1, 1, 1778587200000000, 1);
         INSERT INTO moz_bookmarks VALUES (1, 1, 'Example Bookmark', 1, 1778587200000000, 1778587200000000);
+        INSERT INTO moz_anno_attributes VALUES (1, 'downloads/destinationFileURI');
+        INSERT INTO moz_anno_attributes VALUES (2, 'downloads/metaData');
+        INSERT INTO moz_annos VALUES (
+          1, 2, 1, 'file:///C:/Users/Jean/Downloads/example.pdf', 1778587200000000, 1778587200000000
+        );
+        INSERT INTO moz_annos VALUES (
+          2, 2, 2, '{"state":1,"deleted":false,"endTime":1778587200500,"fileSize":1234}',
+          1778587200000000, 1778587200000000
+        );
         """
     )
     conn.close()

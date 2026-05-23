@@ -619,7 +619,7 @@ def test_internal_mailbox_and_messaging_parsers_are_configured():
 
     assert mailbox.type == "internal_mailbox"
     assert mailbox.artifacts[0].name == "mail_artifacts"
-    assert mailbox.artifacts[0].source == ""
+    assert mailbox.artifacts[0].source == "Users"
     assert "*.pst" in mailbox.artifacts[0].patterns
     assert "*.mbx" in mailbox.artifacts[0].patterns
     assert messaging.type == "internal_messaging"

@@ -1236,6 +1236,19 @@ def ingest_csv_output(
                                     row=dict(row),
                                 )
                             )
+                        elif "target_path" in row:
+                            browser_download_rows.append(
+                                normalized_browser_download_row(
+                                    case_id=case_id,
+                                    computer_id=computer_id,
+                                    image_id=image_id,
+                                    tool_output_id=tool_output_id,
+                                    tool_name=tool_name,
+                                    source_csv=path,
+                                    row_number=row_number,
+                                    row=dict(row),
+                                )
+                            )
                         elif "host" in row:
                             firefox_cookie_rows.append(
                                 normalized_firefox_cookie_row(
