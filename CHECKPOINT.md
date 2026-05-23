@@ -437,21 +437,14 @@ Recommended VM upgrade:
 - Increase RAM to at least 32 GB; 64 GB is preferable for larger images.
 - More cores will help concurrent parsing, compression/decompression, external tools, and indexing.
 
-## Next Suggested Work
+## Remaining Backlog
 
-1. Add a storage migration layer for DuckDB/Parquet-backed high-volume tables.
-2. Add a cleanup command that can prune redundant `parsed_rows` and duplicate normalized rows safely.
-3. Add incremental rebuilds for timeline/correlation tables instead of full rebuilds.
-4. Add DB/table index review after moving to NVMe.
-5. Continue artifact work after the VM upgrade stabilizes performance.
+This checkpoint no longer carries a task backlog. The active reference-derived
+backlog is maintained in:
 
-Future additions bucket:
-
-- Event-log detection enrichment: keep `EvtxECmd` as the canonical parser for
-  normalized `evtx_events`. Consider adding Hayabusa later as a derived
-  detection/timeline pass only, storing compact rule hits and references back to
-  `evtx_events` rather than duplicating raw event-log content. Chainsaw remains
-  a possible optional hunt/search tool, not a primary event-log ingestion path.
+```text
+docs/reference-review-recommendations.md
+```
 
 ## Report Plugins
 
