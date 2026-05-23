@@ -19,6 +19,7 @@ from forensic_orchestrator.paths import WorkspacePaths
 from forensic_orchestrator.safety import MissingDependencyError, ToolError, require_dependency
 
 from .ingest import ingest_csv_output
+from .archive_inventory import parse_archive_inventory_to_csv
 from .chromium import parse_chromium_artifacts_to_csv
 from .browser_cache import parse_browser_cache_artifacts_to_csv
 from .cloud_sync import parse_cloud_sync_artifacts_to_csv
@@ -28,7 +29,7 @@ from .firefox import parse_firefox_artifacts_to_csv
 from .file_metadata import parse_file_metadata_to_csv
 from .mailbox import parse_mailbox_artifacts_to_csv
 from .messaging import parse_messaging_artifacts_to_csv
-from .ntfs_index import parse_ntfs_index_with_mftecmd_to_csv
+from .ntfs_index import parse_ntfs_index_to_csv
 from .onedrive_explorer import parse_onedrive_explorer_to_csv
 from .onedrive_odl import parse_onedrive_odl_to_csv
 from .office_backstage import parse_office_backstage_artifacts_to_csv
@@ -46,6 +47,7 @@ from .registry import build_tool_command, required_paths
 from .rdp_cache import parse_rdp_cache_to_csv
 from .rdp_vision_review import parse_rdp_vision_review_to_csv
 from .sam import parse_sam_to_csv
+from .spotify import parse_spotify_artifacts_to_csv
 from .srum import parse_srum_artifacts_to_csv
 from .ual import parse_ual_artifacts_to_csv
 from .webcache import parse_webcache_artifacts_to_csv
@@ -74,6 +76,17 @@ def file_sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _source_scope_from_output(output: Path) -> str:
+    lowered = str(output).lower().replace("\\", "/")
+    if "windows.old" in lowered or "windows_old" in lowered:
+        return "Windows.old"
+    if re.search(r"(^|[/_. -])vsc([0-9]+|[/_. -]|$)", lowered) or re.search(
+        r"(^|[/_. -])snapshot([0-9]+|[/_. -]|$)", lowered
+    ):
+        return "VSC"
+    return "live"
 
 
 def parse_evtx_parser_errors(stdout_text: str, stderr_text: str = "") -> dict[str, dict[str, object]]:
@@ -154,6 +167,7 @@ def validate_tool(
         "internal_onedrive_odl",
         "internal_package_cache",
         "internal_package_artifacts",
+        "internal_spotify",
         "internal_rdp_cache",
         "internal_rdp_vision_review",
         "internal_telemetry",
@@ -167,6 +181,7 @@ def validate_tool(
         "internal_registry",
         "internal_registry_artifacts",
         "internal_file_metadata",
+        "internal_archive_inventory",
         "internal_mailbox",
         "internal_windows_mail",
         "internal_messaging",
@@ -250,6 +265,7 @@ def run_internal_prefetch_tool(
     dry_run: bool,
 ) -> object:
     job_id = str(uuid.uuid4())
+    source_scope = _source_scope_from_output(output)
     job_dir = output / "_job"
     job_dir.mkdir(parents=True, exist_ok=True)
     stdout_path = job_dir / "stdout.txt"
@@ -261,6 +277,7 @@ def run_internal_prefetch_tool(
             "case_id": case_id,
             "image_id": image_id,
             "computer_id": computer_id,
+            "source_scope": source_scope,
             "tool_name": tool.name,
             "tool_version": "internal-prefetch-v1",
             "command": command,
@@ -315,18 +332,25 @@ def run_internal_prefetch_tool(
     except Exception as exc:
         stdout_path.write_text("")
         stderr_path.write_text(str(exc) + "\n")
-        exit_code = 1
+        source_missing = isinstance(exc, FileNotFoundError) and source_scope == "Windows.old"
+        exit_code = 0 if source_missing else 1
     db.finish_job(job_id, utc_now(), exit_code)
+    source_missing = bool(exit_code == 0 and stderr_path.exists() and stderr_path.read_text(errors="replace").strip())
     db.log_activity(
         case_id=case_id,
         computer_id=computer_id,
         image_id=image_id,
         job_id=job_id,
-        level="error" if exit_code else "info",
-        event="job.finished",
-        message=f"Finished {tool.name} with exit code {exit_code}",
+        level="warning" if source_missing else ("error" if exit_code else "info"),
+        event="tool.source_not_present" if source_missing else "job.finished",
+        message=(
+            f"{tool.name} source artifact was not present in {source_scope}; recorded as no source artifact"
+            if source_missing
+            else f"Finished {tool.name} with exit code {exit_code}"
+        ),
         details={
             "exit_code": exit_code,
+            "source_scope": source_scope,
             "stdout_path": str(stdout_path),
             "stderr_path": str(stderr_path),
         },
@@ -829,6 +853,34 @@ def run_internal_package_artifacts_tool(
     )
 
 
+def run_internal_spotify_tool(
+    *,
+    db: Database,
+    case_id: str,
+    image_id: str,
+    computer_id: str | None,
+    tool: ToolDefinition,
+    command: list[str],
+    output: Path,
+    artifacts: dict[str, Path],
+    dry_run: bool,
+) -> object:
+    return run_internal_csv_tool(
+        db=db,
+        case_id=case_id,
+        image_id=image_id,
+        computer_id=computer_id,
+        tool=tool,
+        command=command,
+        output=output,
+        artifacts=artifacts,
+        dry_run=dry_run,
+        artifact_name="spotify_profiles",
+        parser_description="internal Spotify artifact parser",
+        parse_to_csv=parse_spotify_artifacts_to_csv,
+    )
+
+
 def run_internal_rdp_cache_tool(
     *,
     db: Database,
@@ -1192,6 +1244,34 @@ def run_internal_file_metadata_tool(
     )
 
 
+def run_internal_archive_inventory_tool(
+    *,
+    db: Database,
+    case_id: str,
+    image_id: str,
+    computer_id: str | None,
+    tool: ToolDefinition,
+    command: list[str],
+    output: Path,
+    artifacts: dict[str, Path],
+    dry_run: bool,
+) -> object:
+    return run_internal_csv_tool(
+        db=db,
+        case_id=case_id,
+        image_id=image_id,
+        computer_id=computer_id,
+        tool=tool,
+        command=command,
+        output=output,
+        artifacts=artifacts,
+        dry_run=dry_run,
+        artifact_name="archive_inventory_root",
+        parser_description="internal archive inventory parser",
+        parse_to_csv=parse_archive_inventory_to_csv,
+    )
+
+
 def run_internal_mailbox_tool(
     *,
     db: Database,
@@ -1344,9 +1424,7 @@ def run_internal_ntfs_index_mftecmd_tool(
             output_folder=output,
         )
     try:
-        if not tool.executable:
-            raise ToolError("MFTECmdI30 requires an MFTECmd executable path")
-        csv_paths = parse_ntfs_index_with_mftecmd_to_csv(
+        csv_paths = parse_ntfs_index_to_csv(
             db=db,
             case_id=case_id,
             image_id=image_id,
@@ -1354,8 +1432,6 @@ def run_internal_ntfs_index_mftecmd_tool(
             raw_image=raw_image,
             offset_sectors=offset_sectors,
             output=output,
-            mftecmd_executable=Path(tool.executable),
-            dotnet_path=Path(command[0]),
         )
         stdout_path.write_text("\n".join(str(path) for path in csv_paths) + "\n")
         stderr_path.write_text("")
@@ -1667,6 +1743,7 @@ def run_tool(
     if output_namespace:
         output = output / output_namespace
     output = output / tool.name
+    source_scope = _source_scope_from_output(output)
     output.mkdir(parents=True, exist_ok=True)
     prepared_registry_logs: list[Path] = []
     if not dry_run and tool.name in {"RECmd", "AmcacheParser", "AppCompatCacheParser", "SBECmd"}:
@@ -1898,6 +1975,18 @@ def run_tool(
             artifacts=artifact_paths,
             dry_run=dry_run,
         )
+    elif tool.type == "internal_spotify":
+        result = run_internal_spotify_tool(
+            db=db,
+            case_id=case_id,
+            image_id=image_id,
+            computer_id=computer_id,
+            tool=tool,
+            command=command,
+            output=output,
+            artifacts=artifact_paths,
+            dry_run=dry_run,
+        )
     elif tool.type == "internal_rdp_cache":
         result = run_internal_rdp_cache_tool(
             db=db,
@@ -2042,6 +2131,18 @@ def run_tool(
             artifacts=artifact_paths,
             dry_run=dry_run,
         )
+    elif tool.type == "internal_archive_inventory":
+        result = run_internal_archive_inventory_tool(
+            db=db,
+            case_id=case_id,
+            image_id=image_id,
+            computer_id=computer_id,
+            tool=tool,
+            command=command,
+            output=output,
+            artifacts=artifact_paths,
+            dry_run=dry_run,
+        )
     elif tool.type == "internal_mailbox":
         result = run_internal_mailbox_tool(
             db=db,
@@ -2116,6 +2217,7 @@ def run_tool(
             command=command,
             output_folder=output,
             dry_run=dry_run,
+            source_scope=source_scope,
         )
     if not dry_run and computer_id:
         csv_files = sorted(output.glob("*.csv"))

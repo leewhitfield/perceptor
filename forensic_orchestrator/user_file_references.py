@@ -7,6 +7,7 @@ from pathlib import PureWindowsPath
 from typing import Any, Iterable
 
 from forensic_orchestrator.activity_contract import activity_contract_row
+from forensic_orchestrator.analytics_query import query_one, query_rows
 from forensic_orchestrator.db import Database, utc_now
 
 
@@ -49,7 +50,9 @@ def rebuild_user_controlled_file_references(
 
 def _defender_rows(db: Database, *, case_id: str, image_id: str | None) -> list[dict[str, Any]]:
     where, params = _case_image_where("windows_defender_events", case_id, image_id)
-    source_rows = db.conn.execute(
+    source_rows = query_rows(
+        db,
+        "windows_defender_events",
         f"""
         SELECT * FROM windows_defender_events
         WHERE {where}
@@ -60,7 +63,7 @@ def _defender_rows(db: Database, *, case_id: str, image_id: str | None) -> list[
           )
         """,
         params,
-    ).fetchall()
+    )
     rows: list[dict[str, Any]] = []
     for row in source_rows:
         text = "\n".join(str(row[key] or "") for key in ("path", "resource", "message"))
@@ -106,7 +109,12 @@ def _defender_rows(db: Database, *, case_id: str, image_id: str | None) -> list[
 
 def _wer_rows(db: Database, *, case_id: str, image_id: str | None) -> list[dict[str, Any]]:
     where, params = _case_image_where("windows_error_reports", case_id, image_id)
-    source_rows = db.conn.execute(f"SELECT * FROM windows_error_reports WHERE {where}", params).fetchall()
+    source_rows = query_rows(
+        db,
+        "windows_error_reports",
+        f"SELECT * FROM windows_error_reports WHERE {where}",
+        params,
+    )
     rows: list[dict[str, Any]] = []
     for row in source_rows:
         text = "\n".join(
@@ -154,7 +162,9 @@ def _wer_rows(db: Database, *, case_id: str, image_id: str | None) -> list[dict[
 
 def _etl_rows(db: Database, *, case_id: str, image_id: str | None) -> list[dict[str, Any]]:
     where, params = _case_image_where("etl_events", case_id, image_id)
-    source_rows = db.conn.execute(
+    source_rows = query_rows(
+        db,
+        "etl_events",
         f"""
         SELECT * FROM etl_events
         WHERE {where}
@@ -165,7 +175,7 @@ def _etl_rows(db: Database, *, case_id: str, image_id: str | None) -> list[dict[
           )
         """,
         params,
-    ).fetchall()
+    )
     rows: list[dict[str, Any]] = []
     for row in source_rows:
         text = "\n".join(str(row[key] or "") for key in ("image_name", "command_line", "payload_strings_json"))
@@ -306,7 +316,9 @@ def _resolve_cloud_transfer(
     transfer_id = PureWindowsPath(interpreted.get("file_name") or "").stem
     if not transfer_id:
         return interpreted
-    row = db.conn.execute(
+    row = query_one(
+        db,
+        "google_drive_cache_map",
         """
         SELECT virtual_path, file_name, cache_path, windows_cache_path, cache_id, mapping_method, evidence_basis
         FROM google_drive_cache_map
@@ -318,7 +330,7 @@ def _resolve_cloud_transfer(
         LIMIT 1
         """,
         (case_id, image_id, transfer_id),
-    ).fetchone()
+    )
     if row is None:
         return interpreted
     interpreted = dict(interpreted)

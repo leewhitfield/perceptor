@@ -7,7 +7,7 @@ import pytest
 from forensic_orchestrator.db import Database
 from forensic_orchestrator.mounting.workflow import mount_image, unmount_image
 from forensic_orchestrator.paths import WorkspacePaths
-from forensic_orchestrator.safety import EncryptedImageError
+from forensic_orchestrator.safety import EncryptedImageError, PartitionError
 
 
 def test_dry_run_mount_records_jobs_without_dependencies(tmp_path):
@@ -121,6 +121,33 @@ Units are in 512-byte sectors
     assert mount_row["offset_bytes"] == 63 * 512
     rows = db.conn.execute("SELECT tool_name FROM jobs ORDER BY start_time").fetchall()
     assert [row["tool_name"] for row in rows] == ["fsstat", "mmls", "fsstat"]
+
+
+def test_raw_mount_does_not_try_ewfmount_when_mmls_fails(tmp_path):
+    paths = WorkspacePaths(tmp_path)
+    db = Database(paths.db_path())
+    case_id = "case-1"
+    image_id = "image-1"
+    raw = tmp_path / "disk.raw"
+    raw.write_bytes(b"not a real raw image")
+
+    paths.ensure_case_tree(case_id)
+    db.create_case(case_id, paths.case_dir(case_id))
+    image = db.add_image(image_id, case_id, raw)
+
+    fsstat_fail = subprocess.CompletedProcess(["fsstat", str(raw)], 1, "", "unsupported")
+    mmls_fail = subprocess.CompletedProcess(["mmls", str(raw)], 1, "", "unsupported")
+
+    with patch("forensic_orchestrator.mounting.workflow.validate_mmls_available"), patch(
+        "forensic_orchestrator.mounting.workflow.validate_ewfmount_available"
+    ) as ewfmount_available, patch(
+        "forensic_orchestrator.mounting.workflow.subprocess.run", side_effect=[fsstat_fail, mmls_fail]
+    ):
+        with pytest.raises(PartitionError, match="raw source"):
+            mount_image(db=db, paths=paths, case_id=case_id, image=image, dry_run=False)
+
+    ewfmount_available.assert_not_called()
+    assert db.latest_mount(case_id, image_id) is None
 
 
 def test_fsstat_ntfs_volume_records_offset_zero(tmp_path):

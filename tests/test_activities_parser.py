@@ -2,6 +2,7 @@ import csv
 import sqlite3
 from pathlib import Path
 
+from forensic_orchestrator.analytics_query import query_one, query_rows
 from forensic_orchestrator.db import Database
 from forensic_orchestrator.timeline import timeline_events_from_rows
 from forensic_orchestrator.tools.activities import parse_windows_activities_to_csv
@@ -97,9 +98,12 @@ def test_windows_activities_ingest_populates_db(tmp_path):
         path=csv_path,
     )
 
-    row = db.conn.execute("SELECT * FROM windows_activities").fetchone()
+    row = query_one(db, "windows_activities", "SELECT * FROM windows_activities")
     assert row["app_display_name"] == "File Explorer"
     assert row["file_name"] == "report.docx"
     assert row["content_uri"] == "file:///C:/Users/Devon/Documents/report.docx"
-    event_types = {row["event_type"] for row in db.conn.execute("SELECT event_type FROM timeline_events")}
+    event_types = {
+        row["event_type"]
+        for row in query_rows(db, "timeline_events", "SELECT event_type FROM timeline_events")
+    }
     assert "windows_activity_started" in event_types

@@ -5,6 +5,8 @@ import csv
 from pathlib import Path
 from typing import Any
 
+from forensic_orchestrator.common_dialog_resolution import resolved_common_dialog_values
+
 
 def normalized_recmd_detail_row(
     *,
@@ -83,11 +85,14 @@ def normalized_recmd_detail_row(
             "last_write_timestamp": _text(row.get("LastWriteTimestamp")),
         }
     if artifact == "userassist":
+        program_name = _text(row.get("ProgramName"))
+        if _is_userassist_control_value(program_name):
+            return None
         return "registry_userassist", {
             **base,
             "batch_key_path": _text(row.get("BatchKeyPath")),
             "batch_value_name": _text(row.get("BatchValueName")),
-            "program_name": _text(row.get("ProgramName")),
+            "program_name": program_name,
             "run_counter": _text(row.get("RunCounter")),
             "focus_count": _text(row.get("FocusCount")),
             "focus_time": _text(row.get("FocusTime")),
@@ -104,6 +109,7 @@ def normalized_recmd_detail_row(
             "file_name": _text(row.get("FileName")),
         }
     if artifact in {"opensavepidlmru", "lastvisitedpidlmru"}:
+        executable = _text(row.get("Executable"))
         return "registry_common_dialog_mru", {
             **base,
             "artifact": artifact,
@@ -112,10 +118,11 @@ def normalized_recmd_detail_row(
             "batch_key_path": _text(row.get("BatchKeyPath")),
             "mru_position": _text(row.get("MruPosition")),
             "batch_value_name": _text(row.get("BatchValueName")),
-            "executable": _text(row.get("Executable")),
+            "executable": executable,
             "absolute_path": _text(row.get("AbsolutePath")),
             "opened_on": _text(row.get("OpenedOn")),
             "details": _text(row.get("Details")),
+            **resolved_common_dialog_values(executable),
         }
     if artifact == "trusteddocuments":
         return "registry_trusted_documents", {
@@ -184,3 +191,8 @@ def _text(value: Any) -> str | None:
         return None
     normalized = str(value).strip()
     return normalized or None
+
+
+def _is_userassist_control_value(value: str | None) -> bool:
+    text = (value or "").casefold()
+    return text == "version" or text.startswith("ueme_ctl")

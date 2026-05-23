@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from forensic_orchestrator.artifact_correlations import rebuild_artifact_correlations
+from forensic_orchestrator.common_dialog_resolution import rebuild_common_dialog_application_resolutions
 from forensic_orchestrator.computer_inventory import rebuild_computer_inventory
 from forensic_orchestrator.correlation import rebuild_file_correlations
 from forensic_orchestrator.db import Database
@@ -68,6 +69,7 @@ from forensic_orchestrator.tools.normalized import (
     normalized_registry_hive_row,
     normalized_sam_account_row,
     normalized_srum_record_row,
+    normalized_spotify_artifact_row,
     normalized_telemetry_artifact_row,
     normalized_thumbcache_entry_row,
     normalized_ual_record_row,
@@ -78,6 +80,7 @@ from forensic_orchestrator.tools.normalized import (
     normalized_windows_error_report_row,
     normalized_windows_search_gather_log_row,
     normalized_windows_activity_row,
+    normalized_archive_entry_row,
     normalized_windows_search_file_row,
     normalized_windows_search_internet_history_row,
     normalized_zone_identifier_ads_row,
@@ -86,7 +89,7 @@ from forensic_orchestrator.tools.normalized import (
     windows_search_property_rows,
     webcache_file_access_row_from_entry,
 )
-from forensic_orchestrator.tools.prefetch_items import normalized_prefetch_row
+from forensic_orchestrator.tools.prefetch_items import normalized_prefetch_row, normalized_prefetch_run_time_rows
 from forensic_orchestrator.tools.recmd import normalized_recmd_detail_row, recmd_ownership_rows
 from forensic_orchestrator.tools.shortcuts import normalized_shortcut_rows
 from forensic_orchestrator.tools.taskband import taskband_pin_rows_from_registry_artifact
@@ -134,6 +137,7 @@ def ingest_csv_output(
     rows = []
     shortcut_rows = []
     prefetch_rows = []
+    prefetch_run_time_rows = []
     sam_rows = []
     registry_hive_rows = []
     registry_artifact_rows = []
@@ -188,11 +192,13 @@ def ingest_csv_output(
     onedrive_log_rows = []
     package_cache_rows = []
     package_artifact_rows = []
+    spotify_artifact_rows = []
     telemetry_artifact_rows = []
     windows_activity_rows = []
     webcache_rows = []
     webcache_file_access_rows = []
     file_internal_metadata_rows = []
+    archive_entry_rows = []
     mailbox_message_rows = []
     mailbox_attachment_rows = []
     windows_mail_store_rows = []
@@ -241,6 +247,7 @@ def ingest_csv_output(
         "FileMetadataVideos",
         "FileMetadataExecutables",
         "FileMetadataDocuments",
+        "ArchiveInventoryParser",
         "MailboxParser",
         "OfficeBackstageParser",
         "UserDictionaryParser",
@@ -321,11 +328,13 @@ def ingest_csv_output(
         nonlocal onedrive_log_rows
         nonlocal package_cache_rows
         nonlocal package_artifact_rows
+        nonlocal spotify_artifact_rows
         nonlocal telemetry_artifact_rows
         nonlocal windows_activity_rows
         nonlocal webcache_rows
         nonlocal webcache_file_access_rows
         nonlocal file_internal_metadata_rows
+        nonlocal archive_entry_rows
         nonlocal mailbox_message_rows
         nonlocal mailbox_attachment_rows
         nonlocal windows_mail_store_rows
@@ -391,6 +400,11 @@ def ingest_csv_output(
 
         insert_normalized("shortcut_items", shortcut_rows, db.insert_shortcut_items)
         insert_normalized("prefetch_items", prefetch_rows, db.insert_prefetch_items)
+        insert_normalized(
+            "prefetch_run_times",
+            prefetch_run_time_rows,
+            lambda rows: db.insert_normalized_artifact_rows("prefetch_run_times", rows),
+        )
         insert_normalized("sam_accounts", sam_rows, db.insert_sam_accounts)
         insert_normalized("registry_hives", registry_hive_rows, db.insert_registry_hives)
         insert_normalized("registry_artifacts", registry_artifact_rows, db.insert_registry_artifacts)
@@ -448,11 +462,13 @@ def ingest_csv_output(
         insert_normalized("onedrive_log_entries", onedrive_log_rows, db.insert_onedrive_log_entries)
         insert_normalized("package_cache_entries", package_cache_rows, db.insert_package_cache_entries)
         insert_normalized("package_artifacts", package_artifact_rows, db.insert_package_artifacts)
+        insert_normalized("spotify_artifacts", spotify_artifact_rows, db.insert_spotify_artifacts)
         insert_normalized("telemetry_artifacts", telemetry_artifact_rows, db.insert_telemetry_artifacts)
         insert_normalized("windows_activities", windows_activity_rows, db.insert_windows_activities)
         insert_normalized("webcache_entries", webcache_rows, db.insert_webcache_entries)
         insert_normalized("webcache_file_accesses", webcache_file_access_rows, db.insert_webcache_file_accesses)
         insert_normalized("file_internal_metadata", file_internal_metadata_rows, db.insert_file_internal_metadata)
+        insert_normalized("archive_entries", archive_entry_rows, db.insert_archive_entries)
         insert_normalized("mailbox_messages", mailbox_message_rows, db.insert_mailbox_messages)
         insert_normalized("mailbox_attachments", mailbox_attachment_rows, db.insert_mailbox_attachments)
         insert_normalized("windows_mail_store_rows", windows_mail_store_rows, db.insert_windows_mail_store_rows)
@@ -540,11 +556,13 @@ def ingest_csv_output(
         onedrive_log_rows = []
         package_cache_rows = []
         package_artifact_rows = []
+        spotify_artifact_rows = []
         telemetry_artifact_rows = []
         windows_activity_rows = []
         webcache_rows = []
         webcache_file_access_rows = []
         file_internal_metadata_rows = []
+        archive_entry_rows = []
         mailbox_message_rows = []
         mailbox_attachment_rows = []
         windows_mail_store_rows = []
@@ -584,19 +602,19 @@ def ingest_csv_output(
                         shortcut_rows.extend(normalized_rows)
                         correlation_inputs_seen = correlation_inputs_seen or bool(normalized_rows)
                     if tool_name == "PrefetchParser":
-                        prefetch_rows.append(
-                            normalized_prefetch_row(
-                                case_id=case_id,
-                                computer_id=computer_id,
-                                image_id=image_id,
-                                tool_output_id=tool_output_id,
-                                tool_name=tool_name,
-                                source_csv=path,
-                                row_number=row_number,
-                                row=dict(row),
-                                artifact_manifest=artifact_manifest,
-                            )
+                        prefetch_row = normalized_prefetch_row(
+                            case_id=case_id,
+                            computer_id=computer_id,
+                            image_id=image_id,
+                            tool_output_id=tool_output_id,
+                            tool_name=tool_name,
+                            source_csv=path,
+                            row_number=row_number,
+                            row=dict(row),
+                            artifact_manifest=artifact_manifest,
                         )
+                        prefetch_rows.append(prefetch_row)
+                        prefetch_run_time_rows.extend(normalized_prefetch_run_time_rows(prefetch_row))
                         correlation_inputs_seen = True
                     if tool_name == "SAMParser":
                         sam_rows.append(
@@ -1000,6 +1018,19 @@ def ingest_csv_output(
                     if tool_name.startswith("FileMetadata"):
                         file_internal_metadata_rows.append(
                             normalized_file_internal_metadata_row(
+                                case_id=case_id,
+                                computer_id=computer_id,
+                                image_id=image_id,
+                                tool_output_id=tool_output_id,
+                                tool_name=tool_name,
+                                source_csv=path,
+                                row_number=row_number,
+                                row=dict(row),
+                            )
+                        )
+                    if tool_name == "ArchiveInventoryParser":
+                        archive_entry_rows.append(
+                            normalized_archive_entry_row(
                                 case_id=case_id,
                                 computer_id=computer_id,
                                 image_id=image_id,
@@ -1493,6 +1524,19 @@ def ingest_csv_output(
                                 row=dict(row),
                             )
                         )
+                    if tool_name == "SpotifyParser":
+                        spotify_artifact_rows.append(
+                            normalized_spotify_artifact_row(
+                                case_id=case_id,
+                                computer_id=computer_id,
+                                image_id=image_id,
+                                tool_output_id=tool_output_id,
+                                tool_name=tool_name,
+                                source_csv=path,
+                                row_number=row_number,
+                                row=dict(row),
+                            )
+                        )
                     if tool_name == "TelemetryParser":
                         telemetry_artifact_rows.append(
                             normalized_telemetry_artifact_row(
@@ -1552,12 +1596,14 @@ def ingest_csv_output(
             exc=exc,
         )
         raise
+    if tool_name in {"RECmd", "JLECmd"}:
+        rebuild_common_dialog_application_resolutions(db, case_id=case_id, image_id=image_id)
+    if rebuild_correlations and tool_name in {"ThumbcacheParser", "SIDR", "WindowsSearchESEParser"}:
+        rebuild_thumbcache_search_correlations(db, case_id=case_id, image_id=image_id)
     if db.analytics_only:
         return row_count
     if rebuild_correlations and correlation_inputs_seen:
         rebuild_file_correlations(db, case_id=case_id, image_id=image_id)
-    if rebuild_correlations and tool_name in {"ThumbcacheParser", "SIDR", "WindowsSearchESEParser"}:
-        rebuild_thumbcache_search_correlations(db, case_id=case_id, image_id=image_id)
     if rebuild_correlations and tool_name in {
         "RegistryArtifactParser",
         "TelemetryParser",

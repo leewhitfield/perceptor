@@ -301,7 +301,7 @@ tools:
       - name: windows_defender_scan_cache
         source: "ProgramData/Microsoft/Windows Defender/Scans"
         destination: "WindowsDefender/Scans"
-        recursive: false
+        recursive: true
         optional: true
         patterns:
           - "mpcache-*"
@@ -309,7 +309,7 @@ tools:
       - name: windows_defender_engine_db
         source: "ProgramData/Microsoft/Windows Defender/Scans"
         destination: "WindowsDefender/ScansEngineDb"
-        recursive: false
+        recursive: true
         optional: true
         patterns:
           - "mpenginedb.db"
@@ -666,6 +666,7 @@ tools:
           - "Microsoft-Windows-Windows Defender%4Operational.evtx"
           - "Microsoft-Windows-WinRM%4Operational.evtx"
           - "Microsoft-Windows-GroupPolicy%4Operational.evtx"
+          - "OAlerts.evtx"
     command:
       - dotnet
       - "{executable}"
@@ -1116,6 +1117,40 @@ tools:
     outputs:
       - csv
 
+  ArchiveInventoryParser:
+    enabled: true
+    type: internal_archive_inventory
+    artifacts:
+      - name: archive_inventory_root
+        source: ""
+        destination: "ArchiveInventory"
+        recursive: true
+        process_in_place: true
+        patterns:
+          - "*.zip"
+          - "*.7z"
+          - "*.rar"
+          - "*.tar"
+          - "*.gz"
+          - "*.tgz"
+          - "*.bz2"
+          - "*.xz"
+          - "*.cab"
+        exclude_patterns:
+          - "Windows/*"
+          - "Windows.old/*"
+          - "Program Files/*"
+          - "Program Files (x86)/*"
+          - "ProgramData/Microsoft/Windows Defender/*"
+    command:
+      - internal-archive-inventory
+      - "{artifact:archive_inventory_root}"
+      - "{output}"
+    required_paths:
+      - "{artifact:archive_inventory_root}"
+    outputs:
+      - csv
+
   OfficeBackstageParser:
     enabled: true
     type: internal_office_backstage
@@ -1385,7 +1420,6 @@ tools:
         source: "Users"
         destination: "CloudSQLite/Users"
         recursive: true
-        use_tsk: true
         optional: true
         patterns:
           - "*.db"
@@ -1439,6 +1473,26 @@ tools:
     command:
       - internal-onedrive-explorer
       - "{artifact:onedrive_profiles}"
+      - "--csv"
+      - "{output}"
+    required_paths: []
+    outputs:
+      - csv
+
+  SpotifyParser:
+    enabled: true
+    type: internal_spotify
+    executable:
+    artifacts:
+      - name: spotify_profiles
+        source: "Users"
+        destination: "Spotify/Users"
+        recursive: true
+        process_in_place: true
+        optional: true
+    command:
+      - internal-spotify-parser
+      - "{artifact:spotify_profiles}"
       - "--csv"
       - "{output}"
     required_paths: []
@@ -1520,7 +1574,7 @@ tools:
     executable:
     artifacts:
       - name: mail_artifacts
-        source: ""
+        source: "Users"
         destination: "mail"
         recursive: true
         optional: true
@@ -2022,8 +2076,6 @@ profiles:
         - SrumParser
         - WindowsActivitiesParser
       file_folder_opening:
-        - ChromiumParser
-        - FirefoxParser
         - JLECmd
         - LECmd
         - OfficeBackstageParser
@@ -2032,6 +2084,13 @@ profiles:
         - WindowsSearchESEParser
         - WindowsSearchGatherParser
         - ZoneIdentifierParser
+      web_derived_file_download_activity:
+        - BrowserCacheParser
+        - ChromiumParser
+        - FirefoxParser
+        - WebCacheParser
+      webcache_file_references:
+        - WebCacheParser
       deleted_items_file_existence:
         - MFTECmd
         - MFTECmdUSN
@@ -2049,13 +2108,17 @@ profiles:
         - FirefoxParser
         - WebCacheParser
       cloud_storage:
+        - ChromiumParser
         - CloudSyncParser
         - EtlParser
+        - FirefoxParser
         - OneDriveExplorer
         - OneDriveOdlParser
         - PackageArtifactsParser
         - PackageCacheParser
         - SQLECmd
+        - SpotifyParser
+        - WebCacheParser
       account_usage:
         - EvtxECmd
         - RdpCacheParser
@@ -2117,6 +2180,7 @@ profiles:
       - BrowserCacheParser
       - PackageCacheParser
       - PackageArtifactsParser
+      - SpotifyParser
       - TelemetryParser
       - SQLECmd
       - CloudSyncParser
@@ -2127,6 +2191,7 @@ profiles:
       - MailboxParser
       - WindowsMailParser
       - MessagingParser
+      - ArchiveInventoryParser
       - JLECmd
       - LECmd
       - SBECmd
@@ -2173,6 +2238,7 @@ profiles:
       - MailboxParser
       - WindowsMailParser
       - MessagingParser
+      - ArchiveInventoryParser
       - JLECmd
       - LECmd
       - SBECmd

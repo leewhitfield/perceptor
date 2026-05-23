@@ -30,6 +30,10 @@ REGISTRY_ARTIFACT_FIELDS = [
     "value_data",
     "display_name",
     "normalized_path",
+    "run_counter",
+    "focus_count",
+    "focus_time",
+    "last_executed",
     "value_data_hex",
     "transaction_logs_detected",
     "transaction_logs_applied",
@@ -75,6 +79,7 @@ RULES = [
     ArtifactRule("usb_volume_history", "usb", ("system",), ("currentcontrolset", "enum", "swd", "wpdbusenum"), recursive=True),
     ArtifactRule("usb_volume_name", "usb", ("software",), ("microsoft", "windows portable devices", "devices"), recursive=True),
     ArtifactRule("usb_volume_info_cache", "usb", ("software",), ("microsoft", "windows search", "volumeinfocache"), recursive=True),
+    ArtifactRule("usb_emdmgmt", "usb", ("software",), ("microsoft", "windows nt", "currentversion", "emdmgmt"), recursive=True),
     ArtifactRule("usb_mountpoints2", "usb", ("ntuser",), ("explorer", "mountpoints2"), recursive=True),
     ArtifactRule(
         "usb_device_migration",
@@ -120,8 +125,8 @@ RULES = [
     ArtifactRule("cloud_dropbox_syncroot", "cloud", ("software", "ntuser"), ("explorer", "syncrootmanager", "dropbox"), recursive=True),
     ArtifactRule("cloud_icloud", "cloud", ("software", "ntuser"), ("apple inc.", "icloud"), recursive=True),
     ArtifactRule("ras_phonebook_registry", "network", ("ntuser",), ("microsoft", "ras phonebook"), recursive=True),
-    ArtifactRule("ras_connection_manager", "network", ("software", "system", "ntuser"), ("remoteaccess"), recursive=True),
-    ArtifactRule("ras_connection_manager", "network", ("software", "system", "ntuser"), ("rasman"), recursive=True),
+    ArtifactRule("ras_connection_manager", "network", ("software", "system", "ntuser"), ("remoteaccess",), recursive=True),
+    ArtifactRule("ras_connection_manager", "network", ("software", "system", "ntuser"), ("rasman",), recursive=True),
     ArtifactRule("capability_access_manager", "privacy", ("software", "ntuser"), ("capabilityaccessmanager", "consentstore"), recursive=True),
     ArtifactRule("cloud_account_details", "account", ("sam",), ("domains", "account", "users"), recursive=True),
     ArtifactRule("amcache", "execution", ("amcache",), ("root",), recursive=True),
@@ -168,7 +173,7 @@ def parse_registry_artifacts_to_csv(sources: list[Path], output: Path) -> Path:
     return csv_path
 
 
-def parse_registry_artifacts(path: Path) -> list[dict[str, str | None]]:
+def parse_registry_artifacts(path: Path, *, allowed_artifacts: set[str] | None = None) -> list[dict[str, str | None]]:
     records = scan_registry_keys(path.read_bytes())
     hive_type = infer_hive_type(path)
     user_profile = infer_user_profile(path)
@@ -179,6 +184,8 @@ def parse_registry_artifacts(path: Path) -> list[dict[str, str | None]]:
     for offset, record in records.items():
         key_path = _normalize_control_set_path(paths[offset], current_control_set)
         rules = _matching_rules(hive_type, key_path)
+        if allowed_artifacts is not None:
+            rules = [rule for rule in rules if rule.artifact in allowed_artifacts]
         if not rules:
             continue
         mru_rank = _mru_rank(record, rules)
@@ -189,9 +196,10 @@ def parse_registry_artifacts(path: Path) -> list[dict[str, str | None]]:
             if _skip_noisy_value(rules, value_name, value_data, key_path):
                 continue
             for rule in rules:
-                display_name = _display_name_for_value(rule.artifact, value_type, raw, value_data)
+                display_name = _display_name_for_value(rule.artifact, value_name, value_type, raw, value_data)
                 user_sid = _user_sid_for_artifact(rule.artifact, key_path)
                 normalized_path = _normalized_path_for_artifact(rule.artifact, value_name)
+                userassist_metadata = _userassist_metadata_for_value(rule.artifact, raw)
                 recentdocs_time = _recentdocs_time_for_value(rule.artifact, recentdocs_scope, record, value_name)
                 recentdocs_extension_time = _recentdocs_extension_time_for_value(
                     rule.artifact, recentdocs_scope, record, value_name
@@ -226,6 +234,10 @@ def parse_registry_artifacts(path: Path) -> list[dict[str, str | None]]:
                         "value_data": display_name or value_data,
                         "display_name": display_name,
                         "normalized_path": normalized_path,
+                        "run_counter": userassist_metadata.get("run_counter"),
+                        "focus_count": userassist_metadata.get("focus_count"),
+                        "focus_time": userassist_metadata.get("focus_time"),
+                        "last_executed": userassist_metadata.get("last_executed"),
                         "value_data_hex": raw[:256].hex(),
                         "transaction_logs_detected": "true" if log_status["detected"] else "false",
                         "transaction_logs_applied": "false",
@@ -392,12 +404,21 @@ def _matching_rules(hive_type: str, key_path: str) -> list[ArtifactRule]:
     for rule in RULES:
         if hive_type not in rule.hive_types:
             continue
+        if rule.artifact in {"bam", "dam"} and not _is_canonical_bam_dam_key(key_parts, rule.artifact):
+            continue
         needle = [part.lower() for part in rule.path_contains]
         if _contains_sequence(key_parts, needle) and (rule.recursive or key_parts[-len(needle):] == needle):
             matches.append(rule)
     if any(rule.artifact == "outlook_secure_temp" for rule in matches):
         matches = [rule for rule in matches if rule.artifact != "office_recent_docs"]
     return matches
+
+
+def _is_canonical_bam_dam_key(key_parts: list[str], artifact: str) -> bool:
+    if key_parts and key_parts[0] == "root":
+        key_parts = key_parts[1:]
+    prefix = ["currentcontrolset", "services", artifact, "state", "usersettings"]
+    return len(key_parts) == len(prefix) + 1 and key_parts[: len(prefix)] == prefix and key_parts[-1].startswith("s-1-")
 
 
 def _contains_sequence(parts: list[str], needle: list[str]) -> bool:
@@ -412,6 +433,8 @@ def _contains_sequence(parts: list[str], needle: list[str]) -> bool:
 def _skip_noisy_value(rules: list[ArtifactRule], value_name: str, value_data: str, key_path: str = "") -> bool:
     artifacts = {rule.artifact for rule in rules}
     if artifacts & {"bam", "dam"} and value_name.lower() in {"version", "sequencenumber"}:
+        return True
+    if "userassist" in artifacts and _is_userassist_control_value(value_name):
         return True
     if "usb_device_migration" in artifacts and not _is_usb_device_migration_evidence(
         key_path, value_name, value_data
@@ -461,8 +484,23 @@ def _skip_noisy_value(rules: list[ArtifactRule], value_name: str, value_data: st
         return lowered_name not in {"", "(default)", "appid", "localizedstring", "threadingmodel"}
     if "office_recent_docs" in artifacts:
         lowered = value_name.lower()
-        return "mru" not in lowered and "item" not in lowered and "file" not in lowered
+        return not _is_office_recent_docs_value_name(lowered)
     return value_name == "" and value_data == ""
+
+
+def _is_office_recent_docs_value_name(lowered_name: str) -> bool:
+    if "mru" in lowered_name or "item" in lowered_name:
+        return True
+    return lowered_name in {
+        "document",
+        "file",
+        "filepath",
+        "filename",
+        "fullpath",
+        "path",
+        "url",
+        "bootdiagnosticslogfile",
+    }
 
 
 def _is_usb_device_migration_evidence(key_path: str, value_name: str, value_data: str) -> bool:
@@ -554,6 +592,11 @@ def _user_sid_for_artifact(artifact: str, key_path: str) -> str | None:
 
 
 def _normalized_path_for_artifact(artifact: str, value_name: str) -> str | None:
+    if artifact == "userassist" and value_name:
+        decoded = _rot13(value_name)
+        if "\\" in decoded or "/" in decoded or decoded.startswith("{"):
+            return decoded
+        return None
     if artifact not in {"bam", "dam"} or not value_name:
         return None
     path = value_name.replace("/", "\\")
@@ -596,9 +639,11 @@ def _recentdocs_extension_time_for_value(
     return record.last_write_utc if _mru_rank(record).get(value_name) == 1 else None
 
 
-def _display_name_for_value(artifact: str, value_type: int, raw: bytes, value_data: str) -> str | None:
+def _display_name_for_value(artifact: str, value_name: str, value_type: int, raw: bytes, value_data: str) -> str | None:
     if artifact in {"bam", "dam"}:
         return None
+    if artifact == "userassist":
+        return _rot13(value_name) if value_name else None
     if artifact == "mui_cache":
         return value_data or None
     if artifact == "recentdocs" and value_type == 3:
@@ -651,6 +696,12 @@ def _notes_for_value(artifact: str, value_name: str, value_type: int, raw: bytes
     return "; ".join(notes)
 
 
+def _is_userassist_control_value(value_name: str) -> bool:
+    original = value_name.casefold()
+    decoded = _rot13(value_name).casefold()
+    return original == "version" or decoded == "version" or original.startswith("ueme_ctl") or decoded.startswith("ueme_ctl")
+
+
 def _rot13(value: str) -> str:
     output = []
     for char in value:
@@ -661,3 +712,26 @@ def _rot13(value: str) -> str:
         else:
             output.append(char)
     return "".join(output)
+
+
+def _userassist_metadata_for_value(artifact: str, raw: bytes) -> dict[str, str | None]:
+    if artifact != "userassist" or len(raw) < 72:
+        return {}
+    run_counter = struct.unpack_from("<I", raw, 4)[0]
+    focus_count = struct.unpack_from("<I", raw, 8)[0]
+    focus_time_ms = struct.unpack_from("<I", raw, 12)[0]
+    last_executed = _filetime_to_iso(struct.unpack_from("<Q", raw, 60)[0])
+    return {
+        "run_counter": str(run_counter),
+        "focus_count": str(focus_count),
+        "focus_time": _format_duration_ms(focus_time_ms),
+        "last_executed": last_executed,
+    }
+
+
+def _format_duration_ms(value: int) -> str:
+    seconds = value // 1000
+    days, remainder = divmod(seconds, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{days}d, {hours}h, {minutes:02d}m, {seconds:02d}s"

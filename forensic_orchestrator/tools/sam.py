@@ -135,6 +135,7 @@ def scan_registry_keys(data: bytes) -> dict[int, RegistryKeyRecord]:
     if len(data) < BASE_BLOCK_SIZE or data[:4] != b"regf":
         raise ValueError("Input does not look like a registry hive")
     records: dict[int, RegistryKeyRecord] = {}
+    root_cell_offset = _u32(data, 0x24)
     position = BASE_BLOCK_SIZE
     while position + HBIN_HEADER_SIZE <= len(data):
         if data[position : position + 4] != b"hbin":
@@ -155,6 +156,16 @@ def scan_registry_keys(data: bytes) -> dict[int, RegistryKeyRecord]:
                     records[cell_offset] = record
             cell_position += abs(cell_size)
         position += hbin_size
+    root_record = records.get(root_cell_offset)
+    if root_record is not None and root_record.parent_offset != 0xFFFFFFFF:
+        records[root_cell_offset] = RegistryKeyRecord(
+            root_record.offset,
+            root_record.name,
+            0xFFFFFFFF,
+            root_record.values,
+            root_record.value_data,
+            root_record.last_write_utc,
+        )
     return records
 
 

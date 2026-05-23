@@ -1,5 +1,6 @@
 import csv
 
+from forensic_orchestrator.analytics_query import query_one, query_rows
 from forensic_orchestrator.db import Database
 from forensic_orchestrator.filesystem_review import rebuild_filesystem_review
 from forensic_orchestrator.reports import file_history_report, thumbcache_report
@@ -107,9 +108,13 @@ def test_thumbcache_ingest_correlates_with_windows_search_and_timeline(tmp_path)
         path=csv_path,
     )
 
-    entry = db.conn.execute("SELECT * FROM thumbcache_entries").fetchone()
-    correlation = db.conn.execute("SELECT * FROM thumbcache_search_correlations").fetchone()
-    events = db.conn.execute("SELECT * FROM timeline_events ORDER BY event_type").fetchall()
+    entry = query_one(db, "thumbcache_entries", "SELECT * FROM thumbcache_entries")
+    correlation = query_one(
+        db,
+        "thumbcache_search_correlations",
+        "SELECT * FROM thumbcache_search_correlations",
+    )
+    events = query_rows(db, "timeline_events", "SELECT * FROM timeline_events ORDER BY event_type")
     report = thumbcache_report(db, case.id, confidence="high")
     filesystem_count = rebuild_filesystem_review(db, case_id=case.id, image_id=image.id)
     filesystem_row = db.conn.execute(

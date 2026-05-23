@@ -1,11 +1,15 @@
 import csv
+import json
+import subprocess
 from pathlib import Path
 
+from forensic_orchestrator.analytics_query import query_one
 from forensic_orchestrator.db import Database
 from forensic_orchestrator.timeline import timeline_events_from_rows
 from forensic_orchestrator.tools.ingest import ingest_csv_output
 from forensic_orchestrator.tools.normalized import normalized_package_cache_entry_row
 from forensic_orchestrator.tools.package_cache import _cache_rows_from_export
+from forensic_orchestrator.tools.package_cache import parse_package_cache_artifacts_to_csv
 from forensic_orchestrator.tools.package_artifacts import parse_package_artifacts_to_csv
 
 
@@ -60,6 +64,36 @@ def test_package_cache_export_rows_store_encrypted_body_metadata(tmp_path):
     assert row["encryption_version"] == "3"
     assert row["response_date_utc"] == "2020-10-27T02:59:03Z"
     assert Path(str(row["stored_body_path"])).exists()
+
+
+def test_package_cache_parser_records_export_failure_without_failing(monkeypatch, tmp_path):
+    database = (
+        tmp_path
+        / "Users"
+        / "Devon"
+        / "AppData"
+        / "Local"
+        / "Packages"
+        / "Microsoft.Windows.CloudExperienceHost_cw5n1h2txyewy"
+        / "AppData"
+        / "CacheStorage"
+        / "CacheStorage.edb"
+    )
+    database.parent.mkdir(parents=True)
+    database.write_bytes(b"bad ese")
+
+    def fake_run(*_args, **_kwargs):
+        return subprocess.CompletedProcess("esedbexport", 1, stdout="", stderr="unable to read catalog")
+
+    monkeypatch.setattr("forensic_orchestrator.tools.package_cache.subprocess.run", fake_run)
+
+    csv_path = parse_package_cache_artifacts_to_csv(tmp_path / "Users", tmp_path / "out")[0]
+
+    rows = list(csv.DictReader(csv_path.open(encoding="utf-8")))
+    assert rows == []
+    inventory = json.loads((tmp_path / "out" / "PackageCacheParserInventory.json").read_text(encoding="utf-8"))
+    assert inventory[0]["parser_status"] == "export_failed"
+    assert "catalog" in inventory[0]["parser_error"]
 
 
 def test_package_artifacts_parser_extracts_phone_link_sqlite_rows(tmp_path):
@@ -217,8 +251,8 @@ def test_package_cache_ingest_populates_db(tmp_path):
         path=csv_path,
     )
 
-    row = db.conn.execute("SELECT * FROM package_cache_entries").fetchone()
+    row = query_one(db, "package_cache_entries", "SELECT * FROM package_cache_entries")
     assert row["host"] == "api.onedrive.com"
     assert row["body_encrypted"] == "true"
-    event = db.conn.execute("SELECT * FROM timeline_events").fetchone()
+    event = query_one(db, "timeline_events", "SELECT * FROM timeline_events")
     assert event["event_type"] == "package_cache_response"

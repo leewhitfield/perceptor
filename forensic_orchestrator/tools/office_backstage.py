@@ -22,7 +22,7 @@ def parse_office_backstage_artifacts_to_csv(source: Path, output: Path) -> Path:
     if source.exists():
         candidates = [source] if source.is_file() else _walk_files(source)
         for item in candidates:
-            if item.is_file() and _looks_office_related(item):
+            if _is_file(item) and _looks_office_related(item):
                 rows.extend(_rows_for_file(item))
     csv_path = output / "OfficeBackstageArtifacts.csv"
     with csv_path.open("w", newline="", encoding="utf-8") as handle:
@@ -39,6 +39,13 @@ def _walk_files(source: Path) -> list[Path]:
         for filename in sorted(filenames):
             paths.append(Path(root) / filename)
     return paths
+
+
+def _is_file(path: Path) -> bool:
+    try:
+        return path.is_file()
+    except OSError:
+        return False
 
 
 def _rows_for_file(path: Path) -> list[dict[str, object]]:

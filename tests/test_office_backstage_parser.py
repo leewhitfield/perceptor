@@ -39,6 +39,28 @@ def test_office_backstage_parser_skips_walk_errors(monkeypatch, tmp_path):
     assert "budget.xlsx" in text
 
 
+def test_office_backstage_parser_skips_stat_errors(monkeypatch, tmp_path):
+    source = tmp_path / "Users"
+    source.mkdir()
+    bad = source / "Default User"
+
+    def fake_walk(root, onerror=None):
+        yield str(source), [], [bad.name]
+
+    def fake_is_file(path):
+        if path == bad:
+            raise OSError("input/output error")
+        return False
+
+    monkeypatch.setattr("forensic_orchestrator.tools.office_backstage.os.walk", fake_walk)
+    monkeypatch.setattr("forensic_orchestrator.tools.office_backstage.Path.is_file", fake_is_file)
+
+    csv_path = parse_office_backstage_artifacts_to_csv(source, tmp_path / "out")
+    text = csv_path.read_text(encoding="utf-8")
+
+    assert text.startswith("artifact_type,source_path")
+
+
 def test_office_backstage_parser_keeps_malformed_url_text_without_failing(tmp_path):
     office = tmp_path / "Users" / "Devon" / "AppData" / "Local" / "Microsoft" / "Office"
     office.mkdir(parents=True)

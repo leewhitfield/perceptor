@@ -43,6 +43,27 @@ class WorkspacePaths:
     def mounts_dir(self, case_id: str) -> Path:
         return self.case_dir(case_id) / "mounts"
 
+    def vsc_work_dir(self, case_id: str) -> Path:
+        return self.case_dir(case_id) / "vsc-work"
+
+    def vshadow_mount_dir(self, case_id: str) -> Path:
+        return self.vsc_work_dir(case_id) / "vshadow"
+
+    def vsc_snapshot_mount_dir(self, case_id: str, snapshot_id: str) -> Path:
+        return self.vsc_work_dir(case_id) / "snapshots" / snapshot_id / "volume"
+
+    def vsc_snapshot_extract_dir(self, case_id: str, snapshot_id: str) -> Path:
+        return self.vsc_work_dir(case_id) / "extracts" / snapshot_id
+
+    def vsc_parsed_dir(self, case_id: str) -> Path:
+        return self.vsc_work_dir(case_id) / "parsed"
+
+    def vsc_parsed_db_path(self, case_id: str) -> Path:
+        return self.vsc_parsed_dir(case_id) / "vsc.duckdb"
+
+    def vsc_reports_dir(self, case_id: str) -> Path:
+        return self.vsc_work_dir(case_id) / "reports"
+
     def ewf_mount_dir(self, case_id: str) -> Path:
         return self.mounts_dir(case_id) / "ewf"
 
@@ -64,6 +85,9 @@ class WorkspacePaths:
             self.parquet_dir(case_id),
             self.ewf_mount_dir(case_id),
             self.mounts_dir(case_id) / "volumes",
+            self.vsc_work_dir(case_id),
+            self.vsc_parsed_dir(case_id),
+            self.vsc_reports_dir(case_id),
         ):
             path.mkdir(parents=True, exist_ok=True)
 

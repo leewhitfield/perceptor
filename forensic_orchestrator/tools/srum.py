@@ -79,7 +79,15 @@ def parse_srum_artifacts_to_csv(
         check=False,
     )
     if result.returncode != 0:
-        raise RuntimeError(f"esedbexport failed with exit code {result.returncode}: {result.stderr.strip()}")
+        (output / "SrumExportError.txt").write_text(
+            f"esedbexport failed with exit code {result.returncode}\n"
+            f"source={srudb}\n\n"
+            f"stdout:\n{result.stdout.strip()}\n\n"
+            f"stderr:\n{result.stderr.strip()}\n",
+            encoding="utf-8",
+        )
+        _write_csv(csv_path, [])
+        return csv_path
     software_maps = _load_software_maps(software_hive)
     id_maps = _load_id_maps(actual_export_dir, software_maps)
     vpn_profiles = _load_vpn_profiles(phonebooks)

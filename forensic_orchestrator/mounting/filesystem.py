@@ -371,7 +371,12 @@ def _fallback_extract_with_tsk(
         match = FlsEntry(inode=source_inode, path=original_path, is_directory=False)
     else:
         match = None
-    if match is None and fls_entries is None and fls_entries_provider is not None:
+    if (
+        match is None
+        and fls_entries is None
+        and fls_entries_provider is not None
+        and os.environ.get("FORENSIC_ALLOW_RECURSIVE_TSK_INVENTORY") == "1"
+    ):
         fls_entries = fls_entries_provider()
     if match is None and fls_entries is None:
         return None
@@ -645,7 +650,11 @@ def extract_artifact_from_mount(
         source = _resolve_case_insensitive(mount_path, artifact.source)
         if source is None or not source.is_file():
             tsk_entries = fls_entries
-            if tsk_entries is None and fls_entries_provider is not None:
+            if (
+                tsk_entries is None
+                and fls_entries_provider is not None
+                and os.environ.get("FORENSIC_ALLOW_RECURSIVE_TSK_INVENTORY") == "1"
+            ):
                 tsk_entries = fls_entries_provider()
             tsk_match = next(
                 (

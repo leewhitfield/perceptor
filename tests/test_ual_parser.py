@@ -1,6 +1,7 @@
 import csv
 from pathlib import Path
 
+from forensic_orchestrator.analytics_query import query_one
 from forensic_orchestrator.db import Database
 from forensic_orchestrator.tools.ingest import ingest_csv_output
 from forensic_orchestrator.tools.ual import parse_ual_artifacts_to_csv
@@ -64,7 +65,7 @@ def test_ual_parser_rows_are_ingested(tmp_path):
     )
 
     assert row_count == 1
-    row = db.conn.execute("SELECT * FROM ual_records").fetchone()
+    row = query_one(db, "ual_records", "SELECT * FROM ual_records")
     assert row["role_name"] == "File Server"
     assert row["client_ip"] == "10.0.0.5"
     assert row["access_count"] == "42"

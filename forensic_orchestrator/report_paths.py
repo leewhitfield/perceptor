@@ -88,6 +88,7 @@ def sanitize_report_paths(value: Any, *, key: str = "") -> Any:
 
 
 def sanitize_report_text(text: str) -> str:
+    text = text.replace("\x00", "")
     text = re.sub(
         r"(?P<prefix>^|[\s`'\"(<])cases/[0-9a-fA-F-]{36}/(?:artifacts|mounts/volumes)/[^/\s`'\"<>)]*/",
         lambda match: match.group("prefix") + "/",

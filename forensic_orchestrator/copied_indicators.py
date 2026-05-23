@@ -6,13 +6,18 @@ import re
 from pathlib import PureWindowsPath
 from typing import Any
 
+from forensic_orchestrator.analytics_query import query_one, query_rows
 from forensic_orchestrator.db import Database
 from forensic_orchestrator.timestamps import parse_timestamp
 
 
 def rebuild_copied_file_indicators(db: Database, *, case_id: str, image_id: str | None = None) -> int:
     rows: list[dict[str, Any]] = []
-    rows.extend(_mft_indicators(db, case_id=case_id, image_id=image_id))
+    # MFT timestamp comparisons are intentionally not materialized here. The
+    # parsed MFT rows already live in DuckDB, and creating one derived row per
+    # MFT timestamp anomaly makes the orchestration SQLite database large and
+    # noisy. Reports that need broad MFT copy indicators should query DuckDB
+    # directly and apply report-specific filtering.
     rows.extend(_shortcut_indicators(db, case_id=case_id, image_id=image_id))
     rows.extend(_shellbag_indicators(db, case_id=case_id, image_id=image_id))
     rows.extend(_registry_indicators(db, case_id=case_id, image_id=image_id))
@@ -22,15 +27,16 @@ def rebuild_copied_file_indicators(db: Database, *, case_id: str, image_id: str 
 
 def _mft_indicators(db: Database, *, case_id: str, image_id: str | None) -> list[dict[str, Any]]:
     where, params = _case_image_where("mft_entries", case_id, image_id)
-    rows = db.conn.execute(
+    rows = query_rows(
+        db,
+        "mft_entries",
         f"""
-        SELECT mft_entries.*, computers.label AS computer_label
+        SELECT mft_entries.*, NULL AS computer_label
         FROM mft_entries
-        LEFT JOIN computers ON mft_entries.computer_id = computers.id
         WHERE {where}
         """,
         params,
-    ).fetchall()
+    )
     indicators = []
     for row in rows:
         indicators.extend(
@@ -64,7 +70,7 @@ def _mft_indicators(db: Database, *, case_id: str, image_id: str | None) -> list
 
 def _shortcut_indicators(db: Database, *, case_id: str, image_id: str | None) -> list[dict[str, Any]]:
     where, params = _case_image_where("shortcut_items", case_id, image_id)
-    rows = db.conn.execute(f"SELECT * FROM shortcut_items WHERE {where}", params).fetchall()
+    rows = query_rows(db, "shortcut_items", f"SELECT * FROM shortcut_items WHERE {where}", params)
     indicators = []
     for row in rows:
         indicators.extend(
@@ -91,7 +97,7 @@ def _shortcut_indicators(db: Database, *, case_id: str, image_id: str | None) ->
 
 def _shellbag_indicators(db: Database, *, case_id: str, image_id: str | None) -> list[dict[str, Any]]:
     where, params = _case_image_where("shellbag_entries", case_id, image_id)
-    rows = db.conn.execute(f"SELECT * FROM shellbag_entries WHERE {where}", params).fetchall()
+    rows = query_rows(db, "shellbag_entries", f"SELECT * FROM shellbag_entries WHERE {where}", params)
     indicators = []
     for row in rows:
         indicators.extend(
@@ -159,7 +165,7 @@ def _registry_indicators(db: Database, *, case_id: str, image_id: str | None) ->
 
 def _common_dialog_item_indicators(db: Database, *, case_id: str, image_id: str | None) -> list[dict[str, Any]]:
     where, params = _case_image_where("registry_common_dialog_items", case_id, image_id)
-    rows = db.conn.execute(f"SELECT * FROM registry_common_dialog_items WHERE {where}", params).fetchall()
+    rows = query_rows(db, "registry_common_dialog_items", f"SELECT * FROM registry_common_dialog_items WHERE {where}", params)
     indicators = []
     for row in rows:
         if not _is_common_dialog_copied_candidate(row):
@@ -219,7 +225,7 @@ def _registry_table_indicators(
     artifact_type: str,
 ) -> list[dict[str, Any]]:
     where, params = _case_image_where(table, case_id, image_id)
-    source_rows = db.conn.execute(f"SELECT * FROM {table} WHERE {where}", params).fetchall()
+    source_rows = query_rows(db, table, f"SELECT * FROM {table} WHERE {where}", params)
     indicators = []
     for source in source_rows:
         path_value = source[path_column]
@@ -302,7 +308,9 @@ def _find_mft_match(db: Database, *, case_id: str, image_id: str, path: str) -> 
         return None
     parent_hint = _parent_path(normalized)
     if parent_hint:
-        row = db.conn.execute(
+        row = query_one(
+            db,
+            "mft_entries",
             """
             SELECT *
             FROM mft_entries
@@ -312,10 +320,12 @@ def _find_mft_match(db: Database, *, case_id: str, image_id: str, path: str) -> 
             LIMIT 1
             """,
             (case_id, image_id, basename, parent_hint),
-        ).fetchone()
+        )
         if row is not None:
             return row
-    return db.conn.execute(
+    return query_one(
+        db,
+        "mft_entries",
         """
         SELECT *
         FROM mft_entries
@@ -324,7 +334,7 @@ def _find_mft_match(db: Database, *, case_id: str, image_id: str, path: str) -> 
         LIMIT 1
         """,
         (case_id, image_id, basename),
-    ).fetchone()
+    )
 
 
 def _case_image_where(table: str, case_id: str, image_id: str | None) -> tuple[str, list[Any]]:

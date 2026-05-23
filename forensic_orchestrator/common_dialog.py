@@ -4,6 +4,7 @@ import json
 import uuid
 from typing import Any
 
+from forensic_orchestrator.analytics_query import query_rows
 from forensic_orchestrator.db import Database
 from forensic_orchestrator.pidl import parse_pidl_items
 
@@ -15,10 +16,12 @@ def rebuild_common_dialog_items(db: Database, *, case_id: str, image_id: str | N
         where.append("image_id = ?")
         params.append(image_id)
     rows = []
-    source_rows = db.conn.execute(
+    source_rows = query_rows(
+        db,
+        "registry_artifacts",
         f"SELECT * FROM registry_artifacts WHERE {' AND '.join(where)} ORDER BY row_number",
         params,
-    ).fetchall()
+    )
     for source in source_rows:
         raw = _raw_bytes(source["value_data_hex"])
         if not raw:

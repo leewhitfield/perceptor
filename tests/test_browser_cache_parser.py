@@ -1,6 +1,7 @@
 import csv
 from pathlib import Path
 
+from forensic_orchestrator.analytics_query import query_one
 from forensic_orchestrator.db import Database
 from forensic_orchestrator.timeline import timeline_events_from_rows
 from forensic_orchestrator.tools.browser_cache import parse_browser_cache_artifacts_to_csv
@@ -50,6 +51,29 @@ def test_browser_cache_parser_extracts_chromium_and_firefox_url_references(tmp_p
     assert any(row["profile_path"] == "abc.default" for row in rows)
 
 
+def test_browser_cache_parser_skips_invalid_ipv6_url_fragments(tmp_path):
+    cache_dir = (
+        tmp_path
+        / "Users"
+        / "Devon"
+        / "AppData"
+        / "Local"
+        / "Google"
+        / "Chrome"
+        / "User Data"
+        / "Default"
+        / "Cache"
+    )
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "bad").write_bytes(b"https://[bad-ipv6-url and https://example.com/good")
+
+    [csv_path] = parse_browser_cache_artifacts_to_csv(tmp_path / "Users", tmp_path / "out")
+
+    with csv_path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert [row["url"] for row in rows] == ["https://example.com/good"]
+
+
 def test_browser_cache_rows_feed_timeline_events(tmp_path):
     row = normalized_browser_cache_entry_row(
         case_id="case-1",
@@ -95,8 +119,8 @@ def test_browser_cache_ingest_populates_db(tmp_path):
         path=csv_path,
     )
 
-    row = db.conn.execute("SELECT * FROM browser_cache_entries").fetchone()
+    row = query_one(db, "browser_cache_entries", "SELECT * FROM browser_cache_entries")
     assert row["browser"] == "chrome"
     assert row["url"] == "https://example.com/app.js"
-    event = db.conn.execute("SELECT * FROM timeline_events").fetchone()
+    event = query_one(db, "timeline_events", "SELECT * FROM timeline_events")
     assert event["event_type"] == "browser_cache_file_modified"

@@ -2,8 +2,11 @@ import uuid
 import os
 from pathlib import Path
 
+import duckdb
+
 from forensic_orchestrator.common_dialog import rebuild_common_dialog_items
 from forensic_orchestrator.copied_indicators import rebuild_copied_file_indicators
+from forensic_orchestrator.analytics_query import query_one
 from forensic_orchestrator.db import Database
 from forensic_orchestrator.filesystem_review import rebuild_filesystem_review
 from forensic_orchestrator.reports import (
@@ -11,6 +14,8 @@ from forensic_orchestrator.reports import (
     artifact_correlations_report,
     autostarts_markdown,
     autostarts_report,
+    brute_force_markdown,
+    brute_force_report,
     case_summary_report,
     correlations_report,
     copied_file_groups_report,
@@ -30,10 +35,14 @@ from forensic_orchestrator.reports import (
     encrypted_volume_indicators_report,
     event_interpretation_report,
     evidence_quality_report,
+    external_storage_markdown,
+    external_storage_report,
     interesting_executables_markdown,
     interesting_executables_report,
+    execution_markdown,
     execution_report,
     execution_correlation_report,
+    file_history_markdown,
     file_history_report,
     file_intelligence_report,
     file_name_drilldown_report,
@@ -216,6 +225,77 @@ def test_storage_policy_report_counts_content_heavy_tables_and_output_files(tmp_
     assert report["artifact_files"]["estimated_bytes"] == output.stat().st_size
     assert report["opensearch"]["latest_status"] == "not_indexed"
     assert any(item["storage"] == "opensearch" for item in report["policy"])
+
+
+def test_brute_force_report_classifies_spray_and_bad_passwords(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+
+    rows = []
+    for index in range(12):
+        rows.append(
+            {
+                "id": f"spray-{index}",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "output-1",
+                "tool_name": "EvtxECmd",
+                "source_csv": tmp_path / "evtx.csv",
+                "row_number": index + 1,
+                "time_created": f"2020-11-14T13:{index:02d}:00Z",
+                "event_id": "4625",
+                "provider": "Microsoft-Windows-Security-Auditing",
+                "channel": "Security",
+                "computer": "HOST",
+                "remote_host": "mstsc (85.14.242.76)",
+                "payload_data1": f"Target: \\USER{index:02d}",
+                "payload_data2": "LogonType 3",
+                "payload_data3": "FailureReason1: the cause is either a bad username or authentication information",
+                "payload_data4": "FailureReason2: user name is correct but the password is wrong",
+                "source_file": "/Windows/System32/winevt/Logs/Security.evtx",
+            }
+        )
+    for index in range(25):
+        rows.append(
+            {
+                "id": f"brute-{index}",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "output-1",
+                "tool_name": "EvtxECmd",
+                "source_csv": tmp_path / "evtx.csv",
+                "row_number": index + 100,
+                "time_created": f"2020-11-14T14:{index:02d}:00Z",
+                "event_id": "4625",
+                "provider": "Microsoft-Windows-Security-Auditing",
+                "channel": "Security",
+                "computer": "HOST",
+                "remote_host": "FreeRDP (10.10.10.5)",
+                "payload_data1": "Target: \\ADMINISTRATOR",
+                "payload_data2": "LogonType 10",
+                "payload_data3": "FailureReason1: the cause is either a bad username or authentication information",
+                "payload_data4": "FailureReason2: user name is correct but the password is wrong",
+                "source_file": "/Windows/System32/winevt/Logs/Security.evtx",
+            }
+        )
+    db.insert_evtx_events(rows)
+
+    report = brute_force_report(db, case.id, min_failures=10, spray_account_threshold=5)
+    markdown = brute_force_markdown(report)
+
+    by_ip = {row["source_ip"]: row for row in report["source_ips"]}
+    assert by_ip["10.10.10.5"]["classification"] == "brute_force"
+    assert by_ip["10.10.10.5"]["credential_results"][0] == {
+        "value": "valid_username_bad_password",
+        "count": 25,
+    }
+    assert by_ip["85.14.242.76"]["classification"] == "password_spraying"
+    assert "Remote valid username, bad password indications: `37`" in markdown
+    assert "Source table: `evtx_events`" in markdown
 
 
 def test_srum_context_report_classifies_cloud_vpn_and_rdp_rows(tmp_path):
@@ -716,6 +796,80 @@ def test_file_history_uses_duckdb_mft_and_usn_when_filesystem_review_is_not_mate
     assert report["events"][0]["reason"] == "FileCreate"
 
 
+def test_file_history_can_include_vsc_sidecar_events(tmp_path, monkeypatch):
+    monkeypatch.delenv("FORENSIC_ANALYTICS_MODE", raising=False)
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    db.insert_normalized_artifact_rows(
+        "mft_entries",
+        [
+            {
+                "id": "mft-1",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "output-mft",
+                "tool_name": "MFTECmd",
+                "source_csv": tmp_path / "mft.csv",
+                "row_number": 1,
+                "entry_number": "42",
+                "sequence_number": "3",
+                "file_name": "report.docx",
+                "parent_path": "Users/Jane/Documents",
+                "in_use": "True",
+                "is_directory": "False",
+                "created_si": "2020-01-01T10:00:00Z",
+                "modified_si": "2020-01-01T11:00:00Z",
+                "accessed_si": "2020-01-01T12:00:00Z",
+                "created_at": "2020-01-01T00:00:00Z",
+            }
+        ],
+    )
+    main_path = case.root / "analytics" / "events.duckdb"
+    main_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = duckdb.connect(str(main_path))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE vsc_mft_deltas (
+                case_id VARCHAR, snapshot_id VARCHAR, snapshot_index VARCHAR,
+                snapshot_created_utc VARCHAR, id VARCHAR, entry_number VARCHAR,
+                sequence_number VARCHAR, file_name VARCHAR,
+                file_size VARCHAR, in_use VARCHAR, is_directory VARCHAR,
+                normalized_path VARCHAR, created_si VARCHAR, modified_si VARCHAR,
+                record_changed_si VARCHAR, accessed_si VARCHAR, path_key VARCHAR,
+                delta_type VARCHAR, source_scope VARCHAR
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO vsc_mft_deltas VALUES (
+                ?, 'vss1', '1', '2020-01-02T00:00:00Z', 'vss1-mft-1', '42',
+                '3', 'report.docx', '12', 'True',
+                'False', '/Users/Jane/Documents/report.docx',
+                '2019-12-31T10:00:00Z', '2019-12-31T11:00:00Z',
+                '2019-12-31T12:00:00Z', '2019-12-31T13:00:00Z',
+                '/users/jane/documents/report.docx', 'not_live', 'VSC'
+            )
+            """,
+            [case.id],
+        )
+    finally:
+        conn.close()
+
+    default_report = file_history_report(db, case.id, name="report.docx", include_artifacts=False)
+    report = file_history_report(db, case.id, name="report.docx", include_artifacts=False, include_vsc=True)
+
+    assert default_report["vsc_events"] == []
+    assert report["summary"]["vsc_event_count"] == 4
+    assert {event["source_scope"] for event in report["vsc_events"]} == {"vsc"}
+    assert {event["snapshot_id"] for event in report["vsc_events"]} == {"vss1"}
+    assert "VSC history events: `4`" in file_history_markdown(report)
+
+
 def test_communications_report_does_not_read_body_content_from_sqlite(tmp_path):
     db = Database(tmp_path / "orchestrator.sqlite3")
     case = db.create_case("case-1", tmp_path / "cases" / "case-1")
@@ -801,8 +955,18 @@ def test_communications_report_does_not_read_body_content_from_sqlite(tmp_path):
     report = communications_report(db, case.id, contains="Falcon", limit=10)
 
     assert report["communications"] == []
-    windows_mail = db.conn.execute("SELECT body_text, body_text_sha256, body_text_length FROM mailbox_messages").fetchone()
-    indexed = db.conn.execute("SELECT content_text, content_sha256, content_length FROM windows_search_indexed_content").fetchone()
+    windows_mail = query_one(
+        db,
+        "mailbox_messages",
+        "SELECT body_text, body_text_sha256, TRY_CAST(body_text_length AS BIGINT) AS body_text_length FROM mailbox_messages",
+    )
+    indexed = query_one(
+        db,
+        "windows_search_indexed_content",
+        "SELECT content_text, content_sha256, TRY_CAST(content_length AS BIGINT) AS content_length FROM windows_search_indexed_content",
+    )
+    assert windows_mail is not None
+    assert indexed is not None
     assert windows_mail["body_text"] == ""
     assert windows_mail["body_text_sha256"]
     assert windows_mail["body_text_length"] == len("Falcon validation communication body.")
@@ -1102,6 +1266,515 @@ def test_artifact_completeness_can_scope_to_latest_profile_run(tmp_path):
     assert [row["tool_name"] for row in scoped["tools"]] == ["MFTECmd"]
     assert historical["summary"]["failed_jobs"] == 1
     assert {row["tool_name"] for row in historical["tools"]} == {"MFTECmd", "OldParser"}
+
+
+def test_artifact_completeness_separates_icat_extraction_caveats(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    stderr_path = tmp_path / "artifacts" / "Windows" / "System32" / "winevt" / "Logs" / "_extract_jobs" / "Security.evtx" / "stderr.txt"
+    stderr_path.parent.mkdir(parents=True)
+    stderr_path.write_text(
+        "Error extracting file from image (ntfs_uncompress_compunit: Shift is too large: 60)\n",
+        encoding="utf-8",
+    )
+    stdout_path = stderr_path.with_name("stdout.txt")
+    stdout_path.write_text("", encoding="utf-8")
+    db.create_job(
+        {
+            "id": "icat-job",
+            "case_id": case.id,
+            "computer_id": "computer-1",
+            "image_id": "image-1",
+            "tool_name": "icat",
+            "command": ["icat", "image.E01", "123"],
+            "start_time": "2026-01-02T00:00:00Z",
+            "end_time": "2026-01-02T00:00:01Z",
+            "exit_code": 1,
+            "stdout_path": stdout_path,
+            "stderr_path": stderr_path,
+            "output_folder": stderr_path.parent,
+        }
+    )
+
+    completeness = artifact_completeness_report(db, case.id, limit=10)
+    quality = evidence_quality_report(db, case.id, limit=10)
+
+    assert completeness["summary"]["failed_jobs"] == 0
+    assert completeness["summary"]["extraction_caveats"] == 1
+    assert completeness["tools"][0]["failed_jobs"] == 0
+    assert completeness["tools"][0]["extraction_caveat_jobs"] == 1
+    assert completeness["extraction_caveats"][0]["target"] == "Security.evtx"
+    assert completeness["extraction_caveats"][0]["caveat_type"] == "ntfs_decompression"
+    assert not any(finding["category"] == "tool_job" for finding in quality["findings"])
+    assert any(finding["category"] == "extraction_caveat" for finding in quality["findings"])
+
+
+def test_external_storage_report_combines_devices_activity_and_event_logs(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    db.insert_usb_storage_devices(
+        [
+            {
+                "id": "usb-1",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "serial": "SER123",
+                "vendor_id": "0781",
+                "product_id": "5581",
+                "vendor": "SanDisk",
+                "product": "Ultra",
+                "revision": "1.00",
+                "friendly_name": "SanDisk Ultra",
+                "parent_id_prefix": "7&abc",
+                "device_service": "USBSTOR",
+                "drive_letter": "E:",
+                "volume_guid": "{11111111-1111-1111-1111-111111111111}",
+                "volume_serial_number": "A1B2-C3D4",
+                "volume_name": "EVIDENCE",
+                "capacity_bytes": "32000000000",
+                "file_system": "FAT32",
+                "alternate_scsi_serial": "",
+                "user_profiles": "fredr",
+                "first_install_date_utc": "2020-11-10T10:00:00Z",
+                "last_arrival_utc": "2020-11-14T10:00:00Z",
+                "last_removal_utc": "2020-11-14T11:00:00Z",
+                "first_volume_serial_event_utc": "2020-11-10T10:01:00Z",
+                "last_partition_event_utc": "2020-11-14T10:01:00Z",
+                "last_migration_present_utc": "2020-11-10T10:02:00Z",
+                "evidence_row_count": 3,
+                "source_artifacts": "usbstor,mounted_devices",
+                "created_at": "2026-01-01T00:00:00Z",
+            },
+            {
+                "id": "uasp-1",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "serial": "UASP123456",
+                "vendor_id": "174C",
+                "product_id": "55AA",
+                "vendor": "ASMT",
+                "product": "2115",
+                "revision": "0",
+                "friendly_name": "ASMT 2115 SCSI Disk Device",
+                "parent_id_prefix": "7&2abc123&0",
+                "device_service": "UASPStor, disk",
+                "drive_letter": "F:",
+                "volume_guid": "{22222222-2222-2222-2222-222222222222}",
+                "volume_serial_number": "E5F6-A7B8",
+                "volume_name": "UASP",
+                "capacity_bytes": "1000000000000",
+                "file_system": "NTFS",
+                "alternate_scsi_serial": "7&2abc123&0",
+                "user_profiles": "fredr",
+                "first_install_date_utc": "2020-11-10T12:00:00Z",
+                "last_arrival_utc": "2020-11-14T12:00:00Z",
+                "last_removal_utc": "",
+                "first_volume_serial_event_utc": "2020-11-10T12:01:00Z",
+                "last_partition_event_utc": "2020-11-14T12:01:00Z",
+                "last_migration_present_utc": "2020-11-10T12:02:00Z",
+                "evidence_row_count": 4,
+                "source_artifacts": "usb_device_migration,scsi_storage,mounted_devices",
+                "created_at": "2026-01-01T00:00:00Z",
+            }
+        ]
+    )
+    db.insert_usb_devices(
+        [
+            {
+                "id": "usb-raw-1",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "out-usb",
+                "tool_name": "RegistryArtifactParser",
+                "source_csv": tmp_path / "usb.csv",
+                "row_number": 1,
+                "source_path": "/Windows/System32/config/SYSTEM",
+                "artifact": "mounted_devices",
+                "device_type": "mounted_device",
+                "vendor_id": "0781",
+                "product_id": "5581",
+                "vendor": "SanDisk",
+                "product": "Ultra",
+                "revision": "1.00",
+                "friendly_name": "SanDisk Ultra",
+                "serial": "SER123",
+                "instance_id": "USBSTOR\\DISK&VEN_SANDISK",
+                "parent_id_prefix": "7&abc",
+                "device_service": "USBSTOR",
+                "user_profile": "",
+                "drive_letter": "E:",
+                "volume_guid": "{11111111-1111-1111-1111-111111111111}",
+                "volume_serial_number": "A1B2-C3D4",
+                "volume_name": "EVIDENCE",
+                "capacity_bytes": "32000000000",
+                "file_system": "FAT32",
+                "alternate_scsi_serial": "",
+                "key_path": "MountedDevices",
+                "key_last_write_utc": "2020-11-14T10:01:00Z",
+                "last_present_date_utc": "",
+                "property_name": "\\DosDevices\\E:",
+                "property_value": "",
+                "value_data_hex": "",
+                "created_at": "2026-01-01T00:00:00Z",
+            }
+        ]
+    )
+    db.insert_usb_connection_events(
+        [
+            {
+                "id": "usb-event-1",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "usb_device_id": "usb-1",
+                "serial": "SER123",
+                "volume_serial_number": "A1B2-C3D4",
+                "volume_guid": "{11111111-1111-1111-1111-111111111111}",
+                "drive_letter": "E:",
+                "event_time_utc": "2020-11-14T10:00:00Z",
+                "event_type": "arrival",
+                "event_source": "registry",
+                "event_id": "",
+                "record_number": "",
+                "source_path": "/Windows/System32/config/SYSTEM",
+                "key_path": "USBSTOR",
+                "property_name": "",
+                "property_value": "",
+                "capacity_bytes": "32000000000",
+                "created_at": "2026-01-01T00:00:00Z",
+            }
+        ]
+    )
+    shortcut_base = {
+        "case_id": case.id,
+        "computer_id": "computer-1",
+        "image_id": "image-1",
+        "file_name": "Budget.xlsx",
+        "file_location": "E:\\Finance\\Budget.xlsx",
+        "target_created": "2020-11-14T10:05:00Z",
+        "target_modified": "2020-11-14T10:06:00Z",
+        "target_accessed": "2020-11-14T10:07:00Z",
+        "device_type": "Removable",
+        "volume_serial_number": "A1B2-C3D4",
+        "volume_name": "EVIDENCE",
+        "command_line_arguments": "",
+        "working_directory": "",
+        "network_path": "",
+        "machine_name": "",
+        "app_id": "",
+        "entry_id": "",
+        "destlist_version": "",
+        "lnk_created": "",
+        "lnk_modified": "",
+        "lnk_accessed": "",
+        "created_at": "2026-01-01T00:00:00Z",
+    }
+    db.insert_shortcut_items(
+        [
+            {
+                **shortcut_base,
+                "id": "lnk-1",
+                "tool_output_id": "out-lnk",
+                "tool_name": "LECmd",
+                "source_csv": tmp_path / "lnk.csv",
+                "row_number": 1,
+                "artifact_type": "lnk",
+                "artifact_name": "Budget.lnk",
+                "artifact_path": "/Users/fredr/AppData/Roaming/Microsoft/Windows/Recent/Budget.lnk",
+                "app_id_description": "",
+                "jumplist_item_number": "",
+            },
+            {
+                **shortcut_base,
+                "id": "jump-1",
+                "tool_output_id": "out-jump",
+                "tool_name": "JLECmd",
+                "source_csv": tmp_path / "jump.csv",
+                "row_number": 1,
+                "artifact_type": "jumplist",
+                "artifact_name": "Excel.destinations-ms",
+                "artifact_path": "/Users/fredr/AppData/Roaming/Microsoft/Windows/Recent/AutomaticDestinations/Excel.destinations-ms",
+                "app_id_description": "Excel",
+                "jumplist_item_number": "1",
+            },
+        ]
+    )
+    db.insert_evtx_events(
+        [
+            {
+                "id": "evtx-usb-1",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "out-evtx",
+                "tool_name": "EvtxECmd",
+                "source_csv": tmp_path / "evtx.csv",
+                "row_number": 1,
+                "time_created": "2020-11-14T10:00:01Z",
+                "event_id": "20001",
+                "provider": "Microsoft-Windows-DriverFrameworks-UserMode",
+                "channel": "Microsoft-Windows-DriverFrameworks-UserMode/Operational",
+                "map_description": "USB storage device started",
+                "payload_data1": "USBSTOR\\Disk&Ven_SanDisk UASPStor SCSI\\SER123",
+                "source_file": "/Windows/System32/winevt/Logs/DriverFrameworks.evtx",
+            },
+            {
+                "id": "evtx-usb-generic",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "out-evtx",
+                "tool_name": "EvtxECmd",
+                "source_csv": tmp_path / "evtx.csv",
+                "row_number": 2,
+                "time_created": "2020-11-14T10:00:02Z",
+                "event_id": "410",
+                "provider": "Microsoft-Windows-Kernel-PnP",
+                "channel": "Microsoft-Windows-Kernel-PnP/Configuration",
+                "map_description": "Device driver error",
+                "payload_data1": "ServiceName: USBSTOR",
+                "payload_data2": "Problem: 0x0",
+                "source_file": "/Windows/System32/winevt/Logs/Kernel-PnP.evtx",
+            },
+        ]
+    )
+
+    report = external_storage_report(db, case.id, limit=50)
+    markdown = external_storage_markdown(report)
+
+    assert report["summary"]["device_count"] == 2
+    assert any(device["device_service"] == "UASPStor, disk" for device in report["devices"])
+    assert report["summary"]["timeline_event_count"] >= 1
+    assert report["summary"]["file_activity_count"] == 1
+    assert report["file_activity"][0]["artifact_count"] == 2
+    assert report["file_activity"][0]["source_artifact_types"] == "jumplist, lnk"
+    assert report["event_log_observations"][0]["event_id"] == "20001"
+    assert {row["event_id"] for row in report["event_log_observations"]} == {"20001"}
+    assert "SanDisk Ultra" in markdown
+    assert "Attributable file/folder activity: `detected" in markdown
+
+
+def test_external_storage_report_lists_unattributed_removable_volume_activity(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    db.insert_shortcut_items(
+        [
+            {
+                "id": "lnk-1",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "out-lnk",
+                "tool_name": "LECmd",
+                "source_csv": tmp_path / "lnk.csv",
+                "row_number": 1,
+                "artifact_type": "lnk",
+                "artifact_name": "Homework.lnk",
+                "artifact_path": "/Users/fredr/AppData/Roaming/Microsoft/Windows/Recent/Homework.lnk",
+                "file_name": "Homework.docx",
+                "file_location": "E:\\New Homework\\Homework.docx",
+                "target_created": "2020-11-14T10:05:00Z",
+                "target_modified": "2020-11-14T10:06:00Z",
+                "target_accessed": "2020-11-14T10:07:00Z",
+                "device_type": "Removable",
+                "volume_serial_number": "5E93-8BFB",
+                "volume_name": "Homework",
+                "command_line_arguments": "",
+                "working_directory": "",
+                "network_path": "",
+                "machine_name": "",
+                "app_id": "",
+                "app_id_description": "",
+                "entry_id": "",
+                "destlist_version": "",
+                "lnk_created": "",
+                "lnk_modified": "",
+                "lnk_accessed": "",
+                "jumplist_item_number": "",
+                "created_at": "2026-01-01T00:00:00Z",
+            }
+        ]
+    )
+
+    report = external_storage_report(db, case.id, limit=50)
+    markdown = external_storage_markdown(report)
+
+    assert report["summary"]["file_activity_count"] == 0
+    assert report["summary"]["unattributed_removable_volume_count"] == 1
+    assert report["summary"]["unattributed_removable_file_activity_count"] == 1
+    volume = report["unattributed_removable_volume_activity"][0]
+    assert volume["volume_name"] == "Homework"
+    assert volume["drive_letter"] == "E:"
+    assert volume["source_artifact_types"] == "lnk"
+    assert "Removable Volumes Not Tied To A Physical Device" in markdown
+    assert "E:\\New Homework\\Homework.docx" in markdown
+
+
+def test_external_storage_report_correlates_files_when_storage_summary_is_absent(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    db.insert_usb_connection_events(
+        [
+            {
+                "id": "usb-event-1",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "usb_device_id": "",
+                "serial": "SER123",
+                "volume_serial_number": "A1B2-C3D4",
+                "volume_guid": "",
+                "drive_letter": "E:",
+                "event_time_utc": "2020-11-14T10:00:00Z",
+                "event_type": "arrival",
+                "event_source": "partition_diagnostic",
+                "event_id": "",
+                "record_number": "",
+                "source_path": "/Windows/System32/winevt/Logs/Microsoft-Windows-Partition%4Diagnostic.evtx",
+                "key_path": "",
+                "property_name": "",
+                "property_value": "",
+                "capacity_bytes": "32000000000",
+                "created_at": "2026-01-01T00:00:00Z",
+            }
+        ]
+    )
+    db.insert_usb_devices(
+        [
+            {
+                "id": "usb-raw-1",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "out-usb",
+                "tool_name": "RegistryArtifactParser",
+                "source_csv": tmp_path / "usb.csv",
+                "row_number": 1,
+                "source_path": "/Windows/System32/config/SYSTEM",
+                "artifact": "partition_diagnostic",
+                "device_type": "usb_partition_diagnostic",
+                "vendor_id": "0781",
+                "product_id": "5581",
+                "vendor": "SanDisk",
+                "product": "Ultra",
+                "revision": "1.00",
+                "friendly_name": "SanDisk Ultra",
+                "serial": "SER123",
+                "instance_id": "SER123",
+                "parent_id_prefix": "",
+                "device_service": "",
+                "user_profile": "",
+                "drive_letter": "E:",
+                "volume_guid": "",
+                "volume_serial_number": "A1B2-C3D4",
+                "volume_name": "EVIDENCE",
+                "capacity_bytes": "32000000000",
+                "file_system": "FAT32",
+                "alternate_scsi_serial": "",
+                "key_path": "USB\\VID_0781&PID_5581\\SER123",
+                "key_last_write_utc": "2020-11-14T10:00:00Z",
+                "property_name": "",
+                "property_value": "",
+                "value_data_hex": "",
+                "created_at": "2026-01-01T00:00:00Z",
+            }
+        ]
+    )
+    db.insert_shortcut_items(
+        [
+            {
+                "id": "lnk-1",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "out-lnk",
+                "tool_name": "LECmd",
+                "source_csv": tmp_path / "lnk.csv",
+                "row_number": 1,
+                "artifact_type": "lnk",
+                "artifact_name": "Budget.lnk",
+                "artifact_path": "/Users/fredr/AppData/Roaming/Microsoft/Windows/Recent/Budget.lnk",
+                "file_name": "Budget.xlsx",
+                "file_location": "E:\\Finance\\Budget.xlsx",
+                "target_created": "2020-11-14T10:05:00Z",
+                "target_modified": "2020-11-14T10:06:00Z",
+                "target_accessed": "2020-11-14T10:07:00Z",
+                "device_type": "Removable",
+                "volume_serial_number": "A1B2-C3D4",
+                "volume_name": "EVIDENCE",
+                "command_line_arguments": "",
+                "working_directory": "",
+                "network_path": "",
+                "machine_name": "",
+                "app_id": "",
+                "app_id_description": "",
+                "entry_id": "",
+                "destlist_version": "",
+                "lnk_created": "",
+                "lnk_modified": "",
+                "lnk_accessed": "",
+                "jumplist_item_number": "",
+                "created_at": "2026-01-01T00:00:00Z",
+            }
+        ]
+    )
+
+    report = external_storage_report(db, case.id, limit=50)
+
+    assert report["summary"]["file_activity_count"] == 1
+    assert report["file_activity"][0]["usb_serial"] == "SER123"
+    assert report["file_activity"][0]["file_location"] == "E:\\Finance\\Budget.xlsx"
+
+
+def test_external_storage_report_synthesizes_devices_from_connection_events(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    db.insert_usb_connection_events(
+        [
+            {
+                "id": "usb-event-1",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "usb_device_id": "",
+                "serial": "SER123",
+                "volume_serial_number": "A1B2-C3D4",
+                "volume_guid": "",
+                "drive_letter": "E:",
+                "event_time_utc": "2020-11-14T10:00:00Z",
+                "event_type": "arrival",
+                "event_source": "partition_diagnostic",
+                "event_id": "",
+                "record_number": "",
+                "source_path": "/Windows/System32/config/SYSTEM",
+                "key_path": "USBSTOR",
+                "property_name": "",
+                "property_value": "",
+                "capacity_bytes": "32000000000",
+                "created_at": "2026-01-01T00:00:00Z",
+            }
+        ]
+    )
+
+    report = external_storage_report(db, case.id, limit=50)
+
+    assert report["summary"]["device_count"] == 1
+    assert report["devices"][0]["serial"] == "SER123"
+    assert report["devices"][0]["synthesized_from"] == "usb_connection_events"
+    assert report["devices"][0]["source_artifacts"] == "partition_diagnostic"
 
 
 def test_file_dossier_groups_dedupes_and_translates_evidence(tmp_path):
@@ -1922,9 +2595,9 @@ def test_copied_file_indicators_table_combines_mft_shortcuts_shellbags_and_regis
     source_types = {row["source_artifact_type"] for row in report["copied_file_indicators"]}
     full_source_types = {row["source_artifact_type"] for row in full_report["copied_file_indicators"]}
 
-    assert count == 5
+    assert count == 3
     assert source_types == {"lnk", "shellbag", "office_mru"}
-    assert full_source_types == {"mft_si", "lnk", "shellbag", "office_mru"}
+    assert full_source_types == {"lnk", "shellbag", "office_mru"}
     assert all(row["created_timestamp_utc"] > row["modified_timestamp_utc"] for row in report["copied_file_indicators"])
     assert "normal.docx" not in {row["file_name"] for row in report["copied_file_indicators"]}
 
@@ -2402,6 +3075,29 @@ def test_tool_run_summary_report_includes_outputs_and_activity(tmp_path):
             "output_folder": tmp_path / "out",
         }
     )
+    db.create_job(
+        {
+            "id": "job-2",
+            "case_id": case.id,
+            "computer_id": "computer-1",
+            "image_id": "image-1",
+            "tool_name": "WindowsSearchESEParser",
+            "tool_version": "1.0",
+            "command": [
+                "internal-windows-search-ese-parser",
+                str(tmp_path / "artifacts" / "Windows.old" / "WindowsSearch" / "Applications" / "Windows"),
+            ],
+            "start_time": "2020-01-01T00:02:00Z",
+            "end_time": "2020-01-01T00:02:01Z",
+            "exit_code": 1,
+            "stdout_path": tmp_path / "old.stdout.txt",
+            "stderr_path": tmp_path / "old.stderr.txt",
+            "output_folder": tmp_path / "outputs" / "Windows.old" / "WindowsSearchESEParser",
+        }
+    )
+    (tmp_path / "old.stderr.txt").write_text(
+        f"Windows.edb not found under {tmp_path / 'artifacts' / 'Windows.old' / 'WindowsSearch' / 'Applications' / 'Windows'}\n"
+    )
     db.insert_tool_output(
         {
             "id": "output-1",
@@ -2428,11 +3124,15 @@ def test_tool_run_summary_report_includes_outputs_and_activity(tmp_path):
 
     report = tool_run_summary_report(db, case.id)
 
-    assert report["status_counts"] == {"completed": 1}
+    assert report["status_counts"] == {"completed": 1, "source_not_present": 1}
     assert report["tools"][0]["tool_name"] == "LECmd"
-    assert report["runs"][0]["output_count"] == 1
-    assert report["runs"][0]["imported_row_count"] == 2
-    assert report["runs"][0]["warnings"][0]["event"] == "tool.warning"
+    assert report["tools"][1]["source_scopes"] == "Windows.old"
+    assert report["tool_scopes"][1]["source_scope"] == "Windows.old"
+    run_by_id = {row["id"]: row for row in report["runs"]}
+    assert run_by_id["job-1"]["output_count"] == 1
+    assert run_by_id["job-1"]["imported_row_count"] == 2
+    assert {row["id"]: row["source_scope"] for row in report["runs"]} == {"job-1": "live", "job-2": "Windows.old"}
+    assert run_by_id["job-1"]["warnings"][0]["event"] == "tool.warning"
 
 
 def _pidl_item_with_times(
@@ -3468,6 +4168,69 @@ def test_execution_report_extracts_prefetch_and_lnk_events(tmp_path):
     assert report["events"][0]["details"]["pf_created"] == "2026-05-12T12:00:00Z"
 
 
+def test_execution_report_labels_vsc_prefetch_rows(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    db.insert_prefetch_items([
+        {
+            "id": "vsc-prefetch-1",
+            "case_id": case.id,
+            "computer_id": "computer-1",
+            "image_id": "image-1",
+            "tool_output_id": "vss1-PrefetchParser",
+            "tool_name": "PrefetchParser",
+            "source_csv": tmp_path / "vss1" / "PrefetchParser.csv",
+            "row_number": 1,
+            "prefetch_name": "SDELETE.EXE-12345678.pf",
+            "artifact_path": "snapshots/vss1/extract/Windows/Prefetch/SDELETE.EXE-12345678.pf",
+            "original_path": "/Windows/Prefetch/SDELETE.EXE-12345678.pf",
+            "executable_name": "SDELETE.EXE",
+            "prefetch_hash": "12345678",
+            "run_count": "1",
+            "last_run_time_utc": "2020-11-10T10:00:00Z",
+            "last_run_times_utc": '["2020-11-10T10:00:00Z"]',
+            "source_scope": "VSC",
+            "snapshot_id": "vss1",
+            "snapshot_index": "1",
+            "snapshot_created_utc": "2020-11-10T12:00:00Z",
+        },
+        {
+            "id": "vsc-prefetch-2",
+            "case_id": case.id,
+            "computer_id": "computer-1",
+            "image_id": "image-1",
+            "tool_output_id": "vss2-PrefetchParser",
+            "tool_name": "PrefetchParser",
+            "source_csv": tmp_path / "vss2" / "PrefetchParser.csv",
+            "row_number": 2,
+            "prefetch_name": "SDELETE.EXE-12345678.pf",
+            "artifact_path": "snapshots/vss2/extract/Windows/Prefetch/SDELETE.EXE-12345678.pf",
+            "original_path": "/Windows/Prefetch/SDELETE.EXE-12345678.pf",
+            "executable_name": "SDELETE.EXE",
+            "prefetch_hash": "12345678",
+            "run_count": "1",
+            "last_run_time_utc": "2020-11-10T10:00:00Z",
+            "last_run_times_utc": '["2020-11-10T10:00:00Z"]',
+            "source_scope": "VSC",
+            "snapshot_id": "vss2",
+            "snapshot_index": "2",
+            "snapshot_created_utc": "2020-11-10T13:00:00Z",
+        }
+    ])
+
+    report = execution_report(db, case.id)
+    markdown = execution_markdown(report)
+
+    assert report["total_events"] == 1
+    assert report["events"][0]["details"]["source_scope"] == "VSC"
+    assert report["events"][0]["details"]["snapshot_id"] == "vss1"
+    assert report["events"][0]["details"]["snapshots"] == ["vss1", "vss2"]
+    assert "source_scope=VSC" in markdown
+    assert "snapshots=vss1, vss2" in markdown
+
+
 def test_userassist_reports_include_corroboration_caveat(tmp_path):
     db = Database(tmp_path / "orchestrator.sqlite3")
     case = db.create_case("case-1", tmp_path / "cases" / "case-1")
@@ -4375,8 +5138,121 @@ def test_shellbag_time_overlap_prefers_discrete_usb_sessions(tmp_path):
 
     assert rows["During"]["volume_serial_match"] == "time_overlap"
     assert rows["During"]["confidence"] == "medium"
+    assert rows["During"]["temporal_status"] == "within_known_connection"
     assert rows["After"]["volume_serial_match"] == "drive_letter"
     assert rows["After"]["confidence"] == "low"
+    assert rows["After"]["temporal_status"] == "after_last_known_connection"
+
+
+def test_usb_file_temporal_status_marks_ambiguous_when_multiple_devices_connected(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    storage_rows = []
+    connection_rows = []
+    for serial, vsn, drive in (("USB123", "AAAA-1111", "E:"), ("USB456", "BBBB-2222", "F:")):
+        storage_rows.append(
+            {
+                "id": f"storage-{serial}",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "serial": serial,
+                "vendor_id": None,
+                "product_id": None,
+                "vendor": None,
+                "product": "Thumb Drive",
+                "revision": None,
+                "friendly_name": None,
+                "parent_id_prefix": None,
+                "device_service": "USBSTOR",
+                "drive_letter": drive,
+                "volume_guid": None,
+                "volume_serial_number": vsn,
+                "volume_name": None,
+                "capacity_bytes": None,
+                "alternate_scsi_serial": None,
+                "user_profiles": None,
+                "first_install_date_utc": "2020-01-02T09:00:00Z",
+                "last_arrival_utc": "2020-01-02T10:00:00Z",
+                "last_removal_utc": "2020-01-02T12:00:00Z",
+                "first_volume_serial_event_utc": None,
+                "last_partition_event_utc": None,
+                "evidence_row_count": 1,
+                "source_artifacts": "test",
+            }
+        )
+        for event_type, timestamp, capacity in (("arrival", "2020-01-02T10:00:00Z", "1000"), ("removal", "2020-01-02T12:00:00Z", "0")):
+            connection_rows.append(
+                {
+                    "id": str(uuid.uuid4()),
+                    "case_id": case.id,
+                    "computer_id": "computer-1",
+                    "image_id": "image-1",
+                    "usb_device_id": f"storage-{serial}",
+                    "serial": serial,
+                    "volume_serial_number": vsn,
+                    "volume_guid": None,
+                    "drive_letter": drive,
+                    "event_time_utc": timestamp,
+                    "event_type": event_type,
+                    "event_source": "partition_diagnostic",
+                    "event_id": "1006",
+                    "record_number": "",
+                    "source_path": "Partition Diagnostic",
+                    "key_path": None,
+                    "property_name": "PartitionDiagnostic:1006:VBR1",
+                    "property_value": None,
+                    "capacity_bytes": capacity,
+                }
+            )
+    db.insert_usb_storage_devices(storage_rows)
+    db.insert_usb_connection_events(connection_rows)
+    db.insert_shortcut_items(
+        [
+            {
+                "id": "lnk-1",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "out-lnk",
+                "tool_name": "LECmd",
+                "source_csv": tmp_path / "LECmd.csv",
+                "row_number": 1,
+                "artifact_type": "lnk",
+                "artifact_name": "Budget.lnk",
+                "artifact_path": "/Users/fredr/AppData/Roaming/Microsoft/Windows/Recent/Budget.lnk",
+                "file_name": "Budget.xlsx",
+                "file_location": "E:\\Budget.xlsx",
+                "target_created": "2020-01-02T10:30:00Z",
+                "target_modified": "2020-01-02T10:31:00Z",
+                "target_accessed": "2020-01-02T10:32:00Z",
+                "device_type": "Removable",
+                "volume_serial_number": "AAAA-1111",
+                "volume_name": "",
+                "command_line_arguments": "",
+                "working_directory": "",
+                "network_path": "",
+                "machine_name": "",
+                "app_id": "",
+                "app_id_description": "",
+                "entry_id": "",
+                "destlist_version": "",
+                "lnk_created": "",
+                "lnk_modified": "",
+                "lnk_accessed": "",
+                "jumplist_item_number": "",
+                "created_at": "2026-01-01T00:00:00Z",
+            }
+        ]
+    )
+
+    row = usb_file_correlation_report(db, case.id)["items"][0]
+
+    assert row["volume_serial_match"] == "exact"
+    assert row["temporal_status"] == "ambiguous_multiple_devices_connected"
+    assert "multiple external-storage sessions overlap" in row["temporal_basis"]
 
 
 def test_usb_verbose_report_combines_device_evidence_and_files(tmp_path):

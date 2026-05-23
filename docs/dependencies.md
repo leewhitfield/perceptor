@@ -24,6 +24,7 @@ These should be installed on Linux workers that process Windows E01 evidence:
 
 - `sleuthkit`: `mmls`, `fsstat`, `fls`, `icat`
 - `ewf-tools`: `ewfinfo`, `ewfmount`
+- `qemu-utils`: `qemu-img` for VHD, VHDX, and VMDK conversion into case-local raw images
 - `ntfs-3g`: optional read-only NTFS filesystem mounting
 - `.NET runtime 9`: required for Eric Zimmerman .NET tools
 - `libesedb-utils`: `esedbexport` for internal WebCache parsing
@@ -34,7 +35,7 @@ Ubuntu/Debian example:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y sleuthkit ewf-tools ntfs-3g libesedb-utils exiftool tesseract-ocr
+sudo apt-get install -y sleuthkit ewf-tools qemu-utils ntfs-3g libesedb-utils exiftool tesseract-ocr
 ```
 
 ## Optional System Tools
@@ -42,6 +43,11 @@ sudo apt-get install -y sleuthkit ewf-tools ntfs-3g libesedb-utils exiftool tess
 These improve coverage but are not required for every case:
 
 - `libfsntfs-utils`, `python3-libfsntfs`: recovery of compressed NTFS files
+- `libvshadow-utils` / `libvshadow-tools`: experimental Volume Shadow Copy
+  sidecar workflow. Provides `vshadowinfo` and `vshadowmount`; generated VSC
+  inventory, mounts, manifests, and test extractions stay under
+  `cases/<case>/vsc-work/` and are not ingested into the main SQLite/DuckDB
+  stores yet.
 - `sidr`: Windows Search index parsing. Set `SIDR_BIN=/path/to/sidr` when not on `PATH`.
 - `OneDriveExplorer.py`: OneDrive `.dat` parsing. Set `ONEDRIVE_EXPLORER=/path/to/OneDriveExplorer.py`.
 - `bmc-tools.py`: RDP bitmap cache fragment extraction. The parser uses
@@ -77,11 +83,13 @@ Run these before a full processing job:
 ```bash
 command -v mmls fsstat fls icat
 command -v ewfinfo ewfmount
+command -v qemu-img
 command -v ntfs-3g
 command -v dotnet
 command -v esedbexport
 command -v exiftool
 command -v tesseract
+command -v vshadowinfo vshadowmount || echo "libvshadow tools not installed; VSC sidecar commands unavailable"
 test -n "${BMC_TOOLS:-}" && test -f "$BMC_TOOLS"
 test -n "${OPENAI_API_KEY:-}" || echo "OPENAI_API_KEY not set; RDP vision review will use Tesseract fallback"
 ```

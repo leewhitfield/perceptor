@@ -8,6 +8,7 @@ from datetime import timedelta
 from typing import Any
 from urllib.parse import urlparse
 
+from forensic_orchestrator.analytics_query import query_rows
 from forensic_orchestrator.db import Database, utc_now
 from forensic_orchestrator.reports import _parse_report_timestamp
 
@@ -155,8 +156,9 @@ def _copied_file_indicators(db: Database, *, case_id: str, image_id: str | None)
     params: list[Any] = [case_id]
     if image_id:
         params.append(image_id)
-    rows = _rows(
+    rows = query_rows(
         db,
+        "copied_file_indicators",
         f"""
         SELECT * FROM copied_file_indicators
         WHERE case_id = ? {image_filter}

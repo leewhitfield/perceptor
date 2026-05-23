@@ -2,6 +2,7 @@ import csv
 import json
 from pathlib import Path
 
+from forensic_orchestrator.analytics_query import query_one
 from forensic_orchestrator.db import Database
 from forensic_orchestrator.timeline import timeline_events_from_rows
 from forensic_orchestrator.tools.etl import _event_row, parse_etl_artifacts_to_csv
@@ -81,8 +82,8 @@ def test_etl_ingest_populates_table_and_timeline(tmp_path):
         path=csv_path,
     )
 
-    row = db.conn.execute("SELECT * FROM etl_events").fetchone()
-    event = db.conn.execute("SELECT * FROM timeline_events").fetchone()
+    row = query_one(db, "etl_events", "SELECT * FROM etl_events")
+    event = query_one(db, "timeline_events", "SELECT * FROM timeline_events")
     assert row_count == 1
     assert row["source_name"] == "AutoLogger-Diagtrack-Listener.etl"
     assert row["provider_label"] == "Microsoft-Windows-Kernel-Process"

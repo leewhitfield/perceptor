@@ -1,7 +1,9 @@
 import csv
 import json
+import subprocess
 from pathlib import Path
 
+from forensic_orchestrator.analytics_query import query_one, query_rows
 from forensic_orchestrator.db import Database
 from forensic_orchestrator.timeline import timeline_events_from_rows
 from forensic_orchestrator.tools.ingest import ingest_csv_output
@@ -24,7 +26,7 @@ def test_webcache_parser_normalizes_exported_tables(tmp_path):
         encoding="utf-8",
     )
 
-    [csv_path] = parse_webcache_artifacts_to_csv(source, tmp_path / "out")
+    csv_path = parse_webcache_artifacts_to_csv(source, tmp_path / "out")[0]
 
     with csv_path.open(newline="", encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
@@ -42,6 +44,27 @@ def test_webcache_parser_normalizes_exported_tables(tmp_path):
     assert rows[0]["content_type"] == "text/html"
     assert rows[0]["http_status"] == "200"
     assert json.loads(rows[0]["raw_metadata_json"])["EntryId"] == "42"
+
+
+def test_webcache_parser_records_export_failure_without_failing(monkeypatch, tmp_path):
+    source = tmp_path / "WebCache"
+    source.mkdir()
+    (source / "WebCacheV01.dat").write_bytes(b"not a usable ese")
+
+    monkeypatch.setattr("forensic_orchestrator.tools.webcache.shutil.which", lambda _name: "/usr/bin/esedbexport")
+
+    def fake_run(*_args, **_kwargs):
+        raise subprocess.CalledProcessError(1, "esedbexport", stderr="header checksum mismatch")
+
+    monkeypatch.setattr("forensic_orchestrator.tools.webcache.subprocess.run", fake_run)
+
+    csv_path = parse_webcache_artifacts_to_csv(source, tmp_path / "out")[0]
+
+    rows = list(csv.DictReader(csv_path.open(encoding="utf-8")))
+    assert rows == []
+    inventory = json.loads((tmp_path / "out" / "WebCacheParserInventory.json").read_text(encoding="utf-8"))
+    assert inventory[0]["parser_status"] == "export_failed"
+    assert "checksum" in inventory[0]["parser_error"]
 
 
 def test_webcache_rows_feed_timeline_events(tmp_path):
@@ -167,17 +190,17 @@ def test_webcache_ingest_populates_db(tmp_path):
         path=csv_path,
     )
 
-    row = db.conn.execute("SELECT * FROM webcache_entries").fetchone()
+    row = query_one(db, "webcache_entries", "SELECT * FROM webcache_entries")
     assert row["url"] == "https://example.com"
     assert row["host"] == "example.com"
     assert row["user_name"] == "Devon"
     assert row["application"] == "Microsoft Edge"
-    file_access = db.conn.execute("SELECT * FROM webcache_file_accesses").fetchone()
+    file_access = query_one(db, "webcache_file_accesses", "SELECT * FROM webcache_file_accesses")
     assert file_access["local_path"] == "C:\\Users\\Devon\\Documents\\report.docx"
     assert file_access["application"] == "Microsoft Edge"
     event_types = {
         row["event_type"]
-        for row in db.conn.execute("SELECT event_type FROM timeline_events").fetchall()
+        for row in query_rows(db, "timeline_events", "SELECT event_type FROM timeline_events")
     }
     assert "webcache_accessed" in event_types
     assert "webcache_file_accessed" in event_types

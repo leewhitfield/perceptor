@@ -19,22 +19,24 @@ def usb_rows_from_partition_diagnostic_event(row: dict[str, Any]) -> list[dict[s
         return []
 
     data = _event_data(row.get("payload"))
-    parent_id = _text(data.get("ParentId"))
+    if not data:
+        data = _event_data_from_payload_fields(row)
+    parent_id = _first_text(data, "ParentId", "ParentDeviceInstanceId")
     if not parent_id or "USB" not in parent_id.upper():
         return []
 
     parent_id = html.unescape(parent_id)
     parent = _parse_parent_id(parent_id)
-    disk_serial = _clean_text(data.get("SerialNumber"))
-    model = _clean_text(data.get("Model"))
-    manufacturer = _clean_text(data.get("Manufacturer"))
-    revision = _clean_text(data.get("Revision"))
+    disk_serial = _first_text(data, "SerialNumber", "SCSI SerialNumber", "DriveSerial")
+    model = _first_text(data, "Model", "DriveModel", "ProductId")
+    manufacturer = _first_text(data, "Manufacturer", "DriveManufacturer", "VendorId")
+    revision = _first_text(data, "Revision", "FirmwareVersion")
     event_time = _text(row.get("time_created"))
 
     rows = []
     volume_metadata = _volume_metadata_from_event_data(data)
     if not volume_metadata:
-        volume_metadata = [{"volume_serial_number": None, "volume_name": None}]
+        volume_metadata = [{"volume_serial_number": None, "volume_name": None, "file_system": None}]
 
     for index, volume in enumerate(volume_metadata, start=1):
         rows.append(
@@ -65,7 +67,8 @@ def usb_rows_from_partition_diagnostic_event(row: dict[str, Any]) -> list[dict[s
                 "volume_guid": data.get("DiskId"),
                 "volume_serial_number": volume.get("volume_serial_number"),
                 "volume_name": volume.get("volume_name"),
-                "capacity_bytes": data.get("Capacity"),
+                "capacity_bytes": _first_text(data, "Capacity", "Size"),
+                "file_system": volume.get("file_system"),
                 "alternate_scsi_serial": disk_serial,
                 "key_path": parent_id,
                 "key_last_write_utc": event_time,
@@ -97,6 +100,20 @@ def _event_data(payload: Any) -> dict[str, str | None]:
     return result
 
 
+def _event_data_from_payload_fields(row: dict[str, Any]) -> dict[str, str | None]:
+    result: dict[str, str | None] = {}
+    for field in ("payload_data1", "payload_data2", "payload_data3", "payload_data4", "payload_data5", "payload_data6"):
+        value = _clean_text(row.get(field))
+        if not value or ":" not in value:
+            continue
+        name, text = value.split(":", 1)
+        name = name.strip()
+        if not name:
+            continue
+        result[name] = _clean_text(text)
+    return result
+
+
 def _parse_parent_id(parent_id: str) -> dict[str, str | None]:
     vendor_id = _regex_group(parent_id, r"VID_([0-9A-Fa-f]{4})")
     product_id = _regex_group(parent_id, r"PID_([0-9A-Fa-f]{4})")
@@ -119,9 +136,60 @@ def _volume_metadata_from_event_data(data: dict[str, str | None]) -> list[dict[s
             metadata["volume_serial_number"] = metadata.get("volume_serial_number") or direct_serial
             metadata["volume_name"] = metadata.get("volume_name") or direct_name
             rows.append(metadata)
+    if not rows:
+        rows.extend(_volume_metadata_from_mbr(data))
     if not rows and (direct_serial or direct_name):
         rows.append({"volume_serial_number": direct_serial, "volume_name": direct_name})
     return rows
+
+
+def _volume_metadata_from_mbr(data: dict[str, str | None]) -> list[dict[str, str | None]]:
+    mbr = data.get("Mbr")
+    if not mbr or _integer(data.get("MbrBytes")) == 0:
+        return []
+    try:
+        raw = bytes.fromhex(mbr.replace("-", ""))
+    except ValueError:
+        return []
+    if len(raw) < 512 or raw[510:512] != b"\x55\xaa":
+        return []
+    rows = []
+    for index in range(4):
+        offset = 0x1BE + (index * 16)
+        entry = raw[offset : offset + 16]
+        if len(entry) != 16:
+            continue
+        partition_type = entry[4]
+        start_lba = int.from_bytes(entry[8:12], "little")
+        sector_count = int.from_bytes(entry[12:16], "little")
+        if partition_type == 0 or sector_count == 0:
+            continue
+        file_system = _filesystem_from_mbr_partition_type(partition_type)
+        if not file_system:
+            continue
+        rows.append(
+            {
+                "volume_serial_number": None,
+                "volume_name": None,
+                "file_system": file_system,
+                "partition_type": f"0x{partition_type:02X}",
+                "partition_start_lba": str(start_lba),
+                "partition_sector_count": str(sector_count),
+            }
+        )
+    return rows
+
+
+def _filesystem_from_mbr_partition_type(partition_type: int) -> str | None:
+    if partition_type in {0x0B, 0x0C}:
+        return "FAT32"
+    if partition_type in {0x04, 0x06, 0x0E}:
+        return "FAT16"
+    if partition_type == 0x01:
+        return "FAT12"
+    if partition_type == 0x07:
+        return "NTFS/exFAT/HPFS"
+    return None
 
 
 def _parse_vbr(value: str | None) -> dict[str, str | None] | None:
@@ -136,18 +204,21 @@ def _parse_vbr(value: str | None) -> dict[str, str | None] | None:
 
     oem = _ascii(data[3:11]).upper()
     if oem.startswith("NTFS"):
-        return {"volume_serial_number": _serial(data[0x48:0x4C]), "volume_name": None}
+        return {"volume_serial_number": _serial(data[0x48:0x4C]), "volume_name": None, "file_system": "NTFS"}
     if oem.startswith("EXFAT"):
-        return {"volume_serial_number": _serial(data[0x64:0x68]), "volume_name": None}
+        return {"volume_serial_number": _serial(data[0x64:0x68]), "volume_name": None, "file_system": "exFAT"}
     if _ascii(data[0x52:0x5A]).upper().startswith("FAT32"):
         return {
             "volume_serial_number": _serial(data[0x43:0x47]),
             "volume_name": _label(data[0x47:0x52]),
+            "file_system": "FAT32",
         }
     if _ascii(data[0x36:0x3E]).upper().startswith(("FAT12", "FAT16")):
+        file_system = _ascii(data[0x36:0x3E]).upper()
         return {
             "volume_serial_number": _serial(data[0x27:0x2B]),
             "volume_name": _label(data[0x2B:0x36]),
+            "file_system": file_system,
         }
     return None
 

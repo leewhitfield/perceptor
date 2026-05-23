@@ -33,6 +33,7 @@ class JobRunner:
         dry_run: bool,
         tool_version: str | None = None,
         computer_id: str | None = None,
+        source_scope: str | None = None,
         check: bool = True,
     ) -> CommandResult:
         job_id = str(uuid.uuid4())
@@ -48,6 +49,7 @@ class JobRunner:
                 "case_id": case_id,
                 "image_id": image_id,
                 "computer_id": computer_id,
+                "source_scope": source_scope,
                 "tool_name": tool_name,
                 "tool_version": tool_version,
                 "command": command,

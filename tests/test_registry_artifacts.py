@@ -2,7 +2,7 @@ import struct
 from datetime import datetime, timezone
 
 from forensic_orchestrator.tools.registry_artifacts import parse_registry_artifacts
-from forensic_orchestrator.tools.sam import RegistryKeyRecord
+from forensic_orchestrator.tools.sam import RegistryKeyRecord, registry_path
 
 
 def test_runmru_uses_mrulist_to_assign_event_time(monkeypatch, tmp_path):
@@ -247,7 +247,7 @@ def test_bam_records_executable_path_and_filetime(monkeypatch, tmp_path):
         8: RegistryKeyRecord(8, "UserSettings", 7, {}),
         9: RegistryKeyRecord(
             9,
-            "S-1-5-21-1000",
+            "S-1-5-21-100-200-300-1000",
             8,
             {"Version": 4, "SequenceNumber": 4, bam_path: 3},
             {
@@ -266,12 +266,142 @@ def test_bam_records_executable_path_and_filetime(monkeypatch, tmp_path):
 
     assert len(rows) == 1
     assert rows[0]["category"] == "execution"
-    assert rows[0]["user_sid"] == "S-1-5-21-1000"
+    assert rows[0]["user_sid"] == "S-1-5-21-100-200-300-1000"
     assert rows[0]["value_name"] == bam_path
     assert rows[0]["normalized_path"] == r"HarddiskVolume3:\Users\fredr\Downloads\SDelete\sdelete.exe"
     assert rows[0]["event_time_utc"] == "2020-11-14T13:45:45Z"
     assert "executed_path=" in rows[0]["notes"]
     assert "filetime=2020-11-14T13:45:45Z" in rows[0]["notes"]
+
+
+def test_userassist_skips_control_values_and_decodes_name(monkeypatch, tmp_path):
+    hive = tmp_path / "NTUSER.DAT"
+    hive.write_bytes(b"regf-test")
+    encoded_cmd = r"P:\Jvaqbjf\Flfgrz32\pzq.rkr"
+    records = {
+        1: RegistryKeyRecord(1, "ROOT", 0xFFFFFFFF, {}),
+        2: RegistryKeyRecord(2, "Software", 1, {}),
+        3: RegistryKeyRecord(3, "Microsoft", 2, {}),
+        4: RegistryKeyRecord(4, "Windows", 3, {}),
+        5: RegistryKeyRecord(5, "CurrentVersion", 4, {}),
+        6: RegistryKeyRecord(6, "Explorer", 5, {}),
+        7: RegistryKeyRecord(7, "UserAssist", 6, {}),
+        8: RegistryKeyRecord(8, "{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}", 7, {}),
+        9: RegistryKeyRecord(
+            9,
+            "Count",
+            8,
+            {"Version": 4, "HRZR_PGYFRFFVBA": 3, "HRZR_PGYPHNPbhag:pgbe": 3, encoded_cmd: 3},
+            {
+                "Version": struct.pack("<I", 5),
+                "HRZR_PGYFRFFVBA": b"\x00" * 16,
+                "HRZR_PGYPHNPbhag:pgbe": b"\xff" * 72,
+                encoded_cmd: _userassist_v5_bytes(run_counter=3, focus_count=4, focus_time_ms=90000),
+            },
+            "2020-11-14T04:43:37.661416Z",
+        ),
+    }
+    monkeypatch.setattr(
+        "forensic_orchestrator.tools.registry_artifacts.scan_registry_keys",
+        lambda _data: records,
+    )
+
+    rows = [row for row in parse_registry_artifacts(hive) if row["artifact"] == "userassist"]
+
+    assert len(rows) == 1
+    assert rows[0]["value_name"] == encoded_cmd
+    assert rows[0]["display_name"] == r"C:\Windows\System32\cmd.exe"
+    assert rows[0]["normalized_path"] == r"C:\Windows\System32\cmd.exe"
+    assert rows[0]["value_data"] == r"C:\Windows\System32\cmd.exe"
+    assert rows[0]["run_counter"] == "3"
+    assert rows[0]["focus_count"] == "4"
+    assert rows[0]["focus_time"] == "0d, 0h, 01m, 30s"
+    assert rows[0]["last_executed"] == "2020-11-14T13:45:45Z"
+    assert rows[0]["notes"] == r"rot13_name=C:\Windows\System32\cmd.exe"
+
+
+def test_bam_ignores_nested_activationbroker_shadow_path(monkeypatch, tmp_path):
+    hive = tmp_path / "SYSTEM"
+    hive.write_bytes(b"regf-test")
+    timestamp = datetime(2020, 11, 14, 13, 45, 45, tzinfo=timezone.utc)
+    filetime = int((timestamp - datetime(1601, 1, 1, tzinfo=timezone.utc)).total_seconds() * 10_000_000)
+    bam_path = r"\Device\HarddiskVolume3\Windows\System32\cmd.exe"
+    records = {
+        1: RegistryKeyRecord(1, "ROOT", 0xFFFFFFFF, {}),
+        2: RegistryKeyRecord(2, "ActivationBroker", 1, {}),
+        3: RegistryKeyRecord(3, "Plugins", 2, {}),
+        4: RegistryKeyRecord(4, "{AC59432D-8659-48C4-A584-AFEBC920256F}", 3, {}),
+        5: RegistryKeyRecord(5, "ROOT", 4, {}),
+        6: RegistryKeyRecord(6, "Select", 5, {"Current": 4}, {"Current": struct.pack("<I", 1)}),
+        7: RegistryKeyRecord(7, "Services", 5, {}),
+        8: RegistryKeyRecord(8, "ControlSet001", 5, {}),
+        9: RegistryKeyRecord(9, "Services", 8, {}),
+        10: RegistryKeyRecord(10, "bam", 9, {}),
+        11: RegistryKeyRecord(11, "State", 10, {}),
+        12: RegistryKeyRecord(12, "UserSettings", 11, {}),
+        13: RegistryKeyRecord(
+            13,
+            "S-1-5-21-1000",
+            12,
+            {bam_path: 3},
+            {bam_path: struct.pack("<Q", filetime) + b"\x00" * 16},
+        ),
+    }
+    monkeypatch.setattr(
+        "forensic_orchestrator.tools.registry_artifacts.scan_registry_keys",
+        lambda _data: records,
+    )
+
+    rows = [row for row in parse_registry_artifacts(hive) if row["artifact"] == "bam"]
+
+    assert rows == []
+
+
+def test_bam_keeps_short_service_sid_for_system_context_analysis(monkeypatch, tmp_path):
+    hive = tmp_path / "SYSTEM"
+    hive.write_bytes(b"regf-test")
+    timestamp = datetime(2020, 11, 14, 13, 45, 45, tzinfo=timezone.utc)
+    filetime = int((timestamp - datetime(1601, 1, 1, tzinfo=timezone.utc)).total_seconds() * 10_000_000)
+    bam_path = r"\Device\HarddiskVolume3\Windows\System32\csrss.exe"
+    records = {
+        1: RegistryKeyRecord(1, "ROOT", 0xFFFFFFFF, {}),
+        2: RegistryKeyRecord(2, "Select", 1, {"Current": 4}, {"Current": struct.pack("<I", 1)}),
+        3: RegistryKeyRecord(3, "ControlSet001", 1, {}),
+        4: RegistryKeyRecord(4, "Services", 3, {}),
+        5: RegistryKeyRecord(5, "bam", 4, {}),
+        6: RegistryKeyRecord(6, "State", 5, {}),
+        7: RegistryKeyRecord(7, "UserSettings", 6, {}),
+        8: RegistryKeyRecord(
+            8,
+            "S-1-5-18",
+            7,
+            {bam_path: 3},
+            {bam_path: struct.pack("<Q", filetime) + b"\x00" * 16},
+        ),
+    }
+    monkeypatch.setattr(
+        "forensic_orchestrator.tools.registry_artifacts.scan_registry_keys",
+        lambda _data: records,
+    )
+
+    rows = [row for row in parse_registry_artifacts(hive) if row["artifact"] == "bam"]
+
+    assert len(rows) == 1
+    assert rows[0]["user_sid"] == "S-1-5-18"
+    assert rows[0]["value_name"] == bam_path
+
+
+def test_registry_path_stops_when_hive_root_parent_is_normalized():
+    records = {
+        32: RegistryKeyRecord(32, "ROOT", 0xFFFFFFFF, {}),
+        368: RegistryKeyRecord(368, "ActivationBroker", 32, {}),
+        856: RegistryKeyRecord(856, "Plugins", 368, {}),
+        3720: RegistryKeyRecord(3720, "{AC59432D-8659-48C4-A584-AFEBC920256F}", 856, {}),
+        5704: RegistryKeyRecord(5704, "ControlSet001", 32, {}),
+        9000: RegistryKeyRecord(9000, "Services", 5704, {}),
+    }
+
+    assert registry_path(records, 9000) == "ROOT/ControlSet001/Services"
 
 
 def test_recentdocs_keeps_root_and_extension_times_separate(monkeypatch, tmp_path):
@@ -488,6 +618,64 @@ def test_registry_artifacts_extract_network_interfaces_and_cards(monkeypatch, tm
     assert card["value_data"] == "Intel(R) Ethernet Connection"
 
 
+def test_ras_connection_manager_rules_do_not_match_character_sequences(monkeypatch, tmp_path):
+    hive = tmp_path / "SOFTWARE"
+    hive.write_bytes(b"regf-test")
+    records = {
+        1: RegistryKeyRecord(1, "ROOT", 0xFFFFFFFF, {}),
+        2: RegistryKeyRecord(2, "Microsoft", 1, {}),
+        3: RegistryKeyRecord(3, "Office", 2, {}),
+        4: RegistryKeyRecord(4, "ClickToRun", 3, {}),
+        5: RegistryKeyRecord(5, "REGISTRY", 4, {}),
+        6: RegistryKeyRecord(6, "MACHINE", 5, {}),
+        7: RegistryKeyRecord(7, "Software", 6, {}),
+        8: RegistryKeyRecord(8, "Microsoft", 7, {}),
+        9: RegistryKeyRecord(9, "Exchange", 8, {}),
+        10: RegistryKeyRecord(10, "Client", 9, {}),
+        11: RegistryKeyRecord(11, "Mac File Types", 10, {"EPSF": 1}, {"EPSF": ".eps\x00".encode("utf-16-le")}),
+    }
+    monkeypatch.setattr(
+        "forensic_orchestrator.tools.registry_artifacts.scan_registry_keys",
+        lambda _data: records,
+    )
+
+    rows = parse_registry_artifacts(hive)
+
+    assert [row for row in rows if row["artifact"] == "ras_connection_manager"] == []
+
+
+def test_office_recent_docs_does_not_treat_profile_as_file_value(monkeypatch, tmp_path):
+    hive = tmp_path / "NTUSER.DAT"
+    hive.write_bytes(b"regf-test")
+    records = {
+        1: RegistryKeyRecord(1, "ROOT", 0xFFFFFFFF, {}),
+        2: RegistryKeyRecord(2, "SOFTWARE", 1, {}),
+        3: RegistryKeyRecord(3, "Microsoft", 2, {}),
+        4: RegistryKeyRecord(4, "Office", 3, {}),
+        5: RegistryKeyRecord(5, "16.0", 4, {}),
+        6: RegistryKeyRecord(6, "Common", 5, {}),
+        7: RegistryKeyRecord(
+            7,
+            "Recent",
+            6,
+            {"Profile": 1, "FilePath": 1},
+            {
+                "Profile": "{00000000-0000-0000-0000-000000000000}\x00".encode("utf-16-le"),
+                "FilePath": "C:\\Users\\fredr\\Documents\\report.docx\x00".encode("utf-16-le"),
+            },
+        ),
+    }
+    monkeypatch.setattr(
+        "forensic_orchestrator.tools.registry_artifacts.scan_registry_keys",
+        lambda _data: records,
+    )
+
+    rows = [row for row in parse_registry_artifacts(hive) if row["artifact"] == "office_recent_docs"]
+
+    assert [row["value_name"] for row in rows] == ["FilePath"]
+    assert rows[0]["value_data"] == "C:\\Users\\fredr\\Documents\\report.docx"
+
+
 def test_registry_artifacts_extract_sam_cloud_account_details_without_full_user_blob(monkeypatch, tmp_path):
     hive = tmp_path / "SAM"
     hive.write_bytes(b"regf-test")
@@ -576,3 +764,14 @@ def test_registry_artifacts_extract_cloud_storage_configuration(monkeypatch, tmp
     }
     assert next(row for row in rows if row["value_name"] == "UrlNamespace")["value_data"] == "https://example.sharepoint.com/sites/Finance"
     assert all(row["user_profile"] == "Jane" for row in rows)
+
+
+def _userassist_v5_bytes(*, run_counter: int, focus_count: int, focus_time_ms: int) -> bytes:
+    data = bytearray(72)
+    struct.pack_into("<I", data, 4, run_counter)
+    struct.pack_into("<I", data, 8, focus_count)
+    struct.pack_into("<I", data, 12, focus_time_ms)
+    timestamp = datetime(2020, 11, 14, 13, 45, 45, tzinfo=timezone.utc)
+    filetime = int((timestamp - datetime(1601, 1, 1, tzinfo=timezone.utc)).total_seconds() * 10_000_000)
+    struct.pack_into("<Q", data, 60, filetime)
+    return bytes(data)

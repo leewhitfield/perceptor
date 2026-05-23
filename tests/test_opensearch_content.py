@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from forensic_orchestrator.analytics_query import query_one
 from forensic_orchestrator.db import Database, utc_now
 from forensic_orchestrator.search.opensearch import (
     mailbox_attachment_document,
@@ -217,34 +218,40 @@ def test_content_heavy_db_inserts_keep_only_metadata_references(tmp_path):
         ]
     )
 
-    mail = db.conn.execute(
+    mail = query_one(
+        db,
+        "mailbox_messages",
         "SELECT body_text, body_text_sha256, body_text_length, opensearch_document_id "
         "FROM mailbox_messages WHERE id = 'mail-1'"
-    ).fetchone()
-    windows_search = db.conn.execute(
+    )
+    windows_search = query_one(
+        db,
+        "windows_search_indexed_content",
         "SELECT content_text, content_sha256, content_length, opensearch_document_id "
         "FROM windows_search_indexed_content WHERE id = 'search-1'"
-    ).fetchone()
-    attachment = db.conn.execute(
+    )
+    attachment = query_one(
+        db,
+        "mailbox_attachments",
         "SELECT metadata_json, extracted_text, metadata_json_sha256, extracted_text_sha256, "
         "metadata_json_length, extracted_text_length, opensearch_document_id "
         "FROM mailbox_attachments WHERE id = 'attachment-1'"
-    ).fetchone()
+    )
 
     assert mail["body_text"] == ""
     assert mail["body_text_sha256"]
-    assert mail["body_text_length"] == len("The launch notes are attached.")
+    assert int(mail["body_text_length"]) == len("The launch notes are attached.")
     assert mail["opensearch_document_id"]
     assert windows_search["content_text"] == ""
     assert windows_search["content_sha256"]
-    assert windows_search["content_length"] == len("Indexed file content about Project Falcon.")
+    assert int(windows_search["content_length"]) == len("Indexed file content about Project Falcon.")
     assert windows_search["opensearch_document_id"]
     assert attachment["metadata_json"] == ""
     assert attachment["extracted_text"] == ""
     assert attachment["metadata_json_sha256"]
     assert attachment["extracted_text_sha256"]
-    assert attachment["metadata_json_length"] > 0
-    assert attachment["extracted_text_length"] == len("Attachment text about Falcon.")
+    assert int(attachment["metadata_json_length"]) > 0
+    assert int(attachment["extracted_text_length"]) == len("Attachment text about Falcon.")
     assert attachment["opensearch_document_id"]
 
 
@@ -289,7 +296,11 @@ def test_database_insert_failure_is_logged_when_activity_log_is_available(tmp_pa
         "timestamp": "2020-01-02T00:00:00+00:00",
     }
 
-    db.insert_windows_search_indexed_content([row])
+    def fail_insert_rows(table, columns, rows):
+        raise RuntimeError("duckdb write failed")
+
+    assert db.analytics is not None
+    db.analytics.insert_rows = fail_insert_rows
     with pytest.raises(Exception):
         db.insert_windows_search_indexed_content([row])
 

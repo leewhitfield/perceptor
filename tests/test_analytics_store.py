@@ -48,6 +48,63 @@ def test_default_duckdb_routes_generic_normalized_rows(tmp_path, monkeypatch):
     sqlite_db.close()
 
 
+def test_default_duckdb_routes_common_artifact_insert_helpers(tmp_path, monkeypatch):
+    monkeypatch.delenv("FORENSIC_ANALYTICS_MODE", raising=False)
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case_id = "case-1"
+    image_id = "image-1"
+    db.create_case(case_id, tmp_path / "cases" / case_id)
+    db.create_computer(computer_id="computer-1", case_id=case_id, label="ROCBA")
+    db.add_image(image_id, case_id, tmp_path / "image.e01", computer_id="computer-1")
+    base = {
+        "case_id": case_id,
+        "computer_id": "computer-1",
+        "image_id": image_id,
+        "tool_output_id": "output-1",
+        "source_csv": tmp_path / "source.csv",
+        "row_number": 1,
+    }
+    db.insert_shortcut_items([
+        {
+            **base,
+            "id": "shortcut-1",
+            "tool_name": "LECmd",
+            "artifact_type": "lnk",
+            "file_name": "report.docx",
+        }
+    ])
+    db.insert_prefetch_items([
+        {
+            **base,
+            "id": "prefetch-1",
+            "tool_name": "PECmd",
+            "prefetch_name": "NOTEPAD.EXE-12345678.pf",
+        }
+    ])
+    db.insert_registry_artifacts([
+        {
+            **base,
+            "id": "registry-1",
+            "tool_name": "RegistryArtifactParser",
+            "source_path": "/registry/SOFTWARE",
+            "artifact": "autostart",
+            "key_path": "Run",
+        }
+    ])
+    db.close()
+
+    duck = duckdb.connect(str(tmp_path / "cases" / case_id / "analytics" / "events.duckdb"))
+    assert duck.execute("SELECT COUNT(*) FROM shortcut_items").fetchone() == (1,)
+    assert duck.execute("SELECT COUNT(*) FROM prefetch_items").fetchone() == (1,)
+    assert duck.execute("SELECT COUNT(*) FROM registry_artifacts").fetchone() == (1,)
+    duck.close()
+    sqlite_db = Database(tmp_path / "orchestrator.sqlite3")
+    assert sqlite_db.conn.execute("SELECT COUNT(*) FROM shortcut_items").fetchone()[0] == 0
+    assert sqlite_db.conn.execute("SELECT COUNT(*) FROM prefetch_items").fetchone()[0] == 0
+    assert sqlite_db.conn.execute("SELECT COUNT(*) FROM registry_artifacts").fetchone()[0] == 0
+    sqlite_db.close()
+
+
 def test_default_duckdb_ingest_routes_normalized_rows(tmp_path, monkeypatch):
     monkeypatch.delenv("FORENSIC_ANALYTICS_MODE", raising=False)
     db = Database(tmp_path / "orchestrator.sqlite3")

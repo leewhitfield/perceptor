@@ -5,6 +5,7 @@ import re
 import uuid
 from typing import Any
 
+from forensic_orchestrator.analytics_query import query_rows
 from forensic_orchestrator.db import Database
 from forensic_orchestrator.timestamps import normalize_timestamp
 
@@ -33,10 +34,18 @@ def rebuild_thumbcache_search_correlations(
         where.append("image_id = ?")
         params.append(image_id)
     db.conn.execute(f"DELETE FROM thumbcache_search_correlations WHERE {' AND '.join(where)}", params)
+    if db.analytics is not None:
+        db.analytics.delete_where("thumbcache_search_correlations", " AND ".join(where), params)
     db.conn.execute(
         f"DELETE FROM timeline_events WHERE {' AND '.join(where)} AND source_table = ?",
         [*params, "thumbcache_search_correlations"],
     )
+    if db.analytics is not None:
+        db.analytics.delete_where(
+            "timeline_events",
+            f"{' AND '.join(where)} AND source_table = ?",
+            [*params, "thumbcache_search_correlations"],
+        )
     direct_rows = _direct_property_matches(db, case_id=case_id, image_id=image_id)
     rows = direct_rows
     db.insert_thumbcache_search_correlations(rows)
@@ -51,7 +60,9 @@ def _direct_property_matches(db: Database, *, case_id: str, image_id: str | None
     if image_id:
         entry_where.append("image_id = ?")
         params.append(image_id)
-    entries = db.conn.execute(
+    entries = query_rows(
+        db,
+        "thumbcache_entries",
         f"""
         SELECT id AS thumbcache_entry_id, case_id, computer_id, image_id,
                tool_output_id, cache_id, user_profile AS thumbcache_user,
@@ -61,12 +72,12 @@ def _direct_property_matches(db: Database, *, case_id: str, image_id: str | None
         WHERE {' AND '.join(entry_where)}
         """,
         params,
-    ).fetchall()
+    )
     by_cache_id: dict[str, list[dict[str, Any]]] = {}
     for row in entries:
         key = _cache_key(row["cache_id"])
         if key:
-            by_cache_id.setdefault(key, []).append(dict(row))
+            by_cache_id.setdefault(key, []).append(row)
     if not by_cache_id:
         return []
 
@@ -75,7 +86,9 @@ def _direct_property_matches(db: Database, *, case_id: str, image_id: str | None
     if image_id:
         prop_where.append("wsp.image_id = ?")
         prop_params.append(image_id)
-    prop_rows = db.conn.execute(
+    prop_rows = query_rows(
+        db,
+        "windows_search_properties",
         f"""
         SELECT wsp.source_record_id AS windows_search_file_id, wsp.property_name,
                wsp.property_value, wsp.item_path AS search_item_path,
@@ -96,11 +109,11 @@ def _direct_property_matches(db: Database, *, case_id: str, image_id: str | None
           )
         """,
         [*prop_params, *sorted(THUMBNAIL_CACHE_PROPERTY_NAMES), *sorted(THUMBNAIL_CACHE_PROPERTY_NAMES)],
-    ).fetchall()
+    )
     rows: list[dict[str, Any]] = []
     for prop in prop_rows:
         for entry in by_cache_id.get(_cache_key(prop["property_value"]), []):
-            rows.append({**entry, **dict(prop)})
+            rows.append({**entry, **prop})
     return [_correlation_row(row, "windows_search_thumbnail_cache_id", "high") for row in rows]
 
 

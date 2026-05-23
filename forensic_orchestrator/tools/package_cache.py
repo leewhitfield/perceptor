@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -42,13 +43,21 @@ PACKAGE_CACHE_FIELDS = [
 def parse_package_cache_artifacts_to_csv(source: Path, output: Path) -> list[Path]:
     output.mkdir(parents=True, exist_ok=True)
     rows: list[dict[str, object]] = []
+    inventory_rows: list[dict[str, object]] = []
     exports_root = output / "_ese_exports"
     bodies_root = output / "opaque_bodies"
     for database in _cache_storage_databases(source):
-        export_dir = _export_cache_storage(database, exports_root)
+        export_dir, status = _export_cache_storage(database, exports_root)
+        inventory_rows.append(status)
+        if export_dir is None:
+            continue
         rows.extend(_cache_rows_from_export(export_dir, database, source, bodies_root))
     csv_path = output / "PackageCacheEntries.csv"
     _write_csv(csv_path, PACKAGE_CACHE_FIELDS, rows)
+    (output / "PackageCacheParserInventory.json").write_text(
+        json.dumps(inventory_rows, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
     return [csv_path]
 
 
@@ -67,7 +76,7 @@ def _cache_storage_databases(source: Path) -> list[Path]:
     return sorted(databases)
 
 
-def _export_cache_storage(database: Path, exports_root: Path) -> Path:
+def _export_cache_storage(database: Path, exports_root: Path) -> tuple[Path | None, dict[str, object]]:
     exports_root.mkdir(parents=True, exist_ok=True)
     target = exports_root / _safe_export_name(database)
     export_dir = target.with_name(target.name + ".export")
@@ -81,8 +90,18 @@ def _export_cache_storage(database: Path, exports_root: Path) -> Path:
         text=True,
     )
     if result.returncode != 0:
-        raise RuntimeError(f"esedbexport failed for {database}: {result.stderr.strip() or result.stdout.strip()}")
-    return export_dir
+        return None, {
+            "source_database": str(database),
+            "parser_status": "export_failed",
+            "detected_format": "ese",
+            "parser_error": result.stderr.strip() or result.stdout.strip(),
+        }
+    return export_dir, {
+        "source_database": str(database),
+        "parser_status": "exported",
+        "detected_format": "ese",
+        "parser_error": "",
+    }
 
 
 def _safe_export_name(database: Path) -> str:
@@ -123,7 +142,7 @@ def _cache_rows_from_export(
                         "cache_name": cache_names.get(body_parent, ""),
                         "site_origin": _site_origin_from_cache_name(cache_names.get(body_parent, "")),
                         "request_url": request_url,
-                        "host": urlparse(request_url).netloc.lower(),
+                        "host": _safe_host(request_url),
                         "response_status": row.get("ResponseStatus") or "",
                         "response_type": row.get("ResponseType") or "",
                         "response_headers": response_headers,
@@ -197,7 +216,7 @@ def _store_body(
     request_url: str,
     headers: dict[str, str],
 ) -> dict[str, str]:
-    if source_body is None or not source_body.is_file():
+    if source_body is None or not _is_file(source_body):
         return {
             "stored_body_path": "",
             "body_size": "",
@@ -206,7 +225,17 @@ def _store_body(
             "encryption_version": "",
             "decoded_state": "body_missing",
         }
-    data = source_body.read_bytes()
+    try:
+        data = source_body.read_bytes()
+    except OSError:
+        return {
+            "stored_body_path": "",
+            "body_size": "",
+            "body_sha256": "",
+            "body_encrypted": "",
+            "encryption_version": "",
+            "decoded_state": "body_unreadable",
+        }
     digest = hashlib.sha256(data).hexdigest()
     bodies_root.mkdir(parents=True, exist_ok=True)
     destination = bodies_root / f"{digest}.bin"
@@ -227,11 +256,25 @@ def _store_body(
 def _looks_encrypted(data: bytes, request_url: str, headers: dict[str, str]) -> bool:
     if not data:
         return False
-    host = urlparse(request_url).netloc.lower()
+    host = _safe_host(request_url)
     content_type = headers.get("content-type", "").lower()
     if content_type != "application/octet-stream":
         return False
     return data[0] in range(1, 10) and any(token in host for token in ("officeapps", "office.com", "onedrive"))
+
+
+def _safe_host(url: str) -> str:
+    try:
+        return urlparse(url).netloc.lower()
+    except ValueError:
+        return ""
+
+
+def _is_file(path: Path) -> bool:
+    try:
+        return path.is_file()
+    except OSError:
+        return False
 
 
 def _normalize_windows_path(value: str) -> str:

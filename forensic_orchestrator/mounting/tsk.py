@@ -212,22 +212,36 @@ def _run_icat_to_file(
     stdout_path.write_text(str(destination) + "\n")
     end_time = utc_now()
     db.finish_job(job_id, end_time, completed.returncode)
+    stderr_text = stderr_path.read_text(errors="replace") if stderr_path.exists() else ""
+    extraction_caveat = completed.returncode != 0 and _is_ntfs_decompression_error(stderr_text)
     db.log_activity(
         case_id=case_id,
         computer_id=computer_id,
         image_id=image_id,
         job_id=job_id,
-        level="error" if completed.returncode != 0 else "info",
-        event="job.finished",
-        message=f"Finished icat with exit code {completed.returncode}",
+        level="warning" if extraction_caveat else ("error" if completed.returncode != 0 else "info"),
+        event="extraction.caveat" if extraction_caveat else "job.finished",
+        message=(
+            f"Extraction caveat for {destination.name}: NTFS decompression failed"
+            if extraction_caveat
+            else f"Finished icat with exit code {completed.returncode}"
+        ),
         details={
             "command": command,
+            "target": destination.name,
             "destination": str(destination),
             "stderr_path": str(stderr_path),
+            "stderr": stderr_text.strip(),
+            "caveat_type": "ntfs_decompression" if extraction_caveat else None,
         },
     )
     if completed.returncode != 0:
         raise ToolError(f"icat failed for inode {inode}; stderr={stderr_path}")
+
+
+def _is_ntfs_decompression_error(stderr_text: str) -> bool:
+    lowered = stderr_text.lower()
+    return "ntfs_uncompress" in lowered or "error extracting file from image" in lowered
 
 
 def read_file_metadata(

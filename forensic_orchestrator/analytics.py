@@ -15,7 +15,8 @@ ANALYTICS_TABLE_COLUMNS: dict[str, list[str]] = {
         "source_csv", "row_number", "record_number", "event_record_id", "time_created",
         "event_id", "level", "provider", "channel", "process_id", "thread_id", "computer",
         "user_id", "map_description", "user_name", "remote_host", "payload_data1",
-        "payload_data2", "payload_data3", "executable_info", "source_file", "created_at",
+        "payload_data2", "payload_data3", "payload_data4", "payload_data5",
+        "payload_data6", "executable_info", "source_file", "payload", "created_at",
     ],
     "timeline_events": [
         "id", "case_id", "computer_id", "image_id", "tool_output_id", "source_tool",
@@ -43,6 +44,27 @@ ANALYTICS_TABLE_COLUMNS: dict[str, list[str]] = {
         "file_size", "mft_created", "mft_modified", "mft_accessed",
         "mft_record_modified", "mft_in_use", "path_unresolved", "deleted_mft_entry",
         "live_orphan", "extraction_method", "created_at",
+    ],
+    "archive_entries": [
+        "id", "case_id", "computer_id", "image_id", "tool_output_id", "tool_name",
+        "source_csv", "row_number", "archive_path", "archive_file_name",
+        "archive_extension", "archive_file_size", "archive_modified_time_utc",
+        "archive_status", "archive_error", "member_path", "member_file_name",
+        "member_extension", "member_size", "member_compressed_size", "member_crc",
+        "member_modified_time_utc", "member_is_dir", "member_is_encrypted",
+        "nested_evidence_format", "multipart_set_id", "multipart_part_number",
+        "multipart_part_count", "multipart_is_first_part",
+        "multipart_related_parts", "created_at",
+    ],
+    "nested_evidence_items": [
+        "id", "case_id", "computer_id", "image_id", "source_table", "source_id",
+        "source_file", "original_path", "parent_path", "file_name", "extension",
+        "file_size", "detected_format", "created_time_utc", "modified_time_utc",
+        "accessed_time_utc", "record_changed_time_utc", "mft_entry_number",
+        "mft_sequence_number", "multipart_set_id", "multipart_part_number",
+        "multipart_part_count", "multipart_is_first_part",
+        "multipart_related_parts", "parser_status", "recommendation",
+        "created_at",
     ],
 }
 
@@ -74,6 +96,11 @@ class AnalyticsStore:
             view_name = f"_analytics_insert_{id(frame)}"
             conn.register(view_name, frame)
             try:
+                if "id" in columns:
+                    conn.execute(
+                        f"DELETE FROM {_quote_identifier(table)} "
+                        f"WHERE id IN (SELECT id FROM {_quote_identifier(view_name)} WHERE id IS NOT NULL)"
+                    )
                 conn.execute(
                     f"INSERT INTO {_quote_identifier(table)} ({column_sql}) "
                     f"SELECT {column_sql} FROM {_quote_identifier(view_name)}"
@@ -106,6 +133,12 @@ class AnalyticsStore:
             params.extend(tool_names)
         conn.execute(f"DELETE FROM {_quote_identifier(table)} WHERE {' AND '.join(where)}", params)
 
+    def delete_where(self, table: str, where: str, params: list[object] | tuple[object, ...]) -> None:
+        conn = self._connect(str(params[0])) if params else None
+        if conn is None or not self._table_exists(conn, table):
+            return
+        conn.execute(f"DELETE FROM {_quote_identifier(table)} WHERE {where}", list(params))
+
     def _group_by_case(self, rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
         grouped: dict[str, list[dict[str, Any]]] = {}
         for row in rows:
@@ -130,6 +163,17 @@ class AnalyticsStore:
     def _ensure_table(self, conn: duckdb.DuckDBPyConnection, table: str, columns: list[str]) -> None:
         column_defs = ", ".join(f"{_quote_identifier(column)} {_duckdb_type(column)}" for column in columns)
         conn.execute(f"CREATE TABLE IF NOT EXISTS {_quote_identifier(table)} ({column_defs})")
+        table_literal = table.replace("'", "''")
+        existing = {
+            str(row[1])
+            for row in conn.execute(f"PRAGMA table_info('{table_literal}')").fetchall()
+        }
+        for column in columns:
+            if column not in existing:
+                conn.execute(
+                    f"ALTER TABLE {_quote_identifier(table)} "
+                    f"ADD COLUMN {_quote_identifier(column)} {_duckdb_type(column)}"
+                )
 
     def _table_exists(self, conn: duckdb.DuckDBPyConnection, table: str) -> bool:
         return bool(

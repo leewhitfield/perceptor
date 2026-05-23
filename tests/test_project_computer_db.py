@@ -5,6 +5,8 @@ from pathlib import Path
 import pytest
 
 from forensic_orchestrator.db import Database
+from forensic_orchestrator.evidence import add_image
+from forensic_orchestrator.paths import WorkspacePaths
 from forensic_orchestrator.reports import process_timing_report, usb_breakdown_report
 import forensic_orchestrator.tools.ingest as ingest_module
 from forensic_orchestrator.tools.ingest import ingest_csv_output
@@ -31,6 +33,23 @@ def test_project_computer_image_relationship(tmp_path):
     assert status["project"]["id"] == "case-1"
     assert status["computers"][0]["label"] == "Laptop 1"
     assert status["images"][0]["computer_id"] == "computer-1"
+
+
+def test_add_image_records_sqlite_image_metadata(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    paths = WorkspacePaths(tmp_path / "workspace")
+    case = db.create_case("case-1", paths.case_dir("case-1"))
+    image_path = tmp_path / "evidence.E01"
+    image_path.write_bytes(b"not a real ewf")
+
+    image = add_image(db, paths, case.id, image_path)
+
+    metadata = db.image_metadata(case_id=case.id, image_id=image.id)
+    values = {(row["source"], row["key"]): row["value"] for row in metadata}
+    assert values[("filesystem", "file_name")] == "evidence.E01"
+    assert values[("filesystem", "size_bytes")] == str(len(b"not a real ewf"))
+    assert db.conn.execute("SELECT COUNT(*) AS count FROM image_metadata").fetchone()["count"] >= 2
+    assert db.case_status(case.id)["image_metadata"]
 
 
 def test_process_timings_record_start_end_and_report(tmp_path):
@@ -540,7 +559,7 @@ def test_partition_diagnostic_evtx_enriches_usb_volume_fields(tmp_path):
         """
         SELECT artifact, device_type, vendor_id, product_id, vendor, product, revision,
                serial, instance_id, volume_guid, volume_serial_number, volume_name,
-               key_last_write_utc
+               capacity_bytes, file_system, key_last_write_utc
         FROM usb_devices
         """
     ).fetchone()
@@ -557,6 +576,8 @@ def test_partition_diagnostic_evtx_enriches_usb_volume_fields(tmp_path):
         "volume_guid": "45af8b97-5331-48aa-9516-288c0e0bca01",
         "volume_serial_number": "B80C-61FD",
         "volume_name": "CASEUSB",
+        "capacity_bytes": None,
+        "file_system": "FAT32",
         "key_last_write_utc": "2020-11-10T14:21:38Z",
     }
 
@@ -608,7 +629,65 @@ def test_partition_diagnostic_ntfs_uses_four_byte_volume_serial(tmp_path):
         tool_name="EvtxECmd",
         path=evtx_csv,
     )
-    assert db.conn.execute("SELECT volume_serial_number FROM usb_devices").fetchone()[0] == "8ED8-EA30"
+    row = db.conn.execute("SELECT volume_serial_number, file_system FROM usb_devices").fetchone()
+    assert dict(row) == {"volume_serial_number": "8ED8-EA30", "file_system": "NTFS"}
+
+
+def test_partition_diagnostic_uses_mbr_partition_type_when_vbr_is_absent(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    mbr = bytearray(512)
+    mbr[0x1BE + 4] = 0x0C
+    mbr[0x1BE + 8 : 0x1BE + 12] = (240).to_bytes(4, "little")
+    mbr[0x1BE + 12 : 0x1BE + 16] = (30310160).to_bytes(4, "little")
+    mbr[510:512] = b"\x55\xaa"
+    payload = {
+        "EventData": {
+            "Data": [
+                {"@Name": "ParentId", "#text": "USB\\VID_125F&PID_DC1A\\29B1109550240002"},
+                {"@Name": "Manufacturer", "#text": "CB"},
+                {"@Name": "Model", "#text": "Cellebrite"},
+                {"@Name": "SerialNumber", "#text": "AA00000000000489"},
+                {"@Name": "MbrBytes", "#text": "512"},
+                {"@Name": "Mbr", "#text": "-".join(f"{byte:02X}" for byte in mbr)},
+            ]
+        }
+    }
+    evtx_csv = tmp_path / "EvtxECmd.csv"
+    with evtx_csv.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=["RecordNumber", "TimeCreated", "EventId", "Provider", "Channel", "Payload"],
+        )
+        writer.writeheader()
+        writer.writerow(
+            {
+                "RecordNumber": "1",
+                "TimeCreated": "2025-11-17T20:52:10Z",
+                "EventId": "1006",
+                "Provider": "Microsoft-Windows-Partition",
+                "Channel": "Microsoft-Windows-Partition/Diagnostic",
+                "Payload": json.dumps(payload),
+            }
+        )
+
+    ingest_csv_output(
+        db=db,
+        case_id=case.id,
+        computer_id="computer-1",
+        image_id="image-1",
+        tool_output_id="output-evtx",
+        tool_name="EvtxECmd",
+        path=evtx_csv,
+    )
+    row = db.conn.execute("SELECT serial, alternate_scsi_serial, file_system FROM usb_devices").fetchone()
+    assert dict(row) == {
+        "serial": "29B1109550240002",
+        "alternate_scsi_serial": "AA00000000000489",
+        "file_system": "FAT32",
+    }
 
 
 def test_recmd_detail_outputs_are_normalized_to_artifact_tables(tmp_path):
@@ -706,6 +785,75 @@ def test_recmd_detail_outputs_are_normalized_to_artifact_tables(tmp_path):
     }
     assert db.conn.execute("SELECT COUNT(*) AS count FROM registry_artifacts WHERE tool_name = 'RECmd'").fetchone()["count"] == 0
     assert db.conn.execute("SELECT COUNT(*) AS count FROM parsed_rows WHERE tool_name = 'RECmd'").fetchone()["count"] == 0
+
+
+def test_common_dialog_guid_executable_resolves_from_jumplist_paths(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+
+    recmd_csv = tmp_path / "RECmd_WindowsActivity_LastVisitedPidlMRU.csv"
+    recmd_csv.write_text(
+        "ValueName,BatchKeyPath,MruPosition,BatchValueName,Executable,AbsolutePath,OpenedOn,Details\n"
+        "0,ROOT\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ComDlg32\\LastVisitedPidlMRU,0,0,"
+        "{11111111-2222-3333-4444-555555555555},This PC\\G:\\Case Work\\Exports,,\n"
+    )
+    summary_csv = tmp_path / "RECmd_WindowsActivity.csv"
+    summary_csv.write_text(
+        "HivePath,HiveType,Description,Category,KeyPath,ValueName,ValueType,ValueData,"
+        "LastWriteTimestamp,PluginDetailFile\n"
+        f"/cases/registry/users/fredr/NTUSER.DAT,NtUser,LastVisitedPidlMRU,User Activity,"
+        f"ROOT\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ComDlg32\\LastVisitedPidlMRU,"
+        f"0,(plugin),ignored,2020-11-14 14:01:34,{recmd_csv}\n"
+    )
+    jumplist_csv = tmp_path / "JLECmd_AutomaticDestinations.csv"
+    jumplist_csv.write_text(
+        "SourceFile,AppId,AppIdDescription,Path,Created,Modified,LastModified\n"
+        "6d2bac8f1edf6668.automaticDestinations-ms,6d2bac8f1edf6668,Microsoft Outlook 2016 64-bit,"
+        "G:\\Case Work\\Exports\\mail.pst,2020-11-14 14:00:54,2020-11-14 13:39:22,2020-11-14 14:01:34\n"
+        "5f7b5f1e01b83767.automaticDestinations-ms,5f7b5f1e01b83767,Quick Access,"
+        "G:\\Case Work\\Exports\\mail.pst,2020-11-14 14:00:54,2020-11-14 13:39:22,2020-11-14 14:01:35\n"
+    )
+
+    ingest_csv_output(
+        db=db,
+        case_id=case.id,
+        computer_id="computer-1",
+        image_id="image-1",
+        tool_output_id="output-recmd",
+        tool_name="RECmd",
+        path=recmd_csv,
+    )
+    row = db.conn.execute(
+        "SELECT executable_is_guid, resolved_executable FROM registry_common_dialog_mru"
+    ).fetchone()
+    assert dict(row) == {"executable_is_guid": "true", "resolved_executable": None}
+
+    ingest_csv_output(
+        db=db,
+        case_id=case.id,
+        computer_id="computer-1",
+        image_id="image-1",
+        tool_output_id="output-jlecmd",
+        tool_name="JLECmd",
+        path=jumplist_csv,
+    )
+
+    row = db.conn.execute(
+        """
+        SELECT executable, executable_is_guid, resolved_executable,
+               executable_resolution_source, executable_resolution_confidence
+        FROM registry_common_dialog_mru
+        """
+    ).fetchone()
+    assert dict(row) == {
+        "executable": "{11111111-2222-3333-4444-555555555555}",
+        "executable_is_guid": "true",
+        "resolved_executable": "Microsoft Outlook 2016 64-bit",
+        "executable_resolution_source": "jumplist_path_match",
+        "executable_resolution_confidence": "high",
+    }
 
 
 def test_purge_tool_data_removes_normalized_rows_and_outputs(tmp_path):
@@ -1384,6 +1532,60 @@ def test_usb_registry_artifacts_populate_usb_devices(tmp_path):
     assert breakdown["raw_usb_evidence_rows"] == 6
     assert breakdown["summarized_usb_storage_devices"] == 1
     assert {"artifact": "usb_device_history", "row_count": 2} in breakdown["artifact_counts"]
+
+
+def test_usb_report_bundle_rows_unpack_mounted_devices_and_volume_cache(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    usb_csv = tmp_path / "RegistryArtifactParser.csv"
+    usb_csv.write_text(
+        "source_path,hive_type,user_profile,artifact,category,key_path,key_last_write_utc,"
+        "value_name,value_type,value_data,display_name,value_data_hex\n"
+        "/cases/registry/SYSTEM,system,,mounted_devices,usb,ROOT\\MountedDevices,"
+        "2020-11-01T01:02:05+00:00,,,"
+        "DeviceName=\\DosDevices\\D:; DeviceData=_??_USBSTOR#Disk&Ven_&Prod_USB_DISK_2.0&Rev_PMAP#90008B5EB5FFFF64&0#{53f56307-b6bf-11d0-94f2-00a0c91efb8b},,\n"
+        "/cases/registry/SOFTWARE,software,,usb_volume_info_cache,usb,"
+        "ROOT\\Microsoft\\Windows Search\\VolumeInfoCache,"
+        "2020-11-01T01:02:06+00:00,,,"
+        "DriveName=E:; VolumeLabel=Homework; DriveType=Fixed,,\n"
+        "/cases/registry/SYSTEM,system,,usb_device_history,usb,"
+        "ROOT\\CurrentControlSet\\Enum\\USBSTOR,"
+        "2020-11-01T01:02:07+00:00,,,"
+        "SerialNumber=90008B5EB5FFFF64&0; DeviceName=USB DISK 2.0; DiskId={4dbf10e4-1305-11eb-aa08-985fd34317f9}; LastConnected=2020-11-02T03:04:05Z,,\n"
+    )
+
+    assert ingest_csv_output(
+        db=db,
+        case_id=case.id,
+        computer_id="computer-1",
+        image_id="image-1",
+        tool_output_id="registry-output",
+        tool_name="RegistryArtifactParser",
+        path=usb_csv,
+    ) == 3
+    rows = [
+        dict(row)
+        for row in db.conn.execute(
+            """
+            SELECT artifact, device_type, serial, product, friendly_name, drive_letter,
+                   volume_guid, volume_name, last_present_date_utc
+            FROM usb_devices
+            ORDER BY row_number
+            """
+        ).fetchall()
+    ]
+    assert rows[0]["drive_letter"] == "D:"
+    assert rows[0]["serial"] == "90008B5EB5FFFF64"
+    assert rows[0]["product"] == "USB DISK 2.0"
+    assert rows[1]["device_type"] == "volume_info_cache"
+    assert rows[1]["drive_letter"] == "E:"
+    assert rows[1]["volume_name"] == "Homework"
+    assert rows[2]["serial"] == "90008B5EB5FFFF64"
+    assert rows[2]["friendly_name"] == "USB DISK 2.0"
+    assert rows[2]["volume_guid"] == "{4dbf10e4-1305-11eb-aa08-985fd34317f9}"
+    assert rows[2]["last_present_date_utc"] == "2020-11-02T03:04:05Z"
 
 
 def test_uasp_scsi_registry_artifacts_merge_with_usb_parent_id_prefix(tmp_path):

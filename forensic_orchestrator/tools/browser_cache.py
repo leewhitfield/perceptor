@@ -88,6 +88,9 @@ def _cache_rows(path: Path, source_root: Path) -> list[dict[str, object]]:
     modified = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat().replace("+00:00", "Z")
     rows = []
     for url in urls:
+        host = _safe_host(url)
+        if not host:
+            continue
         rows.append(
             {
                 "browser": browser,
@@ -95,7 +98,7 @@ def _cache_rows(path: Path, source_root: Path) -> list[dict[str, object]]:
                 "profile_path": profile,
                 "cache_type": cache_type,
                 "url": url,
-                "host": urlparse(url).netloc,
+                "host": host,
                 "cache_file": path.name,
                 "cache_file_size": stat.st_size,
                 "cache_file_modified_utc": modified,
@@ -127,10 +130,20 @@ def _clean_url(url: str) -> str | None:
     url = url.strip().strip("\x00")
     url = re.split(r"[\x00\r\n\t]", url, maxsplit=1)[0]
     url = url.rstrip("),.;]")
-    parsed = urlparse(url)
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return None
     if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
         return None
     return url
+
+
+def _safe_host(url: str) -> str:
+    try:
+        return urlparse(url).netloc
+    except ValueError:
+        return ""
 
 
 def _browser_from_path(path: Path) -> str:

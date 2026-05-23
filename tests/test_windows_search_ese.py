@@ -1,6 +1,11 @@
 import csv
+import json
 
-from forensic_orchestrator.tools.windows_search_ese import _filetime_hex_to_iso, _write_property_store_csv
+from forensic_orchestrator.tools.windows_search_ese import (
+    _filetime_hex_to_iso,
+    _write_property_store_csv,
+    parse_windows_search_ese_to_csv,
+)
 
 
 def test_windows_search_ese_property_store_csv_extracts_thumbcache_mapping(tmp_path):
@@ -56,3 +61,28 @@ def test_windows_search_ese_filetime_handles_empty_and_placeholder_values():
     assert _filetime_hex_to_iso("") == ""
     assert _filetime_hex_to_iso("0000000000000000") == ""
     assert _filetime_hex_to_iso("2a2a2a2a2a2a2a2a") == ""
+
+
+def test_windows_search_parser_records_encrypted_sqlite_without_failing(tmp_path):
+    source = tmp_path / "WindowsSearch" / "Applications" / "Windows"
+    source.mkdir(parents=True)
+    (source / "Windows.db").write_bytes(b"AesGcm1 SQLite3\x00" + b"\x00" * 64)
+
+    csv_path = parse_windows_search_ese_to_csv(source, tmp_path / "out")
+
+    rows = list(csv.DictReader(csv_path.open(encoding="utf-8")))
+    assert rows == []
+    inventory = json.loads((tmp_path / "out" / "WindowsSearchParserInventory.json").read_text(encoding="utf-8"))
+    assert inventory[0]["detected_format"] == "encrypted_sqlite"
+    assert inventory[0]["parser_status"] == "unsupported_encrypted_sqlite"
+    assert inventory[0]["source_path"].endswith("Windows.db")
+
+
+def test_windows_search_parser_records_missing_store_without_failing(tmp_path):
+    csv_path = parse_windows_search_ese_to_csv(tmp_path / "missing", tmp_path / "out")
+
+    rows = list(csv.DictReader(csv_path.open(encoding="utf-8")))
+    assert rows == []
+    inventory = json.loads((tmp_path / "out" / "WindowsSearchParserInventory.json").read_text(encoding="utf-8"))
+    assert inventory[0]["detected_format"] == "missing"
+    assert inventory[0]["parser_status"] == "not_found"

@@ -4,6 +4,7 @@ import re
 import uuid
 from typing import Any
 
+from .analytics_query import query_rows
 from .db import Database
 
 
@@ -18,9 +19,9 @@ def rebuild_computer_inventory(db: Database, *, case_id: str, image_id: str) -> 
 
 
 def _registry_inventory(db: Database, case_id: str, image_id: str) -> list[dict[str, Any]]:
-    registry_rows = [
-        dict(row)
-        for row in db.conn.execute(
+    registry_rows = query_rows(
+        db,
+        "registry_artifacts",
             """
             SELECT id, case_id, computer_id, image_id, artifact, value_name, value_data,
                    display_name, key_path, event_time_utc
@@ -30,8 +31,7 @@ def _registry_inventory(db: Database, case_id: str, image_id: str) -> list[dict[
                                'computer_name', 'time_zone', 'current_control_set')
             """,
             (case_id, image_id),
-        ).fetchall()
-    ]
+    )
     rows: list[dict[str, Any]] = []
     current_version = _current_version_values(registry_rows)
     for name in (
@@ -67,7 +67,9 @@ def _registry_inventory(db: Database, case_id: str, image_id: str) -> list[dict[
 
 def _software_inventory(db: Database, case_id: str, image_id: str) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    for row in db.conn.execute(
+    for row in query_rows(
+        db,
+        "onedrive_log_entries",
         """
         SELECT id, case_id, computer_id, image_id, one_drive_version, windows_version
         FROM onedrive_log_entries
@@ -82,14 +84,15 @@ def _software_inventory(db: Database, case_id: str, image_id: str) -> list[dict[
             rows.append(_row(data, "software_version", "onedrive_version", data["one_drive_version"], "onedrive_log_entries"))
         if data.get("windows_version"):
             rows.append(_row(data, "software_version", "onedrive_reported_windows_version", data["windows_version"], "onedrive_log_entries"))
-    for row in db.conn.execute(
+    for row in query_rows(
+        db,
+        "telemetry_artifacts",
         """
         SELECT id, case_id, computer_id, image_id, application, title
         FROM telemetry_artifacts
         WHERE case_id = ? AND image_id = ? AND artifact_group = 'apprepository'
           AND record_type IN ('apprepository_application', 'apprepository_applicationidentity')
           AND application <> ''
-        GROUP BY application
         LIMIT 500
         """,
         (case_id, image_id),
@@ -156,7 +159,8 @@ def _table_count(db: Database, case_id: str, image_id: str, table: str, extra_wh
     where = "case_id = ? AND image_id = ?"
     if extra_where:
         where += f" AND {extra_where}"
-    return int(db.conn.execute(f"SELECT COUNT(*) AS count FROM {table} WHERE {where}", (case_id, image_id)).fetchone()["count"])
+    rows = query_rows(db, table, f"SELECT COUNT(*) AS count FROM {table} WHERE {where}", (case_id, image_id))
+    return int(rows[0]["count"]) if rows else 0
 
 
 def _row(source: dict[str, Any], category: str, name: str, value: str | None, source_table: str) -> dict[str, Any]:

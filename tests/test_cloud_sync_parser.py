@@ -3,7 +3,9 @@ import json
 import sqlite3
 from pathlib import Path
 
+from forensic_orchestrator.analytics_query import query_one
 from forensic_orchestrator.db import Database
+from forensic_orchestrator.tools import onedrive_explorer
 from forensic_orchestrator.tools.cloud_sync import parse_cloud_sync_artifacts_to_csv
 from forensic_orchestrator.tools.ingest import ingest_csv_output
 
@@ -258,7 +260,7 @@ def test_cloud_sync_ingest_populates_normalized_table(tmp_path):
         path=csv_path,
     )
 
-    row = db.conn.execute("SELECT * FROM cloud_sync_artifacts").fetchone()
+    row = query_one(db, "cloud_sync_artifacts", "SELECT * FROM cloud_sync_artifacts")
     assert row["provider"] == "Google Drive"
     assert row["cloud_path"] == "/Evidence/Report.docx"
 
@@ -378,6 +380,71 @@ def test_onedrive_explorer_ingest_populates_normalized_table(tmp_path):
         path=csv_path,
     )
 
-    row = db.conn.execute("SELECT * FROM onedrive_items").fetchone()
+    row = query_one(db, "onedrive_items", "SELECT * FROM onedrive_items")
     assert row["name"] == "Plan.docx"
     assert row["local_hash_algorithm"] == "SHA1"
+
+
+def test_onedrive_explorer_parses_sync_engine_database_without_external_tool(tmp_path, monkeypatch):
+    users = tmp_path / "Users"
+    database = users / "fredr" / "AppData" / "Local" / "Microsoft" / "OneDrive" / "settings" / "Personal" / "SyncEngineDatabase.db"
+    database.parent.mkdir(parents=True)
+    connection = sqlite3.connect(database)
+    connection.executescript(
+        """
+        CREATE TABLE od_ClientFolder_Records (
+          resourceID TEXT PRIMARY KEY,
+          parentResourceID TEXT,
+          parentScopeID TEXT,
+          eTag TEXT,
+          folderName TEXT,
+          folderStatus INTEGER,
+          spoPermissions INTEGER,
+          volumeID INTEGER,
+          itemIndex INTEGER,
+          sharedItem INTEGER
+        );
+        CREATE TABLE od_ClientFile_Records (
+          resourceID TEXT PRIMARY KEY,
+          parentResourceID TEXT,
+          eTag TEXT,
+          fileName TEXT,
+          fileStatus INTEGER,
+          spoPermissions INTEGER,
+          volumeID INTEGER,
+          itemIndex INTEGER,
+          lastChange INTEGER,
+          size INTEGER,
+          localHashDigest BLOB,
+          localHashAlgorithm INTEGER,
+          sharedItem INTEGER,
+          diskLastAccessTime INTEGER,
+          diskCreationTime INTEGER,
+          lastKnownPinState INTEGER
+        );
+        CREATE TABLE od_HydrationData (
+          resourceID TEXT PRIMARY KEY,
+          firstHydrationTime INTEGER,
+          lastHydrationTime INTEGER,
+          hydrationCount INTEGER,
+          lastHydrationType TEXT
+        );
+        INSERT INTO od_ClientFolder_Records VALUES ('folder-1', 'root-scope', 'scope-1', 'etag-folder', 'Documents', 7, 31, 12, 34, 0);
+        INSERT INTO od_ClientFile_Records VALUES ('file-1', 'folder-1', 'etag-file', 'Plan.docx', 2, 27, 12, 35, 1600000000, 4096, X'010203', 4, 1, 1600000010, 1600000020, 2);
+        INSERT INTO od_HydrationData VALUES ('file-1', 1600000030, 1600000040, 3, 'Active');
+        """
+    )
+    connection.close()
+    monkeypatch.setattr(onedrive_explorer, "_find_onedrive_explorer", lambda: None)
+
+    csv_path = onedrive_explorer.parse_onedrive_explorer_to_csv(users, tmp_path / "out")
+    rows = list(csv.DictReader(csv_path.open(encoding="utf-8")))
+
+    file_row = next(row for row in rows if row["name"] == "Plan.docx")
+    assert file_row["user_profile"] == "fredr"
+    assert file_row["account"] == "Personal"
+    assert file_row["record_type"] == "File"
+    assert file_row["path"] == "Documents"
+    assert file_row["last_change_utc"] == "2020-09-13T12:26:40+00:00"
+    assert file_row["local_hash_digest"] == "SHA1(010203)"
+    assert file_row["local_hash_algorithm"] == "SHA1"

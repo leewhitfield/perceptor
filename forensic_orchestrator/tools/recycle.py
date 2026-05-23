@@ -45,11 +45,12 @@ def parse_recycle_artifacts_to_csv(sources: Iterable[Path], output: Path) -> Pat
 
 def _parse_recycle_root(root: Path) -> list[dict[str, object]]:
     manifest = load_artifact_manifest(root / "placeholder")
-    files = sorted(
+    paths = sorted(
         path
         for path in root.rglob("*")
-        if path.is_file() and path.name != "_artifact_manifest.csv" and "_extract_jobs" not in path.parts
+        if path.name != "_artifact_manifest.csv" and "_extract_jobs" not in path.parts
     )
+    files = [path for path in paths if path.is_file()]
     xp_metadata = _xp_info2_metadata(files)
     modern_i = {path.name[2:]: path for path in files if path.name.upper().startswith("$I")}
     rows: list[dict[str, object]] = []
@@ -63,14 +64,15 @@ def _parse_recycle_root(root: Path) -> list[dict[str, object]]:
         if name_upper == "INFO2":
             continue
         if name_upper.startswith("$I"):
-            rows.append(_modern_item_row(path, root, manifest))
-            emitted_top.add(path.name[2:])
             continue
         r_index = _part_index(parts, "$R")
         if r_index is not None:
             top = parts[r_index]
             suffix = top[2:]
             metadata = _modern_i_metadata(modern_i.get(suffix))
+            top_path = root.joinpath(*parts[: r_index + 1])
+            if suffix not in emitted_top and top_path.is_dir():
+                rows.append(_modern_top_item_row(top_path, root, top, metadata, manifest))
             rows.extend(_recycled_path_rows(path, root, top, "modern", metadata, manifest))
             emitted_top.add(suffix)
             continue
@@ -99,6 +101,28 @@ def _modern_item_row(path: Path, root: Path, manifest: dict[str, dict[str, str]]
         "deletion_time_utc": metadata.get("deletion_time_utc"),
         "file_size": metadata.get("file_size"),
         "is_directory": None,
+    }
+
+
+def _modern_top_item_row(
+    path: Path,
+    root: Path,
+    top_name: str,
+    metadata: dict[str, object],
+    manifest: dict[str, dict[str, str]],
+) -> dict[str, object]:
+    return {
+        **_manifest_values(path, manifest),
+        "record_type": "item",
+        "recycle_format": "modern",
+        "source_path": str(path),
+        "top_level_name": top_name,
+        "recycled_path": str(path.relative_to(root)),
+        "display_name": Path(str(metadata.get("original_path") or top_name)).name,
+        "original_path": metadata.get("original_path"),
+        "deletion_time_utc": metadata.get("deletion_time_utc"),
+        "file_size": metadata.get("file_size"),
+        "is_directory": "1",
     }
 
 
@@ -146,6 +170,11 @@ def _modern_i_metadata(path: Path | None) -> dict[str, object]:
     size = _u64(data, 8)
     deleted = _filetime_to_iso(_u64(data, 16))
     raw_name = data[24:]
+    if version >= 2 and len(data) >= 28:
+        name_chars = int.from_bytes(data[24:28], "little", signed=False)
+        candidate = data[28 : 28 + (name_chars * 2)]
+        if candidate:
+            raw_name = candidate
     original = raw_name.decode("utf-16le", errors="ignore").split("\x00", 1)[0].strip()
     return {
         "version": version,

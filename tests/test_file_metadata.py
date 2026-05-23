@@ -4,6 +4,7 @@ import csv
 import json
 from pathlib import Path
 
+from forensic_orchestrator.analytics_query import query_one
 from forensic_orchestrator.db import Database
 from forensic_orchestrator.reports import (
     file_metadata_report,
@@ -113,10 +114,12 @@ def test_file_internal_metadata_is_ingested(tmp_path):
         path=csv_path,
     ) == 1
 
-    row = db.conn.execute(
+    row = query_one(
+        db,
+        "file_internal_metadata",
         "SELECT original_path, property_name, property_value FROM file_internal_metadata"
-    ).fetchone()
-    assert dict(row) == {
+    )
+    assert row == {
         "original_path": "Users/Jean/Documents/report.docx",
         "property_name": "Creator",
         "property_value": "Jean",
@@ -157,7 +160,11 @@ def test_file_internal_metadata_ingests_large_metadata_fields(tmp_path):
         path=csv_path,
     ) == 1
 
-    row = db.conn.execute("SELECT length(property_value) AS value_length FROM file_internal_metadata").fetchone()
+    row = query_one(
+        db,
+        "file_internal_metadata",
+        "SELECT length(property_value) AS value_length FROM file_internal_metadata",
+    )
     assert row["value_length"] == 150_000
 
 

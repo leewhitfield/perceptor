@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from dataclasses import replace
 import os
+import re
 import shutil
+import sys
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from forensic_orchestrator.artifact_dedupe import rebuild_artifact_windows_old_dedupe
@@ -15,6 +19,7 @@ from forensic_orchestrator.sessions import rebuild_sessions
 from forensic_orchestrator.user_file_references import rebuild_user_controlled_file_references
 from forensic_orchestrator.mounting.filesystem import extract_artifact_from_mount, inventory_mounted_files
 from forensic_orchestrator.mounting.mft_extract import extract_artifact_from_mft
+from forensic_orchestrator.nested_evidence import rebuild_nested_evidence_inventory
 from forensic_orchestrator.mounting.tsk import extract_artifact, list_files, validate_tsk_available
 from forensic_orchestrator.paths import WorkspacePaths
 from forensic_orchestrator.safety import MountError
@@ -73,6 +78,34 @@ ARTIFACT_DEDUPE_TOOLS = {
 }
 
 
+def _progress(message: str) -> None:
+    timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    print(f"[{timestamp}] {message}", file=sys.stderr, flush=True)
+
+
+def _format_elapsed(start: float) -> str:
+    elapsed = time.monotonic() - start
+    if elapsed < 60:
+        return f"{elapsed:.1f}s"
+    minutes, seconds = divmod(elapsed, 60)
+    return f"{int(minutes)}m {seconds:.1f}s"
+
+
+def _progress_detail(details: dict | None) -> str:
+    if not details:
+        return ""
+    parts = []
+    if "file_count" in details:
+        parts.append(f"files={details['file_count']}")
+    if "byte_count" in details:
+        parts.append(f"bytes={details['byte_count']}")
+    if "count" in details:
+        parts.append(f"count={details['count']}")
+    if "path_stat_error" in details:
+        parts.append("stat_error=yes")
+    return f" ({', '.join(parts)})" if parts else ""
+
+
 def _windows_old_tools(tools: list) -> list:
     scoped = []
     for tool in tools:
@@ -117,10 +150,29 @@ def _windows_old_pattern(pattern: str) -> str:
     return f"{WINDOWS_OLD_ROOT}/{clean}"
 
 
-def _artifact_timing_details(path: Path, metadata: dict | None = None) -> dict:
+def _is_missing_source_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    stderr_match = re.search(r"stderr=(?P<path>\\S+)", str(exc))
+    if stderr_match:
+        try:
+            message += "\n" + Path(stderr_match.group("path")).read_text(errors="replace").lower()
+        except OSError:
+            pass
+    return (
+        "required input path missing" in message
+        or "input path missing" in message
+        or "artifact source not found" in message
+        or "not found under" in message
+        or "source artifact was not present" in message
+    )
+
+
+def _artifact_timing_details(path: Path, metadata: dict | None = None, *, include_path_stats: bool = True) -> dict:
     details = {"path": str(path)}
     if metadata:
         details.update(metadata)
+    if not include_path_stats:
+        return details
     try:
         if path.is_dir():
             total_files = 0
@@ -158,6 +210,9 @@ def run_profile(
     parent_timing_id: str | None = None,
 ) -> None:
     image = db.get_image(image_id, case_id)
+    profile_label = profile if not include_windows_old else f"{profile}:windows-old"
+    profile_started = time.monotonic()
+    _progress(f"profile start {profile_label}")
     timing_id = db.start_process_timing(
         case_id=case_id,
         computer_id=image.computer_id,
@@ -165,7 +220,8 @@ def run_profile(
         parent_id=parent_timing_id,
         scope="profile",
         phase="profile",
-        name=profile if not include_windows_old else f"{profile}:windows-old",
+        name=profile_label,
+        source_scope=WINDOWS_OLD_OUTPUT_NAMESPACE if include_windows_old else "live",
         details={
             "profile": profile,
             "dry_run": dry_run,
@@ -193,9 +249,11 @@ def run_profile(
         )
     except Exception as exc:
         db.finish_process_timing(timing_id, status="failed", details={"error": str(exc)})
+        _progress(f"profile failed {profile_label} elapsed={_format_elapsed(profile_started)} error={exc}")
         raise
     else:
         db.finish_process_timing(timing_id)
+        _progress(f"profile completed {profile_label} elapsed={_format_elapsed(profile_started)}")
 
 
 def _run_profile_impl(
@@ -252,6 +310,18 @@ def _run_profile_impl(
     windows_old_mode = include_windows_old or bool(profile_config.get("windows_old"))
     tools = registry.profile_tools(profile)
     if windows_old_mode:
+        if mounted_volume_path and not (mounted_volume_path / WINDOWS_OLD_ROOT).exists():
+            db.log_activity(
+                case_id=case_id,
+                computer_id=image.computer_id,
+                image_id=image_id,
+                level="info",
+                event="windows_old.root_not_present",
+                message=f"Windows.old root not present; skipping profile {profile} Windows.old pass",
+                details={"profile": profile, "artifact_root": WINDOWS_OLD_ROOT},
+            )
+            _progress(f"profile skipped {profile}:windows-old reason=Windows.old root not present")
+            return
         tools = _windows_old_tools(tools)
         db.log_activity(
             case_id=case_id,
@@ -267,6 +337,8 @@ def _run_profile_impl(
             },
         )
     if replace_existing and not dry_run:
+        purge_started = time.monotonic()
+        _progress(f"profile purge start {profile}{':windows-old' if windows_old_mode else ''}")
         purged = db.purge_tool_data(
             case_id=case_id,
             image_id=image_id,
@@ -295,6 +367,10 @@ def _run_profile_impl(
                 "outputs": purged,
                 "removed_output_folders": removed_output_folders,
             },
+        )
+        _progress(
+            f"profile purge completed {profile}{':windows-old' if windows_old_mode else ''} "
+            f"elapsed={_format_elapsed(purge_started)} outputs={len(purged)} folders={len(removed_output_folders)}"
         )
     artifact_definitions = {
         artifact.name: artifact
@@ -405,7 +481,8 @@ def _run_profile_impl(
                 dry_run=dry_run,
             )
         if use_mounted_extraction and any(
-            artifact.recursive and not artifact.source for artifact in artifact_definitions.values()
+            artifact.recursive and not artifact.source and not artifact.process_in_place
+            for artifact in artifact_definitions.values()
         ):
             mounted_files, _ = inventory_mounted_files(
                 db=db,
@@ -419,6 +496,8 @@ def _run_profile_impl(
             extraction_method = "mft" if artifact.name in mft_selected_artifacts else (
                 "mount" if use_mounted_extraction and not artifact.use_tsk else "tsk"
             )
+            artifact_started = time.monotonic()
+            _progress(f"artifact start {artifact.name} method={extraction_method}")
             artifact_timing_id = db.start_process_timing(
                 case_id=case_id,
                 computer_id=image.computer_id,
@@ -429,6 +508,7 @@ def _run_profile_impl(
                 name=artifact.name,
                 tool_name=artifact_tool_names.get(artifact.name),
                 artifact_name=artifact.name,
+                source_scope=WINDOWS_OLD_OUTPUT_NAMESPACE if windows_old_mode else "live",
                 details={
                     "profile": profile,
                     "source": artifact.source,
@@ -490,11 +570,44 @@ def _run_profile_impl(
                         ignore_exclude_patterns=artifact.name == "lnk_files" and include_start_menu_lnk,
                     )
             except Exception as exc:
+                if windows_old_mode and _is_missing_source_error(exc):
+                    db.finish_process_timing(
+                        artifact_timing_id,
+                        status="source_not_present",
+                        details={"error": str(exc)},
+                    )
+                    _progress(
+                        f"artifact source_not_present {artifact.name} method={extraction_method} "
+                        f"elapsed={_format_elapsed(artifact_started)} error={exc}"
+                    )
+                    db.log_activity(
+                        case_id=case_id,
+                        computer_id=image.computer_id,
+                        image_id=image_id,
+                        level="warning",
+                        event="windows_old.artifact_source_not_present",
+                        message=f"Windows.old source artifact was not present for {artifact.name}; continuing",
+                        details={"artifact": artifact.name, "error": str(exc)},
+                    )
+                    return None
                 db.finish_process_timing(artifact_timing_id, status="failed", details={"error": str(exc)})
+                _progress(
+                    f"artifact failed {artifact.name} method={extraction_method} "
+                    f"elapsed={_format_elapsed(artifact_started)} error={exc}"
+                )
                 raise
+            artifact_details = _artifact_timing_details(
+                extracted.path,
+                getattr(extracted, "metadata", None),
+                include_path_stats=not artifact.process_in_place,
+            )
             db.finish_process_timing(
                 artifact_timing_id,
-                details=_artifact_timing_details(extracted.path, getattr(extracted, "metadata", None)),
+                details=artifact_details,
+            )
+            _progress(
+                f"artifact completed {artifact.name} method={extraction_method} "
+                f"elapsed={_format_elapsed(artifact_started)}{_progress_detail(artifact_details)}"
             )
             artifact_paths[artifact.name] = extracted.path
             if artifact.name == "prefetch_files" and not dry_run:
@@ -523,6 +636,7 @@ def _run_profile_impl(
         for artifact in tool.artifacts:
             if artifact.name in mft_selected_artifacts and artifact.name not in artifact_paths:
                 extract_profile_artifact(artifact)
+        missing_tool_artifacts = [artifact.name for artifact in tool.artifacts if artifact.name not in artifact_paths]
         tool_artifacts = {
             artifact.name: artifact_paths[artifact.name]
             for artifact in tool.artifacts
@@ -537,6 +651,7 @@ def _run_profile_impl(
             phase="parse",
             name=tool.name,
             tool_name=tool.name,
+            source_scope=WINDOWS_OLD_OUTPUT_NAMESPACE if windows_old_mode else "live",
             details={
                 "profile": profile,
                 "tool_type": tool.type,
@@ -545,6 +660,28 @@ def _run_profile_impl(
                 "output_namespace": WINDOWS_OLD_OUTPUT_NAMESPACE if windows_old_mode else None,
             },
         )
+        tool_started = time.monotonic()
+        if windows_old_mode and missing_tool_artifacts:
+            db.finish_process_timing(
+                tool_timing_id,
+                status="source_not_present",
+                details={"missing_artifacts": missing_tool_artifacts},
+            )
+            _progress(
+                f"tool source_not_present {tool.name} elapsed={_format_elapsed(tool_started)} "
+                f"missing_artifacts={','.join(missing_tool_artifacts)}"
+            )
+            db.log_activity(
+                case_id=case_id,
+                computer_id=image.computer_id,
+                image_id=image_id,
+                level="warning",
+                event="windows_old.tool_source_not_present",
+                message=f"Windows.old source artifacts were not present for {tool.name}; continuing",
+                details={"tool": tool.name, "missing_artifacts": missing_tool_artifacts},
+            )
+            continue
+        _progress(f"tool start {tool.name} artifacts={','.join(sorted(tool_artifacts)) or '-'}")
         try:
             run_tool(
                 db=db,
@@ -559,11 +696,20 @@ def _run_profile_impl(
                 accept_duplicate=accept_duplicate or windows_old_mode,
                 output_namespace=WINDOWS_OLD_OUTPUT_NAMESPACE if windows_old_mode else None,
                 rebuild_correlations=False,
-                raw_image=fallback_source_image or source_image or paths.ewf_raw_path(case_id),
+                raw_image=source_image or fallback_source_image or paths.ewf_raw_path(case_id),
                 offset_sectors=offset_sectors or 0,
             )
         except Exception as exc:
-            db.finish_process_timing(tool_timing_id, status="failed", details={"error": str(exc)})
+            missing_windows_old_source = windows_old_mode and _is_missing_source_error(exc)
+            db.finish_process_timing(
+                tool_timing_id,
+                status="source_not_present" if missing_windows_old_source else "failed",
+                details={"error": str(exc)},
+            )
+            _progress(
+                f"tool {'source_not_present' if missing_windows_old_source else 'failed'} {tool.name} "
+                f"elapsed={_format_elapsed(tool_started)} error={exc}"
+            )
             if not windows_old_mode:
                 raise
             db.log_activity(
@@ -571,14 +717,21 @@ def _run_profile_impl(
                 computer_id=image.computer_id,
                 image_id=image_id,
                 level="warning",
-                event="windows_old.tool_failed",
-                message=f"Windows.old parser failed for {tool.name}; continuing with remaining tools",
+                event="windows_old.source_not_present" if missing_windows_old_source else "windows_old.tool_failed",
+                message=(
+                    f"Windows.old source artifact was not present for {tool.name}; continuing with remaining tools"
+                    if missing_windows_old_source
+                    else f"Windows.old parser failed for {tool.name}; continuing with remaining tools"
+                ),
                 details={"tool": tool.name, "error": str(exc)},
             )
         else:
             db.finish_process_timing(tool_timing_id)
+            _progress(f"tool completed {tool.name} elapsed={_format_elapsed(tool_started)}")
 
     def timed_postprocess(name: str, callback):
+        postprocess_started = time.monotonic()
+        _progress(f"postprocess start {name}")
         timing_id = db.start_process_timing(
             case_id=case_id,
             computer_id=image.computer_id,
@@ -593,9 +746,11 @@ def _run_profile_impl(
             result = callback()
         except Exception as exc:
             db.finish_process_timing(timing_id, status="failed", details={"error": str(exc)})
+            _progress(f"postprocess failed {name} elapsed={_format_elapsed(postprocess_started)} error={exc}")
             raise
         details = result if isinstance(result, dict) else {"count": result}
         db.finish_process_timing(timing_id, details=details)
+        _progress(f"postprocess completed {name} elapsed={_format_elapsed(postprocess_started)}{_progress_detail(details)}")
         return result
 
     if not dry_run and any(
@@ -635,6 +790,19 @@ def _run_profile_impl(
             image_id=image_id,
             event="filesystem_review.rebuilt",
             message=f"Rebuilt {count} filesystem review rows after profile {profile}",
+            details={"profile": profile, "count": count},
+        )
+    if not dry_run and any(tool.name == "MFTECmd" for tool in tools):
+        count = timed_postprocess(
+            "nested_evidence_inventory",
+            lambda: rebuild_nested_evidence_inventory(db, case_id=case_id, image_id=image_id),
+        )
+        db.log_activity(
+            case_id=case_id,
+            computer_id=image.computer_id,
+            image_id=image_id,
+            event="nested_evidence.inventory_rebuilt",
+            message=f"Inventoried {count} nested disk image candidates after profile {profile}",
             details={"profile": profile, "count": count},
         )
     if not dry_run and any(tool.name in TIMELINE_TOOLS for tool in tools):

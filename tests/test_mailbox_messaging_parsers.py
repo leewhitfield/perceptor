@@ -1,6 +1,7 @@
 import csv
 from pathlib import Path
 
+from forensic_orchestrator.analytics_query import query_one
 from forensic_orchestrator.db import Database
 import forensic_orchestrator.tools.ingest as ingest_module
 from forensic_orchestrator.tools.ingest import ingest_csv_output
@@ -76,16 +77,20 @@ def test_mailbox_parser_extracts_eml_and_ingests_messages(tmp_path, monkeypatch)
         tool_name="MailboxParser",
         path=csv_path,
     )
-    row = db.conn.execute(
+    row = query_one(
+        db,
+        "mailbox_messages",
         "SELECT subject, sender, recipients, body_text, body_text_length, body_text_sha256 FROM mailbox_messages"
-    ).fetchone()
-    metadata = db.conn.execute(
+    )
+    metadata = query_one(
+        db,
+        "mailbox_messages",
         """
         SELECT source_format, parser_status, user_profile, attachment_count, has_attachments,
                conversation_index, conversation_topic, references_header, reply_to, importance, x_originating_ip
         FROM mailbox_messages
         """
-    ).fetchone()
+    )
     content_ref = db.conn.execute(
         """
         SELECT source_table, content_role, opensearch_document_id, content_sha256, content_length
@@ -99,7 +104,7 @@ def test_mailbox_parser_extracts_eml_and_ingests_messages(tmp_path, monkeypatch)
     assert "jane@example.test" in row["sender"]
     assert "devon@example.test" in row["recipients"]
     assert row["body_text"] == ""
-    assert row["body_text_length"] > 0
+    assert int(row["body_text_length"]) > 0
     assert row["body_text_sha256"]
     assert any("attached" in str(document["content"]) for document in documents)
     assert metadata["source_format"] == "eml"
@@ -110,7 +115,7 @@ def test_mailbox_parser_extracts_eml_and_ingests_messages(tmp_path, monkeypatch)
     assert metadata["reply_to"] == "Jane Reply <reply@example.test>"
     assert metadata["importance"] == "high"
     assert metadata["x_originating_ip"] == "[192.0.2.10]"
-    assert metadata["attachment_count"] == 0
+    assert int(metadata["attachment_count"]) == 0
     assert metadata["has_attachments"] == "0"
     assert content_ref["content_role"] == "message_body"
     assert content_ref["opensearch_document_id"] == documents[0]["id"]
@@ -266,13 +271,17 @@ def test_messaging_parser_extracts_leveldb_candidate_strings_and_ingests(tmp_pat
         tool_name="MessagingParser",
         path=message_csv_path,
     )
-    row = db.conn.execute(
+    row = query_one(
+        db,
+        "messaging_records",
         "SELECT application, user_profile, artifact_type, record_type, url, host, message_text, message_text_length "
         "FROM messaging_records WHERE url = 'https://example.test/thread'"
-    ).fetchone()
-    message_row = db.conn.execute(
+    )
+    message_row = query_one(
+        db,
+        "messaging_messages",
         "SELECT application, channel_id, sender_id, timestamp_utc, message_text, message_text_length FROM messaging_messages"
-    ).fetchone()
+    )
     content_refs = db.conn.execute(
         """
         SELECT source_table, content_role, opensearch_document_id
@@ -290,13 +299,13 @@ def test_messaging_parser_extracts_leveldb_candidate_strings_and_ingests(tmp_pat
     assert row["url"] == "https://example.test/thread"
     assert row["host"] == "example.test"
     assert row["message_text"] == ""
-    assert row["message_text_length"] > 0
+    assert int(row["message_text_length"]) > 0
     assert message_row["application"] == "Slack"
     assert message_row["channel_id"] == "C1"
     assert message_row["sender_id"] == "U1"
     assert message_row["timestamp_utc"].startswith("2020-11-14T")
     assert message_row["message_text"] == ""
-    assert message_row["message_text_length"] > 0
+    assert int(message_row["message_text_length"]) > 0
     assert any("slack channel" in str(document["content"]) for document in documents)
     assert any("Structured hello from Slack" in str(document["content"]) for document in documents)
     assert {row["source_table"] for row in content_refs} == {"messaging_messages", "messaging_records"}
@@ -398,19 +407,23 @@ def test_messaging_parser_extracts_ai_app_json_and_obsidian_notes(tmp_path, monk
         path=message_csv_path,
     )
 
-    chat_row = db.conn.execute(
+    chat_row = query_one(
+        db,
+        "messaging_messages",
         "SELECT application, conversation_id, message_text, message_text_length FROM messaging_messages WHERE application = 'ChatGPT'"
-    ).fetchone()
-    note_row = db.conn.execute(
+    )
+    note_row = query_one(
+        db,
+        "messaging_records",
         "SELECT application, artifact_type, record_type, message_text, message_text_length "
         "FROM messaging_records WHERE application = 'Obsidian' AND artifact_type = 'markdown_note'"
-    ).fetchone()
+    )
 
     assert chat_row["conversation_id"] == "conv-1"
     assert chat_row["message_text"] == ""
-    assert chat_row["message_text_length"] > 0
+    assert int(chat_row["message_text_length"]) > 0
     assert note_row["record_type"] == "note_content"
     assert note_row["message_text"] == ""
-    assert note_row["message_text_length"] > 0
+    assert int(note_row["message_text_length"]) > 0
     assert any("red folder for project notes" in str(document["content"]) for document in documents)
     assert any("red folder in Obsidian" in str(document["content"]) for document in documents)

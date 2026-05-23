@@ -15,15 +15,20 @@ def usb_rows_from_registry_artifact(row: dict[str, Any]) -> list[dict[str, Any]]
         "usb_volume_info_cache",
         "usb_mountpoints2",
         "usb_device_migration",
+        "usb_emdmgmt",
         "mounted_devices",
     }:
         return []
     key_path = _text(row.get("key_path"))
     value_name = _text(row.get("value_name"))
     value_data = _text(row.get("value_data"))
+    if artifact == "mounted_devices":
+        value_name = value_name or _value_blob_field(value_data, "DeviceName")
+        value_data = _value_blob_field(value_data, "DeviceData") or value_data
     if artifact == "usb_device_migration" and not _is_device_migration_root(key_path):
         return []
     parsed = _parse_usb_key(key_path, artifact, value_name=value_name, value_data=value_data)
+    _merge_report_bundle_usb_fields(parsed, artifact, row.get("value_data"))
     return [
         {
             "id": str(uuid.uuid4()),
@@ -161,12 +166,22 @@ def _parse_usb_key(
     elif artifact == "usb_volume_info_cache":
         result["device_type"] = "volume_info_cache"
         result.update(_parse_volume_guid_from_text(key_path))
+        drive_name = _value_blob_field(value_data, "DriveName")
+        volume_label = _value_blob_field(value_data, "VolumeLabel")
+        if drive_name and not result.get("drive_letter"):
+            result["drive_letter"] = drive_name.upper()
+        if volume_label and not result.get("volume_name"):
+            result["volume_name"] = _display_tail(volume_label)
         if value_name and value_name.lower() == "driveletter":
             result["drive_letter"] = value_data
         elif value_name and value_name.lower() in {"volumelabel", "volumename", "friendlyname"}:
             result["volume_name"] = _display_tail(value_data)
     elif artifact == "usb_mountpoints2":
         result["device_type"] = "user_mountpoint"
+        result.update(_parse_volume_guid_from_text(key_path))
+    elif artifact == "usb_emdmgmt":
+        result["device_type"] = "readyboost_device"
+        result.update(_parse_embedded_usb_identifier(key_path, value_data))
         result.update(_parse_volume_guid_from_text(key_path))
     elif artifact == "usb_device_migration":
         result.update(_parse_embedded_usb_identifier(key_path, value_data))
@@ -255,6 +270,7 @@ def _parse_mounted_device_value(value_name: str | None, value_data: str | None) 
         if volume:
             result["volume_guid"] = "{" + volume.group(1) + "}"
     if value_data:
+        result.update(_parse_volume_guid_from_text(value_data))
         storage = re.search(r"USBSTOR#([^#]+)#([^#]+)#", value_data, re.IGNORECASE)
         if storage:
             result.update(_parse_usbstor_descriptor(storage.group(1)))
@@ -268,6 +284,60 @@ def _parse_mounted_device_value(value_name: str | None, value_data: str | None) 
             result["parent_id_prefix"] = identifier
             result["instance_id"] = identifier
     return result
+
+
+def _merge_report_bundle_usb_fields(parsed: dict[str, str | None], artifact: str, value_data: Any) -> None:
+    text = _text(value_data)
+    if not text:
+        return
+    if artifact in {"usb_device_history", "usb_volume_history", "usb_device_migration"}:
+        serial = _value_blob_field(text, "SerialNumber")
+        if serial and not parsed.get("serial"):
+            parsed["serial"] = serial.replace("&0", "")
+            parsed["instance_id"] = parsed["serial"]
+        device_name = _value_blob_field(text, "DeviceName") or _value_blob_field(text, "Title")
+        if device_name and not parsed.get("friendly_name"):
+            parsed["friendly_name"] = device_name
+        disk_id = _value_blob_field(text, "DiskId")
+        if disk_id and not parsed.get("volume_guid"):
+            parsed["volume_guid"] = disk_id if disk_id.startswith("{") else f"{{{disk_id.strip('{}')}}}"
+        last_connected = _value_blob_field(text, "LastConnected")
+        if last_connected and not parsed.get("last_present_date_utc"):
+            parsed["last_present_date_utc"] = last_connected
+    elif artifact == "mounted_devices":
+        device_name = _value_blob_field(text, "DeviceName")
+        device_data = _value_blob_field(text, "DeviceData")
+        if device_name:
+            drive = re.search(r"\\DosDevices\\([A-Z]:)", device_name, re.IGNORECASE)
+            if drive and not parsed.get("drive_letter"):
+                parsed["drive_letter"] = drive.group(1).upper()
+            volume = re.search(r"Volume\{([^}]+)\}", device_name, re.IGNORECASE)
+            if volume and not parsed.get("volume_guid"):
+                parsed["volume_guid"] = "{" + volume.group(1) + "}"
+        if device_data:
+            extra = _parse_mounted_device_value(device_name, device_data)
+            for key, value in extra.items():
+                if value and not parsed.get(key):
+                    parsed[key] = value
+    elif artifact == "usb_volume_info_cache":
+        drive = _value_blob_field(text, "DriveName")
+        label = _value_blob_field(text, "VolumeLabel")
+        if drive and not parsed.get("drive_letter"):
+            parsed["drive_letter"] = drive.upper()
+        if label and not parsed.get("volume_name"):
+            parsed["volume_name"] = label
+
+
+def _value_blob_field(value: Any, field: str) -> str | None:
+    text = _text(value)
+    if not text:
+        return None
+    pattern = rf"(?:^|;\s*){re.escape(field)}=([^;]*)"
+    match = re.search(pattern, text, re.IGNORECASE)
+    if not match:
+        return None
+    result = match.group(1).strip()
+    return result or None
 
 
 def _parse_embedded_usb_identifier(*values: str | None) -> dict[str, str | None]:

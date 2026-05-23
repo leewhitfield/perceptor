@@ -2,6 +2,7 @@ import csv
 import struct
 from pathlib import Path
 
+from forensic_orchestrator.analytics_query import query_one
 from forensic_orchestrator.db import Database
 from forensic_orchestrator.tools.ingest import ingest_csv_output
 from forensic_orchestrator.tools.onedrive_odl import parse_onedrive_odl_to_csv
@@ -164,6 +165,6 @@ def test_onedrive_odl_ingest_populates_normalized_table(tmp_path):
         path=csv_path,
     )
 
-    row = db.conn.execute("SELECT * FROM onedrive_log_entries").fetchone()
+    row = query_one(db, "onedrive_log_entries", "SELECT * FROM onedrive_log_entries")
     assert row["event_type"] == "download"
     assert row["local_path"] == "C:\\Users\\fredr\\OneDrive\\Report.docx"

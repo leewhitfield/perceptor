@@ -149,6 +149,7 @@ def test_registry_loads_eztools_profile():
     assert registry.get_tool("WebCacheParser").enabled is True
     assert registry.get_tool("PackageCacheParser").enabled is True
     assert registry.get_tool("PackageArtifactsParser").enabled is True
+    assert registry.get_tool("SpotifyParser").enabled is True
     assert registry.get_tool("TelemetryParser").enabled is True
     assert registry.get_tool("EtlParser").enabled is True
     assert registry.get_tool("WindowsSearchGatherParser").enabled is True
@@ -212,6 +213,7 @@ def test_windows_full_includes_complete_current_artifact_set():
         "BrowserCacheParser",
         "PackageCacheParser",
         "PackageArtifactsParser",
+        "SpotifyParser",
         "TelemetryParser",
         "SQLECmd",
         "CloudSyncParser",
@@ -670,7 +672,18 @@ def test_dedicated_registry_tools_are_configured():
         "AppCompatCache.csv",
     ]
 
+def test_evtx_triage_includes_office_alerts_log():
+    registry = ToolRegistry.from_files([default_plugin_path()])
+    tool = registry.get_tool("EvtxECmdTriage")
+    artifacts = {artifact.name: artifact for artifact in tool.artifacts}
+
+    assert "OAlerts.evtx" in artifacts["evtx_triage_logs"].patterns
+
+
+def test_dedicated_shellbag_tool_is_configured():
+    registry = ToolRegistry.from_files([default_plugin_path()])
     shellbags = registry.get_tool("SBECmd")
+
     assert shellbags.enabled is True
     assert build_tool_command(
         shellbags,

@@ -54,36 +54,66 @@ UNIX_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 def parse_webcache_artifacts_to_csv(source: Path, output: Path) -> list[Path]:
     output.mkdir(parents=True, exist_ok=True)
     csv_path = output / "WebCacheEntries.csv"
+    inventory_path = output / "WebCacheParserInventory.json"
     rows: list[dict[str, object]] = []
+    inventory_rows: list[dict[str, object]] = []
     if source.exists():
         exported_root = output / "_esedbexport"
         rows.extend(_parse_exported_tables(source))
         for database in _iter_files(source, "WebCache*.dat"):
-            if database.is_file():
-                rows.extend(_parse_database(database, exported_root))
+            if _is_file(database):
+                parsed_rows, status = _parse_database(database, exported_root)
+                rows.extend(parsed_rows)
+                inventory_rows.append(status)
     _write_csv(csv_path, WEBCACHE_FIELDS, rows)
+    inventory_path.write_text(json.dumps(inventory_rows, indent=2, sort_keys=True), encoding="utf-8")
     return [csv_path]
 
 
-def _parse_database(database: Path, exported_root: Path) -> list[dict[str, object]]:
+def _parse_database(database: Path, exported_root: Path) -> tuple[list[dict[str, object]], dict[str, object]]:
     exported_dir = exported_root / _safe_name(database)
     exported_actual = Path(str(exported_dir) + ".export")
     parse_dir = exported_actual if exported_actual.exists() else exported_dir
     if not any(_iter_files(parse_dir)):
         binary = shutil.which("esedbexport")
         if binary is None:
-            raise RuntimeError(
-                "esedbexport not found. Install libesedb-utils or provide exported WebCache tables as CSV/TSV."
+            return [], _webcache_inventory_row(
+                database,
+                "missing_dependency",
+                "ese",
+                "esedbexport not found. Install libesedb-utils or provide exported WebCache tables as CSV/TSV.",
             )
         exported_dir.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(
-            [binary, "-t", str(exported_dir), str(database)],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        try:
+            subprocess.run(
+                [binary, "-t", str(exported_dir), str(database)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            error_text = (exc.stderr or exc.stdout or str(exc)).strip()
+            return [], _webcache_inventory_row(database, "export_failed", "ese", error_text)
         parse_dir = exported_actual if exported_actual.exists() else exported_dir
-    return _parse_exported_tables(parse_dir, source_database=database)
+    rows = _parse_exported_tables(parse_dir, source_database=database)
+    return rows, _webcache_inventory_row(database, "parsed", "ese", "", row_count=len(rows))
+
+
+def _webcache_inventory_row(
+    database: Path,
+    parser_status: str,
+    detected_format: str,
+    parser_error: str,
+    *,
+    row_count: int = 0,
+) -> dict[str, object]:
+    return {
+        "source_database": str(database),
+        "parser_status": parser_status,
+        "detected_format": detected_format,
+        "row_count": row_count,
+        "parser_error": parser_error,
+    }
 
 
 def _parse_exported_tables(root: Path, source_database: Path | None = None) -> list[dict[str, object]]:
@@ -126,6 +156,13 @@ def _iter_files(root: Path, pattern: str = "*") -> list[Path]:
             if path.match(pattern):
                 matches.append(path)
     return matches
+
+
+def _is_file(path: Path) -> bool:
+    try:
+        return path.is_file()
+    except OSError:
+        return False
 
 
 def _read_table(path: Path) -> list[dict[str, str]]:

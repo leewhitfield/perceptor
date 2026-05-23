@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import json
+import uuid
+from datetime import datetime, timezone
 from typing import Any
 
+from forensic_orchestrator.analytics_query import query_rows
 from forensic_orchestrator.db import Database
 
 
@@ -13,8 +17,9 @@ def rebuild_filesystem_review(db: Database, *, case_id: str, image_id: str | Non
         params.append(image_id)
     db.conn.execute(f"DELETE FROM filesystem_review WHERE {' AND '.join(where)}", params)
     if db.analytics_only:
-        db.conn.commit()
-        return 0
+        rows = _duckdb_filesystem_review_rows(db, case_id=case_id, image_id=image_id)
+        db.replace_filesystem_review(case_id=case_id, image_id=image_id, rows=rows)
+        return len(rows)
     _insert_mft_rows(db, case_id=case_id, image_id=image_id)
     _insert_usn_rows(db, case_id=case_id, image_id=image_id)
     _insert_logfile_rows(db, case_id=case_id, image_id=image_id)
@@ -454,6 +459,394 @@ WINDOWS_SEARCH_REVIEW_PROPERTIES = {
     "4519-System_Message_DateReceived",
     "4520-System_Message_DateSent",
 }
+
+
+def _duckdb_filesystem_review_rows(db: Database, *, case_id: str, image_id: str | None) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    now = datetime.now(timezone.utc).isoformat()
+    image_filter = " AND image_id = ?" if image_id is not None else ""
+    params: list[Any] = [case_id, *([image_id] if image_id is not None else [])]
+
+    for row in query_rows(
+        db,
+        "mft_entries",
+        f"""
+        SELECT *
+        FROM mft_entries
+        WHERE case_id = ?{image_filter}
+        """,
+        params,
+    ):
+        rows.append(
+            _review_row(
+                row,
+                source_table="mft_entries",
+                event_type="mft_record",
+                event_time=_coalesce(row.get("record_changed_si"), row.get("modified_si"), row.get("created_si")),
+                file_name=row.get("file_name"),
+                file_path=_join_path_value(row.get("parent_path"), row.get("file_name")),
+                parent_path=row.get("parent_path"),
+                mft_entry_number=row.get("entry_number"),
+                mft_sequence_number=row.get("sequence_number"),
+                parent_entry_number=row.get("parent_entry_number"),
+                parent_sequence_number=row.get("parent_sequence_number"),
+                in_use=row.get("in_use"),
+                is_directory=row.get("is_directory"),
+                operation=None,
+                reason="mft_record_present",
+                status="mft_in_use" if str(row.get("in_use") or "").lower() == "true" else "mft_not_in_use",
+                details={},
+                created_at=now,
+            )
+        )
+
+    for row in query_rows(
+        db,
+        "usn_journal_entries",
+        f"""
+        SELECT *
+        FROM usn_journal_entries
+        WHERE case_id = ?{image_filter}
+        """,
+        params,
+    ):
+        reason = row.get("reason")
+        rows.append(
+            _review_row(
+                row,
+                source_table="usn_journal_entries",
+                event_type=_usn_event_type(reason),
+                event_time=row.get("update_timestamp"),
+                file_name=row.get("file_name"),
+                file_path=_join_path_value(row.get("full_path"), row.get("file_name")),
+                parent_path=row.get("full_path"),
+                mft_entry_number=row.get("file_reference_number"),
+                mft_sequence_number=row.get("file_reference_sequence_number"),
+                parent_entry_number=row.get("parent_file_reference_number"),
+                parent_sequence_number=row.get("parent_file_reference_sequence_number"),
+                in_use=None,
+                is_directory="true" if "director" in str(row.get("file_attributes") or "").lower() else "false",
+                operation=reason,
+                reason=reason,
+                status="filesystem_journal_event",
+                details={},
+                created_at=now,
+            )
+        )
+
+    for row in query_rows(
+        db,
+        "ntfs_logfile_entries",
+        f"""
+        SELECT *
+        FROM ntfs_logfile_entries
+        WHERE case_id = ?{image_filter}
+        """,
+        params,
+    ):
+        operation = _coalesce(row.get("operation"), row.get("redo_operation"), row.get("undo_operation"))
+        rows.append(
+            _review_row(
+                row,
+                source_table="ntfs_logfile_entries",
+                event_type=_logfile_event_type(operation),
+                event_time=row.get("event_time"),
+                file_name=row.get("file_name"),
+                file_path=row.get("file_path"),
+                parent_path=None,
+                mft_entry_number=row.get("file_reference_number"),
+                mft_sequence_number=row.get("file_reference_sequence_number"),
+                parent_entry_number=row.get("parent_file_reference_number"),
+                parent_sequence_number=row.get("parent_file_reference_sequence_number"),
+                in_use=None,
+                is_directory=None,
+                operation=operation,
+                reason=operation,
+                status="ntfs_transaction_log_event",
+                details=_json_or_empty(row.get("row_json")),
+                created_at=now,
+            )
+        )
+
+    search_files = {
+        str(row.get("id")): row
+        for row in query_rows(
+            db,
+            "windows_search_files",
+            f"""
+            SELECT *
+            FROM windows_search_files
+            WHERE case_id = ?{image_filter}
+            """,
+            params,
+        )
+    }
+    property_names = set(WINDOWS_SEARCH_REVIEW_PROPERTIES)
+    for row in query_rows(
+        db,
+        "windows_search_properties",
+        f"""
+        SELECT *
+        FROM windows_search_properties
+        WHERE case_id = ?{image_filter}
+        """,
+        params,
+    ):
+        if row.get("property_name") not in property_names or not row.get("property_value"):
+            continue
+        file_row = search_files.get(str(row.get("source_record_id"))) or {}
+        item_path = _coalesce(file_row.get("item_path"), row.get("item_path"))
+        if not item_path:
+            continue
+        rows.append(
+            _review_row(
+                row,
+                source_table="windows_search_properties",
+                event_type=_windows_search_property_event_type(row.get("property_name")),
+                event_time=_windows_search_property_event_time(row, file_row),
+                file_name=_coalesce(file_row.get("file_name"), _basename_value(item_path)),
+                file_path=item_path,
+                parent_path=file_row.get("folder_path"),
+                mft_entry_number=None,
+                mft_sequence_number=None,
+                parent_entry_number=None,
+                parent_sequence_number=None,
+                in_use=None,
+                is_directory="true" if str(file_row.get("is_folder") or "").lower() in {"true", "1", "yes"} else None,
+                operation=row.get("property_name"),
+                reason=f"Windows Search property corroboration: {row.get('property_name')}",
+                status=_windows_search_property_status(row),
+                details={
+                    "work_id": row.get("work_id"),
+                    "property_name": row.get("property_name"),
+                    "normalized_name": row.get("normalized_name"),
+                    "property_value": row.get("property_value"),
+                    "windows_search_file_id": file_row.get("id"),
+                    "windows_search_gather_time": file_row.get("gather_time"),
+                    "windows_search_item_url": file_row.get("item_url"),
+                    "windows_search_item_type": file_row.get("item_type"),
+                    "windows_search_size": file_row.get("size"),
+                    "windows_search_owner": file_row.get("owner"),
+                },
+                created_at=now,
+            )
+        )
+
+    for row in query_rows(
+        db,
+        "thumbcache_search_correlations",
+        f"""
+        SELECT *
+        FROM thumbcache_search_correlations
+        WHERE case_id = ?{image_filter}
+          AND COALESCE(search_item_path, '') != ''
+        """,
+        params,
+    ):
+        search_file = search_files.get(str(row.get("windows_search_file_id"))) or {}
+        is_deleted = str(search_file.get("is_deleted") or "").lower() in {"true", "1", "yes"}
+        is_folder = str(search_file.get("is_folder") or "").lower() in {"true", "1", "yes"}
+        rows.append(
+            _review_row(
+                row,
+                source_table="thumbcache_search_correlations",
+                event_type="windows_search_thumbcache_deleted_path" if is_deleted else "thumbcache_search_path_correlation",
+                event_time=_coalesce(
+                    row.get("search_date_accessed"),
+                    row.get("search_date_modified"),
+                    row.get("search_date_created"),
+                    row.get("search_date_imported"),
+                ),
+                file_name=row.get("search_file_name"),
+                file_path=row.get("search_item_path"),
+                parent_path=_json_or_empty(row.get("details_json")).get("search_folder_path"),
+                mft_entry_number=None,
+                mft_sequence_number=None,
+                parent_entry_number=None,
+                parent_sequence_number=None,
+                in_use=None,
+                is_directory="true" if is_folder else None,
+                operation=row.get("correlation_basis"),
+                reason="Thumbcache Cache Entry Hash matched Windows Search System_ThumbnailCacheId",
+                status="windows_search_deleted_path" if is_deleted else "thumbcache_search_observation",
+                details={
+                    "cache_id": row.get("cache_id"),
+                    "confidence": row.get("confidence"),
+                    "thumbcache_entry_id": row.get("thumbcache_entry_id"),
+                    "thumbcache_name": row.get("thumbcache_name"),
+                    "thumbcache_user": row.get("thumbcache_user"),
+                    "thumbnail_sha256": row.get("thumbnail_sha256"),
+                    "thumbnail_type": row.get("thumbnail_type"),
+                    "windows_search_file_id": row.get("windows_search_file_id"),
+                    "windows_search_is_deleted": search_file.get("is_deleted"),
+                    "windows_search_is_folder": search_file.get("is_folder"),
+                },
+                created_at=now,
+            )
+        )
+    return rows
+
+
+def _review_row(
+    source: dict[str, Any],
+    *,
+    source_table: str,
+    event_type: str,
+    event_time: Any,
+    file_name: Any,
+    file_path: Any,
+    parent_path: Any,
+    mft_entry_number: Any,
+    mft_sequence_number: Any,
+    parent_entry_number: Any,
+    parent_sequence_number: Any,
+    in_use: Any,
+    is_directory: Any,
+    operation: Any,
+    reason: Any,
+    status: str,
+    details: dict[str, Any],
+    created_at: str,
+) -> dict[str, Any]:
+    return {
+        "id": str(uuid.uuid4()),
+        "case_id": source.get("case_id"),
+        "computer_id": source.get("computer_id"),
+        "image_id": source.get("image_id"),
+        "source_table": source_table,
+        "source_id": source.get("id"),
+        "source_tool": source.get("tool_name"),
+        "source_row_number": source.get("row_number"),
+        "event_type": event_type,
+        "event_time": event_time,
+        "file_name": file_name,
+        "file_path": file_path,
+        "parent_path": parent_path,
+        "mft_entry_number": mft_entry_number,
+        "mft_sequence_number": mft_sequence_number,
+        "parent_entry_number": parent_entry_number,
+        "parent_sequence_number": parent_sequence_number,
+        "in_use": in_use,
+        "is_directory": is_directory,
+        "operation": operation,
+        "reason": reason,
+        "status": status,
+        "details_json": json.dumps(details, sort_keys=True),
+        "created_at": created_at,
+    }
+
+
+def _coalesce(*values: Any) -> Any:
+    for value in values:
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _join_path_value(parent: Any, name: Any) -> str | None:
+    if not parent and not name:
+        return None
+    if not parent:
+        return str(name)
+    if not name:
+        return str(parent)
+    sep = "\\" if "\\" in str(parent) else "/"
+    return f"{str(parent).rstrip('/\\')}{sep}{name}"
+
+
+def _basename_value(path: Any) -> str | None:
+    if not path:
+        return None
+    text = str(path).replace("\\", "/").rstrip("/")
+    return text.rsplit("/", 1)[-1] if text else None
+
+
+def _json_or_empty(value: Any) -> dict[str, Any]:
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(str(value))
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _usn_event_type(reason: Any) -> str:
+    text = str(reason or "").lower()
+    if "delete" in text:
+        return "usn_delete"
+    if "rename" in text:
+        return "usn_rename"
+    if "create" in text:
+        return "usn_create"
+    if any(token in text for token in ("dataextend", "datatruncation", "overwrite")):
+        return "usn_content_change"
+    if "close" in text:
+        return "usn_close"
+    return "usn_event"
+
+
+def _logfile_event_type(operation: Any) -> str:
+    text = str(operation or "").lower()
+    if "delete" in text or "dealloc" in text:
+        return "logfile_delete"
+    if "rename" in text:
+        return "logfile_rename"
+    if "create" in text or "alloc" in text:
+        return "logfile_create"
+    return "logfile_event"
+
+
+def _windows_search_property_event_type(property_name: Any) -> str:
+    name = str(property_name or "")
+    if name in {"4430-System_IsDeleted", "System_IsDeleted"}:
+        return "windows_search_deleted_state"
+    if name in {"4397-System_FilePlaceholderStatus", "System_FilePlaceholderStatus"}:
+        return "windows_search_cloud_placeholder_state"
+    if "System_Document_" in name:
+        return "windows_search_document_metadata"
+    if "System_Photo_" in name:
+        return "windows_search_photo_metadata"
+    if "System_GPS_" in name:
+        return "windows_search_gps_metadata"
+    if "System_Message_" in name:
+        return "windows_search_message_metadata"
+    if name in {"4429-System_IsAttachment", "System_IsAttachment", "4431-System_IsEncrypted", "System_IsEncrypted", "4434-System_IsFolder", "System_IsFolder"}:
+        return "windows_search_file_state"
+    return "windows_search_property"
+
+
+def _windows_search_property_event_time(row: dict[str, Any], file_row: dict[str, Any]) -> Any:
+    name = str(row.get("property_name") or "")
+    if "Date" in name or name in {
+        "4371-System_Document_DateCreated",
+        "4373-System_Document_DateSaved",
+        "4372-System_Document_DatePrinted",
+        "4519-System_Message_DateReceived",
+        "4520-System_Message_DateSent",
+        "4570-System_Photo_DateTaken",
+        "4404-System_GPS_Date",
+    }:
+        return row.get("property_value")
+    return _coalesce(
+        row.get("timestamp"),
+        file_row.get("date_accessed"),
+        file_row.get("date_modified"),
+        file_row.get("gather_time"),
+        file_row.get("date_created"),
+    )
+
+
+def _windows_search_property_status(row: dict[str, Any]) -> str:
+    name = str(row.get("property_name") or "")
+    value = str(row.get("property_value") or "").lower()
+    if name in {"4430-System_IsDeleted", "System_IsDeleted"} and value in {"true", "1", "yes"}:
+        return "windows_search_deleted_path"
+    if name in {"4430-System_IsDeleted", "System_IsDeleted"}:
+        return "windows_search_not_deleted"
+    if name in {"4397-System_FilePlaceholderStatus", "System_FilePlaceholderStatus"}:
+        return "windows_search_cloud_placeholder"
+    return "windows_search_property_observation"
 
 
 PATH_JOIN_SQL = """

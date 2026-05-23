@@ -12,6 +12,18 @@ from .db import Database
 from .evidence import add_image, create_case, create_computer
 from .logging_config import configure_logging
 from .mounting.workflow import mount_image, unmount_image
+from .mounting.vshadow import discover_vsc_snapshots, extract_vsc_artifact, mount_vsc_snapshot, unmount_vsc
+from .mounting.vsc_prefetch import run_vsc_prefetch_scan
+from .mounting.vsc_registry import run_vsc_registry_scan
+from .mounting.vsc_browser import run_vsc_browser_scan
+from .mounting.vsc_appcompat import run_vsc_appcompat_scan
+from .mounting.vsc_srum import run_vsc_srum_scan
+from .mounting.vsc_evtx import run_vsc_evtx_triage_scan
+from .mounting.vsc_ntfs import run_vsc_ntfs_delta_scan
+from .mounting.vsc_recycle import run_vsc_recycle_scan
+from .mounting.vsc_search import run_vsc_windows_search_scan
+from .mounting.vsc_file_history import build_vsc_file_history_report
+from .mounting.vsc_profile import VSC_PROFILES, run_vsc_profile_scan
 from .paths import WorkspacePaths
 from .report_paths import sanitize_report_paths, sanitize_report_text
 from .reports import (
@@ -59,6 +71,10 @@ from .reports import (
     evidence_quality_report,
     evtx_report,
     evtx_recovery_report,
+    brute_force_markdown,
+    brute_force_report,
+    external_storage_markdown,
+    external_storage_report,
     execution_markdown,
     execution_report,
     execution_correlation_report,
@@ -185,6 +201,7 @@ from .search.opensearch import (
     search_result_drilldown,
 )
 from .report_specs import list_report_specs, run_report_spec
+from .report_bundle import import_report_bundle
 from .safety import OrchestratorError
 from .artifact_dedupe import rebuild_artifact_windows_old_dedupe
 from .correlation_framework import rebuild_correlation_framework
@@ -428,6 +445,204 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use non-interactive sudo for the unmount command",
     )
 
+    vsc = subparsers.add_parser("vsc")
+    vsc_sub = vsc.add_subparsers(dest="action", required=True)
+    vsc_list = vsc_sub.add_parser("list")
+    vsc_list.add_argument("--case", required=True, dest="case_id")
+    vsc_list.add_argument("--image", required=True, dest="image_id")
+    vsc_mount = vsc_sub.add_parser("mount")
+    vsc_mount.add_argument("--case", required=True, dest="case_id")
+    vsc_mount.add_argument("--image", required=True, dest="image_id")
+    vsc_mount.add_argument("--snapshot", required=True, type=int, dest="snapshot_index")
+    vsc_mount.add_argument(
+        "--sudo",
+        action="store_true",
+        dest="use_sudo_mount",
+        help="Use non-interactive sudo for the read-only NTFS mount command",
+    )
+    vsc_extract = vsc_sub.add_parser("extract")
+    vsc_extract.add_argument("--case", required=True, dest="case_id")
+    vsc_extract.add_argument("--snapshot", required=True, dest="snapshot_id")
+    vsc_extract.add_argument("--path", required=True, dest="relative_path")
+    vsc_prefetch = vsc_sub.add_parser("prefetch-scan")
+    vsc_prefetch.add_argument("--case", required=True, dest="case_id")
+    vsc_prefetch.add_argument("--image", required=True, dest="image_id")
+    vsc_prefetch.add_argument(
+        "--snapshot",
+        action="append",
+        type=int,
+        dest="snapshot_indexes",
+        help="Snapshot index to scan; repeat for multiple snapshots. Defaults to all discovered snapshots.",
+    )
+    vsc_prefetch.add_argument(
+        "--sudo",
+        action="store_true",
+        dest="use_sudo_mount",
+        help="Use non-interactive sudo for each read-only VSC NTFS mount",
+    )
+    vsc_registry = vsc_sub.add_parser("registry-scan")
+    vsc_registry.add_argument("--case", required=True, dest="case_id")
+    vsc_registry.add_argument("--image", required=True, dest="image_id")
+    vsc_registry.add_argument(
+        "--snapshot",
+        action="append",
+        type=int,
+        dest="snapshot_indexes",
+        help="Snapshot index to scan; repeat for multiple snapshots. Defaults to all discovered snapshots.",
+    )
+    vsc_registry.add_argument(
+        "--sudo",
+        action="store_true",
+        dest="use_sudo_mount",
+        help="Use non-interactive sudo for each read-only VSC NTFS mount",
+    )
+    vsc_browser = vsc_sub.add_parser("browser-scan")
+    vsc_browser.add_argument("--case", required=True, dest="case_id")
+    vsc_browser.add_argument("--image", required=True, dest="image_id")
+    vsc_browser.add_argument(
+        "--snapshot",
+        action="append",
+        type=int,
+        dest="snapshot_indexes",
+        help="Snapshot index to scan; repeat for multiple snapshots. Defaults to all discovered snapshots.",
+    )
+    vsc_browser.add_argument(
+        "--sudo",
+        action="store_true",
+        dest="use_sudo_mount",
+        help="Use non-interactive sudo for each read-only VSC NTFS mount",
+    )
+    vsc_appcompat = vsc_sub.add_parser("appcompat-scan")
+    vsc_appcompat.add_argument("--case", required=True, dest="case_id")
+    vsc_appcompat.add_argument("--image", required=True, dest="image_id")
+    vsc_appcompat.add_argument(
+        "--snapshot",
+        action="append",
+        type=int,
+        dest="snapshot_indexes",
+        help="Snapshot index to scan; repeat for multiple snapshots. Defaults to all discovered snapshots.",
+    )
+    vsc_appcompat.add_argument(
+        "--sudo",
+        action="store_true",
+        dest="use_sudo_mount",
+        help="Use non-interactive sudo for each read-only VSC NTFS mount",
+    )
+    vsc_srum = vsc_sub.add_parser("srum-scan")
+    vsc_srum.add_argument("--case", required=True, dest="case_id")
+    vsc_srum.add_argument("--image", required=True, dest="image_id")
+    vsc_srum.add_argument(
+        "--snapshot",
+        action="append",
+        type=int,
+        dest="snapshot_indexes",
+        help="Snapshot index to scan; repeat for multiple snapshots. Defaults to all discovered snapshots.",
+    )
+    vsc_srum.add_argument(
+        "--sudo",
+        action="store_true",
+        dest="use_sudo_mount",
+        help="Use non-interactive sudo for each read-only VSC NTFS mount",
+    )
+    vsc_evtx = vsc_sub.add_parser("evtx-triage-scan")
+    vsc_evtx.add_argument("--case", required=True, dest="case_id")
+    vsc_evtx.add_argument("--image", required=True, dest="image_id")
+    vsc_evtx.add_argument(
+        "--snapshot",
+        action="append",
+        type=int,
+        dest="snapshot_indexes",
+        help="Snapshot index to scan; repeat for multiple snapshots. Defaults to all discovered snapshots.",
+    )
+    vsc_evtx.add_argument(
+        "--sudo",
+        action="store_true",
+        dest="use_sudo_mount",
+        help="Use non-interactive sudo for each read-only VSC NTFS mount",
+    )
+    vsc_ntfs = vsc_sub.add_parser("ntfs-delta-scan")
+    vsc_ntfs.add_argument("--case", required=True, dest="case_id")
+    vsc_ntfs.add_argument("--image", required=True, dest="image_id")
+    vsc_ntfs.add_argument(
+        "--snapshot",
+        action="append",
+        type=int,
+        dest="snapshot_indexes",
+        help="Snapshot index to scan; repeat for multiple snapshots. Defaults to all discovered snapshots.",
+    )
+    vsc_ntfs.add_argument(
+        "--sudo",
+        action="store_true",
+        dest="use_sudo_mount",
+        help="Use non-interactive sudo for each read-only VSC NTFS mount",
+    )
+    vsc_recycle = vsc_sub.add_parser("recycle-scan")
+    vsc_recycle.add_argument("--case", required=True, dest="case_id")
+    vsc_recycle.add_argument("--image", required=True, dest="image_id")
+    vsc_recycle.add_argument(
+        "--snapshot",
+        action="append",
+        type=int,
+        dest="snapshot_indexes",
+        help="Snapshot index to scan; repeat for multiple snapshots. Defaults to all discovered snapshots.",
+    )
+    vsc_recycle.add_argument(
+        "--sudo",
+        action="store_true",
+        dest="use_sudo_mount",
+        help="Use non-interactive sudo for each read-only VSC NTFS mount",
+    )
+    vsc_search = vsc_sub.add_parser("windows-search-scan")
+    vsc_search.add_argument("--case", required=True, dest="case_id")
+    vsc_search.add_argument("--image", required=True, dest="image_id")
+    vsc_search.add_argument(
+        "--snapshot",
+        action="append",
+        type=int,
+        dest="snapshot_indexes",
+        help="Snapshot index to scan; repeat for multiple snapshots. Defaults to all discovered snapshots.",
+    )
+    vsc_search.add_argument(
+        "--sudo",
+        action="store_true",
+        dest="use_sudo_mount",
+        help="Use non-interactive sudo for each read-only VSC NTFS mount",
+    )
+    vsc_file_history = vsc_sub.add_parser("file-history-report")
+    vsc_file_history.add_argument("--case", required=True, dest="case_id")
+    vsc_file_history.add_argument("--image", required=True, dest="image_id")
+    vsc_profile = vsc_sub.add_parser("profile-scan")
+    vsc_profile.add_argument("--case", required=True, dest="case_id")
+    vsc_profile.add_argument("--image", required=True, dest="image_id")
+    vsc_profile.add_argument("--profile", choices=sorted(VSC_PROFILES), default="history")
+    vsc_profile.add_argument(
+        "--snapshot",
+        action="append",
+        type=int,
+        dest="snapshot_indexes",
+        help="Snapshot index to scan; repeat for multiple snapshots. Defaults to all discovered snapshots.",
+    )
+    vsc_profile.add_argument(
+        "--sudo",
+        action="store_true",
+        dest="use_sudo_mount",
+        help="Use non-interactive sudo for each read-only VSC NTFS mount",
+    )
+    vsc_profile.add_argument(
+        "--stop-on-error",
+        action="store_true",
+        help="Stop profile execution after the first failed scan",
+    )
+    vsc_unmount = vsc_sub.add_parser("unmount")
+    vsc_unmount.add_argument("--case", required=True, dest="case_id")
+    vsc_unmount.add_argument("--snapshot", dest="snapshot_id")
+    vsc_unmount.add_argument(
+        "--sudo",
+        action="store_true",
+        dest="use_sudo_mount",
+        help="Use non-interactive sudo for VSC NTFS unmount commands",
+    )
+
     tools = subparsers.add_parser("tools")
     tools_sub = tools.add_subparsers(dest="action", required=True)
     tools_sub.add_parser("list")
@@ -521,6 +736,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run the selected profile against Windows.old artifacts only, storing output under a Windows.old namespace",
     )
 
+    report_bundle = subparsers.add_parser("report-bundle")
+    report_bundle_sub = report_bundle.add_subparsers(dest="action", required=True)
+    report_bundle_import = report_bundle_sub.add_parser("import")
+    report_bundle_import.add_argument("--case", dest="case_id", help="Existing case/project ID; creates one when omitted")
+    report_bundle_import.add_argument("--path", required=True, help="Directory containing pre-generated report CSVs")
+    report_bundle_import.add_argument("--computer", dest="computer_id", help="Existing computer ID for this case")
+    report_bundle_import.add_argument("--computer-label", help="Computer label to create when --computer is not supplied")
+    report_bundle_import.add_argument(
+        "--accept-duplicate",
+        action="store_true",
+        help="Import output even when the same content hash already exists for this evidence source/tool",
+    )
+
     report = subparsers.add_parser("report")
     report_sub = report.add_subparsers(dest="action", required=True)
     report_summary = report_sub.add_parser("summary")
@@ -561,6 +789,13 @@ def build_parser() -> argparse.ArgumentParser:
     report_autostarts.add_argument("--limit", type=int, default=1000)
     report_autostarts.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
     report_autostarts.add_argument("--output")
+    report_bruteforce = report_sub.add_parser("brute-force")
+    report_bruteforce.add_argument("--case", required=True, dest="case_id")
+    report_bruteforce.add_argument("--limit", type=int, default=100)
+    report_bruteforce.add_argument("--min-failures", type=int, default=20)
+    report_bruteforce.add_argument("--spray-account-threshold", type=int, default=10)
+    report_bruteforce.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
+    report_bruteforce.add_argument("--output")
     report_malware_hiding = report_sub.add_parser("malware-hiding-places")
     report_malware_hiding.add_argument("--case", required=True, dest="case_id")
     report_malware_hiding.add_argument("--limit", type=int, default=100)
@@ -1180,6 +1415,11 @@ def build_parser() -> argparse.ArgumentParser:
     report_usb.add_argument("--limit", type=int, default=100)
     report_usb.add_argument("--raw", action="store_true", help="Show raw USB evidence rows instead of storage-device summary")
     report_usb.add_argument("--breakdown", action="store_true", help="Show USB evidence row counts by source and device type")
+    report_external_storage = report_sub.add_parser("external-storage")
+    report_external_storage.add_argument("--case", required=True, dest="case_id")
+    report_external_storage.add_argument("--limit", type=int, default=500)
+    report_external_storage.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
+    report_external_storage.add_argument("--output", help="Write report output to a file")
     report_device_inventory = report_sub.add_parser("device-inventory")
     report_device_inventory.add_argument("--case", required=True, dest="case_id")
     report_device_inventory.add_argument("--limit", type=int, default=250)
@@ -1305,6 +1545,7 @@ def build_parser() -> argparse.ArgumentParser:
     report_file_history.add_argument("--path")
     report_file_history.add_argument("--mft-entry")
     report_file_history.add_argument("--filesystem-only", action="store_true")
+    report_file_history.add_argument("--include-vsc", action="store_true")
     report_file_history.add_argument("--limit", type=int, default=500)
     report_file_history.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
     report_file_history.add_argument("--output")
@@ -1564,6 +1805,32 @@ def run(args: argparse.Namespace) -> int:
             print_json(payload)
             return 0
 
+        if args.resource == "report-bundle" and args.action == "import":
+            result = import_report_bundle(
+                db=db,
+                paths=paths,
+                report_root=Path(args.path),
+                case_id=args.case_id,
+                computer_id=args.computer_id,
+                computer_label=args.computer_label,
+                accept_duplicate=args.accept_duplicate,
+            )
+            print_json(
+                {
+                    "case_id": result.case_id,
+                    "project_id": result.case_id,
+                    "computer_id": result.computer_id,
+                    "image_id": result.image_id,
+                    "report_root": result.report_root,
+                    "imported_files": result.imported_files,
+                    "imported_rows": result.imported_rows,
+                    "skipped_files": result.skipped_files,
+                    "failed_files": result.failed_files,
+                    "markdown_path": result.markdown_path,
+                }
+            )
+            return 0
+
         if args.resource in {"case", "project"} and args.action == "create":
             case_id = create_case(db, paths)
             print_json({"project_id": case_id, "case_id": case_id, "root": str(paths.case_dir(case_id))})
@@ -1813,6 +2080,225 @@ def run(args: argparse.Namespace) -> int:
             print_json(payload)
             return 0
 
+        if args.resource == "vsc" and args.action == "list":
+            case = db.get_case(args.case_id)
+            image = db.get_image(args.image_id, args.case_id)
+            print_json(discover_vsc_snapshots(db=db, paths=paths, case_id=case.id, image=image))
+            return 0
+
+        if args.resource == "vsc" and args.action == "mount":
+            case = db.get_case(args.case_id)
+            image = db.get_image(args.image_id, args.case_id)
+            print_json(
+                mount_vsc_snapshot(
+                    db=db,
+                    paths=paths,
+                    case_id=case.id,
+                    image=image,
+                    snapshot_index=args.snapshot_index,
+                    use_sudo_mount=args.use_sudo_mount,
+                )
+            )
+            return 0
+
+        if args.resource == "vsc" and args.action == "extract":
+            db.get_case(args.case_id)
+            print_json(
+                extract_vsc_artifact(
+                    paths=paths,
+                    case_id=args.case_id,
+                    snapshot_id=args.snapshot_id,
+                    relative_path=args.relative_path,
+                )
+            )
+            return 0
+
+        if args.resource == "vsc" and args.action == "prefetch-scan":
+            case = db.get_case(args.case_id)
+            image = db.get_image(args.image_id, args.case_id)
+            print_json(
+                run_vsc_prefetch_scan(
+                    db=db,
+                    paths=paths,
+                    case_id=case.id,
+                    image=image,
+                    snapshot_indexes=args.snapshot_indexes,
+                    use_sudo_mount=args.use_sudo_mount,
+                )
+            )
+            return 0
+
+        if args.resource == "vsc" and args.action == "registry-scan":
+            case = db.get_case(args.case_id)
+            image = db.get_image(args.image_id, args.case_id)
+            print_json(
+                run_vsc_registry_scan(
+                    db=db,
+                    paths=paths,
+                    case_id=case.id,
+                    image=image,
+                    snapshot_indexes=args.snapshot_indexes,
+                    use_sudo_mount=args.use_sudo_mount,
+                )
+            )
+            return 0
+
+        if args.resource == "vsc" and args.action == "browser-scan":
+            case = db.get_case(args.case_id)
+            image = db.get_image(args.image_id, args.case_id)
+            print_json(
+                run_vsc_browser_scan(
+                    db=db,
+                    paths=paths,
+                    case_id=case.id,
+                    image=image,
+                    snapshot_indexes=args.snapshot_indexes,
+                    use_sudo_mount=args.use_sudo_mount,
+                )
+            )
+            return 0
+
+        if args.resource == "vsc" and args.action == "appcompat-scan":
+            case = db.get_case(args.case_id)
+            image = db.get_image(args.image_id, args.case_id)
+            print_json(
+                run_vsc_appcompat_scan(
+                    db=db,
+                    paths=paths,
+                    case_id=case.id,
+                    image=image,
+                    snapshot_indexes=args.snapshot_indexes,
+                    use_sudo_mount=args.use_sudo_mount,
+                )
+            )
+            return 0
+
+        if args.resource == "vsc" and args.action == "srum-scan":
+            case = db.get_case(args.case_id)
+            image = db.get_image(args.image_id, args.case_id)
+            print_json(
+                run_vsc_srum_scan(
+                    db=db,
+                    paths=paths,
+                    case_id=case.id,
+                    image=image,
+                    snapshot_indexes=args.snapshot_indexes,
+                    use_sudo_mount=args.use_sudo_mount,
+                )
+            )
+            return 0
+
+        if args.resource == "vsc" and args.action == "evtx-triage-scan":
+            case = db.get_case(args.case_id)
+            image = db.get_image(args.image_id, args.case_id)
+            print_json(
+                run_vsc_evtx_triage_scan(
+                    db=db,
+                    paths=paths,
+                    case_id=case.id,
+                    image=image,
+                    snapshot_indexes=args.snapshot_indexes,
+                    use_sudo_mount=args.use_sudo_mount,
+                )
+            )
+            return 0
+
+        if args.resource == "vsc" and args.action == "ntfs-delta-scan":
+            case = db.get_case(args.case_id)
+            image = db.get_image(args.image_id, args.case_id)
+            print_json(
+                run_vsc_ntfs_delta_scan(
+                    db=db,
+                    paths=paths,
+                    case_id=case.id,
+                    image=image,
+                    snapshot_indexes=args.snapshot_indexes,
+                    use_sudo_mount=args.use_sudo_mount,
+                )
+            )
+            return 0
+
+        if args.resource == "vsc" and args.action == "recycle-scan":
+            case = db.get_case(args.case_id)
+            image = db.get_image(args.image_id, args.case_id)
+            print_json(
+                run_vsc_recycle_scan(
+                    db=db,
+                    paths=paths,
+                    case_id=case.id,
+                    image=image,
+                    snapshot_indexes=args.snapshot_indexes,
+                    use_sudo_mount=args.use_sudo_mount,
+                )
+            )
+            return 0
+
+        if args.resource == "vsc" and args.action == "windows-search-scan":
+            case = db.get_case(args.case_id)
+            image = db.get_image(args.image_id, args.case_id)
+            print_json(
+                run_vsc_windows_search_scan(
+                    db=db,
+                    paths=paths,
+                    case_id=case.id,
+                    image=image,
+                    snapshot_indexes=args.snapshot_indexes,
+                    use_sudo_mount=args.use_sudo_mount,
+                )
+            )
+            return 0
+
+        if args.resource == "vsc" and args.action == "file-history-report":
+            case = db.get_case(args.case_id)
+            image = db.get_image(args.image_id, args.case_id)
+            report = build_vsc_file_history_report(
+                db=db,
+                paths=paths,
+                case_id=case.id,
+                image_id=image.id,
+            )
+            print_json(
+                {
+                    "case_id": report["case_id"],
+                    "image_id": report["image_id"],
+                    "started_at": report["started_at"],
+                    "ended_at": report["ended_at"],
+                    "summary": report["summary"],
+                    "report_path": report["report_path"],
+                    "json_path": report["json_path"],
+                }
+            )
+            return 0
+
+        if args.resource == "vsc" and args.action == "profile-scan":
+            case = db.get_case(args.case_id)
+            image = db.get_image(args.image_id, args.case_id)
+            print_json(
+                run_vsc_profile_scan(
+                    db=db,
+                    paths=paths,
+                    case_id=case.id,
+                    image=image,
+                    profile=args.profile,
+                    snapshot_indexes=args.snapshot_indexes,
+                    use_sudo_mount=args.use_sudo_mount,
+                    continue_on_error=not args.stop_on_error,
+                )
+            )
+            return 0
+
+        if args.resource == "vsc" and args.action == "unmount":
+            db.get_case(args.case_id)
+            print_json(
+                unmount_vsc(
+                    paths=paths,
+                    case_id=args.case_id,
+                    snapshot_id=args.snapshot_id,
+                    use_sudo_mount=args.use_sudo_mount,
+                )
+            )
+            return 0
+
         if args.resource == "tools" and args.action == "list":
             print_json(
                 {
@@ -1985,6 +2471,37 @@ def run(args: argparse.Namespace) -> int:
                     "value_preview",
                     "normalized_path",
                     "source_path",
+                ],
+            )
+            return 0
+
+        if args.resource == "report" and args.action == "brute-force":
+            report = brute_force_report(
+                db,
+                args.case_id,
+                limit=args.limit,
+                min_failures=args.min_failures,
+                spray_account_threshold=args.spray_account_threshold,
+            )
+            if args.format == "md":
+                write_text_output(brute_force_markdown(report), args.output)
+                return 0
+            write_report_output(
+                report,
+                report["source_ips"],
+                args.format,
+                args.output,
+                title=f"Brute force and password spraying report for case {args.case_id}",
+                columns=[
+                    "severity",
+                    "classification",
+                    "source_ip",
+                    "failure_count",
+                    "target_account_count",
+                    "first_seen_utc",
+                    "last_seen_utc",
+                    "credential_results",
+                    "top_targets",
                 ],
             )
             return 0
@@ -2193,14 +2710,18 @@ def run(args: argparse.Namespace) -> int:
                 path=args.path,
                 mft_entry=args.mft_entry,
                 include_artifacts=not args.filesystem_only,
+                include_vsc=args.include_vsc,
                 limit=args.limit,
             )
             if args.format == "md":
                 write_text_output(file_history_markdown(report), args.output)
                 return 0
+            rows = report["events"]
+            if args.include_vsc:
+                rows = [*rows, *report.get("vsc_events", [])]
             write_report_output(
                 report,
-                report["events"],
+                rows,
                 args.format,
                 args.output,
                 title=f"File history for case {args.case_id}",
@@ -2275,7 +2796,17 @@ def run(args: argparse.Namespace) -> int:
                 args.format,
                 args.output,
                 title=f"Tool runs for case {args.case_id}",
-                columns=["start_time", "tool_name", "status", "exit_code", "output_count", "imported_row_count", "warning_count", "error_count"],
+                columns=[
+                    "start_time",
+                    "tool_name",
+                    "source_scope",
+                    "status",
+                    "exit_code",
+                    "output_count",
+                    "imported_row_count",
+                    "warning_count",
+                    "error_count",
+                ],
             )
             return 0
 
@@ -2294,6 +2825,7 @@ def run(args: argparse.Namespace) -> int:
                         "start_time",
                         "end_time",
                         "duration_seconds",
+                        "source_scope",
                         "scope",
                         "phase",
                         "name",
@@ -2418,6 +2950,7 @@ def run(args: argparse.Namespace) -> int:
                 rows.extend({"section": "tool", **row} for row in report["tools"])
                 rows.extend({"section": "skipped", **row} for row in report["skipped"])
                 rows.extend({"section": "failed_job", **row} for row in report["failed_jobs"])
+                rows.extend({"section": "extraction_caveat", **row} for row in report["extraction_caveats"])
             else:
                 rows = report["tools"]
             write_report_output(
@@ -2429,9 +2962,15 @@ def run(args: argparse.Namespace) -> int:
                 columns=[
                     "section",
                     "tool_name",
+                    "source_scopes",
+                    "failed_source_scopes",
+                    "not_present_source_scopes",
+                    "extraction_caveat_source_scopes",
                     "job_count",
                     "successful_jobs",
                     "failed_jobs",
+                    "not_present_jobs",
+                    "extraction_caveat_jobs",
                     "output_count",
                     "imported_row_count",
                     "warning_count",
@@ -2440,6 +2979,10 @@ def run(args: argparse.Namespace) -> int:
                     "event",
                     "message",
                     "count",
+                    "source_scope",
+                    "target",
+                    "caveat_type",
+                    "error",
                     "exit_code",
                     "stderr_path",
                 ],
@@ -4276,6 +4819,54 @@ def run(args: argparse.Namespace) -> int:
                 print_json(usb_breakdown_report(db, args.case_id))
                 return 0
             print_json(usb_report(db, args.case_id, limit=args.limit, raw=args.raw))
+            return 0
+
+        if args.resource == "report" and args.action == "external-storage":
+            report = external_storage_report(db, args.case_id, limit=args.limit)
+            rows = (
+                [{"section": "device", **row} for row in report["devices"]]
+                + [{"section": "file_activity", **row} for row in report["file_activity"]]
+                + [{"section": "timeline", **row} for row in report["timeline"]]
+                + [{"section": "event_log", **row} for row in report["event_log_observations"]]
+            )
+            if args.format == "md":
+                write_text_output(external_storage_markdown(report), args.output)
+            elif args.format == "json":
+                write_text_output(json.dumps(report, indent=2, default=str), args.output)
+            elif args.format == "csv":
+                write_csv_rows(rows, args.output)
+            else:
+                write_report_output(
+                    report,
+                    rows,
+                    args.format,
+                    args.output,
+                    title=f"External storage report for case {args.case_id}",
+                    columns=[
+                        "section",
+                        "serial",
+                        "friendly_name",
+                        "product",
+                        "volume_serial_number",
+                        "capacity_bytes",
+                        "file_system",
+                        "drive_letter",
+                        "first_install_date_utc",
+                        "last_arrival_utc",
+                        "last_removal_utc",
+                        "source_artifact_types",
+                        "file_location",
+                        "first_target_time",
+                        "last_target_time",
+                        "timestamp",
+                        "event_type",
+                        "time_created",
+                        "provider",
+                        "event_id",
+                        "description",
+                        "confidence",
+                    ],
+                )
             return 0
 
         if args.resource == "report" and args.action == "usb-files":

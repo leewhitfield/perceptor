@@ -5,6 +5,7 @@ from collections import defaultdict
 from typing import Any
 
 from forensic_orchestrator.db import Database
+from forensic_orchestrator.analytics_query import query_rows
 
 
 STORAGE_TYPES = {
@@ -13,6 +14,7 @@ STORAGE_TYPES = {
     "usb_volume",
     "portable_device_volume",
     "mounted_device",
+    "readyboost_device",
     "usb_partition_diagnostic",
 }
 SUPPORTING_TYPES = {"usb_device"}
@@ -24,7 +26,9 @@ def rebuild_usb_storage_devices(db: Database, *, case_id: str, image_id: str | N
     if image_id is not None:
         image_filter = "AND usb_devices.image_id = ?"
         params.append(image_id)
-    rows = db.conn.execute(
+    rows = query_rows(
+        db,
+        "usb_devices",
         f"""
         SELECT *
         FROM usb_devices
@@ -33,7 +37,7 @@ def rebuild_usb_storage_devices(db: Database, *, case_id: str, image_id: str | N
           AND COALESCE(serial, instance_id, parent_id_prefix) IS NOT NULL
         """,
         params + sorted(STORAGE_TYPES | SUPPORTING_TYPES),
-    ).fetchall()
+    )
     serial_aliases = _serial_aliases([dict(row) for row in rows])
     groups: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
@@ -60,34 +64,17 @@ def rebuild_usb_connection_events(db: Database, *, case_id: str, image_id: str |
     if image_id is not None:
         image_filter = "AND usb_devices.image_id = ?"
         params.append(image_id)
-    rows = db.conn.execute(
+    rows = query_rows(
+        db,
+        "usb_devices",
         f"""
-        SELECT usb_devices.*, usb_storage_devices.id AS usb_device_id
+        SELECT *
         FROM usb_devices
-        LEFT JOIN usb_storage_devices
-          ON usb_storage_devices.case_id = usb_devices.case_id
-          AND usb_storage_devices.image_id = usb_devices.image_id
-          AND usb_storage_devices.serial = CASE
-            WHEN usb_devices.serial LIKE '%&0'
-              THEN SUBSTR(usb_devices.serial, 1, LENGTH(usb_devices.serial) - 2)
-            ELSE COALESCE(usb_devices.serial, usb_devices.instance_id)
-          END
-        WHERE usb_devices.case_id = ? {image_filter}
-          AND COALESCE(usb_devices.serial, usb_devices.instance_id, usb_devices.parent_id_prefix) IS NOT NULL
-          AND (
-            usb_storage_devices.id IS NOT NULL
-            OR usb_devices.device_type IN (
-              'usb_storage',
-              'scsi_storage',
-              'usb_volume',
-              'portable_device_volume',
-              'mounted_device',
-              'usb_partition_diagnostic'
-            )
-          )
+        WHERE case_id = ? {image_filter}
+          AND COALESCE(serial, instance_id, parent_id_prefix) IS NOT NULL
         """,
         params,
-    ).fetchall()
+    )
 
     row_items = [dict(row) for row in rows]
     serial_aliases = _serial_aliases(row_items)
@@ -98,10 +85,12 @@ def rebuild_usb_connection_events(db: Database, *, case_id: str, image_id: str |
         storage_id_params.append(image_id)
     storage_ids = {
         (row["image_id"], row["serial"]): row["id"]
-        for row in db.conn.execute(
+        for row in query_rows(
+            db,
+            "usb_storage_devices",
             f"SELECT id, image_id, serial FROM usb_storage_devices WHERE case_id = ? {storage_id_filter}",
             storage_id_params,
-        ).fetchall()
+        )
         if row["serial"]
     }
     events: list[dict[str, Any]] = []
@@ -111,6 +100,8 @@ def rebuild_usb_connection_events(db: Database, *, case_id: str, image_id: str |
         if not serial:
             continue
         item["usb_device_id"] = storage_ids.get((item["image_id"], serial)) or item.get("usb_device_id")
+        if not item.get("usb_device_id") and item.get("device_type") not in STORAGE_TYPES:
+            continue
         for event in _connection_events_for_row(item, serial):
             key = (
                 event["case_id"],
@@ -156,6 +147,7 @@ def _summary_for_group(items: list[dict[str, Any]], serial: str) -> dict[str, An
         "volume_serial_number": _join_unique(items, "volume_serial_number"),
         "volume_name": _join_unique(items, "volume_name"),
         "capacity_bytes": _join_unique(items, "capacity_bytes", exclude={"0"}),
+        "file_system": _join_unique(items, "file_system"),
         "alternate_scsi_serial": _join_unique(items, "alternate_scsi_serial"),
         "user_profiles": _join_unique(items, "user_profile"),
         "first_install_date_utc": _property_time(items, "0064", prefer_value=True),

@@ -1,5 +1,6 @@
 import csv
 
+from forensic_orchestrator.analytics_query import query_one
 from forensic_orchestrator.db import Database
 from forensic_orchestrator.timeline import timeline_events_from_rows
 from forensic_orchestrator.tools.ingest import ingest_csv_output
@@ -44,8 +45,8 @@ def test_windows_search_gather_ingest_populates_table_and_timeline(tmp_path):
         path=csv_path,
     )
 
-    row = db.conn.execute("SELECT * FROM windows_search_gather_logs").fetchone()
-    event = db.conn.execute("SELECT * FROM timeline_events").fetchone()
+    row = query_one(db, "windows_search_gather_logs", "SELECT * FROM windows_search_gather_logs")
+    event = query_one(db, "timeline_events", "SELECT * FROM timeline_events")
     assert row_count == 1
     assert row["is_deleted_path"] == "true"
     assert row["item_path"] == "C:\\$Extend\\$Deleted\\000600000005EDFA7E247764\\"

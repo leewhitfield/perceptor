@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import base64
 import csv
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -53,7 +55,10 @@ def parse_onedrive_explorer_to_csv(source: Path, output: Path) -> Path:
     rows: list[dict[str, object]] = []
     explorer = _find_onedrive_explorer()
     if explorer is None:
-        rows.append(_error_row(source, "OneDriveExplorer.py not found. Set ONEDRIVE_EXPLORER to the script path."))
+        for profile in _onedrive_profiles(source):
+            rows.extend(_parse_onedrive_sqlite_settings(profile))
+        if not rows:
+            rows.append(_error_row(source, "OneDriveExplorer.py not found. Set ONEDRIVE_EXPLORER to the script path."))
         return _write_output(output, rows)
     for profile in _onedrive_profiles(source):
         profile_output = output / "_onedrive_explorer" / _safe_name(str(profile.relative_to(source)))
@@ -63,20 +68,13 @@ def parse_onedrive_explorer_to_csv(source: Path, output: Path) -> Path:
         env["PYTHONPATH"] = str(explorer.parent) + os.pathsep + env.get("PYTHONPATH", "")
         completed = subprocess.run(command, capture_output=True, text=True, check=False, env=env, timeout=1800)
         if completed.returncode:
+            sqlite_rows = _parse_onedrive_sqlite_settings(profile)
+            if sqlite_rows:
+                rows.extend(sqlite_rows)
+                continue
             fallback_rows = _parse_onedrive_dat_with_explorer_library(profile, explorer, profile_output)
             if fallback_rows:
                 rows.extend(fallback_rows)
-                rows.append(
-                    _error_row(
-                        profile,
-                        "OneDriveExplorer CLI failed; imported .dat records with OneDriveExplorer parser library fallback",
-                        {
-                            "command": command,
-                            "returncode": completed.returncode,
-                            "stderr": completed.stderr[-4000:],
-                        },
-                    )
-                )
                 continue
             rows.append(
                 _error_row(
@@ -98,6 +96,166 @@ def parse_onedrive_explorer_to_csv(source: Path, output: Path) -> Path:
         for csv_path in produced:
             rows.extend(_rows_from_onedrive_explorer_csv(profile, csv_path))
     return _write_output(output, rows)
+
+
+def _parse_onedrive_sqlite_settings(profile: Path) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for database in sorted((profile / "settings").glob("*/SyncEngineDatabase.db")):
+        account = database.parent.name
+        try:
+            rows.extend(_rows_from_sync_engine_database(profile, database, account))
+        except Exception as exc:
+            rows.append(_error_row(database, "OneDrive SyncEngineDatabase.db fallback failed", {"error": str(exc)}))
+    return rows
+
+
+def _rows_from_sync_engine_database(profile: Path, database: Path, account: str) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+    connection.row_factory = sqlite3.Row
+    try:
+        if not _sqlite_table_exists(connection, "od_ClientFile_Records"):
+            return rows
+        folder_rows = _sqlite_rows(connection, "SELECT * FROM od_ClientFolder_Records") if _sqlite_table_exists(connection, "od_ClientFolder_Records") else []
+        hydration = (
+            {str(row["resourceID"]).lower(): row for row in _sqlite_rows(connection, "SELECT * FROM od_HydrationData")}
+            if _sqlite_table_exists(connection, "od_HydrationData")
+            else {}
+        )
+        folder_paths = _folder_paths(folder_rows)
+        source_csv = database.with_name("OneDriveExplorerSyncEngineFallback.csv")
+        row_number = 0
+        for folder in folder_rows:
+            row_number += 1
+            parent_resource_id = str(folder["parentResourceID"] or "").lower()
+            rows.append(
+                _normalize_ode_row(
+                    profile,
+                    source_csv,
+                    row_number,
+                    {
+                        "Account": account,
+                        "Type": "Folder",
+                        "Name": _sqlite_value(folder, "folderName"),
+                        "Path": folder_paths.get(parent_resource_id, parent_resource_id),
+                        "parentResourceID": _sqlite_value(folder, "parentResourceID"),
+                        "resourceID": _sqlite_value(folder, "resourceID"),
+                        "eTag": _sqlite_value(folder, "eTag"),
+                        "folderStatus": _sqlite_value(folder, "folderStatus"),
+                        "spoPermissions": _sqlite_value(folder, "spoPermissions"),
+                        "volumeID": _sqlite_value(folder, "volumeID"),
+                        "itemIndex": _sqlite_value(folder, "itemIndex"),
+                        "sharedItem": _sqlite_value(folder, "sharedItem"),
+                        "source_database": str(database),
+                    },
+                )
+            )
+        for item in _sqlite_rows(connection, "SELECT * FROM od_ClientFile_Records"):
+            row_number += 1
+            resource_id = str(item["resourceID"])
+            item_hydration = hydration.get(resource_id.lower())
+            parent_path = folder_paths.get(str(item["parentResourceID"]).lower(), str(item["parentResourceID"] or ""))
+            rows.append(
+                _normalize_ode_row(
+                    profile,
+                    source_csv,
+                    row_number,
+                    {
+                        "Account": account,
+                        "Type": "File",
+                        "Name": _sqlite_value(item, "fileName"),
+                        "Path": parent_path,
+                        "parentResourceID": _sqlite_value(item, "parentResourceID"),
+                        "resourceID": resource_id,
+                        "eTag": _sqlite_value(item, "eTag"),
+                        "fileStatus": _sqlite_value(item, "fileStatus"),
+                        "spoPermissions": _sqlite_value(item, "spoPermissions"),
+                        "volumeID": _sqlite_value(item, "volumeID"),
+                        "itemIndex": _sqlite_value(item, "itemIndex"),
+                        "lastChange": _sqlite_value(item, "lastChange"),
+                        "diskLastAccessTime": _sqlite_value(item, "diskLastAccessTime"),
+                        "diskCreationTime": _sqlite_value(item, "diskCreationTime"),
+                        "size": _sqlite_value(item, "size"),
+                        "localHashDigest": _onedrive_hash(
+                            _sqlite_value(item, "localHashDigest"),
+                            _sqlite_value(item, "localHashAlgorithm"),
+                        ),
+                        "sharedItem": _sqlite_value(item, "sharedItem"),
+                        "lastKnownPinState": _sqlite_value(item, "lastKnownPinState"),
+                        "firstHydrationTime": _sqlite_value(item_hydration, "firstHydrationTime"),
+                        "lastHydrationTime": _sqlite_value(item_hydration, "lastHydrationTime"),
+                        "hydrationCount": _sqlite_value(item_hydration, "hydrationCount"),
+                        "lastHydrationType": _sqlite_value(item_hydration, "lastHydrationType"),
+                        "source_database": str(database),
+                    },
+                )
+            )
+    finally:
+        connection.close()
+    return rows
+
+
+def _sqlite_table_exists(connection: sqlite3.Connection, table: str) -> bool:
+    return (
+        connection.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)).fetchone()
+        is not None
+    )
+
+
+def _sqlite_rows(connection: sqlite3.Connection, query: str) -> list[sqlite3.Row]:
+    return list(connection.execute(query))
+
+
+def _folder_paths(folder_rows: list[sqlite3.Row]) -> dict[str, str]:
+    names = {str(row["resourceID"]).lower(): str(row["folderName"] or "") for row in folder_rows}
+    parents = {str(row["resourceID"]).lower(): str(row["parentResourceID"] or "").lower() for row in folder_rows}
+    paths: dict[str, str] = {}
+
+    def resolve(resource_id: str, seen: set[str] | None = None) -> str:
+        key = resource_id.lower()
+        if key in paths:
+            return paths[key]
+        seen = set(seen or ())
+        if key in seen:
+            return names.get(key, key)
+        seen.add(key)
+        name = names.get(key, key)
+        parent = parents.get(key, "")
+        if parent and parent in names:
+            parent_path = resolve(parent, seen)
+            value = "\\".join(part for part in (parent_path, name) if part)
+        else:
+            value = name
+        paths[key] = value
+        return value
+
+    for resource_id in names:
+        resolve(resource_id)
+    return paths
+
+
+def _sqlite_value(row: sqlite3.Row | None, key: str) -> str:
+    if row is None or key not in row.keys():
+        return ""
+    value = row[key]
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.hex()
+    return str(value)
+
+
+def _onedrive_hash(digest: str, algorithm: str) -> str:
+    if not digest:
+        return ""
+    if algorithm == "4":
+        return f"SHA1({digest})"
+    if algorithm == "5":
+        try:
+            return f"quickXor({base64.b64encode(bytes.fromhex(digest)).decode('ascii')})"
+        except ValueError:
+            return f"quickXor({digest})"
+    return f"{algorithm}:{digest}" if algorithm else digest
 
 
 def _parse_onedrive_dat_with_explorer_library(profile: Path, explorer: Path, output: Path) -> list[dict[str, object]]:

@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from .analytics_query import query_rows
 from .db import Database
 
 
@@ -264,6 +265,10 @@ def _correlation(
 
 
 def _rows(db: Database, sql: str, params: tuple[Any, ...]) -> list[dict[str, Any]]:
+    match = re.search(r"\bFROM\s+([A-Za-z_][A-Za-z0-9_]*)", sql, re.IGNORECASE)
+    table = match.group(1) if match else ""
+    if table:
+        return query_rows(db, table, sql, params)
     return [dict(row) for row in db.conn.execute(sql, params).fetchall()]
 
 

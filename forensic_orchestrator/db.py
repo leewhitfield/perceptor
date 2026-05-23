@@ -4,6 +4,7 @@ import json
 import hashlib
 import logging
 import os
+import re
 import sqlite3
 import uuid
 from contextlib import contextmanager
@@ -32,6 +33,21 @@ def _duration_ms(start_time: str, end_time: str) -> int:
         return max(0, int((_parse_iso_datetime(end_time) - _parse_iso_datetime(start_time)).total_seconds() * 1000))
     except Exception:
         return 0
+
+
+def _source_scope_from_values(*values: object) -> str:
+    text = "\n".join(str(value) for value in values if value not in (None, ""))
+    lowered = text.lower().replace("\\", "/")
+    if "windows.old" in lowered or "windows_old" in lowered:
+        return "Windows.old"
+    if (
+        "volume shadow" in lowered
+        or "shadow copy" in lowered
+        or re.search(r"(^|[/_. -])vsc([0-9]+|[/_. -]|$)", lowered)
+        or re.search(r"(^|[/_. -])snapshot([0-9]+|[/_. -]|$)", lowered)
+    ):
+        return "VSC"
+    return "live"
 
 
 def _host_from_url(value: object) -> str:
@@ -70,6 +86,7 @@ DEFAULT_PURGE_TABLES = (
     "parsed_rows",
     "shortcut_items",
     "prefetch_items",
+    "prefetch_run_times",
     "sam_accounts",
     "registry_hives",
     "registry_artifacts",
@@ -126,11 +143,14 @@ DEFAULT_PURGE_TABLES = (
     "onedrive_log_entries",
     "package_cache_entries",
     "package_artifacts",
+    "spotify_artifacts",
     "telemetry_artifacts",
     "windows_activities",
     "webcache_entries",
     "webcache_file_accesses",
     "file_internal_metadata",
+    "archive_entries",
+    "nested_evidence_items",
     "mailbox_messages",
     "mailbox_attachments",
     "windows_mail_store_rows",
@@ -148,11 +168,15 @@ SQLITE_ONLY_PURGE_TABLES = {
 }
 
 ANALYTICS_TABLES = (set(DEFAULT_PURGE_TABLES) - SQLITE_ONLY_PURGE_TABLES) | {
+    "copied_file_indicators",
     "firefox_cookies",
     "firefox_history",
     "recycle_children",
     "recycle_items",
     "timeline_events",
+    "usb_connection_events",
+    "usb_file_correlations",
+    "usb_storage_devices",
 }
 
 
@@ -168,6 +192,7 @@ TOOL_PURGE_TABLES = {
         "browser_notifications",
         "tool_outputs",
     },
+    "PrefetchParser": {"prefetch_items", "prefetch_run_times", "tool_outputs"},
     "MFTECmd": {"parsed_rows", "mft_entries", "tool_outputs"},
     "MFTECmdI30": {"ntfs_index_entries", "ntfs_index_bitmaps", "tool_outputs"},
     "MailboxParser": {"mailbox_messages", "mailbox_attachments", "tool_outputs"},
@@ -182,6 +207,32 @@ TOOL_PURGE_TABLES = {
         "rdp_visual_observations",
         "tool_outputs",
     },
+    "SAMParser": {"sam_accounts", "tool_outputs"},
+    "RegistryParser": {"registry_hives", "tool_outputs"},
+    "RegistryArtifactParser": {
+        "registry_artifacts",
+        "registry_office_trust_records",
+        "registry_taskbar_feature_usage",
+        "registry_taskbar_pins",
+        "usb_devices",
+        "tool_outputs",
+    },
+    "RECmd": {
+        "registry_recentdocs",
+        "registry_runmru",
+        "registry_typedpaths",
+        "registry_wordwheel_query",
+        "registry_userassist",
+        "registry_office_mru",
+        "registry_common_dialog_mru",
+        "registry_trusted_documents",
+        "tool_outputs",
+    },
+    "AmcacheParser": {"amcache_entries", "tool_outputs"},
+    "AppCompatCacheParser": {"shimcache_entries", "tool_outputs"},
+    "SBECmd": {"shellbag_entries", "tool_outputs"},
+    "ArchiveInventoryParser": {"archive_entries", "tool_outputs"},
+    "SpotifyParser": {"spotify_artifacts", "tool_outputs"},
 }
 
 
@@ -225,12 +276,10 @@ class Database:
     def _analytics_insert(self, table: str, columns: list[str], rows: list[dict[str, Any]]) -> bool:
         if self.analytics is None:
             return False
-        allowed_columns = ANALYTICS_TABLE_COLUMNS.get(table)
-        if allowed_columns is None:
-            if table not in ANALYTICS_TABLES:
-                return False
-            allowed_columns = columns
-        analytics_columns = [column for column in allowed_columns if column in columns]
+        if table not in ANALYTICS_TABLES:
+            return False
+        allowed_columns = [str(row["name"]) for row in self.conn.execute(f"PRAGMA table_info({table})").fetchall()]
+        analytics_columns = list(allowed_columns)
         analytics_rows = [
             {column: row.get(column) for column in analytics_columns}
             for row in rows
@@ -286,6 +335,20 @@ class Database:
               created_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS image_metadata (
+              id TEXT PRIMARY KEY,
+              case_id TEXT NOT NULL REFERENCES cases(id),
+              image_id TEXT NOT NULL REFERENCES images(id),
+              source TEXT NOT NULL,
+              key TEXT NOT NULL,
+              value TEXT,
+              created_at TEXT NOT NULL,
+              UNIQUE(case_id, image_id, source, key)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_image_metadata_image
+              ON image_metadata(case_id, image_id);
+
             CREATE TABLE IF NOT EXISTS mounts (
               id TEXT PRIMARY KEY,
               case_id TEXT NOT NULL REFERENCES cases(id),
@@ -316,6 +379,7 @@ class Database:
               case_id TEXT NOT NULL,
               image_id TEXT NOT NULL,
               computer_id TEXT,
+              source_scope TEXT NOT NULL DEFAULT 'live',
               tool_name TEXT NOT NULL,
               tool_version TEXT,
               command_json TEXT NOT NULL,
@@ -335,6 +399,7 @@ class Database:
               image_id TEXT REFERENCES images(id),
               parent_id TEXT REFERENCES process_timings(id),
               job_id TEXT REFERENCES jobs(id),
+              source_scope TEXT NOT NULL DEFAULT 'live',
               scope TEXT NOT NULL,
               phase TEXT NOT NULL,
               name TEXT NOT NULL,
@@ -421,6 +486,12 @@ class Database:
               lnk_modified TEXT,
               lnk_accessed TEXT,
               jumplist_item_number TEXT,
+              source_scope TEXT DEFAULT 'live',
+              snapshot_id TEXT,
+              snapshot_ids TEXT,
+              snapshot_count TEXT,
+              snapshot_index TEXT,
+              snapshot_created_utc TEXT,
               created_at TEXT NOT NULL
             );
 
@@ -464,6 +535,12 @@ class Database:
               artifact_volume_name TEXT,
               artifact_volume_guid TEXT,
               artifact_drive_letter TEXT,
+              temporal_status TEXT,
+              temporal_basis TEXT,
+              first_known_connection_utc TEXT,
+              last_known_connection_utc TEXT,
+              nearest_connection_before_utc TEXT,
+              nearest_removal_after_utc TEXT,
               volume_serial_match TEXT NOT NULL,
               confidence TEXT NOT NULL,
               created_at TEXT NOT NULL
@@ -507,6 +584,12 @@ class Database:
               pf_modified TEXT,
               pf_accessed TEXT,
               pf_mft_record_modified TEXT,
+              source_scope TEXT DEFAULT 'live',
+              snapshot_id TEXT,
+              snapshot_ids TEXT,
+              snapshot_count TEXT,
+              snapshot_index TEXT,
+              snapshot_created_utc TEXT,
               created_at TEXT NOT NULL
             );
 
@@ -518,6 +601,36 @@ class Database:
               ON prefetch_items(tool_output_id);
             CREATE INDEX IF NOT EXISTS idx_prefetch_items_case_exe_time
               ON prefetch_items(case_id, executable_name, last_run_time_utc);
+
+            CREATE TABLE IF NOT EXISTS prefetch_run_times (
+              id TEXT PRIMARY KEY,
+              case_id TEXT NOT NULL REFERENCES cases(id),
+              computer_id TEXT NOT NULL REFERENCES computers(id),
+              image_id TEXT NOT NULL REFERENCES images(id),
+              tool_output_id TEXT NOT NULL REFERENCES tool_outputs(id),
+              tool_name TEXT NOT NULL,
+              source_csv TEXT NOT NULL,
+              prefetch_item_id TEXT NOT NULL,
+              prefetch_name TEXT,
+              executable_name TEXT,
+              prefetch_hash TEXT,
+              artifact_path TEXT,
+              original_path TEXT,
+              run_index TEXT,
+              run_time_utc TEXT NOT NULL,
+              is_last_run TEXT,
+              source_scope TEXT DEFAULT 'live',
+              snapshot_id TEXT,
+              snapshot_ids TEXT,
+              snapshot_count TEXT,
+              snapshot_index TEXT,
+              snapshot_created_utc TEXT,
+              created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_prefetch_run_times_case_time
+              ON prefetch_run_times(case_id, run_time_utc);
+            CREATE INDEX IF NOT EXISTS idx_prefetch_run_times_item
+              ON prefetch_run_times(prefetch_item_id);
 
             CREATE TABLE IF NOT EXISTS sam_accounts (
               id TEXT PRIMARY KEY,
@@ -610,10 +723,20 @@ class Database:
               value_data TEXT,
               display_name TEXT,
               normalized_path TEXT,
+              run_counter TEXT,
+              focus_count TEXT,
+              focus_time TEXT,
+              last_executed TEXT,
               value_data_hex TEXT,
               transaction_logs_detected TEXT,
               transaction_logs_applied TEXT,
               transaction_log_paths TEXT,
+              source_scope TEXT DEFAULT 'live',
+              snapshot_id TEXT,
+              snapshot_ids TEXT,
+              snapshot_count TEXT,
+              snapshot_index TEXT,
+              snapshot_created_utc TEXT,
               notes TEXT,
               created_at TEXT NOT NULL
             );
@@ -719,7 +842,9 @@ class Database:
               key_last_write_timestamp TEXT, recmd_description TEXT,
               artifact TEXT, extension TEXT, value_name TEXT, batch_key_path TEXT,
               mru_position TEXT, batch_value_name TEXT, executable TEXT, absolute_path TEXT,
-              opened_on TEXT, details TEXT, created_at TEXT NOT NULL
+              opened_on TEXT, details TEXT, executable_is_guid TEXT, resolved_executable TEXT,
+              executable_resolution_source TEXT, executable_resolution_confidence TEXT,
+              created_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS registry_trusted_documents (
               id TEXT PRIMARY KEY, case_id TEXT NOT NULL, computer_id TEXT NOT NULL,
@@ -788,7 +913,9 @@ class Database:
               product_name TEXT, product_version TEXT, file_version TEXT, sha1 TEXT,
               sha256 TEXT, binary_type TEXT, size TEXT, created_utc TEXT, modified_utc TEXT,
               link_date TEXT, compile_time TEXT, program_id TEXT, install_date TEXT,
-              unassociated TEXT, created_at TEXT NOT NULL
+              unassociated TEXT, source_scope TEXT DEFAULT 'live', snapshot_id TEXT,
+              snapshot_ids TEXT, snapshot_count TEXT, snapshot_index TEXT,
+              snapshot_created_utc TEXT, created_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_amcache_entries_case
               ON amcache_entries(case_id, image_id);
@@ -800,7 +927,10 @@ class Database:
               image_id TEXT NOT NULL, tool_output_id TEXT NOT NULL, tool_name TEXT NOT NULL,
               source_csv TEXT NOT NULL, row_number INTEGER NOT NULL,
               source_file TEXT, control_set TEXT, entry_number TEXT, path TEXT,
-              last_modified_utc TEXT, executed TEXT, source_key TEXT, created_at TEXT NOT NULL
+              last_modified_utc TEXT, executed TEXT, source_key TEXT,
+              source_scope TEXT DEFAULT 'live', snapshot_id TEXT, snapshot_ids TEXT,
+              snapshot_count TEXT, snapshot_index TEXT, snapshot_created_utc TEXT,
+              created_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_shimcache_entries_case
               ON shimcache_entries(case_id, image_id);
@@ -832,7 +962,7 @@ class Database:
               instance_id TEXT, parent_id_prefix TEXT, device_service TEXT,
               user_profile TEXT, drive_letter TEXT, volume_guid TEXT,
               volume_serial_number TEXT, volume_name TEXT, capacity_bytes TEXT,
-              alternate_scsi_serial TEXT,
+              file_system TEXT, alternate_scsi_serial TEXT,
               key_path TEXT, key_last_write_utc TEXT, last_present_date_utc TEXT,
               property_name TEXT, property_value TEXT, value_data_hex TEXT,
               created_at TEXT NOT NULL
@@ -848,7 +978,7 @@ class Database:
               vendor_id TEXT, product_id TEXT, vendor TEXT, product TEXT, revision TEXT,
               friendly_name TEXT, parent_id_prefix TEXT, device_service TEXT,
               drive_letter TEXT, volume_guid TEXT, volume_serial_number TEXT,
-              volume_name TEXT, capacity_bytes TEXT, alternate_scsi_serial TEXT,
+              volume_name TEXT, capacity_bytes TEXT, file_system TEXT, alternate_scsi_serial TEXT,
               user_profiles TEXT, first_install_date_utc TEXT,
               last_arrival_utc TEXT, last_removal_utc TEXT, first_volume_serial_event_utc TEXT,
               last_partition_event_utc TEXT, last_migration_present_utc TEXT,
@@ -968,6 +1098,77 @@ class Database:
               ON usn_journal_entries(case_id, file_name);
             CREATE INDEX IF NOT EXISTS idx_usn_journal_entries_output
               ON usn_journal_entries(tool_output_id);
+
+            CREATE TABLE IF NOT EXISTS vsc_mft_deltas (
+              id TEXT PRIMARY KEY,
+              case_id TEXT NOT NULL REFERENCES cases(id),
+              computer_id TEXT NOT NULL REFERENCES computers(id),
+              image_id TEXT NOT NULL REFERENCES images(id),
+              source_scope TEXT,
+              snapshot_id TEXT,
+              snapshot_ids TEXT,
+              snapshot_count TEXT,
+              snapshot_index TEXT,
+              snapshot_created_utc TEXT,
+              delta_type TEXT NOT NULL,
+              entry_number TEXT,
+              sequence_number TEXT,
+              in_use TEXT,
+              parent_entry_number TEXT,
+              parent_sequence_number TEXT,
+              normalized_path TEXT,
+              path_key TEXT,
+              file_name TEXT,
+              extension TEXT,
+              file_size TEXT,
+              is_directory TEXT,
+              has_ads TEXT,
+              is_ads TEXT,
+              si_flags TEXT,
+              reparse_target TEXT,
+              created_si TEXT,
+              modified_si TEXT,
+              record_changed_si TEXT,
+              accessed_si TEXT,
+              record_signature TEXT,
+              created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_vsc_mft_deltas_case_path
+              ON vsc_mft_deltas(case_id, image_id, path_key);
+            CREATE INDEX IF NOT EXISTS idx_vsc_mft_deltas_case_snapshot
+              ON vsc_mft_deltas(case_id, image_id, snapshot_id);
+
+            CREATE TABLE IF NOT EXISTS vsc_usn_deltas (
+              id TEXT PRIMARY KEY,
+              case_id TEXT NOT NULL REFERENCES cases(id),
+              computer_id TEXT NOT NULL REFERENCES computers(id),
+              image_id TEXT NOT NULL REFERENCES images(id),
+              source_scope TEXT,
+              snapshot_id TEXT,
+              snapshot_ids TEXT,
+              snapshot_count TEXT,
+              snapshot_index TEXT,
+              snapshot_created_utc TEXT,
+              delta_type TEXT NOT NULL,
+              update_sequence_number TEXT,
+              update_timestamp TEXT,
+              file_name TEXT,
+              extension TEXT,
+              file_reference_number TEXT,
+              file_reference_sequence_number TEXT,
+              parent_file_reference_number TEXT,
+              parent_file_reference_sequence_number TEXT,
+              normalized_path TEXT,
+              path_key TEXT,
+              reason TEXT,
+              file_attributes TEXT,
+              record_signature TEXT,
+              created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_vsc_usn_deltas_case_time
+              ON vsc_usn_deltas(case_id, image_id, update_timestamp);
+            CREATE INDEX IF NOT EXISTS idx_vsc_usn_deltas_case_snapshot
+              ON vsc_usn_deltas(case_id, image_id, snapshot_id);
 
             CREATE TABLE IF NOT EXISTS ntfs_index_entries (
               id TEXT PRIMARY KEY,
@@ -1223,6 +1424,12 @@ class Database:
               vpn_protocol TEXT,
               vpn_phonebook_path TEXT,
               vpn_match_method TEXT,
+              source_scope TEXT DEFAULT 'live',
+              snapshot_id TEXT,
+              snapshot_ids TEXT,
+              snapshot_count TEXT,
+              snapshot_index TEXT,
+              snapshot_created_utc TEXT,
               row_json TEXT NOT NULL,
               created_at TEXT NOT NULL
             );
@@ -1295,6 +1502,12 @@ class Database:
               computer_name TEXT,
               is_deleted TEXT,
               is_folder TEXT,
+              source_scope TEXT DEFAULT 'live',
+              snapshot_id TEXT,
+              snapshot_ids TEXT,
+              snapshot_count TEXT,
+              snapshot_index TEXT,
+              snapshot_created_utc TEXT,
               row_json TEXT NOT NULL,
               created_at TEXT NOT NULL
             );
@@ -1400,6 +1613,12 @@ class Database:
               crawl_code_hex TEXT,
               scope_id TEXT,
               document_id TEXT,
+              source_scope TEXT DEFAULT 'live',
+              snapshot_id TEXT,
+              snapshot_ids TEXT,
+              snapshot_count TEXT,
+              snapshot_index TEXT,
+              snapshot_created_utc TEXT,
               raw_fields_json TEXT NOT NULL,
               created_at TEXT NOT NULL
             );
@@ -1552,6 +1771,80 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_file_metadata_summary_case
               ON file_metadata_extraction_summaries(case_id, created_at);
 
+            CREATE TABLE IF NOT EXISTS archive_entries (
+              id TEXT PRIMARY KEY,
+              case_id TEXT NOT NULL REFERENCES cases(id),
+              computer_id TEXT NOT NULL REFERENCES computers(id),
+              image_id TEXT NOT NULL REFERENCES images(id),
+              tool_output_id TEXT NOT NULL REFERENCES tool_outputs(id),
+              tool_name TEXT NOT NULL,
+              source_csv TEXT NOT NULL,
+              row_number INTEGER NOT NULL,
+              archive_path TEXT,
+              archive_file_name TEXT,
+              archive_extension TEXT,
+              archive_file_size TEXT,
+              archive_modified_time_utc TEXT,
+              archive_status TEXT,
+              archive_error TEXT,
+              member_path TEXT,
+              member_file_name TEXT,
+              member_extension TEXT,
+              member_size TEXT,
+              member_compressed_size TEXT,
+              member_crc TEXT,
+              member_modified_time_utc TEXT,
+              member_is_dir TEXT,
+              member_is_encrypted TEXT,
+              nested_evidence_format TEXT,
+              multipart_set_id TEXT,
+              multipart_part_number TEXT,
+              multipart_part_count TEXT,
+              multipart_is_first_part TEXT,
+              multipart_related_parts TEXT,
+              created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_archive_entries_case_archive
+              ON archive_entries(case_id, archive_path);
+            CREATE INDEX IF NOT EXISTS idx_archive_entries_case_member
+              ON archive_entries(case_id, member_file_name);
+            CREATE INDEX IF NOT EXISTS idx_archive_entries_nested_format
+              ON archive_entries(case_id, nested_evidence_format);
+
+            CREATE TABLE IF NOT EXISTS nested_evidence_items (
+              id TEXT PRIMARY KEY,
+              case_id TEXT NOT NULL REFERENCES cases(id),
+              computer_id TEXT,
+              image_id TEXT NOT NULL REFERENCES images(id),
+              source_table TEXT,
+              source_id TEXT,
+              source_file TEXT,
+              original_path TEXT,
+              parent_path TEXT,
+              file_name TEXT,
+              extension TEXT,
+              file_size TEXT,
+              detected_format TEXT,
+              created_time_utc TEXT,
+              modified_time_utc TEXT,
+              accessed_time_utc TEXT,
+              record_changed_time_utc TEXT,
+              mft_entry_number TEXT,
+              mft_sequence_number TEXT,
+              multipart_set_id TEXT,
+              multipart_part_number TEXT,
+              multipart_part_count TEXT,
+              multipart_is_first_part TEXT,
+              multipart_related_parts TEXT,
+              parser_status TEXT,
+              recommendation TEXT,
+              created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_nested_evidence_case_path
+              ON nested_evidence_items(case_id, original_path);
+            CREATE INDEX IF NOT EXISTS idx_nested_evidence_case_format
+              ON nested_evidence_items(case_id, detected_format);
+
             CREATE TABLE IF NOT EXISTS evtx_events (
               id TEXT PRIMARY KEY,
               case_id TEXT NOT NULL REFERENCES cases(id),
@@ -1578,6 +1871,9 @@ class Database:
               payload_data1 TEXT,
               payload_data2 TEXT,
               payload_data3 TEXT,
+              payload_data4 TEXT,
+              payload_data5 TEXT,
+              payload_data6 TEXT,
               executable_info TEXT,
               source_file TEXT,
               payload TEXT,
@@ -2758,6 +3054,39 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_package_artifacts_output
               ON package_artifacts(tool_output_id);
 
+            CREATE TABLE IF NOT EXISTS spotify_artifacts (
+              id TEXT PRIMARY KEY,
+              case_id TEXT NOT NULL REFERENCES cases(id),
+              computer_id TEXT NOT NULL REFERENCES computers(id),
+              image_id TEXT NOT NULL REFERENCES images(id),
+              tool_output_id TEXT NOT NULL REFERENCES tool_outputs(id),
+              tool_name TEXT NOT NULL,
+              source_csv TEXT NOT NULL,
+              row_number INTEGER NOT NULL,
+              artifact_type TEXT,
+              user_profile TEXT,
+              source_path TEXT,
+              source_name TEXT,
+              source_file TEXT,
+              file_size TEXT,
+              modified_utc TEXT,
+              account_user_id TEXT,
+              spotify_user_id TEXT,
+              spotify_user_uri TEXT,
+              display_name TEXT,
+              key_name TEXT,
+              value TEXT,
+              evidence TEXT,
+              error TEXT,
+              created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_spotify_artifacts_case_type
+              ON spotify_artifacts(case_id, artifact_type);
+            CREATE INDEX IF NOT EXISTS idx_spotify_artifacts_case_user
+              ON spotify_artifacts(case_id, spotify_user_id);
+            CREATE INDEX IF NOT EXISTS idx_spotify_artifacts_output
+              ON spotify_artifacts(tool_output_id);
+
             CREATE TABLE IF NOT EXISTS telemetry_artifacts (
               id TEXT PRIMARY KEY,
               case_id TEXT NOT NULL REFERENCES cases(id),
@@ -3367,6 +3696,7 @@ class Database:
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_timeline_events_case_source_time_output ON timeline_events(case_id, source_tool, source_table, event_type, timestamp_utc, tool_output_id)"
         )
+        self._add_column_if_missing("prefetch_items", "last_run_times_utc", "TEXT")
         self._add_column_if_missing("prefetch_items", "referenced_strings", "TEXT")
         self._add_column_if_missing("prefetch_items", "resolved_reference_path", "TEXT")
         self._add_column_if_missing("prefetch_items", "resolved_reference_device_path", "TEXT")
@@ -3375,6 +3705,34 @@ class Database:
         self._add_column_if_missing("prefetch_items", "resolved_reference_description", "TEXT")
         self._add_column_if_missing("prefetch_items", "resolved_reference_source", "TEXT")
         self._add_column_if_missing("prefetch_items", "resolved_reference_match_count", "TEXT")
+        for table in ("prefetch_items", "prefetch_run_times"):
+            self._add_column_if_missing(table, "source_scope", "TEXT DEFAULT 'live'")
+            self._add_column_if_missing(table, "snapshot_id", "TEXT")
+            self._add_column_if_missing(table, "snapshot_ids", "TEXT")
+            self._add_column_if_missing(table, "snapshot_count", "TEXT")
+            self._add_column_if_missing(table, "snapshot_index", "TEXT")
+            self._add_column_if_missing(table, "snapshot_created_utc", "TEXT")
+        for table in (
+            "shortcut_items",
+            "registry_artifacts",
+            "amcache_entries",
+            "shimcache_entries",
+            "srum_records",
+            "browser_history",
+            "browser_downloads",
+            "firefox_history",
+            "recycle_items",
+            "recycle_children",
+            "evtx_events",
+            "windows_search_files",
+            "windows_search_gather_logs",
+        ):
+            self._add_column_if_missing(table, "source_scope", "TEXT DEFAULT 'live'")
+            self._add_column_if_missing(table, "snapshot_id", "TEXT")
+            self._add_column_if_missing(table, "snapshot_ids", "TEXT")
+            self._add_column_if_missing(table, "snapshot_count", "TEXT")
+            self._add_column_if_missing(table, "snapshot_index", "TEXT")
+            self._add_column_if_missing(table, "snapshot_created_utc", "TEXT")
         for column in (
             "references_header",
             "reply_to",
@@ -3433,6 +3791,22 @@ class Database:
             self._add_column_if_missing(table, "key_path", "TEXT")
             self._add_column_if_missing(table, "key_last_write_timestamp", "TEXT")
             self._add_column_if_missing(table, "recmd_description", "TEXT")
+        for column in (
+            "executable_is_guid",
+            "resolved_executable",
+            "executable_resolution_source",
+            "executable_resolution_confidence",
+        ):
+            self._add_column_if_missing("registry_common_dialog_mru", column, "TEXT")
+        for column in (
+            "multipart_set_id",
+            "multipart_part_number",
+            "multipart_part_count",
+            "multipart_is_first_part",
+            "multipart_related_parts",
+        ):
+            self._add_column_if_missing("archive_entries", column, "TEXT")
+            self._add_column_if_missing("nested_evidence_items", column, "TEXT")
         for table, columns in {
             "amcache_entries": {
                 "entry_type": "TEXT", "source_file": "TEXT", "path": "TEXT", "name": "TEXT",
@@ -3469,7 +3843,7 @@ class Database:
                 "instance_id": "TEXT", "parent_id_prefix": "TEXT", "device_service": "TEXT",
                 "user_profile": "TEXT", "drive_letter": "TEXT", "volume_guid": "TEXT",
                 "volume_serial_number": "TEXT", "volume_name": "TEXT", "capacity_bytes": "TEXT",
-                "alternate_scsi_serial": "TEXT", "key_path": "TEXT",
+                "file_system": "TEXT", "alternate_scsi_serial": "TEXT", "key_path": "TEXT",
                 "key_last_write_utc": "TEXT", "last_present_date_utc": "TEXT",
                 "property_name": "TEXT", "property_value": "TEXT", "value_data_hex": "TEXT",
             },
@@ -3478,7 +3852,7 @@ class Database:
                 "product": "TEXT", "revision": "TEXT", "friendly_name": "TEXT",
                 "parent_id_prefix": "TEXT", "device_service": "TEXT", "drive_letter": "TEXT",
                 "volume_guid": "TEXT", "volume_serial_number": "TEXT", "volume_name": "TEXT",
-                "capacity_bytes": "TEXT", "alternate_scsi_serial": "TEXT", "user_profiles": "TEXT",
+                "capacity_bytes": "TEXT", "file_system": "TEXT", "alternate_scsi_serial": "TEXT", "user_profiles": "TEXT",
                 "first_install_date_utc": "TEXT", "last_arrival_utc": "TEXT", "last_removal_utc": "TEXT",
                 "first_volume_serial_event_utc": "TEXT", "last_partition_event_utc": "TEXT",
                 "last_migration_present_utc": "TEXT", "evidence_row_count": "INTEGER NOT NULL DEFAULT 0",
@@ -3604,6 +3978,9 @@ class Database:
                 "date_modified": "TEXT", "date_accessed": "TEXT", "date_imported": "TEXT",
                 "size": "TEXT", "owner": "TEXT", "computer_name": "TEXT",
                 "is_deleted": "TEXT", "is_folder": "TEXT",
+                "source_scope": "TEXT DEFAULT 'live'", "snapshot_id": "TEXT",
+                "snapshot_ids": "TEXT", "snapshot_count": "TEXT",
+                "snapshot_index": "TEXT", "snapshot_created_utc": "TEXT",
                 "row_json": "TEXT NOT NULL DEFAULT '{}'",
             },
             "windows_search_internet_history": {
@@ -3630,6 +4007,9 @@ class Database:
                 "item_path": "TEXT", "item_scheme": "TEXT", "is_deleted_path": "TEXT",
                 "status_hex": "TEXT", "crawl_code_hex": "TEXT", "scope_id": "TEXT",
                 "document_id": "TEXT", "raw_fields_json": "TEXT NOT NULL DEFAULT '[]'",
+                "source_scope": "TEXT DEFAULT 'live'", "snapshot_id": "TEXT",
+                "snapshot_ids": "TEXT", "snapshot_count": "TEXT",
+                "snapshot_index": "TEXT", "snapshot_created_utc": "TEXT",
             },
             "windows_search_email_indicators": {
                 "source_table": "TEXT NOT NULL DEFAULT ''",
@@ -3709,6 +4089,9 @@ class Database:
                 "target_modified": "TEXT", "target_accessed": "TEXT", "device_type": "TEXT",
                 "artifact_volume_serial_number": "TEXT", "artifact_volume_name": "TEXT",
                 "artifact_volume_guid": "TEXT", "artifact_drive_letter": "TEXT",
+                "temporal_status": "TEXT", "temporal_basis": "TEXT",
+                "first_known_connection_utc": "TEXT", "last_known_connection_utc": "TEXT",
+                "nearest_connection_before_utc": "TEXT", "nearest_removal_after_utc": "TEXT",
                 "volume_serial_match": "TEXT", "confidence": "TEXT",
             },
             "copied_file_indicators": {
@@ -4113,6 +4496,12 @@ class Database:
             """,
             (utc_now(),),
         )
+        for column in ("run_counter", "focus_count", "focus_time", "last_executed"):
+            self._add_column_if_missing("registry_artifacts", column, "TEXT")
+        for column in ("payload_data4", "payload_data5", "payload_data6"):
+            self._add_column_if_missing("evtx_events", column, "TEXT")
+        self._add_column_if_missing("jobs", "source_scope", "TEXT NOT NULL DEFAULT 'live'")
+        self._add_column_if_missing("process_timings", "source_scope", "TEXT NOT NULL DEFAULT 'live'")
         self.conn.commit()
 
     def _add_column_if_missing(self, table: str, column: str, definition: str) -> None:
@@ -4193,6 +4582,43 @@ class Database:
             path=path,
             created_at=created_at,
         )
+
+    def replace_image_metadata(self, *, case_id: str, image_id: str, rows: list[dict[str, Any]]) -> None:
+        self.get_image(image_id, case_id)
+        self.conn.execute("DELETE FROM image_metadata WHERE case_id = ? AND image_id = ?", (case_id, image_id))
+        if rows:
+            created_at = utc_now()
+            self.conn.executemany(
+                """
+                INSERT INTO image_metadata (id, case_id, image_id, source, key, value, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        row.get("id") or str(uuid.uuid4()),
+                        case_id,
+                        image_id,
+                        str(row["source"]),
+                        str(row["key"]),
+                        None if row.get("value") is None else str(row.get("value")),
+                        created_at,
+                    )
+                    for row in rows
+                ],
+            )
+        self._commit()
+
+    def image_metadata(self, *, case_id: str, image_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT source, key, value, created_at
+            FROM image_metadata
+            WHERE case_id = ? AND image_id = ?
+            ORDER BY source, key
+            """,
+            (case_id, image_id),
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def get_image(self, image_id: str, case_id: str) -> EvidenceImage:
         row = self.conn.execute(
@@ -4371,18 +4797,25 @@ class Database:
         ).fetchall()
 
     def create_job(self, values: dict[str, Any]) -> None:
+        source_scope = values.get("source_scope") or _source_scope_from_values(
+            values.get("output_folder"),
+            values.get("stdout_path"),
+            values.get("stderr_path"),
+            " ".join(str(part) for part in values.get("command") or []),
+        )
         self.conn.execute(
             """
             INSERT INTO jobs (
-              id, case_id, image_id, tool_name, tool_version, command_json,
-              computer_id, start_time, end_time, exit_code, stdout_path, stderr_path,
-              output_folder, dry_run
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              id, case_id, image_id, source_scope, tool_name, tool_version,
+              command_json, computer_id, start_time, end_time, exit_code,
+              stdout_path, stderr_path, output_folder, dry_run
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 values["id"],
                 values["case_id"],
                 values["image_id"],
+                source_scope,
                 values["tool_name"],
                 values.get("tool_version"),
                 json.dumps(values["command"]),
@@ -4468,6 +4901,12 @@ class Database:
     def insert_normalized_artifact_rows(self, table: str, rows: list[dict[str, Any]]) -> None:
         if not rows:
             return
+        if table == "onedrive_items":
+            rows = self._strip_columns(rows, ("media_json", "hydration_json", "metadata_json"))
+            for row in rows:
+                row["media_json"] = ""
+                row["hydration_json"] = ""
+                row["metadata_json"] = ""
         self._insert_rows(table, self._table_columns(table), rows)
 
     def insert_normalized_artifact_row_groups(self, table_rows: dict[str, list[dict[str, Any]]]) -> None:
@@ -4481,121 +4920,57 @@ class Database:
         return [row["name"] for row in rows]
 
     def insert_shortcut_items(self, rows: list[dict[str, Any]]) -> None:
-        if not rows:
-            return
-        created_at = utc_now()
-        self.conn.executemany(
-            """
-            INSERT INTO shortcut_items (
-              id, case_id, computer_id, image_id, tool_output_id, tool_name,
-              source_csv, row_number, artifact_type, artifact_name, artifact_path,
-              file_name, file_location, target_created, target_modified, target_accessed,
-              device_type, volume_serial_number, volume_name, command_line_arguments,
-              working_directory, network_path, machine_name, app_id, app_id_description,
-              entry_id, destlist_version, lnk_created, lnk_modified, lnk_accessed,
-              jumplist_item_number, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
+        self._insert_rows(
+            "shortcut_items",
             [
-                (
-                    row["id"],
-                    row["case_id"],
-                    row["computer_id"],
-                    row["image_id"],
-                    row["tool_output_id"],
-                    row["tool_name"],
-                    str(row["source_csv"]),
-                    row["row_number"],
-                    row["artifact_type"],
-                    row.get("artifact_name"),
-                    row.get("artifact_path"),
-                    row.get("file_name"),
-                    row.get("file_location"),
-                    row.get("target_created"),
-                    row.get("target_modified"),
-                    row.get("target_accessed"),
-                    row.get("device_type"),
-                    row.get("volume_serial_number"),
-                    row.get("volume_name"),
-                    row.get("command_line_arguments"),
-                    row.get("working_directory"),
-                    row.get("network_path"),
-                    row.get("machine_name"),
-                    row.get("app_id"),
-                    row.get("app_id_description"),
-                    row.get("entry_id"),
-                    row.get("destlist_version"),
-                    row.get("lnk_created"),
-                    row.get("lnk_modified"),
-                    row.get("lnk_accessed"),
-                    row.get("jumplist_item_number"),
-                    created_at,
-                )
-                for row in rows
+                "id", "case_id", "computer_id", "image_id", "tool_output_id",
+                "tool_name", "source_csv", "row_number", "artifact_type",
+                "artifact_name", "artifact_path", "file_name", "file_location",
+                "target_created", "target_modified", "target_accessed",
+                "device_type", "volume_serial_number", "volume_name",
+                "command_line_arguments", "working_directory", "network_path",
+                "machine_name", "app_id", "app_id_description", "entry_id",
+                "destlist_version", "lnk_created", "lnk_modified",
+                "lnk_accessed", "jumplist_item_number", "source_scope",
+                "snapshot_id", "snapshot_ids", "snapshot_count", "snapshot_index",
+                "snapshot_created_utc", "created_at",
             ],
+            rows,
         )
-        self._commit()
 
     def insert_prefetch_items(self, rows: list[dict[str, Any]]) -> None:
-        if not rows:
-            return
-        created_at = utc_now()
-        self.conn.executemany(
-            """
-            INSERT INTO prefetch_items (
-              id, case_id, computer_id, image_id, tool_output_id, tool_name,
-              source_csv, row_number, prefetch_name, artifact_path, original_path,
-              executable_name, prefetch_hash, prefetch_version, prefetch_version_label,
-              compression, run_count, last_run_time_utc, last_run_times_utc,
-              referenced_string_count, referenced_strings, parser_note,
-              resolved_reference_path, resolved_reference_device_path,
-              resolved_reference_command_line, resolved_reference_os,
-              resolved_reference_description, resolved_reference_source,
-              resolved_reference_match_count, pf_created, pf_modified,
-              pf_accessed, pf_mft_record_modified, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            [
-                (
-                    row["id"],
-                    row["case_id"],
-                    row["computer_id"],
-                    row["image_id"],
-                    row["tool_output_id"],
-                    row["tool_name"],
-                    str(row["source_csv"]),
-                    row["row_number"],
-                    row.get("prefetch_name"),
+        prepared_rows = [
+            {
+                **row,
+                "source_scope": row.get("source_scope") or _source_scope_from_values(
+                    row.get("source_csv"),
                     row.get("artifact_path"),
                     row.get("original_path"),
-                    row.get("executable_name"),
-                    row.get("prefetch_hash"),
-                    row.get("prefetch_version"),
-                    row.get("prefetch_version_label"),
-                    row.get("compression"),
-                    row.get("run_count"),
-                    row.get("last_run_time_utc"),
-                    row.get("last_run_times_utc"),
-                    row.get("referenced_string_count"),
-                    row.get("referenced_strings"),
-                    row.get("parser_note"),
-                    row.get("resolved_reference_path"),
-                    row.get("resolved_reference_device_path"),
-                    row.get("resolved_reference_command_line"),
-                    row.get("resolved_reference_os"),
-                    row.get("resolved_reference_description"),
-                    row.get("resolved_reference_source"),
-                    row.get("resolved_reference_match_count"),
-                    row.get("pf_created"),
-                    row.get("pf_modified"),
-                    row.get("pf_accessed"),
-                    row.get("pf_mft_record_modified"),
-                    created_at,
-                )
-                for row in rows
+                    row.get("tool_output_id"),
+                    row.get("snapshot_id"),
+                ),
+            }
+            for row in rows
+        ]
+        self._insert_rows(
+            "prefetch_items",
+            [
+                "id", "case_id", "computer_id", "image_id", "tool_output_id",
+                "tool_name", "source_csv", "row_number", "prefetch_name",
+                "artifact_path", "original_path", "executable_name",
+                "prefetch_hash", "prefetch_version", "prefetch_version_label",
+                "compression", "run_count", "last_run_time_utc",
+                "last_run_times_utc", "referenced_string_count", "referenced_strings", "parser_note",
+                "resolved_reference_path", "resolved_reference_device_path",
+                "resolved_reference_command_line", "resolved_reference_os",
+                "resolved_reference_description", "resolved_reference_source",
+                "resolved_reference_match_count", "pf_created", "pf_modified",
+                "pf_accessed", "pf_mft_record_modified", "source_scope",
+                "snapshot_id", "snapshot_ids", "snapshot_count", "snapshot_index",
+                "snapshot_created_utc", "created_at",
             ],
+            prepared_rows,
         )
-        self._commit()
 
     def insert_file_correlations(self, rows: list[dict[str, Any]]) -> None:
         if not rows:
@@ -4832,6 +5207,20 @@ class Database:
             rows,
         )
 
+    def insert_spotify_artifacts(self, rows: list[dict[str, Any]]) -> None:
+        self._insert_rows(
+            "spotify_artifacts",
+            [
+                "id", "case_id", "computer_id", "image_id", "tool_output_id",
+                "tool_name", "source_csv", "row_number", "artifact_type",
+                "user_profile", "source_path", "source_name", "source_file",
+                "file_size", "modified_utc", "account_user_id",
+                "spotify_user_id", "spotify_user_uri", "display_name",
+                "key_name", "value", "evidence", "error", "created_at",
+            ],
+            rows,
+        )
+
     def insert_user_dictionary_words(self, rows: list[dict[str, Any]]) -> None:
         self._insert_rows(
             "user_dictionary_words",
@@ -5050,6 +5439,10 @@ class Database:
 
     def insert_onedrive_items(self, rows: list[dict[str, Any]]) -> None:
         rows = self._strip_columns(rows, ("media_json", "hydration_json", "metadata_json"))
+        for row in rows:
+            row["media_json"] = ""
+            row["hydration_json"] = ""
+            row["metadata_json"] = ""
         self._insert_rows(
             "onedrive_items",
             [
@@ -5136,53 +5529,19 @@ class Database:
         )
 
     def insert_sam_accounts(self, rows: list[dict[str, Any]]) -> None:
-        if not rows:
-            return
-        created_at = utc_now()
-        self.conn.executemany(
-            """
-            INSERT INTO sam_accounts (
-              id, case_id, computer_id, image_id, tool_output_id, tool_name,
-              source_csv, row_number, source_path, username, rid, rid_hex,
-              account_category, last_login_utc, password_last_set_utc,
-              last_bad_password_utc, account_expires_utc, logon_count,
-              bad_password_count, account_flags_hex, account_flags,
-              account_flags_unknown_hex, registry_path, account_key_last_write_utc,
-              created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
+        self._insert_rows(
+            "sam_accounts",
             [
-                (
-                    row["id"],
-                    row["case_id"],
-                    row["computer_id"],
-                    row["image_id"],
-                    row["tool_output_id"],
-                    row["tool_name"],
-                    str(row["source_csv"]),
-                    row["row_number"],
-                    row.get("source_path"),
-                    row.get("username"),
-                    row.get("rid"),
-                    row.get("rid_hex"),
-                    row.get("account_category"),
-                    row.get("last_login_utc"),
-                    row.get("password_last_set_utc"),
-                    row.get("last_bad_password_utc"),
-                    row.get("account_expires_utc"),
-                    row.get("logon_count"),
-                    row.get("bad_password_count"),
-                    row.get("account_flags_hex"),
-                    row.get("account_flags"),
-                    row.get("account_flags_unknown_hex"),
-                    row.get("registry_path"),
-                    row.get("account_key_last_write_utc"),
-                    created_at,
-                )
-                for row in rows
+                "id", "case_id", "computer_id", "image_id", "tool_output_id",
+                "tool_name", "source_csv", "row_number", "source_path", "username",
+                "rid", "rid_hex", "account_category", "last_login_utc",
+                "password_last_set_utc", "last_bad_password_utc", "account_expires_utc",
+                "logon_count", "bad_password_count", "account_flags_hex",
+                "account_flags", "account_flags_unknown_hex", "registry_path",
+                "account_key_last_write_utc", "created_at",
             ],
+            rows,
         )
-        self._commit()
 
     def insert_registry_hives(self, rows: list[dict[str, Any]]) -> None:
         if not rows:
@@ -5225,63 +5584,26 @@ class Database:
         self._commit()
 
     def insert_registry_artifacts(self, rows: list[dict[str, Any]]) -> None:
-        if not rows:
-            return
-        created_at = utc_now()
-        self.conn.executemany(
-            """
-            INSERT INTO registry_artifacts (
-              id, case_id, computer_id, image_id, tool_output_id, tool_name,
-              source_csv, row_number, source_path, hive_type, user_profile,
-              user_sid, artifact, category, key_path, key_last_write_utc, event_time_utc,
-              recentdocs_time_utc, recentdocs_extension_time_utc, mru_position,
-              recentdocs_mru_position, recentdocs_extension_mru_position,
-              is_most_recent, value_name, value_type, value_data, display_name,
-              normalized_path, value_data_hex, transaction_logs_detected, transaction_logs_applied,
-              transaction_log_paths, notes, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
+        self._insert_rows(
+            "registry_artifacts",
             [
-                (
-                    row["id"],
-                    row["case_id"],
-                    row["computer_id"],
-                    row["image_id"],
-                    row["tool_output_id"],
-                    row["tool_name"],
-                    str(row["source_csv"]),
-                    row["row_number"],
-                    row.get("source_path"),
-                    row.get("hive_type"),
-                    row.get("user_profile"),
-                    row.get("user_sid"),
-                    row.get("artifact"),
-                    row.get("category"),
-                    row.get("key_path"),
-                    row.get("key_last_write_utc"),
-                    row.get("event_time_utc"),
-                    row.get("recentdocs_time_utc"),
-                    row.get("recentdocs_extension_time_utc"),
-                    row.get("mru_position"),
-                    row.get("recentdocs_mru_position"),
-                    row.get("recentdocs_extension_mru_position"),
-                    row.get("is_most_recent"),
-                    row.get("value_name"),
-                    row.get("value_type"),
-                    row.get("value_data"),
-                    row.get("display_name"),
-                    row.get("normalized_path"),
-                    row.get("value_data_hex"),
-                    row.get("transaction_logs_detected"),
-                    row.get("transaction_logs_applied"),
-                    row.get("transaction_log_paths"),
-                    row.get("notes"),
-                    created_at,
-                )
-                for row in rows
+                "id", "case_id", "computer_id", "image_id", "tool_output_id",
+                "tool_name", "source_csv", "row_number", "source_path",
+                "hive_type", "user_profile", "user_sid", "artifact", "category",
+                "key_path", "key_last_write_utc", "event_time_utc",
+                "recentdocs_time_utc", "recentdocs_extension_time_utc",
+                "mru_position", "recentdocs_mru_position",
+                "recentdocs_extension_mru_position", "is_most_recent",
+                "value_name", "value_type", "value_data", "display_name",
+                "normalized_path", "run_counter", "focus_count", "focus_time",
+                "last_executed", "value_data_hex", "transaction_logs_detected",
+                "transaction_logs_applied", "transaction_log_paths", "source_scope",
+                "snapshot_id", "snapshot_ids", "snapshot_count", "snapshot_index",
+                "snapshot_created_utc", "notes",
+                "created_at",
             ],
+            rows,
         )
-        self._commit()
 
     def insert_office_trust_records(self, rows: list[dict[str, Any]]) -> None:
         self._insert_rows(
@@ -5331,6 +5653,10 @@ class Database:
         case_id: str,
         image_id: str | None = None,
     ) -> None:
+        if self.analytics is not None:
+            self._enrich_duckdb_registry_artifact_users(case_id=case_id, image_id=image_id)
+            if self.analytics_only:
+                return
         where = ["case_id = ?"]
         params: list[Any] = [case_id]
         if image_id is not None:
@@ -5356,6 +5682,52 @@ class Database:
         if updates:
             self.conn.executemany("UPDATE registry_artifacts SET user_profile = ? WHERE id = ?", updates)
             self._commit()
+
+    def _enrich_duckdb_registry_artifact_users(
+        self,
+        *,
+        case_id: str,
+        image_id: str | None = None,
+    ) -> None:
+        assert self.analytics is not None
+        conn = self.analytics._connect(case_id)
+        if not self.analytics._table_exists(conn, "registry_artifacts") or not self.analytics._table_exists(conn, "sam_accounts"):
+            return
+        where = ["case_id = ?"]
+        params: list[Any] = [case_id]
+        if image_id is not None:
+            where.append("image_id = ?")
+            params.append(image_id)
+        account_rows = conn.execute(
+            f"""
+            SELECT id, user_sid
+            FROM registry_artifacts
+            WHERE {' AND '.join(where)}
+              AND artifact IN ('bam', 'dam')
+              AND COALESCE(user_sid, '') != ''
+            """,
+            params,
+        ).fetchall()
+        if not account_rows:
+            return
+        sam_params: list[Any] = [case_id]
+        sam_where = ["case_id = ?"]
+        if image_id is not None:
+            sam_where.append("image_id = ?")
+            sam_params.append(image_id)
+        sam_rows = conn.execute(
+            f"SELECT username, rid FROM sam_accounts WHERE {' AND '.join(sam_where)}",
+            sam_params,
+        ).fetchall()
+        by_rid = {str(row[1]): row[0] for row in sam_rows if row[1] and row[0]}
+        updates = []
+        for row in account_rows:
+            rid = str(row[1]).rsplit("-", 1)[-1]
+            username = by_rid.get(rid)
+            if username:
+                updates.append((username, row[0]))
+        for username, row_id in updates:
+            conn.execute("UPDATE registry_artifacts SET user_profile = ? WHERE id = ?", [username, row_id])
 
     def insert_recmd_artifact_rows(self, table_rows: dict[str, list[dict[str, Any]]]) -> None:
         ownership_columns = [
@@ -5399,7 +5771,8 @@ class Database:
                 "id", "case_id", "computer_id", "image_id", "tool_output_id", "tool_name",
                 "source_csv", "row_number", *ownership_columns, "artifact", "extension", "value_name",
                 "batch_key_path", "mru_position", "batch_value_name", "executable",
-                "absolute_path", "opened_on", "details", "created_at",
+                "absolute_path", "opened_on", "details", "executable_is_guid", "resolved_executable",
+                "executable_resolution_source", "executable_resolution_confidence", "created_at",
             ],
             "registry_trusted_documents": [
                 "id", "case_id", "computer_id", "image_id", "tool_output_id", "tool_name",
@@ -5432,7 +5805,8 @@ class Database:
                 "publisher", "product_name", "product_version", "file_version", "sha1",
                 "sha256", "binary_type", "size", "created_utc", "modified_utc",
                 "link_date", "compile_time", "program_id", "install_date",
-                "unassociated", "created_at",
+                "unassociated", "source_scope", "snapshot_id", "snapshot_ids",
+                "snapshot_count", "snapshot_index", "snapshot_created_utc", "created_at",
             ],
             rows,
         )
@@ -5443,7 +5817,9 @@ class Database:
             [
                 "id", "case_id", "computer_id", "image_id", "tool_output_id", "tool_name",
                 "source_csv", "row_number", "source_file", "control_set", "entry_number",
-                "path", "last_modified_utc", "executed", "source_key", "created_at",
+                "path", "last_modified_utc", "executed", "source_key", "source_scope",
+                "snapshot_id", "snapshot_ids", "snapshot_count", "snapshot_index",
+                "snapshot_created_utc", "created_at",
             ],
             rows,
         )
@@ -5472,7 +5848,7 @@ class Database:
                 "vendor_id", "product_id", "vendor", "product", "revision", "friendly_name", "serial",
                 "instance_id", "parent_id_prefix", "device_service", "user_profile",
                 "drive_letter", "volume_guid", "volume_serial_number", "volume_name",
-                "capacity_bytes", "alternate_scsi_serial", "key_path", "key_last_write_utc",
+                "capacity_bytes", "file_system", "alternate_scsi_serial", "key_path", "key_last_write_utc",
                 "last_present_date_utc", "property_name", "property_value", "value_data_hex",
                 "created_at",
             ],
@@ -5486,6 +5862,8 @@ class Database:
             where += " AND image_id = ?"
             params.append(image_id)
         self.conn.execute(f"DELETE FROM usb_storage_devices WHERE {where}", params)
+        if self.analytics is not None:
+            self.analytics.delete_case_image("usb_storage_devices", case_id=case_id, image_id=image_id)
         self._commit()
 
     def insert_usb_storage_devices(self, rows: list[dict[str, Any]]) -> None:
@@ -5496,7 +5874,7 @@ class Database:
                 "vendor_id", "product_id", "vendor", "product", "revision",
                 "friendly_name", "parent_id_prefix", "device_service", "drive_letter",
                 "volume_guid", "volume_serial_number", "volume_name", "capacity_bytes",
-                "alternate_scsi_serial", "user_profiles", "first_install_date_utc",
+                "file_system", "alternate_scsi_serial", "user_profiles", "first_install_date_utc",
                 "last_arrival_utc", "last_removal_utc",
                 "first_volume_serial_event_utc", "last_partition_event_utc",
                 "last_migration_present_utc", "evidence_row_count", "source_artifacts", "created_at",
@@ -5511,6 +5889,8 @@ class Database:
             where += " AND image_id = ?"
             params.append(image_id)
         self.conn.execute(f"DELETE FROM usb_connection_events WHERE {where}", params)
+        if "usb_connection_events" in ANALYTICS_TABLES and self.analytics is not None:
+            self.analytics.delete_case_image("usb_connection_events", case_id=case_id, image_id=image_id)
         self._commit()
 
     def insert_usb_connection_events(self, rows: list[dict[str, Any]]) -> None:
@@ -5533,6 +5913,8 @@ class Database:
             where += " AND image_id = ?"
             params.append(image_id)
         self.conn.execute(f"DELETE FROM usb_file_correlations WHERE {where}", params)
+        if "usb_file_correlations" in ANALYTICS_TABLES:
+            self.analytics.delete_case_image("usb_file_correlations", case_id=case_id, image_id=image_id)
         self._commit()
 
     def insert_usb_file_correlations(self, rows: list[dict[str, Any]]) -> None:
@@ -5548,12 +5930,17 @@ class Database:
                 "jumplist_item_number", "file_name", "file_location", "target_created", "target_modified",
                 "target_accessed", "device_type", "artifact_volume_serial_number",
                 "artifact_volume_name", "artifact_volume_guid", "artifact_drive_letter",
+                "temporal_status", "temporal_basis", "first_known_connection_utc",
+                "last_known_connection_utc", "nearest_connection_before_utc",
+                "nearest_removal_after_utc",
                 "volume_serial_match", "confidence", "created_at",
             ],
             rows,
         )
 
     def dedupe_usb_devices(self, *, case_id: str, image_id: str | None = None) -> int:
+        if self.analytics_only and self.analytics is not None:
+            return self._dedupe_duckdb_usb_devices(case_id=case_id, image_id=image_id)
         params: list[Any] = [case_id]
         where = "case_id = ?"
         if image_id is not None:
@@ -5578,6 +5965,40 @@ class Database:
         after = self.conn.execute(f"SELECT COUNT(*) AS count FROM usb_devices WHERE {where}", params).fetchone()["count"]
         self._commit()
         return int(before) - int(after)
+
+    def _dedupe_duckdb_usb_devices(self, *, case_id: str, image_id: str | None = None) -> int:
+        assert self.analytics is not None
+        conn = self.analytics._connect(case_id)
+        if not self.analytics._table_exists(conn, "usb_devices"):
+            return 0
+        where = ["case_id = ?"]
+        params: list[Any] = [case_id]
+        if image_id is not None:
+            where.append("image_id = ?")
+            params.append(image_id)
+        rows = conn.execute(
+            f"""
+            SELECT id, artifact, device_type, serial, instance_id, key_path,
+                   property_name, property_value, key_last_write_utc
+            FROM usb_devices
+            WHERE {' AND '.join(where)}
+            ORDER BY row_number, id
+            """,
+            params,
+        ).fetchall()
+        seen: set[tuple[Any, ...]] = set()
+        duplicate_ids: list[str] = []
+        for row in rows:
+            key = tuple("" if value is None else str(value) for value in row[1:])
+            if key in seen:
+                duplicate_ids.append(str(row[0]))
+            else:
+                seen.add(key)
+        if not duplicate_ids:
+            return 0
+        placeholders = ", ".join("?" for _ in duplicate_ids)
+        conn.execute(f"DELETE FROM usb_devices WHERE id IN ({placeholders})", duplicate_ids)
+        return len(duplicate_ids)
 
     def _insert_rows(self, table: str, columns: list[str], rows: list[dict[str, Any]]) -> None:
         if not rows:
@@ -5638,60 +6059,21 @@ class Database:
             LOGGER.exception("Failed to write database failure activity log for table %s", table)
 
     def insert_mft_entries(self, rows: list[dict[str, Any]]) -> None:
-        if not rows:
-            return
-        created_at = utc_now()
-        self.conn.executemany(
-            """
-            INSERT INTO mft_entries (
-              id, case_id, computer_id, image_id, tool_output_id, tool_name,
-              source_csv, row_number, entry_number, sequence_number, in_use,
-              parent_entry_number, parent_sequence_number, parent_path, file_name,
-              extension, file_size, is_directory, has_ads, is_ads, si_flags,
-              reparse_target, si_fn_copied, created_si, created_fn, modified_si, modified_fn, record_changed_si,
-              record_changed_fn, accessed_si, accessed_fn, source_file, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
+        self._insert_rows(
+            "mft_entries",
             [
-                (
-                    row["id"],
-                    row["case_id"],
-                    row["computer_id"],
-                    row["image_id"],
-                    row["tool_output_id"],
-                    row["tool_name"],
-                    str(row["source_csv"]),
-                    row["row_number"],
-                    row.get("entry_number"),
-                    row.get("sequence_number"),
-                    row.get("in_use"),
-                    row.get("parent_entry_number"),
-                    row.get("parent_sequence_number"),
-                    row.get("parent_path"),
-                    row.get("file_name"),
-                    row.get("extension"),
-                    row.get("file_size"),
-                    row.get("is_directory"),
-                    row.get("has_ads"),
-                    row.get("is_ads"),
-                    row.get("si_flags"),
-                    row.get("reparse_target"),
-                    row.get("si_fn_copied"),
-                    row.get("created_si"),
-                    row.get("created_fn"),
-                    row.get("modified_si"),
-                    row.get("modified_fn"),
-                    row.get("record_changed_si"),
-                    row.get("record_changed_fn"),
-                    row.get("accessed_si"),
-                    row.get("accessed_fn"),
-                    row.get("source_file"),
-                    created_at,
-                )
-                for row in rows
+                "id", "case_id", "computer_id", "image_id", "tool_output_id",
+                "tool_name", "source_csv", "row_number", "entry_number",
+                "sequence_number", "in_use", "parent_entry_number",
+                "parent_sequence_number", "parent_path", "file_name", "extension",
+                "file_size", "is_directory", "has_ads", "is_ads", "si_flags",
+                "reparse_target", "si_fn_copied", "created_si", "created_fn",
+                "modified_si", "modified_fn", "record_changed_si",
+                "record_changed_fn", "accessed_si", "accessed_fn", "source_file",
+                "created_at",
             ],
+            rows,
         )
-        self._commit()
 
     def insert_usn_journal_entries(self, rows: list[dict[str, Any]]) -> None:
         self._insert_rows(
@@ -5838,7 +6220,9 @@ class Database:
                 "cs_ac_time", "cs_dc_time", "cs_discharge_time", "cs_energy",
                 "configuration_hash", "metadata", "energy_data", "tag",
                 "binary_data", "vpn_profile_name", "vpn_server", "vpn_device",
-                "vpn_protocol", "vpn_phonebook_path", "vpn_match_method", "row_json",
+                "vpn_protocol", "vpn_phonebook_path", "vpn_match_method",
+                "source_scope", "snapshot_id", "snapshot_ids", "snapshot_count",
+                "snapshot_index", "snapshot_created_utc", "row_json",
                 "created_at",
             ],
             rows,
@@ -5870,7 +6254,9 @@ class Database:
                 "item_path", "item_url", "folder_path", "file_name", "file_extension",
                 "item_type", "date_created", "date_modified", "date_accessed",
                 "date_imported", "size", "owner", "computer_name", "is_deleted",
-                "is_folder", "row_json", "created_at",
+                "is_folder", "source_scope", "snapshot_id", "snapshot_ids",
+                "snapshot_count", "snapshot_index", "snapshot_created_utc",
+                "row_json", "created_at",
             ],
             rows,
         )
@@ -5916,7 +6302,9 @@ class Database:
                 "log_type", "line_number", "timestamp_utc", "filetime_hex",
                 "time_low_hex", "time_high_hex", "item_url", "item_path",
                 "item_scheme", "is_deleted_path", "status_hex", "crawl_code_hex",
-                "scope_id", "document_id", "raw_fields_json", "created_at",
+                "scope_id", "document_id", "source_scope", "snapshot_id",
+                "snapshot_ids", "snapshot_count", "snapshot_index",
+                "snapshot_created_utc", "raw_fields_json", "created_at",
             ],
             rows,
         )
@@ -6021,6 +6409,40 @@ class Database:
                 "mft_accessed", "mft_record_modified", "mft_in_use",
                 "path_unresolved", "deleted_mft_entry", "live_orphan",
                 "extraction_method", "created_at",
+            ],
+            rows,
+        )
+
+    def insert_archive_entries(self, rows: list[dict[str, Any]]) -> None:
+        self._insert_rows(
+            "archive_entries",
+            [
+                "id", "case_id", "computer_id", "image_id", "tool_output_id",
+                "tool_name", "source_csv", "row_number", "archive_path",
+                "archive_file_name", "archive_extension", "archive_file_size",
+                "archive_modified_time_utc", "archive_status", "archive_error",
+                "member_path", "member_file_name", "member_extension",
+                "member_size", "member_compressed_size", "member_crc",
+                "member_modified_time_utc", "member_is_dir", "member_is_encrypted",
+                "nested_evidence_format", "multipart_set_id", "multipart_part_number",
+                "multipart_part_count", "multipart_is_first_part",
+                "multipart_related_parts", "created_at",
+            ],
+            rows,
+        )
+
+    def insert_nested_evidence_items(self, rows: list[dict[str, Any]]) -> None:
+        self._insert_rows(
+            "nested_evidence_items",
+            [
+                "id", "case_id", "computer_id", "image_id", "source_table",
+                "source_id", "source_file", "original_path", "parent_path",
+                "file_name", "extension", "file_size", "detected_format",
+                "created_time_utc", "modified_time_utc", "accessed_time_utc",
+                "record_changed_time_utc", "mft_entry_number", "mft_sequence_number",
+                "multipart_set_id", "multipart_part_number", "multipart_part_count",
+                "multipart_is_first_part", "multipart_related_parts",
+                "parser_status", "recommendation", "created_at",
             ],
             rows,
         )
@@ -6198,6 +6620,9 @@ class Database:
                 "payload_data1": row.get("payload_data1"),
                 "payload_data2": row.get("payload_data2"),
                 "payload_data3": row.get("payload_data3"),
+                "payload_data4": row.get("payload_data4"),
+                "payload_data5": row.get("payload_data5"),
+                "payload_data6": row.get("payload_data6"),
                 "executable_info": row.get("executable_info"),
                 "source_file": row.get("source_file"),
                 "payload": row.get("payload"),
@@ -6214,9 +6639,10 @@ class Database:
               source_csv, row_number, record_number, event_record_id, time_created,
               event_id, level, provider, channel, process_id, thread_id, computer,
               user_id, map_description, user_name, remote_host, payload_data1,
-              payload_data2, payload_data3, executable_info, source_file, payload,
+              payload_data2, payload_data3, payload_data4, payload_data5,
+              payload_data6, executable_info, source_file, payload,
               created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
@@ -6245,6 +6671,9 @@ class Database:
                     row.get("payload_data1"),
                     row.get("payload_data2"),
                     row.get("payload_data3"),
+                    row.get("payload_data4"),
+                    row.get("payload_data5"),
+                    row.get("payload_data6"),
                     row.get("executable_info"),
                     row.get("source_file"),
                     row.get("payload"),
@@ -6411,6 +6840,12 @@ class Database:
         if image_id is not None:
             where.append("image_id = ?")
             params.append(image_id)
+        if self.analytics is not None:
+            self.analytics.delete_case_image(
+                "copied_file_indicators",
+                case_id=case_id,
+                image_id=image_id,
+            )
         self.conn.execute(f"DELETE FROM copied_file_indicators WHERE {' AND '.join(where)}", params)
         self._insert_rows(
             "copied_file_indicators",
@@ -6458,18 +6893,14 @@ class Database:
         image_id: str | None = None,
         tool_names: list[str] | None = None,
     ) -> int:
-        where = ["case_id = ?"]
-        params: list[Any] = [case_id]
-        if image_id is not None:
-            where.append("image_id = ?")
-            params.append(image_id)
-        if tool_names:
-            placeholders = ", ".join("?" for _ in tool_names)
-            where.append(f"tool_name IN ({placeholders})")
-            params.extend(tool_names)
-        clause = " AND ".join(where)
+        output_clause, output_params = self._purge_where_for_table(
+            "tool_outputs",
+            case_id=case_id,
+            image_id=image_id,
+            tool_names=tool_names,
+        )
         output_count = self.conn.execute(
-            f"SELECT COUNT(*) AS count FROM tool_outputs WHERE {clause}", params
+            f"SELECT COUNT(*) AS count FROM tool_outputs WHERE {output_clause}", output_params
         ).fetchone()["count"]
         if tool_names and all(name in TOOL_PURGE_TABLES for name in tool_names):
             purge_tables = tuple(
@@ -6480,6 +6911,14 @@ class Database:
         else:
             purge_tables = DEFAULT_PURGE_TABLES
         for table in purge_tables:
+            clause, params = self._purge_where_for_table(
+                table,
+                case_id=case_id,
+                image_id=image_id,
+                tool_names=tool_names,
+            )
+            if not clause:
+                continue
             self.conn.execute(f"DELETE FROM {table} WHERE {clause}", params)
             if self.analytics is not None and table not in SQLITE_ONLY_PURGE_TABLES:
                 self.analytics.delete_case_image(
@@ -6522,6 +6961,12 @@ class Database:
             if image_id is not None:
                 copied_where.append("image_id = ?")
                 copied_params.append(image_id)
+            if self.analytics is not None:
+                self.analytics.delete_case_image(
+                    "copied_file_indicators",
+                    case_id=case_id,
+                    image_id=image_id,
+                )
             self.conn.execute(
                 f"DELETE FROM copied_file_indicators WHERE {' AND '.join(copied_where)}",
                 copied_params,
@@ -6570,6 +7015,8 @@ class Database:
                 usb_where.append("image_id = ?")
                 usb_params.append(image_id)
             self.conn.execute(f"DELETE FROM usb_storage_devices WHERE {' AND '.join(usb_where)}", usb_params)
+            if self.analytics is not None:
+                self.analytics.delete_case_image("usb_storage_devices", case_id=case_id, image_id=image_id)
         if not tool_names or any(
             name in {"LECmd", "JLECmd", "SBECmd", "RegistryArtifactParser", "EvtxECmd", "EvtxECmdTriage"}
             for name in tool_names
@@ -6660,6 +7107,53 @@ class Database:
         self.conn.commit()
         return int(output_count)
 
+    def _purge_where_for_table(
+        self,
+        table: str,
+        *,
+        case_id: str,
+        image_id: str | None,
+        tool_names: list[str] | None,
+    ) -> tuple[str, list[Any]]:
+        columns = {str(row["name"]) for row in self.conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if not columns:
+            return "", []
+        where: list[str] = []
+        params: list[Any] = []
+        if "case_id" in columns:
+            where.append("case_id = ?")
+            params.append(case_id)
+        if image_id is not None and "image_id" in columns:
+            where.append("image_id = ?")
+            params.append(image_id)
+        if tool_names:
+            placeholders = ", ".join("?" for _ in tool_names)
+            if "tool_name" in columns:
+                where.append(f"tool_name IN ({placeholders})")
+                params.extend(tool_names)
+            elif "source_tool" in columns:
+                where.append(f"source_tool IN ({placeholders})")
+                params.extend(tool_names)
+            elif "tool_output_id" in columns:
+                output_where = ["case_id = ?"]
+                output_params: list[Any] = [case_id]
+                if image_id is not None:
+                    output_where.append("image_id = ?")
+                    output_params.append(image_id)
+                output_where.append(f"tool_name IN ({placeholders})")
+                output_params.extend(tool_names)
+                where.append(
+                    "tool_output_id IN ("
+                    f"SELECT id FROM tool_outputs WHERE {' AND '.join(output_where)}"
+                    ")"
+                )
+                params.extend(output_params)
+            else:
+                return "", []
+        if not where:
+            return "", []
+        return " AND ".join(where), params
+
     def log_activity(
         self,
         *,
@@ -6707,17 +7201,19 @@ class Database:
         job_id: str | None = None,
         tool_name: str | None = None,
         artifact_name: str | None = None,
+        source_scope: str | None = None,
         details: dict[str, Any] | None = None,
     ) -> str:
         timing_id = str(uuid.uuid4())
         now = utc_now()
+        timing_source_scope = source_scope or _source_scope_from_values(name, artifact_name, json.dumps(details or {}, default=str))
         self.conn.execute(
             """
             INSERT INTO process_timings (
-              id, case_id, computer_id, image_id, parent_id, job_id, scope,
-              phase, name, tool_name, artifact_name, status, start_time,
-              details_json, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              id, case_id, computer_id, image_id, parent_id, job_id,
+              source_scope, scope, phase, name, tool_name, artifact_name,
+              status, start_time, details_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 timing_id,
@@ -6726,6 +7222,7 @@ class Database:
                 image_id,
                 parent_id,
                 job_id,
+                timing_source_scope,
                 scope,
                 phase,
                 name,
@@ -6869,6 +7366,8 @@ class Database:
               UNION ALL
               SELECT case_id, computer_id, image_id, tool_name, tool_output_id FROM file_internal_metadata
               UNION ALL
+              SELECT case_id, computer_id, image_id, tool_name, tool_output_id FROM archive_entries
+              UNION ALL
               SELECT case_id, computer_id, image_id, tool_name, tool_output_id FROM evtx_events
               UNION ALL
               SELECT case_id, computer_id, image_id, tool_name, tool_output_id FROM etl_events
@@ -6900,6 +7399,8 @@ class Database:
               SELECT case_id, computer_id, image_id, tool_name, tool_output_id FROM package_cache_entries
               UNION ALL
               SELECT case_id, computer_id, image_id, tool_name, tool_output_id FROM package_artifacts
+              UNION ALL
+              SELECT case_id, computer_id, image_id, tool_name, tool_output_id FROM spotify_artifacts
               UNION ALL
               SELECT case_id, computer_id, image_id, tool_name, tool_output_id FROM telemetry_artifacts
               UNION ALL
@@ -6937,6 +7438,15 @@ class Database:
             "SELECT id, computer_id, path, created_at FROM images WHERE case_id = ? ORDER BY created_at",
             (case_id,),
         ).fetchall()
+        image_metadata = self.conn.execute(
+            """
+            SELECT image_id, source, key, value, created_at
+            FROM image_metadata
+            WHERE case_id = ?
+            ORDER BY image_id, source, key
+            """,
+            (case_id,),
+        ).fetchall()
         computers = self.conn.execute(
             "SELECT id, label, hostname, notes, created_at FROM computers WHERE case_id = ? ORDER BY created_at",
             (case_id,),
@@ -6972,6 +7482,7 @@ class Database:
             "project": {"id": case.id, "root": str(case.root), "created_at": case.created_at},
             "computers": [dict(row) for row in computers],
             "images": [dict(row) for row in images],
+            "image_metadata": [dict(row) for row in image_metadata],
             "mounts": [dict(row) for row in mounts],
             "artifacts": [dict(row) for row in artifacts],
             "outputs": [dict(row) for row in outputs],

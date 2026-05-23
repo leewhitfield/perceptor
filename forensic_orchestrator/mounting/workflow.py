@@ -12,6 +12,7 @@ from forensic_orchestrator.encryption_preflight import (
     build_fsstat_command,
     log_encryption_preflight_inconclusive,
 )
+from forensic_orchestrator.evidence_sources import prepare_mount_source
 from forensic_orchestrator.jobs import JobRunner
 from forensic_orchestrator.models import EvidenceImage, Partition
 from forensic_orchestrator.paths import WorkspacePaths
@@ -220,7 +221,7 @@ def _ensure_ewf_raw_source(
     source_type: str,
     use_sudo_mount: bool,
 ) -> tuple[Path, str, bool]:
-    if source_path != image.path:
+    if "direct-e01" not in source_type:
         return source_path, source_type, False
 
     ewf_dir = paths.ewf_mount_dir(case_id)
@@ -240,7 +241,7 @@ def _ensure_ewf_raw_source(
         image_id=image.id,
         computer_id=image.computer_id,
         tool_name="ewfmount",
-        command=build_ewfmount_command(image.path, ewf_dir, use_sudo=False, allow_other=True),
+        command=build_ewfmount_command(source_path, ewf_dir, use_sudo=False, allow_other=True),
         output_folder=paths.jobs_dir(case_id) / "mount" / "ewfmount",
         dry_run=False,
     )
@@ -412,6 +413,9 @@ def mount_image(
     raw_path = paths.ewf_raw_path(case_id)
     mount_jobs = paths.jobs_dir(case_id) / "mount"
     runner = JobRunner(db)
+    prepared = prepare_mount_source(db=db, paths=paths, case_id=case_id, image=image, dry_run=dry_run)
+    source_type = prepared.source_type
+    source_path = prepared.path
 
     if not dry_run:
         validate_mmls_available()
@@ -420,7 +424,7 @@ def mount_image(
     if dry_run:
         dry_run_partition_id = "dry-run-selected-partition"
         dry_run_volume_dir = paths.volume_mount_dir(case_id, dry_run_partition_id)
-        fsstat_command = ["fsstat", str(image.path)]
+        fsstat_command = ["fsstat", str(source_path)]
         runner.run(
             case_id=case_id,
             image_id=image.id,
@@ -430,7 +434,7 @@ def mount_image(
             output_folder=mount_jobs / "fsstat-direct",
             dry_run=True,
         )
-        mmls_command = build_mmls_command(image.path)
+        mmls_command = build_mmls_command(source_path)
         runner.run(
             case_id=case_id,
             image_id=image.id,
@@ -440,8 +444,8 @@ def mount_image(
             output_folder=mount_jobs / "mmls-direct",
             dry_run=True,
         )
-        if mount_filesystem:
-            ewf_command = build_ewfmount_command(image.path, ewf_dir, use_sudo=False, allow_other=True)
+        if mount_filesystem and "direct-e01" in source_type:
+            ewf_command = build_ewfmount_command(source_path, ewf_dir, use_sudo=False, allow_other=True)
             runner.run(
                 case_id=case_id,
                 image_id=image.id,
@@ -451,8 +455,14 @@ def mount_image(
                 output_folder=mount_jobs / "ewfmount",
                 dry_run=True,
             )
+            mount_source_path = raw_path
+            mount_source_type = "ewfmount"
+        else:
+            mount_source_path = source_path
+            mount_source_type = source_type
+        if mount_filesystem:
             mount_command = build_ntfs_mount_command(
-                raw_path,
+                mount_source_path,
                 dry_run_volume_dir,
                 Partition(
                     id=dry_run_partition_id,
@@ -481,16 +491,13 @@ def mount_image(
                 "image_id": image.id,
                 "partition_id": dry_run_partition_id if mount_filesystem else None,
                 "ewf_mount_path": ewf_dir,
-                "raw_path": image.path,
-                "source_type": "direct-e01",
+                "raw_path": mount_source_path,
+                "source_type": mount_source_type,
                 "volume_mount_path": dry_run_volume_dir if mount_filesystem else None,
                 "offset_bytes": 0 if mount_filesystem else None,
             }
         )
         return None
-
-    source_type = "direct-e01"
-    source_path = image.path
 
     fsstat_result = _run_fsstat(
         db=db,
@@ -515,8 +522,8 @@ def mount_image(
             image_id=image.id,
             computer_id=image.computer_id,
             event="image.source_selected",
-            message="Using direct Sleuth Kit access to NTFS volume E01",
-            details={"source": str(source_path), "source_type": "direct-e01-volume"},
+            message="Using direct Sleuth Kit access to NTFS volume image",
+            details={"source": str(source_path), "source_type": f"{source_type}-volume"},
         )
         return _record_prepared_source(
             db=db,
@@ -524,7 +531,7 @@ def mount_image(
             case_id=case_id,
             image=image,
             source_path=source_path,
-            source_type="direct-e01-volume",
+            source_type=f"{source_type}-volume",
             partition=Partition(
                 id="volume-ntfs",
                 slot="volume",
@@ -551,13 +558,17 @@ def mount_image(
             image_id=image.id,
             computer_id=image.computer_id,
             event="image.source_selected",
-            message="Using direct Sleuth Kit access to E01",
-            details={"source": str(source_path)},
+            message="Using direct Sleuth Kit access to disk image",
+            details={"source": str(source_path), "source_type": source_type},
         )
 
     if mmls_result.returncode != 0:
+        if prepared.original_kind != "ewf":
+            raise PartitionError(
+                f"mmls failed with exit code {mmls_result.returncode} for {prepared.original_kind} source: {source_path}"
+            )
         validate_ewfmount_available()
-        ewf_command = build_ewfmount_command(image.path, ewf_dir, use_sudo=False, allow_other=True)
+        ewf_command = build_ewfmount_command(source_path, ewf_dir, use_sudo=False, allow_other=True)
         runner.run(
             case_id=case_id,
             image_id=image.id,
@@ -569,7 +580,7 @@ def mount_image(
         )
         if not raw_path.exists():
             raise MountError(f"ewfmount completed but raw image was not found at {raw_path}")
-        source_type = "ewfmount"
+        source_type = "ewfmount" if prepared.source_type == "direct-e01" else "zip-ewfmount"
         source_path = raw_path
         mmls_result = _run_mmls(
             db=db,

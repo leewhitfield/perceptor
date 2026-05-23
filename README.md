@@ -22,6 +22,8 @@ Linux worker packages:
 - `sleuthkit` for `mmls`, `fls`, and `icat`
 - `dotnet-runtime-9.0` or equivalent
 - `ewf-tools` for `ewfmount` fallback when Sleuth Kit cannot read E01 directly
+- `qemu-utils` for `qemu-img` conversion of VHD, VHDX, and VMDK evidence into
+  case-local raw images
 - `ntfs-3g` if using optional read-only filesystem mounts
 - `libfsntfs-utils` and `python3-libfsntfs` for optional recovery of compressed NTFS files
 - Eric Zimmerman's `SrumECmd` for SRUM parsing. The configured .NET tool runs
@@ -53,10 +55,21 @@ See `docs/dependencies.md` for the maintained dependency checklist, optional
 tool environment variables, and verification commands.
 
 The default MVP flow does not require a kernel NTFS mount. Image preparation
-first runs `fsstat` to detect volume-captured NTFS E01s at offset `0`, then
-uses `mmls` for full-disk images. If the local Sleuth Kit build cannot read EWF
-images, it falls back to `ewfmount` for the EWF container layer and then uses
-Sleuth Kit against `ewf1`.
+accepts E01/EWF, DD/RAW, VHD, VHDX, VMDK, and ZIP-wrapped evidence. VHD, VHDX,
+and VMDK sources are converted with `qemu-img` into case-local raw images before
+Sleuth Kit processing. ZIP evidence is extracted into case-local image storage
+and the best mountable image candidate is selected. Preparation first runs
+`fsstat` to detect volume-captured NTFS images at offset `0`, then uses `mmls`
+for full-disk images. If the local Sleuth Kit build cannot read EWF images, it
+falls back to `ewfmount` for the EWF container layer and then uses Sleuth Kit
+against `ewf1`.
+
+During `windows-full`, ZIP archives inside the mounted Windows filesystem are
+inventoried without storing member contents in the database. Damaged archives
+are recorded as damaged and processing continues. Nested disk image files such
+as VHD, VHDX, VMDK, E01, DD, RAW, and IMG are listed as `nested_evidence_items`
+for analyst review; they are not parsed by `windows-full` and should be handled
+with a separate nested-evidence workflow.
 
 Before mounting or running a profile, image preparation performs an encryption
 preflight. It checks `fsstat` output for volume images, then checks the selected
@@ -320,6 +333,10 @@ forensic-orchestrator --root /tmp/fo run --case CASE_ID --image IMAGE_ID --profi
 forensic-orchestrator --root /tmp/fo run --case CASE_ID --image IMAGE_ID --profile windows-deep
 forensic-orchestrator --root /tmp/fo run --case CASE_ID --image IMAGE_ID --profile windows-old
 ```
+
+Experimental Volume Shadow Copy work is kept outside normal profile ingestion.
+Use the `vsc` sidecar commands to inventory, mount, and extract one test
+artifact under `cases/<case>/vsc-work/`; see `docs/vsc-sidecar.md`.
 
 `windows-basic` is kept as an alias for `windows-basic-evtx`.
 `windows-srum`, `windows-search`, and `windows-webcache` are useful for testing those larger

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import csv
+import json
 import shutil
 import subprocess
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -79,9 +81,60 @@ RAW_FILETIME_FIELDS = {
 FILETIME_EPOCH = datetime(1601, 1, 1, tzinfo=timezone.utc)
 
 
+@dataclass(frozen=True)
+class SearchDbCandidate:
+    path: Path
+    format: str
+
+
 def parse_windows_search_ese_to_csv(source: Path, output: Path) -> Path:
     output.mkdir(parents=True, exist_ok=True)
-    edb_path = _resolve_windows_edb(source)
+    candidate = _resolve_windows_search_store(source)
+    csv_path = output / "WindowsSearchESEParser.csv"
+    if candidate is None:
+        _write_empty_csv(csv_path)
+        _write_inventory_report(
+            output,
+            [
+                {
+                    "source_path": str(source),
+                    "detected_format": "missing",
+                    "parser_status": "not_found",
+                    "parser_note": f"Windows Search database not found under {source}",
+                }
+            ],
+        )
+        return csv_path
+    if candidate.format == "encrypted_sqlite":
+        _write_empty_csv(csv_path)
+        _write_inventory_report(
+            output,
+            [
+                {
+                    "source_path": str(candidate.path),
+                    "detected_format": "encrypted_sqlite",
+                    "parser_status": "unsupported_encrypted_sqlite",
+                    "parser_note": "Windows 11 Search database uses AesGcm1 SQLite3 format; contents are encrypted and were not parsed.",
+                }
+            ],
+        )
+        return csv_path
+    if candidate.format == "sqlite":
+        _write_empty_csv(csv_path)
+        _write_inventory_report(
+            output,
+            [
+                {
+                    "source_path": str(candidate.path),
+                    "detected_format": "sqlite",
+                    "parser_status": "unsupported_sqlite",
+                    "parser_note": "Windows Search SQLite format detected but no SQLite schema parser is available yet.",
+                }
+            ],
+        )
+        return csv_path
+
+    edb_path = candidate.path
     export_prefix = output / "_ese_export" / "windows_search"
     export_dir = export_prefix.with_suffix(".export")
     if export_dir.exists():
@@ -96,21 +149,66 @@ def parse_windows_search_ese_to_csv(source: Path, output: Path) -> Path:
         check=True,
     )
     property_store = _find_exported_table(export_dir, "SystemIndex_PropertyStore")
-    csv_path = output / "WindowsSearchESEParser.csv"
     _write_property_store_csv(property_store, csv_path)
+    _write_inventory_report(
+        output,
+        [
+            {
+                "source_path": str(edb_path),
+                "detected_format": "ese",
+                "parser_status": "parsed",
+                "parser_note": "Windows Search ESE database parsed with esedbexport.",
+            }
+        ],
+    )
     return csv_path
 
 
-def _resolve_windows_edb(source: Path) -> Path:
+def _resolve_windows_search_store(source: Path) -> SearchDbCandidate | None:
     if source.is_file():
-        return source
+        return SearchDbCandidate(source, _detect_search_store_format(source))
     candidate = source / "Windows.edb"
     if candidate.exists():
-        return candidate
+        return SearchDbCandidate(candidate, _detect_search_store_format(candidate))
     matches = sorted(source.rglob("Windows.edb")) if source.exists() else []
     if matches:
-        return matches[0]
-    raise FileNotFoundError(f"Windows.edb not found under {source}")
+        return SearchDbCandidate(matches[0], _detect_search_store_format(matches[0]))
+    sqlite_candidates = _windows_search_sqlite_candidates(source)
+    if sqlite_candidates:
+        return sqlite_candidates[0]
+    return None
+
+
+def _detect_search_store_format(path: Path) -> str:
+    try:
+        signature = path.read_bytes()[:64]
+    except OSError:
+        return "unreadable"
+    if signature.startswith(b"SQLite format 3\x00"):
+        return "sqlite"
+    if signature.startswith(b"AesGcm1 SQLite3\x00"):
+        return "encrypted_sqlite"
+    if path.name.lower().endswith(".edb"):
+        return "ese"
+    return "unknown"
+
+
+def _windows_search_sqlite_candidates(source: Path) -> list[SearchDbCandidate]:
+    if not source.exists():
+        return []
+    candidates: list[SearchDbCandidate] = []
+    for path in sorted(source.rglob("*")):
+        if not path.is_file() or path.suffix.lower() not in {".db", ".sqlite", ".sqlite3"}:
+            continue
+        detected = _detect_search_store_format(path)
+        if detected in {"sqlite", "encrypted_sqlite"}:
+            candidates.append(SearchDbCandidate(path, detected))
+    def sort_key(candidate: SearchDbCandidate) -> tuple[int, str]:
+        name = candidate.path.name.lower()
+        priority = 0 if name == "windows.db" else 1 if name == "windows-gather.db" else 2
+        return priority, str(candidate.path).lower()
+
+    return sorted(candidates, key=sort_key)
 
 
 def _find_exported_table(export_dir: Path, table_name: str) -> Path:
@@ -147,6 +245,17 @@ def _write_property_store_csv(source: Path, destination: Path) -> None:
             if not normalized.get("System_FileExtension"):
                 normalized["System_FileExtension"] = _extension(normalized.get("System_FileName"))
             writer.writerow(normalized)
+
+
+def _write_empty_csv(destination: Path) -> None:
+    with destination.open("w", encoding="utf-8", newline="") as dst:
+        writer = csv.DictWriter(dst, fieldnames=OUTPUT_FIELDS)
+        writer.writeheader()
+
+
+def _write_inventory_report(output: Path, rows: list[dict[str, str]]) -> None:
+    path = output / "WindowsSearchParserInventory.json"
+    path.write_text(json.dumps(rows, indent=2, sort_keys=True), encoding="utf-8")
 
 
 def _first(row: dict[str, str], *keys: str) -> str:

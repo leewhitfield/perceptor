@@ -4,6 +4,7 @@ import uuid
 from pathlib import Path
 
 from .db import Database
+from .image_metadata import collect_image_metadata
 from .models import Computer, EvidenceImage
 from .paths import WorkspacePaths
 from .safety import require_file
@@ -42,7 +43,10 @@ def add_image(
     computer_id: str | None = None,
 ) -> EvidenceImage:
     db.get_case(case_id)
-    require_file(image_path, "E01 image")
+    require_file(image_path, "evidence file")
     image_id = str(uuid.uuid4())
     paths.ensure_case_tree(case_id)
-    return db.add_image(image_id, case_id, image_path.resolve(), computer_id=computer_id)
+    resolved = image_path.resolve()
+    image = db.add_image(image_id, case_id, resolved, computer_id=computer_id)
+    db.replace_image_metadata(case_id=case_id, image_id=image.id, rows=collect_image_metadata(resolved))
+    return image
