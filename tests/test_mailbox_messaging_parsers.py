@@ -1,7 +1,7 @@
 import csv
 from pathlib import Path
 
-from forensic_orchestrator.analytics_query import query_one
+from forensic_orchestrator.analytics_query import query_one, query_rows
 from forensic_orchestrator.db import Database
 import forensic_orchestrator.tools.ingest as ingest_module
 from forensic_orchestrator.tools.ingest import ingest_csv_output
@@ -91,13 +91,15 @@ def test_mailbox_parser_extracts_eml_and_ingests_messages(tmp_path, monkeypatch)
         FROM mailbox_messages
         """
     )
-    content_ref = db.conn.execute(
+    content_ref = query_one(
+        db,
+        "content_references",
         """
         SELECT source_table, content_role, opensearch_document_id, content_sha256, content_length
         FROM content_references
         WHERE source_table = 'mailbox_messages'
-        """
-    ).fetchone()
+        """,
+    )
 
     assert count == 1
     assert row["subject"] == "Project Update"
@@ -120,7 +122,7 @@ def test_mailbox_parser_extracts_eml_and_ingests_messages(tmp_path, monkeypatch)
     assert content_ref["content_role"] == "message_body"
     assert content_ref["opensearch_document_id"] == documents[0]["id"]
     assert content_ref["content_sha256"]
-    assert content_ref["content_length"] > 0
+    assert int(content_ref["content_length"]) > 0
 
 
 def test_mailbox_parser_extracts_attachment_rows(tmp_path):
@@ -282,13 +284,15 @@ def test_messaging_parser_extracts_leveldb_candidate_strings_and_ingests(tmp_pat
         "messaging_messages",
         "SELECT application, channel_id, sender_id, timestamp_utc, message_text, message_text_length FROM messaging_messages"
     )
-    content_refs = db.conn.execute(
+    content_refs = query_rows(
+        db,
+        "content_references",
         """
         SELECT source_table, content_role, opensearch_document_id
         FROM content_references
         ORDER BY source_table, content_role
-        """
-    ).fetchall()
+        """,
+    )
 
     assert count >= 1
     assert message_count == 1

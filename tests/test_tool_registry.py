@@ -131,6 +131,7 @@ def test_registry_loads_eztools_profile():
     assert registry.get_tool("RegistryArtifactParser").enabled is True
     assert registry.get_tool("UserDictionaryParser").enabled is True
     assert registry.get_tool("ZoneIdentifierParser").enabled is True
+    assert registry.get_tool("ZoneIdentifierParser").artifacts[0].use_tsk is True
     assert registry.get_tool("ThumbcacheParser").enabled is True
     assert registry.get_tool("RdpCacheParser").enabled is True
     assert registry.get_tool("RdpVisionReview").enabled is True
@@ -180,7 +181,7 @@ def test_windows_full_includes_complete_current_artifact_set():
 
     expected = {
         "MFTECmd",
-        "MFTECmdUSN",
+        "USNRewind",
         "MFTECmdLogFile",
         "NTFSParseLogFile",
         "MFTECmdI30",
@@ -563,6 +564,7 @@ def test_internal_firefox_parser_extracts_profile_sqlite_files():
     assert tool.type == "internal_firefox"
     assert tool.artifacts[0].name == "firefox_profiles"
     assert tool.artifacts[0].source == "Users"
+    assert tool.artifacts[0].use_tsk is True
     assert "places.sqlite" in tool.artifacts[0].patterns
     assert "cookies.sqlite" in tool.artifacts[0].patterns
     assert "formhistory.sqlite" in tool.artifacts[0].patterns
@@ -727,6 +729,33 @@ def test_mftecmd_usn_is_configured_with_mft_context():
         "/cases/1/outputs/MFTECmdUSN",
         "--csvf",
         "USNJrnl.csv",
+    ]
+
+
+def test_usn_rewind_is_configured_with_mft_context():
+    registry = ToolRegistry.from_files([default_plugin_path()])
+    tool = registry.get_tool("USNRewind")
+
+    assert tool.executable.endswith("usnjrnl-forensic")
+    assert [artifact.name for artifact in tool.artifacts] == ["MFT", "UsnJrnlJ"]
+    assert tool.artifacts[1].source == "$Extend/$UsnJrnl:$J"
+    assert build_tool_command(
+        tool,
+        mount=Path("/unused"),
+        output=Path("/cases/1/outputs/USNRewind"),
+        artifacts={
+            "MFT": Path("/cases/1/artifacts/$MFT"),
+            "UsnJrnlJ": Path("/cases/1/artifacts/$Extend/$J"),
+        },
+    ) == [
+        tool.executable,
+        "-j",
+        "/cases/1/artifacts/$Extend/$J",
+        "-m",
+        "/cases/1/artifacts/$MFT",
+        "--csv",
+        "/cases/1/outputs/USNRewind/usn_rewind.csv",
+        "--stats",
     ]
 
 

@@ -22,7 +22,16 @@ def test_opensearch_documents_only_index_body_or_content_fields():
     }
 
     mail = mailbox_message_document(
-        {**base, "subject": "Metadata Subject", "source_format": "eml", "parser_status": "parsed"},
+        {
+            **base,
+            "subject": "Metadata Subject",
+            "source_format": "eml",
+            "parser_status": "parsed",
+            "message_path": "/mail/message-1.eml",
+            "container_path": "/mail/export.mbox",
+            "message_date_utc": "2020-01-01T00:00:00+00:00",
+            "user_profile": "Jane",
+        },
         body_text="Actual email body",
         body_html="",
     )
@@ -41,6 +50,12 @@ def test_opensearch_documents_only_index_body_or_content_fields():
     )
 
     assert mail["content"] == "Actual email body"
+    assert mail["source_path"] == "/mail/message-1.eml"
+    assert mail["container_path"] == "/mail/export.mbox"
+    assert mail["title"] == "Metadata Subject"
+    assert mail["timestamp"] == "2020-01-01T00:00:00+00:00"
+    assert mail["user_profile"] == "Jane"
+    assert mail["metadata"]["subject"] == "Metadata Subject"
     assert attachment["content"] == "Actual attachment text"
     assert record["content"] == "Actual message fragment"
     assert message["content"] == "Actual chat message"

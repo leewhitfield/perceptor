@@ -176,6 +176,43 @@ def test_package_artifacts_parser_extracts_wsl_outlook_and_recent_file_cache(tmp
     assert by_type["recent_file_cache_entry"][0]["artifact_value"] == "C:\\Users\\Jane\\Downloads\\tool.exe"
 
 
+def test_package_artifacts_parser_extracts_teams_filesystem_diagnostic_rows(tmp_path):
+    log_path = (
+        tmp_path
+        / "Users"
+        / "Jane"
+        / "AppData"
+        / "Local"
+        / "Packages"
+        / "MSTeams_8wekyb3d8bbwe"
+        / "LocalCache"
+        / "Microsoft"
+        / "MSTeams"
+        / "EBWebView"
+        / "WV2Profile_tfl"
+        / "File System"
+        / "000"
+        / "t"
+        / "Paths"
+        / "000003.log"
+    )
+    log_path.parent.mkdir(parents=True)
+    log_path.write_text(
+        "CHILD_OF:6:1762967535995 "
+        "Teams_diagnostics-event-logs-main_react-web-client_9188040d-6c67-4c5b-b112-36a304b66dad_00000000-0000-0000-dd1b-2dba18cab35a@",
+        encoding="utf-8",
+    )
+
+    outputs = parse_package_artifacts_to_csv(tmp_path, tmp_path / "out")
+
+    rows = list(csv.DictReader(outputs[0].open()))
+    teams_rows = [row for row in rows if row["record_type"] == "teams_filesystem_diagnostic_log"]
+    assert len(teams_rows) == 1
+    assert teams_rows[0]["event_time_utc"] == "2025-11-12T17:12:15.995000Z"
+    assert teams_rows[0]["application_package"] == "MSTeams"
+    assert teams_rows[0]["artifact_value"].startswith("Teams_diagnostics-event-logs-main_react-web-client")
+
+
 def test_package_cache_rows_feed_timeline_events(tmp_path):
     row = normalized_package_cache_entry_row(
         case_id="case-1",

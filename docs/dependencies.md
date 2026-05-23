@@ -18,6 +18,11 @@ or, for editable development:
 uv pip install -e ".[dev]"
 ```
 
+Notable parser libraries include `dissect.esedb`, which is used as the SRUM
+ESE fallback when `esedbexport` cannot read a dirty or otherwise problematic
+database, and `pypdf`, which is used as the PDF text fallback when
+`pdftotext` is unavailable.
+
 ## Required System Tools
 
 These should be installed on Linux workers that process Windows E01 evidence:
@@ -30,6 +35,10 @@ These should be installed on Linux workers that process Windows E01 evidence:
 - `libesedb-utils`: `esedbexport` for internal WebCache parsing
 - `exiftool`: embedded/internal document, media, and executable metadata
 - `tesseract-ocr`: OCR for RDP contact sheets and other image OCR hooks
+- `usnjrnl-forensic`: USN journal replay/path reconstruction. Install with
+  `cargo install usnjrnl-forensic --root ~/.cargo`; set
+  `USNJRNL_FORENSIC_BIN=/path/to/usnjrnl-forensic` when it is not installed
+  under `~/.cargo/bin` or on `PATH`.
 
 Ubuntu/Debian example:
 
@@ -49,6 +58,9 @@ These improve coverage but are not required for every case:
   `cases/<case>/vsc-work/` and are not ingested into the main SQLite/DuckDB
   stores yet.
 - `sidr`: Windows Search index parsing. Set `SIDR_BIN=/path/to/sidr` when not on `PATH`.
+- `poppler-utils`: `pdftotext` for faster PDF text extraction into
+  OpenSearch-backed user-file content rows. If unavailable, the Python `pypdf`
+  fallback is used.
 - `OneDriveExplorer.py`: OneDrive `.dat` parsing. Set `ONEDRIVE_EXPLORER=/path/to/OneDriveExplorer.py`.
 - `bmc-tools.py`: RDP bitmap cache fragment extraction. The parser uses
   `BMC_TOOLS=/path/to/bmc-tools.py` when set, otherwise it auto-discovers the
@@ -88,7 +100,9 @@ command -v ntfs-3g
 command -v dotnet
 command -v esedbexport
 command -v exiftool
+command -v pdftotext || echo "pdftotext not installed; PDF parser will use pypdf fallback"
 command -v tesseract
+command -v usnjrnl-forensic || test -x "$HOME/.cargo/bin/usnjrnl-forensic"
 command -v vshadowinfo vshadowmount || echo "libvshadow tools not installed; VSC sidecar commands unavailable"
 test -n "${BMC_TOOLS:-}" && test -f "$BMC_TOOLS"
 test -n "${OPENAI_API_KEY:-}" || echo "OPENAI_API_KEY not set; RDP vision review will use Tesseract fallback"

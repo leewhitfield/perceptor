@@ -56,6 +56,12 @@ ANALYTICS_TABLE_COLUMNS: dict[str, list[str]] = {
         "multipart_part_count", "multipart_is_first_part",
         "multipart_related_parts", "created_at",
     ],
+    "content_references": [
+        "id", "case_id", "computer_id", "image_id", "tool_output_id",
+        "source_tool", "source_table", "source_row_id", "content_role",
+        "opensearch_document_id", "content_sha256", "content_length",
+        "source_path", "created_at",
+    ],
     "nested_evidence_items": [
         "id", "case_id", "computer_id", "image_id", "source_table", "source_id",
         "source_file", "original_path", "parent_path", "file_name", "extension",

@@ -83,6 +83,13 @@ def _resolve_executable(executable: str | None) -> str | None:
         for candidate in (Path.home() / "tools" / "sidr" / "sidr", Path.home() / "tools" / "sidr" / "sidr.exe"):
             if candidate.exists():
                 return str(candidate)
+    if executable == "usnjrnl-forensic":
+        configured = os.environ.get("USNJRNL_FORENSIC_BIN")
+        if configured:
+            return configured
+        candidate = Path.home() / ".cargo" / "bin" / "usnjrnl-forensic"
+        if candidate.exists():
+            return str(candidate)
     eztools_root = os.environ.get("EZTOOLS_ROOT")
     default_prefix = "/opt/eztools/"
     if eztools_root and executable.startswith(default_prefix):

@@ -1,6 +1,8 @@
 import csv
+import struct
+from datetime import datetime, timezone
 
-from forensic_orchestrator.tools.srum import parse_srum_artifacts_to_csv
+from forensic_orchestrator.tools.srum import _decode_channel_hints, _filetime_or_text, _srum_time, parse_srum_artifacts_to_csv
 
 
 def test_internal_srum_parser_exports_all_provider_rows(monkeypatch, tmp_path):
@@ -61,3 +63,21 @@ def test_internal_srum_parser_exports_all_provider_rows(monkeypatch, tmp_path):
     assert vpn_row["vpn_profile_name"] == "Stark Research Labs"
     assert vpn_row["vpn_server"] == "vpn.stark-research-labs.com:8443"
     assert vpn_row["vpn_protocol"] == "SSTP"
+
+
+def test_srum_time_decodes_dissect_ole_datetime_integer():
+    ole_days = (datetime(2025, 11, 17, 15, 2, tzinfo=timezone.utc) - datetime(1899, 12, 30, tzinfo=timezone.utc)).total_seconds() / 86400
+    raw = int.from_bytes(struct.pack("<d", ole_days), "little")
+
+    assert _srum_time(raw) == "2025-11-17T15:02:00Z"
+
+
+def test_srum_connect_start_time_decodes_filetime_integer():
+    assert _filetime_or_text("134078588164630307") == "2025-11-17T13:13:36.463030Z"
+
+
+def test_decode_channel_hints_supports_plain_ssid_payload():
+    payload = b"@Hyatt_WiFi"
+    data = len(payload).to_bytes(4, "little", signed=True) + payload
+
+    assert _decode_channel_hints(data) == "@Hyatt_WiFi"

@@ -51,6 +51,34 @@ tools:
     outputs:
       - csv
 
+  USNRewind:
+    enabled: true
+    type: binary
+    executable: usnjrnl-forensic
+    artifacts:
+      - name: MFT
+        source: "$MFT"
+        inode: "0"
+        destination: "$MFT"
+        process_in_place: true
+      - name: UsnJrnlJ
+        source: "$Extend/$UsnJrnl:$J"
+        destination: "$Extend/$J"
+    command:
+      - "{executable}"
+      - "-j"
+      - "{artifact:UsnJrnlJ}"
+      - "-m"
+      - "{artifact:MFT}"
+      - "--csv"
+      - "{output}/usn_rewind.csv"
+      - "--stats"
+    required_paths:
+      - "{artifact:UsnJrnlJ}"
+      - "{artifact:MFT}"
+    outputs:
+      - csv
+
   MFTECmdLogFile:
     enabled: true
     type: dotnet
@@ -620,6 +648,42 @@ tools:
     outputs:
       - csv
 
+  UserFileContentParser:
+    enabled: true
+    type: internal_file_content
+    artifacts:
+      - name: content_files
+        source: ""
+        destination: "UserFileContent"
+        recursive: true
+        patterns:
+          - "*.pdf"
+          - "*.docx"
+          - "*.docm"
+          - "*.pptx"
+          - "*.pptm"
+          - "*.ppsx"
+          - "*.xlsx"
+          - "*.xlsm"
+          - "*.txt"
+          - "*.csv"
+          - "*.tsv"
+          - "*.log"
+          - "*.json"
+          - "*.xml"
+          - "*.html"
+          - "*.htm"
+          - "*.md"
+          - "*.rtf"
+    command:
+      - internal-file-content
+      - "{artifact:content_files}"
+      - "{output}"
+    required_paths:
+      - "{artifact:content_files}"
+    outputs:
+      - csv
+
   EvtxECmd:
     enabled: true
     type: dotnet
@@ -1056,6 +1120,7 @@ tools:
         source: "Users"
         destination: "browser/Firefox"
         recursive: true
+        use_tsk: true
         patterns:
           - "places.sqlite"
           - "cookies.sqlite"
@@ -1210,7 +1275,7 @@ tools:
         source: "Users"
         destination: "ZoneIdentifierADS"
         recursive: true
-        process_in_place: true
+        use_tsk: true
         optional: true
         patterns:
           - "*:Zone.Identifier"
@@ -1531,6 +1596,8 @@ tools:
         optional: true
         patterns:
           - "ActivitiesCache.db"
+          - "ActivitiesCache.db-wal"
+          - "ActivitiesCache.db-shm"
     command:
       - internal-windows-activities-parser
       - "{artifact:windows_activities}"
@@ -2093,7 +2160,7 @@ profiles:
         - WebCacheParser
       deleted_items_file_existence:
         - MFTECmd
-        - MFTECmdUSN
+        - USNRewind
         - MFTECmdLogFile
         - MFTECmdI30
         - NTFSParseLogFile
@@ -2147,7 +2214,7 @@ profiles:
         - WindowsMailParser
     tools:
       - MFTECmd
-      - MFTECmdUSN
+      - USNRewind
       - MFTECmdLogFile
       - NTFSParseLogFile
       - MFTECmdI30
@@ -2500,6 +2567,11 @@ profiles:
     description: Extract embedded metadata from common document, media, executable, and archive file types
     tools:
       - FileMetadataExtractor
+
+  user-file-content:
+    description: Extract readable user-file content into OpenSearch while storing only references and hashes in DuckDB
+    tools:
+      - UserFileContentParser
 
   office-backstage:
     description: Extract Office Backstage/recent-document cache strings and metadata

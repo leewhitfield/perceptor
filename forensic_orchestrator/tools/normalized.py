@@ -116,6 +116,8 @@ def normalized_usn_journal_entry_row(
     row_number: int,
     row: dict[str, Any],
 ) -> dict[str, Any]:
+    file_name = _first_text(row, "FileName", "Name")
+    parent_path = _first_text(row, "FullPath", "FilePath", "Path", "ParentPath")
     return {
         "id": str(uuid.uuid4()),
         "case_id": case_id,
@@ -128,7 +130,7 @@ def normalized_usn_journal_entry_row(
         "source_file": _first_text(row, "SourceFile", "Source File"),
         "update_sequence_number": _first_text(row, "UpdateSequenceNumber", "USN", "Usn"),
         "update_timestamp": _first_text(row, "UpdateTimestamp", "Timestamp", "TimeStamp", "TimeCreated"),
-        "file_name": _first_text(row, "FileName", "Name"),
+        "file_name": file_name,
         "extension": _first_text(row, "Extension"),
         "file_reference_number": _first_text(row, "FileReferenceNumber", "EntryNumber", "FileReference"),
         "file_reference_sequence_number": _first_text(
@@ -149,7 +151,7 @@ def normalized_usn_journal_entry_row(
             "ParentSequenceNumber",
             "ParentFileSequenceNumber",
         ),
-        "full_path": _first_text(row, "FullPath", "FilePath", "Path", "ParentPath"),
+        "full_path": _join_parent_and_name(parent_path, file_name),
         "reason": _first_text(row, "Reason", "UpdateReasons", "Reasons"),
         "reason_flags": _first_text(row, "ReasonFlags", "UpdateReasonFlags"),
         "file_attributes": _first_text(row, "FileAttributes"),
@@ -161,6 +163,21 @@ def normalized_usn_journal_entry_row(
         "record_length": _first_text(row, "RecordLength"),
         "offset": _first_text(row, "Offset"),
     }
+
+
+def _join_parent_and_name(parent_path: str | None, file_name: str | None) -> str | None:
+    if not parent_path:
+        return file_name
+    if not file_name:
+        return parent_path
+    clean_parent = parent_path.rstrip("\\/")
+    clean_name = file_name.strip("\\/")
+    lower_parent = clean_parent.lower().replace("/", "\\")
+    lower_name = clean_name.lower().replace("/", "\\")
+    if lower_parent.endswith("\\" + lower_name) or lower_parent == lower_name:
+        return parent_path
+    separator = "\\" if "\\" in clean_parent or clean_parent.startswith(".") else "/"
+    return f"{clean_parent}{separator}{clean_name}"
 
 
 def normalized_zone_identifier_ads_row(

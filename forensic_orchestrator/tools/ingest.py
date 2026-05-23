@@ -5,13 +5,14 @@ import hashlib
 import logging
 import os
 import sys
+import uuid
 from pathlib import Path
 
 from forensic_orchestrator.artifact_correlations import rebuild_artifact_correlations
 from forensic_orchestrator.common_dialog_resolution import rebuild_common_dialog_application_resolutions
 from forensic_orchestrator.computer_inventory import rebuild_computer_inventory
 from forensic_orchestrator.correlation import rebuild_file_correlations
-from forensic_orchestrator.db import Database
+from forensic_orchestrator.db import Database, utc_now
 from forensic_orchestrator.search.opensearch import (
     IngestContentIndexer,
     OpenSearchConfig,
@@ -421,6 +422,8 @@ def ingest_csv_output(
         usb_evidence_seen = usb_evidence_seen or bool(usb_rows)
         insert_normalized("mft_entries", mft_rows, db.insert_mft_entries)
         insert_normalized("usn_journal_entries", usn_rows, db.insert_usn_journal_entries)
+        if mft_rows and usn_rows:
+            db.enrich_usn_paths_from_mft(case_id=case_id, image_id=image_id)
         insert_normalized("ntfs_logfile_entries", ntfs_logfile_rows, db.insert_ntfs_logfile_entries)
         insert_normalized("ntfs_index_entries", ntfs_index_entry_rows, db.insert_ntfs_index_entries)
         insert_normalized("ntfs_index_bitmaps", ntfs_index_bitmap_rows, db.insert_ntfs_index_bitmaps)
@@ -763,7 +766,7 @@ def ingest_csv_output(
                             )
                         )
                         correlation_inputs_seen = True
-                    if tool_name == "MFTECmdUSN":
+                    if tool_name in {"MFTECmdUSN", "USNRewind"}:
                         usn_rows.append(
                             normalized_usn_journal_entry_row(
                                 case_id=case_id,
@@ -1028,6 +1031,38 @@ def ingest_csv_output(
                                 row=dict(row),
                             )
                         )
+                    if tool_name == "UserFileContentParser":
+                        content = str(row.get("content_text") or "").strip()
+                        if content:
+                            content_id = str(uuid.uuid4())
+                            item_path = str(row.get("item_path") or row.get("source_file") or "")
+                            windows_search_content_rows.append(
+                                {
+                                    "id": content_id,
+                                    "case_id": case_id,
+                                    "computer_id": computer_id,
+                                    "image_id": image_id,
+                                    "tool_output_id": tool_output_id,
+                                    "tool_name": tool_name,
+                                    "source_csv": path,
+                                    "source_table": "user_file_content",
+                                    "source_record_id": content_id,
+                                    "row_number": row_number,
+                                    "work_id": "",
+                                    "gather_time": "",
+                                    "item_path": item_path,
+                                    "item_name": str(row.get("item_name") or Path(item_path).name),
+                                    "item_type": str(row.get("item_type") or ""),
+                                    "content_field": str(row.get("content_field") or "extracted_text"),
+                                    "content_text": "",
+                                    "_opensearch_content_text": content,
+                                    "content_sha256": hashlib.sha256(content.encode("utf-8", errors="replace")).hexdigest(),
+                                    "content_length": len(content),
+                                    "opensearch_document_id": hashlib.sha256(f"{case_id}|content|{hashlib.sha256(content.encode('utf-8', errors='replace')).hexdigest()}".encode("utf-8", errors="replace")).hexdigest(),
+                                    "timestamp": str(row.get("modified_utc") or ""),
+                                    "created_at": utc_now(),
+                                }
+                            )
                     if tool_name == "ArchiveInventoryParser":
                         archive_entry_rows.append(
                             normalized_archive_entry_row(

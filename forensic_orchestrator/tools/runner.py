@@ -27,6 +27,7 @@ from .etl import parse_etl_artifacts_to_csv
 from .activities import parse_windows_activities_to_csv
 from .firefox import parse_firefox_artifacts_to_csv
 from .file_metadata import parse_file_metadata_to_csv
+from .file_content import parse_file_content_to_csv
 from .mailbox import parse_mailbox_artifacts_to_csv
 from .messaging import parse_messaging_artifacts_to_csv
 from .ntfs_index import parse_ntfs_index_to_csv
@@ -181,6 +182,7 @@ def validate_tool(
         "internal_registry",
         "internal_registry_artifacts",
         "internal_file_metadata",
+        "internal_file_content",
         "internal_archive_inventory",
         "internal_mailbox",
         "internal_windows_mail",
@@ -1244,6 +1246,34 @@ def run_internal_file_metadata_tool(
     )
 
 
+def run_internal_file_content_tool(
+    *,
+    db: Database,
+    case_id: str,
+    image_id: str,
+    computer_id: str | None,
+    tool: ToolDefinition,
+    command: list[str],
+    output: Path,
+    artifacts: dict[str, Path],
+    dry_run: bool,
+) -> object:
+    return run_internal_csv_tool(
+        db=db,
+        case_id=case_id,
+        image_id=image_id,
+        computer_id=computer_id,
+        tool=tool,
+        command=command,
+        output=output,
+        artifacts=artifacts,
+        dry_run=dry_run,
+        artifact_name="content_files",
+        parser_description="internal user file content parser",
+        parse_to_csv=parse_file_content_to_csv,
+    )
+
+
 def run_internal_archive_inventory_tool(
     *,
     db: Database,
@@ -2121,6 +2151,18 @@ def run_tool(
         )
     elif tool.type == "internal_file_metadata":
         result = run_internal_file_metadata_tool(
+            db=db,
+            case_id=case_id,
+            image_id=image_id,
+            computer_id=computer_id,
+            tool=tool,
+            command=command,
+            output=output,
+            artifacts=artifact_paths,
+            dry_run=dry_run,
+        )
+    elif tool.type == "internal_file_content":
+        result = run_internal_file_content_tool(
             db=db,
             case_id=case_id,
             image_id=image_id,

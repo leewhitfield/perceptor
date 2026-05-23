@@ -38,6 +38,10 @@ def test_firefox_parser_writes_history_and_cookie_csvs(tmp_path):
     with (tmp_path / "out" / "FirefoxArtifacts.csv").open(newline="", encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
     assert any(row["artifact_type"] == "bookmark" and row["url"] == "https://example.com/" for row in rows)
+    bookmark_row = next(row for row in rows if row["artifact_type"] == "bookmark" and row["url"] == "https://example.com/")
+    bookmark_details = json.loads(bookmark_row["details_json"])
+    assert bookmark_details["bookmark_guid"] == "bookmark-guid-1"
+    assert bookmark_details["place_guid"] == "place-guid-1"
     assert any(row["artifact_type"] == "firefox_sync_device_summary" for row in rows)
     with (tmp_path / "out" / "FirefoxHistory.csv").open(newline="", encoding="utf-8") as handle:
         history_rows = list(csv.DictReader(handle))
@@ -90,14 +94,15 @@ def create_places(path):
         """
         CREATE TABLE moz_places (
           id INTEGER PRIMARY KEY, url TEXT, title TEXT, visit_count INTEGER,
-          typed INTEGER, hidden INTEGER, frecency INTEGER, syncStatus INTEGER
+          typed INTEGER, hidden INTEGER, frecency INTEGER, syncStatus INTEGER,
+          guid TEXT
         );
         CREATE TABLE moz_historyvisits (
           id INTEGER PRIMARY KEY, place_id INTEGER, visit_date INTEGER, visit_type INTEGER
         );
         CREATE TABLE moz_bookmarks (
           id INTEGER PRIMARY KEY, fk INTEGER, title TEXT, type INTEGER,
-          dateAdded INTEGER, lastModified INTEGER
+          dateAdded INTEGER, lastModified INTEGER, guid TEXT
         );
         CREATE TABLE moz_anno_attributes (
           id INTEGER PRIMARY KEY, name TEXT
@@ -106,10 +111,10 @@ def create_places(path):
           id INTEGER PRIMARY KEY, place_id INTEGER, anno_attribute_id INTEGER,
           content TEXT, dateAdded INTEGER, lastModified INTEGER
         );
-        INSERT INTO moz_places VALUES (1, 'https://example.com/', 'Example', 3, 1, 0, 100, 2);
-        INSERT INTO moz_places VALUES (2, 'https://example.com/download.pdf', 'example.pdf', 1, 0, 0, 10, 1);
+        INSERT INTO moz_places VALUES (1, 'https://example.com/', 'Example', 3, 1, 0, 100, 2, 'place-guid-1');
+        INSERT INTO moz_places VALUES (2, 'https://example.com/download.pdf', 'example.pdf', 1, 0, 0, 10, 1, 'place-guid-2');
         INSERT INTO moz_historyvisits VALUES (1, 1, 1778587200000000, 1);
-        INSERT INTO moz_bookmarks VALUES (1, 1, 'Example Bookmark', 1, 1778587200000000, 1778587200000000);
+        INSERT INTO moz_bookmarks VALUES (1, 1, 'Example Bookmark', 1, 1778587200000000, 1778587200000000, 'bookmark-guid-1');
         INSERT INTO moz_anno_attributes VALUES (1, 'downloads/destinationFileURI');
         INSERT INTO moz_anno_attributes VALUES (2, 'downloads/metaData');
         INSERT INTO moz_annos VALUES (

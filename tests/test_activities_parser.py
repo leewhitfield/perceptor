@@ -1,4 +1,5 @@
 import csv
+import json
 import sqlite3
 from pathlib import Path
 
@@ -50,6 +51,74 @@ def test_windows_activities_parser_extracts_activity_rows(tmp_path):
     assert rows[0]["content_uri"] == "file:///C:/Users/Devon/Documents/report.docx"
     assert rows[0]["start_time_utc"] == "2024-01-02T03:04:05Z"
     assert "report.docx" in rows[0]["payload_json"]
+
+
+def test_windows_activities_parser_reads_wal_rows_and_clipboard_payload(tmp_path):
+    db_path = (
+        tmp_path
+        / "Users"
+        / "Maya"
+        / "AppData"
+        / "Local"
+        / "ConnectedDevicesPlatform"
+        / "L.Maya"
+        / "ActivitiesCache.db"
+    )
+    db_path.parent.mkdir(parents=True)
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(
+        """
+        CREATE TABLE ActivityOperation (
+          Id TEXT, AppId TEXT, ActivityType INTEGER, LastModifiedTime INTEGER,
+          ClipboardPayload TEXT
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO ActivityOperation VALUES (?, ?, ?, ?, ?)",
+        (
+            "clipboard-1",
+            "Microsoft.Windows.Clipboard",
+            5,
+            1704164645,
+            json.dumps([{"content": "U2FsbHkgaXMgaW4gSXRhbHk="}]),
+        ),
+    )
+    conn.commit()
+
+    [csv_path] = parse_windows_activities_to_csv(tmp_path / "Users", tmp_path / "out")
+    conn.close()
+
+    rows = list(csv.DictReader(csv_path.open(newline="", encoding="utf-8")))
+    row = next(row for row in rows if row["activity_id"] == "clipboard-1")
+    assert row["source_table"] == "ActivityOperation"
+    assert row["display_text"] == "Sally is in Italy"
+
+
+def test_windows_activities_parser_recovers_deleted_clipboard_payloads(tmp_path):
+    db_path = (
+        tmp_path
+        / "Users"
+        / "Maya"
+        / "AppData"
+        / "Local"
+        / "ConnectedDevicesPlatform"
+        / "L.Maya"
+        / "ActivitiesCache.db"
+    )
+    db_path.parent.mkdir(parents=True)
+    db_path.write_bytes(
+        b"SQLite format 3\x00"
+        b'[{"content":"ZG9lcyBJdGFseSBleHRyYWRpdGUgVS5TLiBjaXRpemVucyBiYWNrIHRvIHRoZSBVLlMu","formatName":"Text"}]'
+    )
+
+    [csv_path] = parse_windows_activities_to_csv(tmp_path / "Users", tmp_path / "out")
+
+    rows = list(csv.DictReader(csv_path.open(newline="", encoding="utf-8")))
+    row = next(row for row in rows if row["source_table"] == "RecoveredClipboardPayload")
+    assert row["app_display_name"] == "Windows Clipboard"
+    assert row["display_text"] == "does Italy extradite U.S. citizens back to the U.S."
 
 
 def test_windows_activity_rows_feed_timeline_events(tmp_path):

@@ -208,6 +208,52 @@ def test_usn_journal_rows_are_ingested(tmp_path):
     assert counts[0]["row_count"] == 1
 
 
+def test_usn_paths_are_enriched_from_mft_parent_rows(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    mft_csv = tmp_path / "mft.csv"
+    mft_csv.write_text(
+        "EntryNumber,SequenceNumber,ParentEntryNumber,ParentSequenceNumber,ParentPath,FileName,IsDirectory\n"
+        "100,2,50,1,.\\\\Users\\\\Maya,Desktop,True\n",
+        encoding="utf-8",
+    )
+    usn_csv = tmp_path / "USNJrnl.csv"
+    usn_csv.write_text(
+        "SourceFile,UpdateSequenceNumber,UpdateTimestamp,FileName,Extension,"
+        "FileReferenceNumber,FileReferenceSequenceNumber,ParentFileReferenceNumber,"
+        "ParentFileReferenceSequenceNumber,ParentPath,Reason,FileAttributes,Offset\n"
+        "/artifacts/$Extend/$J,12345,2026-05-12 13:14:15,note.txt,txt,"
+        "900,3,100,2,.\\\\PathUnknown\\\\Directory with ID 0x00000064-00000002,FILE_CREATE,Archive,4096\n",
+        encoding="utf-8",
+    )
+
+    ingest_csv_output(
+        db=db,
+        case_id=case.id,
+        computer_id="computer-1",
+        image_id="image-1",
+        tool_output_id="output-mft",
+        tool_name="MFTECmd",
+        path=mft_csv,
+    )
+    ingest_csv_output(
+        db=db,
+        case_id=case.id,
+        computer_id="computer-1",
+        image_id="image-1",
+        tool_output_id="output-usn",
+        tool_name="MFTECmdUSN",
+        path=usn_csv,
+    )
+    updated = db.enrich_usn_paths_from_mft(case_id=case.id, image_id="image-1")
+
+    row = db.conn.execute("SELECT full_path FROM usn_journal_entries").fetchone()
+    assert updated == 1
+    assert row["full_path"] == ".\\Users\\Maya\\Desktop\\note.txt"
+
+
 def test_ntfs_logfile_rows_are_ingested(tmp_path):
     db = Database(tmp_path / "orchestrator.sqlite3")
     case = db.create_case("case-1", tmp_path / "cases" / "case-1")

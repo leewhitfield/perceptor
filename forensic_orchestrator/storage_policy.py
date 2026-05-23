@@ -60,7 +60,7 @@ OPENSEARCH_POLICY = StoragePolicyItem(
         "AI assistant conversation text",
         "future OCR text",
     ),
-    rule="Index large searchable text in OpenSearch during ingest; keep SQLite references to source table/row, hashes, lengths, and metadata.",
+    rule="Index large searchable text in OpenSearch during ingest; keep DuckDB/SQLite references to source table/row, hashes, lengths, and metadata.",
 )
 
 SQLITE_DETAILS_POLICY = StoragePolicyItem(

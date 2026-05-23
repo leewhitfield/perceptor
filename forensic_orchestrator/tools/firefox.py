@@ -244,9 +244,15 @@ def _download_rows(path: Path, source_root: Path) -> list[dict[str, object]]:
 
 
 def _bookmark_rows(path: Path, source_root: Path) -> list[dict[str, object]]:
-    query = """
+    bookmark_columns = _columns(path, "moz_bookmarks")
+    place_columns = _columns(path, "moz_places")
+    bookmark_guid_expr = "moz_bookmarks.guid" if "guid" in bookmark_columns else "NULL"
+    place_guid_expr = "moz_places.guid" if "guid" in place_columns else "NULL"
+    query = f"""
         SELECT moz_bookmarks.title, moz_places.url, moz_bookmarks.dateAdded,
-               moz_bookmarks.lastModified, moz_bookmarks.type
+               moz_bookmarks.lastModified, moz_bookmarks.type,
+               {bookmark_guid_expr} AS bookmark_guid,
+               {place_guid_expr} AS place_guid
         FROM moz_bookmarks
         LEFT JOIN moz_places ON moz_places.id = moz_bookmarks.fk
         WHERE moz_bookmarks.type IN (1, 2)
@@ -257,7 +263,12 @@ def _bookmark_rows(path: Path, source_root: Path) -> list[dict[str, object]]:
             path, source_root, "bookmark" if row["url"] else "bookmark_folder",
             name=row["title"] or "", title=row["title"] or "", url=row["url"] or "",
             timestamp=_firefox_time(row["dateAdded"]),
-            details={"last_modified_utc": _firefox_time(row["lastModified"]), "type": row["type"]},
+            details={
+                "last_modified_utc": _firefox_time(row["lastModified"]),
+                "type": row["type"],
+                "bookmark_guid": row["bookmark_guid"],
+                "place_guid": row["place_guid"],
+            },
         )
         for row in _query(path, query)
     ]

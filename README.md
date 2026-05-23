@@ -1112,11 +1112,11 @@ application attribution fields: `user_name`, `application`,
 
 ## OpenSearch Content Index
 
-SQLite remains the forensic system of record for normalized metadata.
+DuckDB is the forensic system of record for normalized artifact metadata; SQLite keeps case orchestration state.
 OpenSearch is the required destination for large derived text: email bodies,
 email attachment text, Windows Search indexed content, chat/message bodies,
 note bodies, AI assistant conversation text, and future OCR text. These
-documents are indexed during ingest; SQLite stores only source references,
+documents are indexed during ingest; the databases store only source references,
 hashes, lengths, provenance, and OpenSearch document IDs.
 
 Start a local OpenSearch instance before running parsers that produce large

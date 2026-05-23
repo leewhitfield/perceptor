@@ -876,8 +876,8 @@ def usn_suspicious_report(db: Database, case_id: str, *, limit: int = 100) -> di
         FROM usn_journal_entries
         WHERE usn_journal_entries.case_id = ?
           AND (
-            reason LIKE '%Delete%'
-            OR reason LIKE '%Rename%'
+            LOWER(COALESCE(reason, '')) LIKE '%delete%'
+            OR LOWER(COALESCE(reason, '')) LIKE '%rename%'
             OR LOWER(COALESCE(extension, '')) IN (
               '.exe', 'exe', '.dll', 'dll', '.ps1', 'ps1', '.bat', 'bat',
               '.cmd', 'cmd', '.vbs', 'vbs', '.js', 'js', '.lnk', 'lnk',
@@ -929,8 +929,8 @@ def usn_user_files_report(
           AND (
             usn_journal_entries.full_path LIKE '.\\Users\\%'
             OR usn_journal_entries.full_path LIKE 'Users\\%'
-            OR usn_journal_entries.reason LIKE '%Rename%'
-            OR usn_journal_entries.reason LIKE '%Delete%'
+            OR LOWER(COALESCE(usn_journal_entries.reason, '')) LIKE '%rename%'
+            OR LOWER(COALESCE(usn_journal_entries.reason, '')) LIKE '%delete%'
           )
         ORDER BY usn_journal_entries.update_timestamp DESC, usn_journal_entries.update_sequence_number DESC
         LIMIT ?
@@ -980,15 +980,15 @@ def usn_rename_pairs_report(db: Database, case_id: str, *, limit: int = 100) -> 
         SELECT *
         FROM usn_journal_entries
         WHERE case_id = ?
-          AND (reason LIKE '%RenameOldName%' OR reason LIKE '%RenameNewName%')
+          AND (LOWER(COALESCE(reason, '')) LIKE '%renameoldname%' OR LOWER(COALESCE(reason, '')) LIKE '%renamenewname%')
         ORDER BY update_timestamp DESC, update_sequence_number DESC
         LIMIT ?
         """,
         (case_id, max(limit * 10, 1000)),
     )
     _fill_computer_image_fields(db, case_id, rows)
-    old_rows = [row for row in rows if "RenameOldName" in str(row.get("reason") or "")]
-    new_rows = [row for row in rows if "RenameNewName" in str(row.get("reason") or "")]
+    old_rows = [row for row in rows if "renameoldname" in str(row.get("reason") or "").lower()]
+    new_rows = [row for row in rows if "renamenewname" in str(row.get("reason") or "").lower()]
     pairs = []
     for old in old_rows:
         for new in new_rows:
@@ -1035,10 +1035,10 @@ def sdelete_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str,
         FROM usn_journal_entries
         WHERE usn_journal_entries.case_id = ?
           AND (
-            usn_journal_entries.reason LIKE '%Rename%'
-            OR usn_journal_entries.reason LIKE '%Delete%'
-            OR usn_journal_entries.reason LIKE '%DataOverwrite%'
-            OR usn_journal_entries.reason LIKE '%ReparsePointChange%'
+            LOWER(COALESCE(usn_journal_entries.reason, '')) LIKE '%rename%'
+            OR LOWER(COALESCE(usn_journal_entries.reason, '')) LIKE '%delete%'
+            OR LOWER(COALESCE(usn_journal_entries.reason, '')) LIKE '%dataoverwrite%'
+            OR LOWER(COALESCE(usn_journal_entries.reason, '')) LIKE '%reparsepointchange%'
           )
         ORDER BY usn_journal_entries.image_id,
                  usn_journal_entries.file_reference_number,
@@ -7298,6 +7298,41 @@ def email_artifacts_report(db: Database, case_id: str, *, limit: int = 100) -> d
             for row in _query_report_rows(
                 db,
                 case_id,
+                "windows_search_indexed_content",
+                """
+                SELECT 'windows_search_indexed_email_content' AS source,
+                       computer_id, image_id, item_path AS path,
+                       COALESCE(NULLIF(item_name, ''), regexp_extract(item_path, '[^/\\\\]+$')) AS name,
+                       NULL AS extension, COALESCE(timestamp, gather_time) AS timestamp,
+                       NULL AS file_size, NULL AS email, content_field AS evidence_value,
+                       opensearch_document_id, content_sha256, content_length,
+                       id AS source_record_id,
+                       COALESCE(opensearch_document_id, content_sha256, id) AS dedupe_key
+                FROM windows_search_indexed_content
+                WHERE case_id = ?
+                  AND COALESCE(TRY_CAST(content_length AS BIGINT), 0) > 0
+                  AND (
+                    lower(COALESCE(item_type, '')) LIKE 'mapi/%'
+                    OR lower(COALESCE(item_type, '')) LIKE '%email%'
+                    OR lower(COALESCE(item_path, '')) LIKE '%/inbox/%'
+                    OR lower(COALESCE(item_path, '')) LIKE '%/sent items/%'
+                    OR lower(COALESCE(item_path, '')) LIKE '%/deleted items/%'
+                    OR lower(COALESCE(item_path, '')) LIKE '%outlook%'
+                    OR lower(COALESCE(item_path, '')) LIKE '%windowscommunicationsapps%'
+                  )
+                ORDER BY timestamp DESC
+                LIMIT ?
+                """,
+                (case_id, remaining),
+            )
+        )
+    remaining = max(0, limit - len(file_rows))
+    if remaining:
+        file_rows.extend(
+            dict(row)
+            for row in _query_report_rows(
+                db,
+                case_id,
                 "windows_search_email_indicators",
                 """
         SELECT 'windows_search_email' AS source, computer_id, image_id, context_path AS path,
@@ -9149,9 +9184,10 @@ def _communication_windows_search_rows(
         [*params, limit],
     ):
         item = dict(row)
+        source_type = "indexed_email_content" if _is_indexed_email_content(item) else "windows_search_content"
         rows.append(
             {
-                "source_type": "windows_search_content",
+                "source_type": source_type,
                 "source_table": "windows_search_indexed_content",
                 "source_id": item.get("id"),
                 "computer_id": item.get("computer_id"),
@@ -9160,12 +9196,12 @@ def _communication_windows_search_rows(
                 "timestamp": item.get("timestamp") or item.get("gather_time"),
                 "sender": "",
                 "recipients": "",
-                "title": item.get("item_name"),
+                "title": item.get("item_name") or _path_basename(item.get("item_path")),
                 "preview": "",
                 "source_path": item.get("item_path"),
                 "container_path": "",
                 "communication_key": item.get("opensearch_document_id") or _content_key("", item.get("item_path")),
-                "attribution": "Indexed content from Windows Search.",
+                "attribution": "Email-like indexed MAPI content from Windows Search." if source_type == "indexed_email_content" else "Indexed content from Windows Search.",
                 "review_value": "normal",
                 "related_windows_search_count": 0,
                 "related_windows_search": [],
@@ -9174,6 +9210,31 @@ def _communication_windows_search_rows(
             }
         )
     return rows
+
+
+def _is_indexed_email_content(row: dict[str, Any]) -> bool:
+    item_type = str(row.get("item_type") or "").lower()
+    item_path = str(row.get("item_path") or "").lower()
+    if item_type.startswith("mapi/") or "email" in item_type:
+        return True
+    return any(
+        token in item_path
+        for token in (
+            "/inbox/",
+            "/sent items/",
+            "/deleted items/",
+            "/drafts/",
+            "outlook",
+            "windowscommunicationsapps",
+        )
+    )
+
+
+def _path_basename(path: str | None) -> str:
+    value = str(path or "").rstrip("/\\")
+    if not value:
+        return ""
+    return re.split(r"[/\\]", value)[-1]
 
 
 def _communication_messaging_rows(
@@ -9521,7 +9582,7 @@ def timeline_review_report(
         usn_filters.append("(full_path LIKE ? OR file_name LIKE ?)")
         usn_params.extend([f"%/Users/{user}/%", f"%{user}%"])
     if contains:
-        usn_filters.append("(full_path LIKE ? OR file_name LIKE ? OR reason LIKE ?)")
+        usn_filters.append("(full_path LIKE ? OR file_name LIKE ? OR LOWER(COALESCE(reason, '')) LIKE LOWER(?))")
         usn_params.extend([f"%{contains}%", f"%{contains}%", f"%{contains}%"])
     usn_params.append(source_limit)
     for row in db.conn.execute(
@@ -9922,7 +9983,86 @@ def validation_report(db: Database, case_id: str) -> dict[str, Any]:
         "issue_counts": {row["level"]: row["count"] for row in issue_counts},
         "skipped_activity": [dict(row) for row in skipped],
         "evtx_recovery": _evtx_recovery_counts(db, case_id),
+        "artifact_integrity": _artifact_integrity_checks(db, case_id),
     }
+
+
+def _artifact_integrity_checks(db: Database, case_id: str) -> list[dict[str, Any]]:
+    checks: list[dict[str, Any]] = []
+    checks.extend(_zone_identifier_ads_integrity(db, case_id))
+    return checks
+
+
+def _zone_identifier_ads_integrity(db: Database, case_id: str) -> list[dict[str, Any]]:
+    mft_rows = _query_report_rows(
+        db,
+        case_id,
+        "mft_entries",
+        """
+        SELECT id, image_id, parent_path, file_name
+        FROM mft_entries
+        WHERE case_id = ?
+          AND COALESCE(is_ads, '') = 'True'
+          AND LOWER(COALESCE(file_name, '')) LIKE '%:zone.identifier'
+        """,
+        (case_id,),
+    )
+    zone_rows = _query_report_rows(
+        db,
+        case_id,
+        "zone_identifier_ads",
+        """
+        SELECT image_id, file_path
+        FROM zone_identifier_ads
+        WHERE case_id = ?
+        """,
+        (case_id,),
+    )
+    zone_paths = {
+        (str(row.get("image_id") or ""), _integrity_path_key(row.get("file_path")))
+        for row in zone_rows
+    }
+    missing = []
+    for row in mft_rows:
+        host_name = _strip_zone_identifier_stream(row.get("file_name"))
+        expected = _integrity_path_key(f"{row.get('parent_path') or ''}\\{host_name}")
+        if (str(row.get("image_id") or ""), expected) not in zone_paths:
+            missing.append(
+                {
+                    "mft_id": row.get("id"),
+                    "image_id": row.get("image_id"),
+                    "expected_file_path": expected,
+                    "mft_file_name": row.get("file_name"),
+                }
+            )
+    return [
+        {
+            "check": "zone_identifier_ads_mft_coverage",
+            "status": "pass" if not missing else "warning",
+            "mft_ads_count": len(mft_rows),
+            "parsed_zone_identifier_count": len(zone_rows),
+            "matched_count": len(mft_rows) - len(missing),
+            "missing_count": len(missing),
+            "missing_examples": missing[:25],
+        }
+    ]
+
+
+def _strip_zone_identifier_stream(value: object) -> str:
+    text = str(value or "")
+    suffix = ":zone.identifier"
+    if text.lower().endswith(suffix):
+        return text[: -len(suffix)]
+    return text
+
+
+def _integrity_path_key(value: object) -> str:
+    text = str(value or "").replace("/", "\\").strip()
+    text = re.sub(r"^\.\\+", "", text)
+    text = text.lstrip("\\")
+    if len(text) > 2 and text[1] == ":":
+        text = text[2:].lstrip("\\")
+    return text.rstrip("\\").casefold()
 
 
 def registry_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str, Any]:
@@ -21899,7 +22039,7 @@ def _usn_filtered_report(
         where.append("(usn_journal_entries.full_path LIKE ? OR usn_journal_entries.file_name LIKE ?)")
         params.extend([f"%{path_contains}%", f"%{path_contains}%"])
     if reason_contains:
-        where.append("usn_journal_entries.reason LIKE ?")
+        where.append("LOWER(COALESCE(usn_journal_entries.reason, '')) LIKE LOWER(?)")
         params.append(f"%{reason_contains}%")
     direction = "ASC" if order.upper() == "ASC" else "DESC"
     params.append(limit)

@@ -2972,6 +2972,32 @@ def test_cloud_messaging_email_and_event_reports_use_existing_normalized_rows(tm
             }
         ]
     )
+    db.insert_windows_search_indexed_content(
+        [
+            {
+                "id": "indexed-email-1",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "output-search",
+                "tool_name": "SIDR",
+                "source_csv": tmp_path / "search.csv",
+                "source_table": "windows_search_files",
+                "source_record_id": "search-file-1",
+                "row_number": 2,
+                "work_id": "100",
+                "gather_time": "2020-01-02T11:00:00Z",
+                "item_path": "/jane@example.test/Inbox/Azure/Get the most from your new virtual machine",
+                "item_name": "",
+                "item_type": "MAPI/IPM.Note.Read",
+                "content_field": "_extra[3]",
+                "content_text": "Get the most from your new virtual machine.",
+                "content_length": 43,
+                "timestamp": "2020-01-02T11:00:00Z",
+                "created_at": "2020-01-02T11:00:00Z",
+            }
+        ]
+    )
     db.insert_evtx_events(
         [
             {
@@ -3046,7 +3072,12 @@ def test_cloud_messaging_email_and_event_reports_use_existing_normalized_rows(tm
     assert cloud["cloud_artifacts"][0]["provider"] == "iCloud"
     assert messaging["messaging_artifacts"][0]["application"] == "Slack"
     assert "leveldb_candidate" in messaging["messaging_artifacts"][0]["evidence_tags"]
-    assert {row["source"] for row in email["email_artifacts"]} == {"mft", "windows_search_email"}
+    assert {row["source"] for row in email["email_artifacts"]} == {
+        "mft",
+        "windows_search_email",
+        "windows_search_indexed_email_content",
+    }
+    assert any(row["name"] == "Get the most from your new virtual machine" for row in email["email_artifacts"])
     assert email["deduplicated"]
     assert events["events"][0]["category"] == "usb"
     assert vpn_events["events"][0]["category"] == "vpn"

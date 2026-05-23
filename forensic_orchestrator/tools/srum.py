@@ -6,10 +6,11 @@ import json
 import os
 import re
 import shutil
+import struct
 import subprocess
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
-from typing import Iterable
+from pathlib import Path, PureWindowsPath
+from typing import Any, Iterable
 
 from Registry import Registry
 
@@ -79,6 +80,17 @@ def parse_srum_artifacts_to_csv(
         check=False,
     )
     if result.returncode != 0:
+        fallback_rows = _parse_srum_with_dissect(srudb, software_hive=software_hive, phonebooks=phonebooks)
+        if fallback_rows:
+            (output / "SrumExportError.txt").write_text(
+                f"esedbexport failed with exit code {result.returncode}; recovered with dissect.esedb fallback\n"
+                f"source={srudb}\n\n"
+                f"stdout:\n{result.stdout.strip()}\n\n"
+                f"stderr:\n{result.stderr.strip()}\n",
+                encoding="utf-8",
+            )
+            _write_csv(csv_path, fallback_rows)
+            return csv_path
         (output / "SrumExportError.txt").write_text(
             f"esedbexport failed with exit code {result.returncode}\n"
             f"source={srudb}\n\n"
@@ -111,8 +123,52 @@ def parse_srum_artifacts_to_csv(
     return csv_path
 
 
+def _parse_srum_with_dissect(
+    srudb: Path,
+    *,
+    software_hive: Path | None = None,
+    phonebooks: Path | None = None,
+) -> list[dict[str, object]]:
+    try:
+        from dissect.esedb import EseDB
+    except ImportError:
+        return []
+    try:
+        with srudb.open("rb") as handle:
+            db = EseDB(handle)
+            software_maps = _load_software_maps(software_hive)
+            id_maps = _load_id_maps_from_dissect(db, software_maps)
+            vpn_profiles = _load_vpn_profiles(phonebooks)
+            rows: list[dict[str, object]] = []
+            for table in db.tables():
+                provider_guid = _provider_guid_from_name(table.name)
+                if not provider_guid:
+                    continue
+                record_type, provider_name = PROVIDERS.get(provider_guid.lower(), (provider_guid.lower(), provider_guid))
+                try:
+                    records = table.records()
+                except Exception:
+                    continue
+                for row in records:
+                    try:
+                        rows.append(_normalize_srum_row(
+                            row.as_dict(),
+                            provider_guid=provider_guid,
+                            provider_name=provider_name,
+                            record_type=record_type,
+                            source_table=table.name,
+                            id_maps=id_maps,
+                            vpn_profiles=vpn_profiles,
+                        ))
+                    except Exception:
+                        continue
+            return rows
+    except Exception:
+        return []
+
+
 def _normalize_srum_row(
-    row: dict[str, str],
+    row: dict[str, Any],
     *,
     provider_guid: str,
     provider_name: str,
@@ -148,7 +204,7 @@ def _normalize_srum_row(
         "l2_profile_name": _first(row, "ProfileName", "L2ProfileName") or id_maps.get("profile_index_to_ssid", {}).get(_first(row, "L2ProfileId"), ""),
         "l2_profile_flags": _first(row, "L2ProfileFlags"),
         "connected_time": _first(row, "ConnectedTime"),
-        "connect_start_time": _srum_time(_first(row, "ConnectStartTime")),
+        "connect_start_time": _filetime_or_text(_first(row, "ConnectStartTime")),
         "connect_end_time": "",
         "notification_type": _first(row, "NotificationType"),
         "payload_size": _first(row, "PayloadSize"),
@@ -256,6 +312,34 @@ def _load_id_maps(
             elif _first(row, "IdType") == "3":
                 sid = _decode_sid(bytes.fromhex(blob)) if blob else ""
                 users[index] = {"sid": sid, "name": software_maps["sid_to_user"].get(sid, "")}
+    return {
+        "apps": apps,
+        "users": users,
+        "profile_index_to_ssid": software_maps["profile_index_to_ssid"],
+    }
+
+
+def _load_id_maps_from_dissect(
+    db: Any,
+    software_maps: dict[str, dict[str, str]],
+) -> dict[str, dict[str, dict[str, str]]]:
+    apps: dict[str, dict[str, str]] = {}
+    users: dict[str, dict[str, str]] = {}
+    try:
+        records = db.table("SruDbIdMapTable").records()
+    except Exception:
+        records = []
+    for record in records:
+        row = record.as_dict()
+        index = str(row.get("IdIndex") or "")
+        blob = row.get("IdBlob") or b""
+        if not index:
+            continue
+        if row.get("IdType") == 0:
+            apps[index] = _decode_app_blob(blob.hex() if isinstance(blob, bytes) else str(blob))
+        elif row.get("IdType") == 3:
+            sid = _decode_sid(blob) if isinstance(blob, bytes) and blob else ""
+            users[index] = {"sid": sid, "name": software_maps["sid_to_user"].get(sid, "")}
     return {
         "apps": apps,
         "users": users,
@@ -378,7 +462,7 @@ def _load_software_maps(software_hive: Path | None) -> dict[str, dict[str, str]]
                 profile_path = subkey.value("ProfileImagePath").value()
             except Registry.RegistryValueNotFoundException:
                 continue
-            maps["sid_to_user"][subkey.name()] = Path(str(profile_path)).name
+            maps["sid_to_user"][subkey.name()] = PureWindowsPath(str(profile_path)).name
     except Registry.RegistryKeyNotFoundException:
         pass
     try:
@@ -392,7 +476,7 @@ def _load_software_maps(software_hive: Path | None) -> dict[str, dict[str, str]]
                 try:
                     profile_index = str(profile_key.value("ProfileIndex").value())
                     metadata = profile_key.subkey("MetaData")
-                    channel_hints = metadata.value("Channel Hints").raw_data()
+                    channel_hints = _metadata_channel_hints(metadata)
                 except (Registry.RegistryKeyNotFoundException, Registry.RegistryValueNotFoundException):
                     continue
                 ssid = _decode_channel_hints(channel_hints)
@@ -401,6 +485,15 @@ def _load_software_maps(software_hive: Path | None) -> dict[str, dict[str, str]]
     except Registry.RegistryKeyNotFoundException:
         pass
     return maps
+
+
+def _metadata_channel_hints(metadata) -> bytes:
+    for name in ("Channel Hints", "Band Channel Hints"):
+        try:
+            return metadata.value(name).raw_data()
+        except Registry.RegistryValueNotFoundException:
+            continue
+    raise Registry.RegistryValueNotFoundException("Channel Hints")
 
 
 def _decode_channel_hints(data: bytes) -> str:
@@ -471,7 +564,7 @@ def _provider_guid_from_name(name: str) -> str:
     return match.group(1).lower() if match else ""
 
 
-def _first(row: dict[str, str], *names: str) -> str:
+def _first(row: dict[str, Any], *names: str) -> str:
     for name in names:
         value = row.get(name)
         if value not in (None, ""):
@@ -480,9 +573,15 @@ def _first(row: dict[str, str], *names: str) -> str:
 
 
 def _srum_time(value: str | None) -> str:
-    if not value or value.startswith("("):
+    if value is None or value == "":
+        return ""
+    if isinstance(value, int):
+        return _srum_ole_datetime(value)
+    if str(value).startswith("("):
         return value or ""
-    value = value.strip()
+    value = str(value).strip()
+    if re.fullmatch(r"\d{12,}", value):
+        return _srum_ole_datetime(int(value))
     match = re.match(r"([A-Z][a-z]{2} \d{1,2}, \d{4} \d{2}:\d{2}:\d{2})(?:\.(\d+))?", value)
     if not match:
         return value
@@ -494,6 +593,14 @@ def _srum_time(value: str | None) -> str:
     if fraction:
         dt += timedelta(microseconds=int(fraction[:6].ljust(6, "0")))
     return dt.isoformat().replace("+00:00", "Z")
+
+
+def _srum_ole_datetime(value: int) -> str:
+    try:
+        ole_days = struct.unpack("<d", int(value).to_bytes(8, "little", signed=False))[0]
+        return (datetime(1899, 12, 30, tzinfo=timezone.utc) + timedelta(days=ole_days)).isoformat().replace("+00:00", "Z")
+    except (OverflowError, ValueError, struct.error):
+        return str(value)
 
 
 def _filetime_or_text(value: str | None) -> str:

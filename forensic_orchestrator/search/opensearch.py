@@ -493,9 +493,15 @@ def _base_document(
         "source_type": source_type,
         "source_table": source_table,
         "source_record_id": source_record_id,
+        "source_path": source_path,
+        "container_path": container_path,
+        "title": title,
         "content": content,
         "content_hash": content_hash,
         "content_length": len(content),
+        "timestamp": timestamp,
+        "user_profile": user_profile,
+        "metadata": extra,
         "indexed_at": utc_now(),
     }
 

@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import csv
+import base64
+import binascii
+import hashlib
 import json
+import re
+import shutil
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -42,19 +47,19 @@ def parse_windows_activities_to_csv(source: Path, output: Path) -> list[Path]:
     if source.exists():
         for db_path in sorted(source.rglob("ActivitiesCache.db")):
             if db_path.is_file():
-                rows.extend(_activity_rows(db_path, source))
+                rows.extend(_activity_rows(_sqlite_working_copy(db_path, output), source, original_db_path=db_path))
     csv_path = output / "WindowsActivities.csv"
     _write_csv(csv_path, ACTIVITY_FIELDS, rows)
     return [csv_path]
 
 
-def _activity_rows(db_path: Path, source_root: Path) -> list[dict[str, object]]:
+def _activity_rows(db_path: Path, source_root: Path, *, original_db_path: Path | None = None) -> list[dict[str, object]]:
     try:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
         conn.row_factory = sqlite3.Row
         tables = [row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")]
     except sqlite3.Error:
-        return []
+        return _recovered_clipboard_rows(original_db_path or db_path, source_root, [])
     rows: list[dict[str, object]] = []
     try:
         for table in tables:
@@ -65,9 +70,10 @@ def _activity_rows(db_path: Path, source_root: Path) -> list[dict[str, object]]:
             except sqlite3.Error:
                 continue
             for row in table_rows:
-                rows.append(_normalize_activity_row(row, db_path, source_root, table))
+                rows.append(_normalize_activity_row(row, original_db_path or db_path, source_root, table))
     finally:
         conn.close()
+    rows.extend(_recovered_clipboard_rows(original_db_path or db_path, source_root, rows))
     return rows
 
 
@@ -83,6 +89,7 @@ def _normalize_activity_row(row: sqlite3.Row, db_path: Path, source_root: Path, 
     payload_data = _loads_json(payload)
     app_id = _first(compact, "appid", "applicationid", "packageid")
     display_text = _payload_value(payload_data, "displayText")
+    clipboard_text = _clipboard_text(_first(compact, "clipboardpayload"))
     content_uri = _payload_value(payload_data, "contentUri")
     activation_uri = _payload_value(payload_data, "activationUri")
     fallback_uri = _payload_value(payload_data, "fallbackUri")
@@ -100,7 +107,7 @@ def _normalize_activity_row(row: sqlite3.Row, db_path: Path, source_root: Path, 
             or _display_name_from_app_id(app_id)
         ),
         "activity_type": _first(compact, "activitytype", "type"),
-        "display_text": display_text,
+        "display_text": display_text or clipboard_text,
         "file_name": file_name,
         "content_uri": content_uri,
         "activation_uri": activation_uri,
@@ -113,6 +120,151 @@ def _normalize_activity_row(row: sqlite3.Row, db_path: Path, source_root: Path, 
         "payload_json": _json_or_text(payload),
         "raw_json": json.dumps(raw, default=str, sort_keys=True),
     }
+
+
+def _sqlite_working_copy(db_path: Path, output: Path) -> Path:
+    work_root = output / "_sqlite_work"
+    try:
+        rel = db_path.relative_to(output.parent)
+    except ValueError:
+        rel = Path(*db_path.parts[-6:])
+    work_db = work_root / rel
+    work_db.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        shutil.copy2(db_path, work_db)
+        for suffix in ("-wal", "-shm"):
+            companion = Path(f"{db_path}{suffix}")
+            if companion.exists():
+                shutil.copy2(companion, Path(f"{work_db}{suffix}"))
+    except OSError:
+        return db_path
+    return work_db
+
+
+def _clipboard_text(value: str | None) -> str | None:
+    parsed = _loads_json(value)
+    candidates = _clipboard_candidates(parsed) if parsed is not None else [_value_to_text(value)]
+    decoded: list[str] = []
+    for candidate in candidates:
+        text = _maybe_base64_text(candidate)
+        if text and text not in decoded:
+            decoded.append(text)
+    if not decoded:
+        return None
+    return "; ".join(decoded)[:1024]
+
+
+def _recovered_clipboard_rows(
+    db_path: Path,
+    source_root: Path,
+    existing_rows: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    try:
+        data = db_path.read_bytes()
+    except OSError:
+        return []
+    existing = {
+        str(row.get("display_text") or "")
+        for row in existing_rows
+        if str(row.get("source_table") or "").lower() in {"activity", "activityoperation", "recoveredclipboardpayload"}
+    }
+    recovered: list[dict[str, object]] = []
+    seen_payloads: set[str] = set()
+    for match in re.finditer(rb'\[\{"content":"[^"\]\}]{8,}","formatName":"[^"\]\}]{1,80}"(?:,\{"content":"[^"\]\}]{8,}","formatName":"[^"\]\}]{1,80}")*\}\]', data):
+        payload = match.group(0).decode("ascii", errors="ignore")
+        if payload in seen_payloads:
+            continue
+        seen_payloads.add(payload)
+        clipboard_text = _clipboard_text(payload)
+        if not clipboard_text or clipboard_text in existing:
+            continue
+        recovered.append(
+            {
+                "source_path": str(db_path),
+                "user_profile": _user_profile(db_path, source_root),
+                "source_table": "RecoveredClipboardPayload",
+                "activity_id": "recovered-clipboard-" + hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16],
+                "app_id": "Microsoft.Windows.Clipboard",
+                "app_display_name": "Windows Clipboard",
+                "activity_type": "clipboard_recovered",
+                "display_text": clipboard_text,
+                "file_name": None,
+                "content_uri": None,
+                "activation_uri": None,
+                "fallback_uri": None,
+                "start_time_utc": None,
+                "end_time_utc": None,
+                "last_modified_utc": None,
+                "expiration_time_utc": None,
+                "platform_device_id": None,
+                "payload_json": _json_or_text(payload),
+                "raw_json": json.dumps(
+                    {
+                        "recovery_method": "sqlite_raw_clipboard_payload",
+                        "byte_offset": match.start(),
+                        "payload": payload,
+                    },
+                    sort_keys=True,
+                ),
+            }
+        )
+    return recovered
+
+
+def _clipboard_candidates(value: object) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, bytes):
+        text = _value_to_text(value)
+        return [text] if text else []
+    if isinstance(value, list):
+        candidates: list[str] = []
+        for item in value:
+            candidates.extend(_clipboard_candidates(item))
+        return candidates
+    if isinstance(value, dict):
+        candidates = []
+        preferred_keys = (
+            "text", "content", "value", "data", "payload", "clipboardText",
+            "Text", "Content", "Value", "Data", "Payload", "ClipboardText",
+        )
+        for key in preferred_keys:
+            if key in value:
+                candidates.extend(_clipboard_candidates(value[key]))
+        return candidates
+    return []
+
+
+def _maybe_base64_text(value: str | None) -> str | None:
+    text = _value_to_text(value)
+    if not text or text in {"[]", "{}"}:
+        return None
+    if 2 <= len(text) and text[0] == "b" and text[1] in {"'", '"'} and text[-1:] == text[1]:
+        text = text[2:-1]
+    for candidate in (text, text.strip("\"'")):
+        if len(candidate) % 4:
+            continue
+        try:
+            data = base64.b64decode(candidate, validate=True)
+        except (ValueError, binascii.Error):
+            continue
+        for encoding in ("utf-8", "utf-16-le", "utf-16"):
+            try:
+                decoded = data.decode(encoding).strip("\x00\r\n\t ")
+            except UnicodeDecodeError:
+                continue
+            if _looks_printable(decoded):
+                return decoded
+    return text if _looks_printable(text) else None
+
+
+def _looks_printable(text: str) -> bool:
+    if not text:
+        return False
+    printable = sum(1 for char in text if char.isprintable() or char.isspace())
+    return printable / max(len(text), 1) > 0.9
 
 
 def _first(row: dict[str, object], *keys: str) -> str | None:

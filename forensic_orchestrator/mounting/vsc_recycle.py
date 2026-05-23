@@ -128,6 +128,8 @@ def run_vsc_recycle_scan(
             ],
             key_func=_recycle_signature,
         )
+        if db.analytics is not None:
+            db.analytics.close()
         comparison = compare_recycle_snapshots_from_db(conn=conn, db=db, case_id=case_id, image_id=image.id)
         ended_at = utc_now()
         report_path = paths.vsc_reports_dir(case_id) / "recycle-vsc-comparison.md"
@@ -201,31 +203,39 @@ def compare_recycle_snapshots_from_db(
     case = db.get_case(case_id)
     live_db = case.root / "analytics" / "events.duckdb"
     conn.execute(f"ATTACH IF NOT EXISTS '{str(live_db).replace("'", "''")}' AS live (READ_ONLY)")
-    conn.execute(
-        """
-        CREATE OR REPLACE TEMP TABLE live_recycle_signatures AS
-        SELECT DISTINCT lower(concat_ws('|',
-          'item',
-          COALESCE(recycle_format, ''),
-          COALESCE(top_level_name, ''),
-          COALESCE(deletion_time_utc, ''),
-          COALESCE(file_size, '')
-        )) AS record_signature
-        FROM live.recycle_items
-        WHERE case_id = ?
-        UNION
-        SELECT DISTINCT lower(concat_ws('|',
-          'child',
-          COALESCE(recycle_format, ''),
-          COALESCE(top_level_name, ''),
-          COALESCE(child_relative_path, ''),
-          COALESCE(file_size, '')
-        )) AS record_signature
-        FROM live.recycle_children
-        WHERE case_id = ?
-        """,
-        [case_id, case_id],
-    )
+    conn.execute("CREATE OR REPLACE TEMP TABLE live_recycle_signatures(record_signature VARCHAR)")
+    if _duckdb_table_exists(conn, "live", "recycle_items"):
+        conn.execute(
+            """
+            INSERT INTO live_recycle_signatures
+            SELECT DISTINCT lower(concat_ws('|',
+              'item',
+              COALESCE(recycle_format, ''),
+              COALESCE(top_level_name, ''),
+              COALESCE(deletion_time_utc, ''),
+              COALESCE(file_size, '')
+            )) AS record_signature
+            FROM live.recycle_items
+            WHERE case_id = ?
+            """,
+            [case_id],
+        )
+    if _duckdb_table_exists(conn, "live", "recycle_children"):
+        conn.execute(
+            """
+            INSERT INTO live_recycle_signatures
+            SELECT DISTINCT lower(concat_ws('|',
+              'child',
+              COALESCE(recycle_format, ''),
+              COALESCE(top_level_name, ''),
+              COALESCE(child_relative_path, ''),
+              COALESCE(file_size, '')
+            )) AS record_signature
+            FROM live.recycle_children
+            WHERE case_id = ?
+            """,
+            [case_id],
+        )
     by_snapshot = _counts_by_snapshot(conn, case_id, image_id)
     examples = conn.execute(
         """
@@ -294,6 +304,20 @@ def _ensure_tables(conn: duckdb.DuckDBPyConnection) -> None:
     for column in RECYCLE_COLUMNS:
         if column not in existing:
             conn.execute(f"ALTER TABLE vsc_recycle_items ADD COLUMN {column} VARCHAR")
+
+
+def _duckdb_table_exists(conn: duckdb.DuckDBPyConnection, schema: str, table: str) -> bool:
+    return bool(
+        conn.execute(
+            """
+            SELECT 1
+            FROM information_schema.tables
+            WHERE table_schema = ? AND table_name = ?
+            LIMIT 1
+            """,
+            [schema, table],
+        ).fetchone()
+    )
 
 
 def _clear_snapshot_rows(conn: duckdb.DuckDBPyConnection, *, case_id: str, image_id: str, snapshot_ids: list[str]) -> None:

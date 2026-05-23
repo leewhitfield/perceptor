@@ -82,6 +82,40 @@ def _content_document_id(case_id: object, content: str) -> str:
     return hashlib.sha256(f"{case_id}|content|{content_hash}".encode("utf-8", errors="replace")).hexdigest()
 
 
+def _usn_path_updates(rows: list[Any]) -> list[tuple[str, str]]:
+    updates: list[tuple[str, str]] = []
+    for row in rows:
+        row_id = str(row["id"] if isinstance(row, sqlite3.Row) else row[0])
+        file_name = str((row["file_name"] if isinstance(row, sqlite3.Row) else row[1]) or "")
+        current = str((row["full_path"] if isinstance(row, sqlite3.Row) else row[2]) or "")
+        parent_path = str((row["parent_path"] if isinstance(row, sqlite3.Row) else row[3]) or "")
+        parent_name = str((row["parent_name"] if isinstance(row, sqlite3.Row) else row[4]) or "")
+        resolved = _compose_usn_full_path(parent_path, parent_name, file_name)
+        if not resolved:
+            continue
+        normalized_current = current.replace("/", "\\").rstrip("\\").lower()
+        normalized_resolved = resolved.replace("/", "\\").rstrip("\\").lower()
+        if normalized_current == normalized_resolved:
+            continue
+        if "pathunknown" in normalized_current or not normalized_current.endswith("\\" + file_name.lower()):
+            updates.append((resolved, row_id))
+    return updates
+
+
+def _compose_usn_full_path(parent_path: str, parent_name: str, file_name: str) -> str:
+    parts = []
+    parent_path = parent_path.replace("/", "\\").strip("\\")
+    if parent_path and parent_path != ".":
+        parts.extend(part for part in parent_path.split("\\") if part and part != ".")
+    parent_name = parent_name.strip("\\/")
+    if parent_name and (not parts or parts[-1].lower() != parent_name.lower()):
+        parts.append(parent_name)
+    file_name = file_name.strip("\\/")
+    if file_name:
+        parts.append(file_name)
+    return ".\\" + "\\".join(parts) if parts else file_name
+
+
 DEFAULT_PURGE_TABLES = (
     "parsed_rows",
     "shortcut_items",
@@ -160,6 +194,7 @@ DEFAULT_PURGE_TABLES = (
     "evtx_events",
     "etl_events",
     "tool_outputs",
+    "content_references",
 )
 
 SQLITE_ONLY_PURGE_TABLES = {
@@ -194,6 +229,8 @@ TOOL_PURGE_TABLES = {
     },
     "PrefetchParser": {"prefetch_items", "prefetch_run_times", "tool_outputs"},
     "MFTECmd": {"parsed_rows", "mft_entries", "tool_outputs"},
+    "MFTECmdUSN": {"usn_journal_entries", "tool_outputs"},
+    "USNRewind": {"usn_journal_entries", "tool_outputs"},
     "MFTECmdI30": {"ntfs_index_entries", "ntfs_index_bitmaps", "tool_outputs"},
     "MailboxParser": {"mailbox_messages", "mailbox_attachments", "tool_outputs"},
     "ZoneIdentifierParser": {"zone_identifier_ads", "tool_outputs"},
@@ -233,6 +270,11 @@ TOOL_PURGE_TABLES = {
     "SBECmd": {"shellbag_entries", "tool_outputs"},
     "ArchiveInventoryParser": {"archive_entries", "tool_outputs"},
     "SpotifyParser": {"spotify_artifacts", "tool_outputs"},
+    "UserFileContentParser": {
+        "windows_search_indexed_content",
+        "content_references",
+        "tool_outputs",
+    },
 }
 
 
@@ -6092,6 +6134,66 @@ class Database:
             rows,
         )
 
+    def enrich_usn_paths_from_mft(self, *, case_id: str, image_id: str | None = None) -> int:
+        if self.analytics_only and self.analytics is not None:
+            conn = self.analytics._connect(case_id)
+            tables = {
+                str(row[0])
+                for row in conn.execute(
+                    "SELECT table_name FROM information_schema.tables WHERE table_name IN ('usn_journal_entries', 'mft_entries')"
+                ).fetchall()
+            }
+            if {"usn_journal_entries", "mft_entries"} - tables:
+                return 0
+            params: list[object] = [case_id]
+            where = "u.case_id = ?"
+            if image_id is not None:
+                where += " AND u.image_id = ?"
+                params.append(image_id)
+            rows = conn.execute(
+                f"""
+                SELECT u.id, u.file_name, u.full_path, m.parent_path, m.file_name AS parent_name
+                FROM usn_journal_entries u
+                JOIN mft_entries m
+                  ON m.case_id = u.case_id
+                 AND COALESCE(m.image_id, '') = COALESCE(u.image_id, '')
+                 AND m.entry_number = u.parent_file_reference_number
+                 AND COALESCE(m.sequence_number, '') = COALESCE(u.parent_file_reference_sequence_number, '')
+                WHERE {where}
+                  AND LOWER(COALESCE(u.full_path, '')) LIKE '%pathunknown%'
+                """,
+                params,
+            ).fetchall()
+            updates = _usn_path_updates(rows)
+            if updates:
+                conn.executemany("UPDATE usn_journal_entries SET full_path = ? WHERE id = ?", updates)
+            return len(updates)
+
+        params = [case_id]
+        where = "u.case_id = ?"
+        if image_id is not None:
+            where += " AND u.image_id = ?"
+            params.append(image_id)
+        rows = self.conn.execute(
+            f"""
+            SELECT u.id, u.file_name, u.full_path, m.parent_path, m.file_name AS parent_name
+            FROM usn_journal_entries u
+            JOIN mft_entries m
+              ON m.case_id = u.case_id
+             AND COALESCE(m.image_id, '') = COALESCE(u.image_id, '')
+             AND m.entry_number = u.parent_file_reference_number
+             AND COALESCE(m.sequence_number, '') = COALESCE(u.parent_file_reference_sequence_number, '')
+            WHERE {where}
+              AND LOWER(COALESCE(u.full_path, '')) LIKE '%pathunknown%'
+            """,
+            params,
+        ).fetchall()
+        updates = _usn_path_updates(rows)
+        if updates:
+            self.conn.executemany("UPDATE usn_journal_entries SET full_path = ? WHERE id = ?", updates)
+            self._commit()
+        return len(updates)
+
     def insert_ntfs_index_entries(self, rows: list[dict[str, Any]]) -> None:
         self._insert_rows(
             "ntfs_index_entries",
@@ -6941,6 +7043,13 @@ class Database:
             f"DELETE FROM content_references WHERE {' AND '.join(content_ref_where)}",
             content_ref_params,
         )
+        if self.analytics is not None:
+            self.analytics.delete_case_image(
+                "content_references",
+                case_id=case_id,
+                image_id=image_id,
+                tool_names=tool_names,
+            )
 
         user_ref_where = ["case_id = ?"]
         user_ref_params: list[Any] = [case_id]

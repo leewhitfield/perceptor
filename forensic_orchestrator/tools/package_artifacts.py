@@ -114,6 +114,8 @@ def parse_package_artifacts_to_csv(source: Path, output: Path) -> list[Path]:
                 rows.append(_outlook_attachment_cache_row(source, path))
             elif lower_name == "recentfilecache.bcf":
                 rows.extend(_recent_file_cache_rows(source, path))
+            elif _is_teams_filesystem_paths_log(path):
+                rows.extend(_teams_filesystem_path_rows(source, path))
             elif lower_name == "typedurls.json":
                 rows.extend(_edge_typed_urls(source, path))
             elif lower_name == "notifications.json":
@@ -133,6 +135,63 @@ def parse_package_artifacts_to_csv(source: Path, output: Path) -> list[Path]:
     csv_path = output / "PackageArtifacts.csv"
     _write_csv(csv_path, PACKAGE_ARTIFACT_FIELDS, rows)
     return [csv_path]
+
+
+def _is_teams_filesystem_paths_log(path: Path) -> bool:
+    lower = path.as_posix().lower()
+    return (
+        path.name.lower().endswith(".log")
+        and "msteams_" in lower
+        and "/file system/" in lower
+        and "/paths/" in lower
+    )
+
+
+def _teams_filesystem_path_rows(source: Path, path: Path) -> list[dict[str, object]]:
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return []
+    text = data.decode("utf-8", errors="replace")
+    rows: list[dict[str, object]] = []
+    seen: set[tuple[str, str]] = set()
+    for match in re.finditer(r"CHILD_OF:\d+:(1[5-9]\d{11,12})(?:\.crswap)?", text):
+        epoch_ms = match.group(1)
+        window = text[match.start(): match.start() + 700]
+        name_match = re.search(r"(Teams_diagnostics-event-logs-[A-Za-z0-9_.@-]+)", window)
+        if not name_match:
+            continue
+        file_name = name_match.group(1).rstrip("@")
+        key = (epoch_ms, file_name)
+        if key in seen:
+            continue
+        seen.add(key)
+        event_time = _epoch_ms_to_iso(epoch_ms)
+        row = _base_row(source, path, "teams_filesystem_diagnostic_log")
+        stat = path.stat()
+        row.update(
+            {
+                "application_package": "MSTeams",
+                "file_name": file_name,
+                "file_extension": "",
+                "file_size": stat.st_size,
+                "modified_utc": _unix_to_iso(stat.st_mtime),
+                "event_time_utc": event_time,
+                "title": "Teams diagnostic event log file",
+                "artifact_value": file_name,
+                "artifact_text": "",
+                "details_json": json.dumps(
+                    {
+                        "epoch_ms": epoch_ms,
+                        "filesystem_scope": "temporary",
+                        "source": "Chromium/WebView File System Paths LevelDB log",
+                    },
+                    sort_keys=True,
+                ),
+            }
+        )
+        rows.append(row)
+    return rows
 
 
 def _walk_package_files(source: Path) -> Iterable[tuple[Path | None, str]]:
@@ -757,6 +816,13 @@ def _unix_to_iso(value: float) -> str:
     try:
         return datetime.fromtimestamp(value, tz=timezone.utc).isoformat().replace("+00:00", "Z")
     except (OSError, OverflowError, ValueError):
+        return ""
+
+
+def _epoch_ms_to_iso(value: str) -> str:
+    try:
+        return _unix_to_iso(int(value) / 1000)
+    except (TypeError, ValueError):
         return ""
 
 
