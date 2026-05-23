@@ -127,6 +127,8 @@ from .reports import (
     process_timing_report,
     recycle_report,
     rdp_cache_report,
+    remote_access_attribution_markdown,
+    remote_access_attribution_report,
     rdp_remote_access_markdown,
     rdp_visual_observations_report,
     registry_artifacts_report,
@@ -1341,6 +1343,16 @@ def build_parser() -> argparse.ArgumentParser:
     report_remote_access.add_argument("--limit", type=int, default=100)
     report_remote_access.add_argument("--format", choices=["json", "table", "csv"], default="json")
     report_remote_access.add_argument("--output")
+    report_remote_access_attribution = report_sub.add_parser("remote-access-attribution")
+    report_remote_access_attribution.add_argument("--case", required=True, dest="case_id")
+    report_remote_access_attribution.add_argument("--start")
+    report_remote_access_attribution.add_argument("--end")
+    report_remote_access_attribution.add_argument("--label")
+    report_remote_access_attribution.add_argument("--remote")
+    report_remote_access_attribution.add_argument("--contains")
+    report_remote_access_attribution.add_argument("--limit", type=int, default=100)
+    report_remote_access_attribution.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
+    report_remote_access_attribution.add_argument("--output")
     report_rdp = report_sub.add_parser("rdp")
     report_rdp.add_argument("--case", required=True, dest="case_id")
     report_rdp.add_argument("--limit", type=int, default=100)
@@ -3406,6 +3418,44 @@ def run(args: argparse.Namespace) -> int:
                     "correlation_basis",
                 ],
             )
+            return 0
+
+        if args.resource == "report" and args.action == "remote-access-attribution":
+            report = remote_access_attribution_report(
+                db,
+                args.case_id,
+                start=args.start,
+                end=args.end,
+                label=args.label,
+                remote=args.remote,
+                contains=args.contains,
+                limit=args.limit,
+            )
+            if args.format == "md":
+                write_text_output(remote_access_attribution_markdown(report), args.output)
+            else:
+                write_report_output(
+                    report,
+                    report["remote_access_windows"],
+                    args.format,
+                    args.output,
+                    title=f"Remote access attribution windows for case {args.case_id}",
+                    columns=[
+                        "window_number",
+                        "window_start_utc",
+                        "window_end_utc",
+                        "window_type",
+                        "remote_source",
+                        "remote_ip",
+                        "successful_logon_count",
+                        "failed_logon_count",
+                        "explicit_credential_count",
+                        "usb_device_count",
+                        "cloud_context_count",
+                        "local_activity_count",
+                        "attribution_assessment",
+                    ],
+                )
             return 0
 
         if args.resource == "report" and args.action == "rdp":

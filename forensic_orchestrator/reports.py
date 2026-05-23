@@ -3322,6 +3322,639 @@ def rdp_remote_access_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def remote_access_attribution_report(
+    db: Database,
+    case_id: str,
+    *,
+    start: str | None = None,
+    end: str | None = None,
+    label: str | None = None,
+    remote: str | None = None,
+    contains: str | None = None,
+    limit: int = 100,
+) -> dict[str, Any]:
+    db.get_case(case_id)
+    events = _incoming_remote_access_events(db, case_id, remote=remote, limit=max(limit * 50, 1000))
+    windows = _incoming_remote_access_windows(events)
+    custom_window = _custom_incident_window(start=start, end=end, label=label, remote=remote)
+    if custom_window:
+        windows.insert(0, custom_window)
+    if start or end:
+        start_dt = _parse_report_timestamp(start) if start else None
+        end_dt = _parse_report_timestamp(end) if end else None
+        windows = [
+            window for window in windows
+            if _windows_overlap(window.get("window_start_utc"), window.get("window_end_utc"), start_dt, end_dt)
+        ]
+    if remote:
+        needle = remote.casefold()
+        windows = [
+            window for window in windows
+            if needle in str(window.get("remote_source") or "").casefold()
+            or needle in str(window.get("remote_ip") or "").casefold()
+            or any(needle in str(event.get("remote_source") or "").casefold() for event in window.get("events") or [])
+        ]
+    enriched: list[dict[str, Any]] = []
+    for index, window in enumerate(windows[:limit], 1):
+        item = dict(window)
+        item["window_number"] = index
+        item["window_start_utc"] = _format_report_window_time(item.get("window_start_utc"))
+        item["window_end_utc"] = _format_report_window_time(item.get("window_end_utc"))
+        raw_window = {
+            "window_start_utc": window.get("window_start_utc"),
+            "window_end_utc": window.get("window_end_utc"),
+        }
+        usb_rows = _vpn_window_usb_devices(db, case_id, raw_window, limit=10)
+        activity_rows = _incident_window_activity_rows(db, case_id, raw_window, contains=contains, limit=limit)
+        cloud_rows = _incident_window_cloud_context_rows(
+            db,
+            case_id,
+            raw_window,
+            remote_source=item.get("remote_source"),
+            remote_ip=item.get("remote_ip"),
+            contains=contains,
+            limit=25,
+        )
+        item["usb_devices_during_window"] = usb_rows
+        item["usb_device_count"] = len(usb_rows)
+        item["local_activity_during_window"] = activity_rows[:limit]
+        item["local_activity_count"] = len(activity_rows)
+        item["local_activity_source_counts"] = _activity_source_counts(activity_rows)
+        item["local_activity_category_counts"] = _activity_category_counts(activity_rows)
+        item["cloud_account_context"] = cloud_rows
+        item["cloud_context_count"] = len(cloud_rows)
+        item["attribution_assessment"] = _remote_access_attribution_assessment(item)
+        enriched.append(item)
+    return {
+        "case_id": case_id,
+        "filters": {
+            "start": start,
+            "end": end,
+            "label": label,
+            "remote": remote,
+            "contains": contains,
+            "limit": limit,
+        },
+        "summary": {
+            "window_count": len(enriched),
+            "custom_window_requested": bool(custom_window),
+            "incoming_remote_access_event_count": len(events),
+            "windows_with_successful_logon": sum(1 for row in enriched if row.get("successful_logon_count")),
+            "windows_with_failed_logon": sum(1 for row in enriched if row.get("failed_logon_count")),
+            "windows_with_usb_overlap": sum(1 for row in enriched if row.get("usb_device_count")),
+            "windows_with_cloud_context": sum(1 for row in enriched if row.get("cloud_context_count")),
+            "windows_with_local_activity": sum(1 for row in enriched if row.get("local_activity_count")),
+        },
+        "remote_access_windows": enriched,
+        "total_returned": len(enriched),
+    }
+
+
+def remote_access_attribution_markdown(report: dict[str, Any]) -> str:
+    case_id = report.get("case_id", "")
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    windows = report.get("remote_access_windows") if isinstance(report.get("remote_access_windows"), list) else []
+    lines = [
+        "# Remote Access Attribution Report",
+        "",
+        f"Case: `{case_id}`",
+        "",
+        "## Summary",
+        "",
+        f"- Windows returned: `{summary.get('window_count', 0)}`",
+        f"- Incoming remote-access events considered: `{summary.get('incoming_remote_access_event_count', 0)}`",
+        f"- Windows with successful logons: `{summary.get('windows_with_successful_logon', 0)}`",
+        f"- Windows with failed logons: `{summary.get('windows_with_failed_logon', 0)}`",
+        f"- Windows with USB overlap: `{summary.get('windows_with_usb_overlap', 0)}`",
+        f"- Windows with cloud/email context: `{summary.get('windows_with_cloud_context', 0)}`",
+        f"- Windows with local activity: `{summary.get('windows_with_local_activity', 0)}`",
+        "",
+        "## Evidence Model",
+        "",
+        "- Incoming remote access is built from `evtx_events`, primarily Security log events `4624`, `4625`, `4648`, `4778`, and `4779`, plus TerminalServices LocalSessionManager events `21`, `24`, and `25` when a non-local remote source is present.",
+        "- USB overlap comes from `usb_connection_events` and `usb_storage_devices` where the device connection interval overlaps the remote-access window.",
+        "- Local activity during the window comes from existing normalized activity sources such as Prefetch, shortcuts/Jump Lists, SRUM, registry activity, browser downloads, WebCache file references, package artifacts, and Windows activities.",
+        "- Cloud/account context is limited to metadata references in `windows_search_indexed_content`; full message or document content remains in OpenSearch and is referenced by document ID when available.",
+        "- This report identifies evidence occurring during a window. It does not, by itself, prove who operated the keyboard or remote session.",
+        "",
+    ]
+    if not windows:
+        lines.append("No remote-access attribution windows matched the selected filters.")
+        return "\n".join(lines).rstrip() + "\n"
+    for window in windows:
+        if not isinstance(window, dict):
+            continue
+        lines.extend(_remote_access_attribution_window_markdown(window))
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _remote_access_attribution_window_markdown(window: dict[str, Any]) -> list[str]:
+    users = ", ".join(window.get("user_names") or []) if isinstance(window.get("user_names"), list) else str(window.get("user_names") or "")
+    lines = [
+        f"## Window {window.get('window_number')}: {window.get('label') or window.get('remote_source') or 'Remote access'}",
+        "",
+        f"- Window: `{window.get('window_start_utc') or ''}` to `{window.get('window_end_utc') or ''}`",
+        f"- Type: `{window.get('window_type') or ''}`",
+        f"- Remote source: `{window.get('remote_source') or ''}`",
+        f"- Remote IP: `{window.get('remote_ip') or ''}`",
+        f"- User/accounts: `{users}`",
+        f"- Successful logons: `{window.get('successful_logon_count') or 0}`",
+        f"- Failed logons: `{window.get('failed_logon_count') or 0}`",
+        f"- Explicit-credential events: `{window.get('explicit_credential_count') or 0}`",
+        f"- RDP reconnect/disconnect events: `{window.get('rdp_session_event_count') or 0}`",
+        f"- Assessment: {window.get('attribution_assessment') or ''}",
+        "",
+        "### Authentication Events During This Window",
+        "",
+    ]
+    events = [row for row in (window.get("events") or []) if isinstance(row, dict)]
+    if not events:
+        lines.append("- No authentication/session events were attached to this window.")
+    for event in events[:30]:
+        lines.append(
+            f"- `{event.get('time_created') or ''}` event `{event.get('event_id') or ''}` "
+            f"`{event.get('event_meaning') or ''}` user `{event.get('user_name') or event.get('target_account') or ''}` "
+            f"remote `{event.get('remote_source') or ''}` result `{event.get('credential_result') or ''}` "
+            f"source `{_short_case_path(event.get('source_file'))}`"
+        )
+    lines.extend(["", "### USB Devices During This Window", ""])
+    usb_rows = [row for row in (window.get("usb_devices_during_window") or []) if isinstance(row, dict)]
+    if not usb_rows:
+        lines.append("- No external-storage connection intervals overlapped this window.")
+    for row in usb_rows:
+        lines.append(
+            f"- Serial `{row.get('serial') or ''}` volume `{row.get('volume_name') or ''}` "
+            f"drive `{row.get('drive_letter') or ''}` volume serial `{row.get('volume_serial_number') or ''}` "
+            f"from `{row.get('session_start') or ''}` to `{row.get('session_end') or ''}`"
+        )
+    lines.extend(["", "### Cloud/Account Context During This Window", ""])
+    cloud_rows = [row for row in (window.get("cloud_account_context") or []) if isinstance(row, dict)]
+    if not cloud_rows:
+        lines.append("- No cloud/email account metadata references matched this window.")
+    for row in cloud_rows[:15]:
+        lines.append(
+            f"- `{row.get('event_time_utc') or ''}` `{row.get('context_type') or ''}` "
+            f"title `{row.get('title') or ''}` path `{_display_evidence_path(row.get('path'))}` "
+            f"OpenSearch `{row.get('opensearch_document_id') or ''}`"
+        )
+    lines.extend(["", "### Local Activity During This Window", ""])
+    counts = [row for row in (window.get("local_activity_category_counts") or []) if isinstance(row, dict)]
+    if counts:
+        lines.append("- Category counts: " + ", ".join(f"`{row.get('activity_category')}`={row.get('count')}" for row in counts))
+    activity_rows = [row for row in (window.get("local_activity_during_window") or []) if isinstance(row, dict)]
+    if not activity_rows:
+        lines.append("- No local activity rows matched this window.")
+    for row in activity_rows[:25]:
+        lines.append(
+            f"- `{row.get('event_time_utc') or ''}` `{row.get('activity_category') or ''}` "
+            f"`{row.get('description') or ''}` path `{_display_evidence_path(row.get('path'))}` "
+            f"source `{row.get('source_table') or ''}`"
+        )
+    lines.append("")
+    return lines
+
+
+def _incoming_remote_access_events(
+    db: Database,
+    case_id: str,
+    *,
+    remote: str | None,
+    limit: int,
+) -> list[dict[str, Any]]:
+    params: list[Any] = [case_id]
+    remote_filter = ""
+    if remote:
+        remote_filter = """
+          AND lower(
+            coalesce(remote_host, '') || ' ' ||
+            coalesce(payload_data1, '') || ' ' ||
+            coalesce(payload_data2, '') || ' ' ||
+            coalesce(payload_data3, '') || ' ' ||
+            coalesce(payload_data4, '') || ' ' ||
+            coalesce(payload_data5, '') || ' ' ||
+            coalesce(payload_data6, '')
+          ) LIKE ?
+        """
+        params.append(f"%{remote.casefold()}%")
+    params.append(limit)
+    rows = _query_report_rows(
+        db,
+        case_id,
+        "evtx_events",
+        f"""
+        SELECT id, image_id, time_created, event_id, provider, channel, computer,
+               user_name, remote_host, payload_data1, payload_data2, payload_data3,
+               payload_data4, payload_data5, payload_data6, map_description,
+               source_file, row_number, record_number
+        FROM evtx_events
+        WHERE case_id = ?
+          AND (
+            (provider = 'Microsoft-Windows-Security-Auditing'
+             AND event_id IN ('4624', '4625', '4648', '4778', '4779'))
+            OR
+            (provider = 'Microsoft-Windows-TerminalServices-LocalSessionManager'
+             AND event_id IN ('21', '24', '25'))
+          )
+          {remote_filter}
+        ORDER BY time_created
+        LIMIT ?
+        """,
+        params,
+    )
+    needle = remote.casefold() if remote else ""
+    events: list[dict[str, Any]] = []
+    for row in rows:
+        event = _normalize_incoming_remote_access_event(row)
+        if not event:
+            continue
+        if needle and needle not in str(event.get("remote_source") or "").casefold() and needle not in str(event.get("remote_ip") or "").casefold():
+            continue
+        events.append(event)
+    return _dedupe_remote_access_events(events)
+
+
+def _normalize_incoming_remote_access_event(row: dict[str, Any]) -> dict[str, Any] | None:
+    event_id = str(row.get("event_id") or "")
+    logon_type = _evtx_logon_type(row)
+    remote_source = _remote_source_from_event(row)
+    if event_id in {"4624", "4625"} and logon_type not in {"3", "10"}:
+        return None
+    if event_id == "4648" and not remote_source:
+        return None
+    if not remote_source or _remote_source_is_local(remote_source):
+        return None
+    target_account = _event_target_account(row)
+    remote_ip = _extract_ip_address(remote_source) or _extract_ip_address(" ".join(str(row.get(key) or "") for key in ("payload_data1", "payload_data2", "payload_data3", "payload_data4", "payload_data5", "payload_data6")))
+    event = {
+        "id": row.get("id"),
+        "image_id": row.get("image_id"),
+        "time_created": row.get("time_created") or "",
+        "event_id": event_id,
+        "event_meaning": _incoming_remote_event_meaning(event_id),
+        "provider": row.get("provider") or "",
+        "channel": row.get("channel") or "",
+        "computer": row.get("computer") or "",
+        "user_name": row.get("user_name") or "",
+        "target_account": target_account,
+        "logon_type": logon_type,
+        "remote_source": remote_source,
+        "remote_ip": remote_ip,
+        "credential_result": _remote_access_credential_result(row),
+        "description": row.get("map_description") or "",
+        "payload_data1": row.get("payload_data1") or "",
+        "payload_data2": row.get("payload_data2") or "",
+        "payload_data3": row.get("payload_data3") or "",
+        "payload_data4": row.get("payload_data4") or "",
+        "payload_data5": row.get("payload_data5") or "",
+        "payload_data6": row.get("payload_data6") or "",
+        "source_file": row.get("source_file") or "",
+        "row_number": row.get("row_number"),
+        "record_number": row.get("record_number"),
+    }
+    return event
+
+
+def _incoming_remote_access_windows(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for event in events:
+        key = _remote_window_key(event)
+        grouped.setdefault(key, []).append(event)
+    windows: list[dict[str, Any]] = []
+    gap = timedelta(minutes=45)
+    for group_events in grouped.values():
+        current: list[dict[str, Any]] = []
+        last_time: datetime | None = None
+        for event in sorted(group_events, key=lambda row: str(row.get("time_created") or "")):
+            timestamp = _parse_report_timestamp(event.get("time_created"))
+            if timestamp is None:
+                continue
+            event_id = str(event.get("event_id") or "")
+            is_disconnect = event_id in {"24", "4779"}
+            if not current and is_disconnect:
+                continue
+            if current and last_time and timestamp > last_time + gap and not is_disconnect:
+                windows.append(_remote_window_from_events(current))
+                current = []
+            current.append(event)
+            last_time = timestamp
+        if current:
+            windows.append(_remote_window_from_events(current))
+    windows.sort(key=lambda row: row.get("window_start_utc") or datetime.min)
+    return windows
+
+
+def _remote_window_from_events(events: list[dict[str, Any]]) -> dict[str, Any]:
+    times = [_parse_report_timestamp(event.get("time_created")) for event in events]
+    real_times = [timestamp for timestamp in times if timestamp is not None]
+    start = min(real_times) if real_times else None
+    end = max(real_times) if real_times else start
+    remote_sources = [str(event.get("remote_source") or "") for event in events if event.get("remote_source")]
+    remote_ips = [str(event.get("remote_ip") or "") for event in events if event.get("remote_ip")]
+    users = sorted(
+        {
+            str(event.get("target_account") or event.get("user_name") or "")
+            for event in events
+            if event.get("target_account") or event.get("user_name")
+        }
+    )
+    event_ids = [str(event.get("event_id") or "") for event in events]
+    remote_source = _most_common(remote_sources)
+    return {
+        "label": f"incoming remote access from {remote_source}" if remote_source else "incoming remote access",
+        "window_type": "incoming_remote_access",
+        "window_start_utc": start,
+        "window_end_utc": end,
+        "remote_source": remote_source,
+        "remote_ip": _most_common(remote_ips),
+        "user_names": users,
+        "successful_logon_count": event_ids.count("4624") + event_ids.count("21") + event_ids.count("25"),
+        "failed_logon_count": event_ids.count("4625"),
+        "explicit_credential_count": event_ids.count("4648"),
+        "rdp_session_event_count": sum(1 for event_id in event_ids if event_id in {"21", "24", "25", "4778", "4779"}),
+        "event_count": len(events),
+        "events": events,
+    }
+
+
+def _custom_incident_window(
+    *,
+    start: str | None,
+    end: str | None,
+    label: str | None,
+    remote: str | None,
+) -> dict[str, Any] | None:
+    if not start and not end:
+        return None
+    start_dt = _parse_report_timestamp(start) if start else None
+    end_dt = _parse_report_timestamp(end) if end else start_dt
+    return {
+        "label": label or "custom incident window",
+        "window_type": "custom",
+        "window_start_utc": start_dt,
+        "window_end_utc": end_dt,
+        "remote_source": remote or "",
+        "remote_ip": _extract_ip_address(remote or ""),
+        "user_names": [],
+        "successful_logon_count": 0,
+        "failed_logon_count": 0,
+        "explicit_credential_count": 0,
+        "rdp_session_event_count": 0,
+        "event_count": 0,
+        "events": [],
+    }
+
+
+def _incident_window_activity_rows(
+    db: Database,
+    case_id: str,
+    window: dict[str, Any],
+    *,
+    contains: str | None,
+    limit: int,
+) -> list[dict[str, Any]]:
+    start = window.get("window_start_utc") if isinstance(window.get("window_start_utc"), datetime) else _parse_report_timestamp(window.get("window_start_utc"))
+    end = window.get("window_end_utc") if isinstance(window.get("window_end_utc"), datetime) else _parse_report_timestamp(window.get("window_end_utc"))
+    candidate_limit = max(limit * 100, 5000)
+    rows = [
+        row for row in _local_activity_rows(db, case_id, limit=candidate_limit)
+        if _timestamp_in_window(row.get("event_time_utc"), start, end)
+    ]
+    if contains:
+        needle = contains.casefold()
+        rows = [
+            row for row in rows
+            if needle in " ".join(
+                str(row.get(key) or "")
+                for key in ("description", "application", "path", "url", "source_file", "source_table")
+            ).casefold()
+        ]
+    return _rank_vpn_window_activity(_dedupe_activity_rows(rows))[:limit]
+
+
+def _incident_window_cloud_context_rows(
+    db: Database,
+    case_id: str,
+    window: dict[str, Any],
+    *,
+    remote_source: Any,
+    remote_ip: Any,
+    contains: str | None,
+    limit: int,
+) -> list[dict[str, Any]]:
+    start = _format_report_window_time(window.get("window_start_utc"))
+    end = _format_report_window_time(window.get("window_end_utc"))
+    tokens = [
+        token.casefold()
+        for token in (contains, remote_source, remote_ip, "azure", "vm", "virtual machine", "cloud", "onedrive", "sharepoint")
+        if token
+    ]
+    rows = _query_report_rows(
+        db,
+        case_id,
+        "windows_search_indexed_content",
+        """
+        SELECT id, gather_time, timestamp, item_path, item_name, item_type,
+               content_field, content_sha256, content_length, opensearch_document_id,
+               source_table, source_record_id, source_csv, row_number
+        FROM windows_search_indexed_content
+        WHERE case_id = ?
+          AND COALESCE(timestamp, gather_time, '') >= ?
+          AND COALESCE(timestamp, gather_time, '') <= ?
+        ORDER BY COALESCE(timestamp, gather_time)
+        LIMIT ?
+        """,
+        (case_id, start, end, max(limit * 20, 200)),
+    )
+    context_rows: list[dict[str, Any]] = []
+    for row in rows:
+        haystack = " ".join(str(row.get(key) or "") for key in ("item_path", "item_name", "item_type", "content_field")).casefold()
+        if tokens and not any(token in haystack for token in tokens):
+            continue
+        context_rows.append(
+            {
+                "event_time_utc": row.get("timestamp") or row.get("gather_time") or "",
+                "context_type": "windows_search_indexed_content",
+                "source_table": "windows_search_indexed_content",
+                "source_row_id": row.get("id"),
+                "title": row.get("item_name") or _path_basename(row.get("item_path")),
+                "path": row.get("item_path"),
+                "item_type": row.get("item_type"),
+                "content_sha256": row.get("content_sha256"),
+                "content_length": row.get("content_length"),
+                "opensearch_document_id": row.get("opensearch_document_id"),
+                "source_file": row.get("source_csv"),
+                "row_number": row.get("row_number"),
+            }
+        )
+        if len(context_rows) >= limit:
+            break
+    return context_rows
+
+
+def _remote_access_attribution_assessment(window: dict[str, Any]) -> str:
+    statements: list[str] = []
+    if window.get("successful_logon_count"):
+        statements.append("A successful remote/session logon event is present; this supports use of valid credentials or equivalent authenticated access during this window.")
+    if window.get("failed_logon_count") and window.get("successful_logon_count"):
+        statements.append("Failed logons also appear in this window, so credential trial or password-spray activity should be considered before the successful access.")
+    elif window.get("failed_logon_count"):
+        statements.append("Only failed logon evidence is present in this window.")
+    if window.get("usb_device_count"):
+        statements.append("External-storage connection intervals overlap this same window.")
+    if window.get("cloud_context_count"):
+        statements.append("Cloud/account metadata references also appear during this window.")
+    if window.get("local_activity_count"):
+        statements.append("Local application/file activity was recorded during this window.")
+    if not statements:
+        statements.append("The selected window has limited direct attribution evidence in the currently parsed tables.")
+    statements.append("Operator identity still requires corroboration beyond the remote account name.")
+    return " ".join(statements)
+
+
+def _remote_window_key(event: dict[str, Any]) -> str:
+    return str(event.get("remote_ip") or event.get("remote_source") or "").casefold()
+
+
+def _windows_overlap(start_value: Any, end_value: Any, filter_start: datetime | None, filter_end: datetime | None) -> bool:
+    start = start_value if isinstance(start_value, datetime) else _parse_report_timestamp(start_value)
+    end = end_value if isinstance(end_value, datetime) else _parse_report_timestamp(end_value)
+    end = end or start
+    start = start or end
+    if start is None or end is None:
+        return False
+    if filter_start and end < filter_start:
+        return False
+    if filter_end and start > filter_end:
+        return False
+    return True
+
+
+def _remote_source_from_event(row: dict[str, Any]) -> str:
+    remote_host = str(row.get("remote_host") or "").strip()
+    if remote_host and remote_host not in {"-", "-:-", "- (-)"}:
+        return remote_host
+    for key in ("payload_data2", "payload_data3", "payload_data4", "payload_data5", "payload_data6", "payload_data1"):
+        text = str(row.get(key) or "")
+        match = re.search(r"(?:Source\s+Network\s+Address|SourceAddress|IpAddress|Client\s+Address|TargetServerName):\s*([^\s;]+)", text, flags=re.I)
+        if match:
+            return match.group(1).strip()
+    return ""
+
+
+def _remote_source_is_local(value: str) -> bool:
+    folded = value.strip().casefold()
+    if not folded or folded in {"-", "-:-", "- (-)", "local", "unknown (local)", "::1", "127.0.0.1", "localhost"}:
+        return True
+    ip = _extract_ip_address(folded)
+    return ip in {"127.0.0.1", "0.0.0.0"}
+
+
+def _extract_ip_address(value: Any) -> str:
+    text = str(value or "")
+    match = re.search(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", text)
+    return match.group(0) if match else ""
+
+
+def _evtx_logon_type(row: dict[str, Any]) -> str:
+    for key in ("payload_data2", "payload_data3", "payload_data4", "payload_data5", "payload_data6"):
+        match = re.search(r"\bLogonType\s+(\d+)\b", str(row.get(key) or ""), flags=re.I)
+        if match:
+            return match.group(1)
+    return ""
+
+
+def _event_target_account(row: dict[str, Any]) -> str:
+    value = str(row.get("payload_data1") or "").strip()
+    match = re.search(r"Target:\s*(.+)$", value, flags=re.I)
+    if match:
+        account = match.group(1).strip()
+        if account and account != "-":
+            return account
+    user_name = str(row.get("user_name") or "").strip()
+    if user_name and user_name not in {"-", "-\\-"}:
+        return user_name
+    return ""
+
+
+def _remote_access_credential_result(row: dict[str, Any]) -> str:
+    event_id = str(row.get("event_id") or "")
+    if event_id in {"4624", "21", "25", "4778"}:
+        return "successful_or_reconnected"
+    if event_id == "4648":
+        return "explicit_credentials_used"
+    if event_id in {"24", "4779"}:
+        return "session_disconnected"
+    if event_id != "4625":
+        return ""
+    return _bruteforce_credential_result(row)
+
+
+def _incoming_remote_event_meaning(event_id: str) -> str:
+    return {
+        "4624": "successful_logon",
+        "4625": "failed_logon",
+        "4648": "explicit_credentials",
+        "4778": "rdp_reconnect",
+        "4779": "rdp_disconnect",
+        "21": "rdp_session_logon",
+        "24": "rdp_session_disconnect",
+        "25": "rdp_session_reconnect",
+    }.get(event_id, "remote_access_event")
+
+
+def _most_common(values: list[str]) -> str:
+    counts: dict[str, int] = {}
+    for value in values:
+        if not value:
+            continue
+        counts[value] = counts.get(value, 0) + 1
+    if not counts:
+        return ""
+    return sorted(counts.items(), key=lambda item: (-item[1], item[0]))[0][0]
+
+
+def _dedupe_activity_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[tuple[str, str, str, str]] = set()
+    deduped: list[dict[str, Any]] = []
+    for row in rows:
+        key = (
+            str(row.get("source_table") or ""),
+            str(row.get("event_time_utc") or ""),
+            str(row.get("description") or "").casefold(),
+            str(row.get("path") or "").replace("\\", "/").lstrip("/").casefold(),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(row)
+    return deduped
+
+
+def _dedupe_remote_access_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[tuple[str, str, str, str, str, str]] = set()
+    positions: dict[tuple[str, str, str, str, str, str], int] = {}
+    deduped: list[dict[str, Any]] = []
+    for event in events:
+        key = (
+            str(event.get("time_created") or ""),
+            str(event.get("event_id") or ""),
+            str(event.get("remote_ip") or event.get("remote_source") or ""),
+            str(event.get("target_account") or event.get("user_name") or ""),
+            str(event.get("logon_type") or ""),
+            str(event.get("payload_data1") or ""),
+        )
+        if key in seen:
+            existing_index = positions[key]
+            existing = deduped[existing_index]
+            if "vsc-work" in str(existing.get("source_file") or "") and "vsc-work" not in str(event.get("source_file") or ""):
+                deduped[existing_index] = event
+            continue
+        seen.add(key)
+        positions[key] = len(deduped)
+        deduped.append(event)
+    return deduped
+
+
 def _vpn_context_markdown(report: dict[str, Any]) -> list[str]:
     context = report.get("vpn_context") if isinstance(report.get("vpn_context"), list) else []
     rows = report.get("vpn_context_rows") if isinstance(report.get("vpn_context_rows"), list) else []
@@ -3572,11 +4205,25 @@ def _vpn_window_usb_devices(db: Database, case_id: str, window: dict[str, Any], 
     end = _format_report_window_time(window.get("window_end_utc"))
     if not start or not end:
         return []
+    has_storage_devices = db.analytics_mode == "sqlite" or _duckdb_table_available(db, case_id, "usb_storage_devices")
+    storage_select = (
+        "usb_storage_devices.volume_name,\n               usb_storage_devices.product,\n               usb_storage_devices.vendor"
+        if has_storage_devices
+        else "NULL AS volume_name,\n               NULL AS product,\n               NULL AS vendor"
+    )
+    storage_join = (
+        """
+        LEFT JOIN usb_storage_devices
+          ON usb_storage_devices.id = start_event.usb_device_id
+        """
+        if has_storage_devices
+        else ""
+    )
     rows = _query_report_rows(
         db,
         case_id,
         "usb_connection_events",
-        """
+        f"""
         SELECT start_event.serial, start_event.volume_serial_number, start_event.volume_guid,
                start_event.drive_letter, start_event.event_time_utc AS session_start,
                COALESCE(
@@ -3592,12 +4239,9 @@ def _vpn_window_usb_devices(db: Database, case_id: str, window: dict[str, Any], 
                  ?
                ) AS session_end,
                start_event.event_source,
-               usb_storage_devices.volume_name,
-               usb_storage_devices.product,
-               usb_storage_devices.vendor
+               {storage_select}
         FROM usb_connection_events start_event
-        LEFT JOIN usb_storage_devices
-          ON usb_storage_devices.id = start_event.usb_device_id
+        {storage_join}
         WHERE start_event.case_id = ?
           AND start_event.event_type IN ('arrival', 'first_connected', 'partition_seen')
           AND start_event.event_time_utc <= ?

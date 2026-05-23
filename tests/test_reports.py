@@ -84,6 +84,8 @@ from forensic_orchestrator.reports import (
     persistence_report,
     registry_activity_report,
     registry_artifacts_report,
+    remote_access_attribution_markdown,
+    remote_access_attribution_report,
     rdp_remote_access_markdown,
     remote_access_sessions_report,
     vpn_activity_report,
@@ -6758,6 +6760,156 @@ def test_remote_access_report_correlates_vpn_rdp_and_cache(tmp_path):
     assert session["rdp_visual_observations"][0]["interpretation_level"] == "semantic"
     assert "Semantic visual interpretations" in markdown
     assert "contact-sheet.jpg" in markdown
+
+
+def test_remote_access_attribution_report_correlates_incoming_auth_usb_and_cloud_context(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    db.insert_evtx_events(
+        [
+            {
+                "id": str(uuid.uuid4()),
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "output-evtx",
+                "tool_name": "EvtxECmd",
+                "source_csv": tmp_path / "evtx.csv",
+                "row_number": 1,
+                "record_number": "1",
+                "event_record_id": "1",
+                "time_created": "2020-11-14 05:10:00.0000000",
+                "event_id": "4625",
+                "level": "Information",
+                "provider": "Microsoft-Windows-Security-Auditing",
+                "channel": "Security",
+                "computer": "SRL-FORGE",
+                "user_name": "-\\-",
+                "remote_host": "cobra (52.249.198.56)",
+                "payload_data1": "Target: SRL-FORGE\\fredr",
+                "payload_data2": "LogonType 10",
+                "payload_data3": "FailureReason1: the cause is either a bad username or authentication information",
+                "payload_data4": "FailureReason2: user name is correct but the password is wrong",
+                "map_description": "Failed logon",
+                "source_file": "Security.evtx",
+                "payload": "{}",
+            },
+            {
+                "id": str(uuid.uuid4()),
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "output-evtx",
+                "tool_name": "EvtxECmd",
+                "source_csv": tmp_path / "evtx.csv",
+                "row_number": 2,
+                "record_number": "2",
+                "event_record_id": "2",
+                "time_created": "2020-11-14 05:12:00.0000000",
+                "event_id": "4624",
+                "level": "Information",
+                "provider": "Microsoft-Windows-Security-Auditing",
+                "channel": "Security",
+                "computer": "SRL-FORGE",
+                "user_name": "SRL-FORGE\\fredr",
+                "remote_host": "cobra (52.249.198.56)",
+                "payload_data1": "Target: SRL-FORGE\\fredr",
+                "payload_data2": "LogonType 10",
+                "payload_data3": "LogonId: 0x123",
+                "map_description": "Successful logon",
+                "source_file": "Security.evtx",
+                "payload": "{}",
+            },
+            {
+                "id": str(uuid.uuid4()),
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "output-evtx",
+                "tool_name": "EvtxECmd",
+                "source_csv": tmp_path / "evtx.csv",
+                "row_number": 3,
+                "record_number": "3",
+                "event_record_id": "3",
+                "time_created": "2020-11-14 05:30:00.0000000",
+                "event_id": "4779",
+                "level": "Information",
+                "provider": "Microsoft-Windows-Security-Auditing",
+                "channel": "Security",
+                "computer": "SRL-FORGE",
+                "user_name": "SRL-FORGE\\fredr",
+                "remote_host": "cobra (52.249.198.56)",
+                "payload_data1": "RDP-Tcp#7",
+                "payload_data3": "LogonId: 0x123",
+                "map_description": "RDP disconnecting",
+                "source_file": "Security.evtx",
+                "payload": "{}",
+            },
+        ]
+    )
+    db.insert_usb_connection_events(
+        [
+            {
+                "id": str(uuid.uuid4()),
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "usb_device_id": "usb-1",
+                "serial": "USB123",
+                "volume_serial_number": "ABCD-1234",
+                "volume_guid": "{volume-guid}",
+                "drive_letter": "E:",
+                "event_time_utc": "2020-11-14 05:00:00",
+                "event_type": "arrival",
+                "event_source": "partition_diagnostic",
+                "event_id": "1006",
+                "source_path": "Partition.evtx",
+            }
+        ]
+    )
+    db.insert_windows_search_indexed_content(
+        [
+            {
+                "id": str(uuid.uuid4()),
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "output-search",
+                "tool_name": "WindowsSearchParser",
+                "source_csv": tmp_path / "search.csv",
+                "source_table": "SystemIndex_0A",
+                "source_record_id": "77",
+                "row_number": 77,
+                "work_id": "77",
+                "gather_time": "2020-11-14 05:15:00",
+                "timestamp": "2020-11-14 05:15:00",
+                "item_path": "/fred.rocba@outlook.com/Inbox/Azure/Get the most from your new virtual machine",
+                "item_name": "Get the most from your new virtual machine",
+                "item_type": "MAPI/IPM.Note.Read",
+                "content_field": "Body",
+                "content_text": "Azure VM setup",
+                "content_sha256": "abc",
+                "content_length": 14,
+                "opensearch_document_id": "case-1:search:77",
+            }
+        ]
+    )
+
+    report = remote_access_attribution_report(db, case.id, remote="52.249.198.56", limit=10)
+
+    assert report["summary"]["window_count"] == 1
+    window = report["remote_access_windows"][0]
+    assert window["remote_ip"] == "52.249.198.56"
+    assert window["successful_logon_count"] == 1
+    assert window["failed_logon_count"] == 1
+    assert window["usb_device_count"] == 1
+    assert window["cloud_context_count"] == 1
+    markdown = remote_access_attribution_markdown(report)
+    assert "valid credentials" in markdown
+    assert "USB123" in markdown
+    assert "Azure" in markdown
 
 
 def test_vpn_local_activity_report_summarizes_endpoint_activity_during_vpn(tmp_path):
