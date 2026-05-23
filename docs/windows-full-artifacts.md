@@ -102,6 +102,7 @@ Note: native cloud parsers provide local sync evidence; browser and WebCache par
 
 ### System Information
 
+- `SetupApiParser`
 - `RegistryArtifactParser`
 - `RegistryParser`
 - `RECmd`
@@ -737,6 +738,18 @@ internal-windows-mail-parser {artifact:windows_mail_data} --csv {output}
 
 ```text
 internal-messaging-parser {artifact:messaging_app_data} --csv {output}
+```
+
+### SetupApiParser
+
+- Type: `internal_setupapi`
+- Outputs: `csv`
+- Artifact inputs:
+  - name=`setupapi_logs`; source=`Windows/INF`; destination=`SetupAPI`
+- Command template:
+
+```text
+internal-setupapi-parser {artifact:setupapi_logs} --csv {output}
 ```
 
 ### ArchiveInventoryParser

@@ -69,6 +69,7 @@ from forensic_orchestrator.tools.normalized import (
     normalized_recycle_row,
     normalized_registry_hive_row,
     normalized_sam_account_row,
+    normalized_setupapi_device_event_row,
     normalized_srum_record_row,
     normalized_spotify_artifact_row,
     normalized_telemetry_artifact_row,
@@ -150,6 +151,7 @@ def ingest_csv_output(
     shimcache_rows = []
     shellbag_rows = []
     usb_rows = []
+    setupapi_rows = []
     mft_rows = []
     usn_rows = []
     ntfs_logfile_rows = []
@@ -260,6 +262,7 @@ def ingest_csv_output(
         "MessagingParser",
         "RegistryParser",
         "RegistryArtifactParser",
+        "SetupApiParser",
         "RECmd",
         "AmcacheParser",
         "AppCompatCacheParser",
@@ -286,6 +289,7 @@ def ingest_csv_output(
         nonlocal shimcache_rows
         nonlocal shellbag_rows
         nonlocal usb_rows
+        nonlocal setupapi_rows
         nonlocal mft_rows
         nonlocal usn_rows
         nonlocal ntfs_logfile_rows
@@ -419,6 +423,7 @@ def ingest_csv_output(
         insert_normalized("shimcache_entries", shimcache_rows, db.insert_shimcache_entries)
         insert_normalized("shellbag_entries", shellbag_rows, db.insert_shellbag_entries)
         insert_normalized("usb_devices", usb_rows, db.insert_usb_devices)
+        insert_normalized("setupapi_device_events", setupapi_rows, db.insert_setupapi_device_events)
         usb_evidence_seen = usb_evidence_seen or bool(usb_rows)
         insert_normalized("mft_entries", mft_rows, db.insert_mft_entries)
         insert_normalized("usn_journal_entries", usn_rows, db.insert_usn_journal_entries)
@@ -516,6 +521,7 @@ def ingest_csv_output(
         shimcache_rows = []
         shellbag_rows = []
         usb_rows = []
+        setupapi_rows = []
         mft_rows = []
         usn_rows = []
         ntfs_logfile_rows = []
@@ -694,6 +700,19 @@ def ingest_csv_output(
                             )
                         )
                         usb_rows.extend(usb_rows_from_registry_artifact(registry_row))
+                    if tool_name == "SetupApiParser":
+                        setupapi_rows.append(
+                            normalized_setupapi_device_event_row(
+                                case_id=case_id,
+                                computer_id=computer_id,
+                                image_id=image_id,
+                                tool_output_id=tool_output_id,
+                                tool_name=tool_name,
+                                source_csv=path,
+                                row_number=row_number,
+                                row=dict(row),
+                            )
+                        )
                     if tool_name == "RECmd":
                         if path not in recmd_ownership_cache:
                             recmd_ownership_cache[path] = recmd_ownership_rows(path)

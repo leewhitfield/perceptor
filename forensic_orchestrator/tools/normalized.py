@@ -215,6 +215,49 @@ def normalized_zone_identifier_ads_row(
     }
 
 
+def normalized_setupapi_device_event_row(
+    *,
+    case_id: str,
+    computer_id: str,
+    image_id: str,
+    tool_output_id: str,
+    tool_name: str,
+    source_csv,
+    row_number: int,
+    row: dict[str, object],
+) -> dict[str, object]:
+    return {
+        "id": str(uuid.uuid4()),
+        "case_id": case_id,
+        "computer_id": computer_id,
+        "image_id": image_id,
+        "tool_output_id": tool_output_id,
+        "tool_name": tool_name,
+        "source_csv": source_csv,
+        "row_number": row_number,
+        "source_path": _first_text(row, "source_path", "SourcePath"),
+        "line_number": _first_text(row, "line_number", "LineNumber"),
+        "section_title": _first_text(row, "section_title", "SectionTitle"),
+        "operation": _first_text(row, "operation", "Operation"),
+        "device_instance_id": _first_text(row, "device_instance_id", "DeviceInstanceId"),
+        "device_class": _first_text(row, "device_class", "DeviceClass"),
+        "vendor_id": _first_text(row, "vendor_id", "VendorId"),
+        "product_id": _first_text(row, "product_id", "ProductId"),
+        "serial": _first_text(row, "serial", "Serial"),
+        "service": _first_text(row, "service", "Service"),
+        "inf_path": _first_text(row, "inf_path", "InfPath"),
+        "driver_package": _first_text(row, "driver_package", "DriverPackage"),
+        "start_time_utc": _first_text(row, "start_time_utc", "StartTimeUtc"),
+        "end_time_utc": _first_text(row, "end_time_utc", "EndTimeUtc"),
+        "event_time_utc": _first_text(row, "event_time_utc", "EventTimeUtc"),
+        "status": _first_text(row, "status", "Status"),
+        "confidence": _first_text(row, "confidence", "Confidence"),
+        "details_json": _first_text(row, "details_json", "DetailsJson") or "{}",
+        "error": _first_text(row, "error", "Error"),
+        "created_at": utc_now(),
+    }
+
+
 def normalized_thumbcache_entry_row(
     *,
     case_id: str,
@@ -1368,6 +1411,10 @@ def normalized_mailbox_message_row(
         "priority": _text(row.get("priority")),
         "sensitivity": _text(row.get("sensitivity")),
         "x_originating_ip": _text(row.get("x_originating_ip")),
+        "message_flags": _text(row.get("message_flags")),
+        "message_status": _text(row.get("message_status")),
+        "message_status_flags": _text(row.get("message_status_flags")),
+        "disposition_notification_to": _text(row.get("disposition_notification_to")),
         "subject": _text(row.get("subject")),
         "sender": _text(row.get("sender")),
         "recipients": _text(row.get("recipients")),

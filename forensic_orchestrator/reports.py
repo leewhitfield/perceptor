@@ -12308,6 +12308,8 @@ def external_storage_report(db: Database, case_id: str, *, limit: int = 500) -> 
         limit=limit,
     )
     timeline = _dedupe_timeline_events([*timeline, *_external_storage_partition_event_timeline(db, case_id, devices)])
+    setupapi_observations = _external_storage_setupapi_rows(db, case_id, devices=devices, limit=limit)
+    timeline = _dedupe_timeline_events([*timeline, *_setupapi_storage_timeline(setupapi_observations)])
     timeline.sort(key=lambda item: (item.get("timestamp") or "", item.get("event_type") or "", item.get("description") or ""))
     timeline = timeline[:limit]
     event_logs = _external_storage_event_log_rows(db, case_id, devices=devices, limit=limit)
@@ -12334,6 +12336,7 @@ def external_storage_report(db: Database, case_id: str, *, limit: int = 500) -> 
                 int(row.get("file_activity_count") or 0) for row in unattributed_volume_activity
             ),
             "event_log_observation_count": len(event_logs),
+            "setupapi_observation_count": len(setupapi_observations),
             "registry_evidence_counts": registry_counts,
             "file_activity_source_counts": [
                 {"source_artifact_type": key, "count": value}
@@ -12353,6 +12356,7 @@ def external_storage_report(db: Database, case_id: str, *, limit: int = 500) -> 
         "file_activity": file_activity,
         "unattributed_removable_volume_activity": unattributed_volume_activity,
         "event_log_observations": event_logs,
+        "setupapi_observations": setupapi_observations,
         "registry_evidence_counts": registry_counts,
         "total_returned": {
             "devices": len(devices),
@@ -12360,6 +12364,7 @@ def external_storage_report(db: Database, case_id: str, *, limit: int = 500) -> 
             "file_activity": len(file_activity),
             "unattributed_removable_volume_activity": len(unattributed_volume_activity),
             "event_log_observations": len(event_logs),
+            "setupapi_observations": len(setupapi_observations),
         },
     }
 
@@ -12379,6 +12384,7 @@ def external_storage_markdown(report: dict[str, Any]) -> str:
         f"- Grouped file/folder activity rows: `{summary.get('file_activity_count', 0)}`",
         f"- Removable-volume activity not tied to a physical device row: `{summary.get('unattributed_removable_file_activity_count', 0)}` rows across `{summary.get('unattributed_removable_volume_count', 0)}` volume(s)",
         f"- Storage-related event-log observations: `{summary.get('event_log_observation_count', 0)}`",
+        f"- SetupAPI device-install observations: `{summary.get('setupapi_observation_count', 0)}`",
         f"- Dedupe: {summary.get('dedupe_note')}",
         "",
     ]
@@ -12495,7 +12501,85 @@ def external_storage_markdown(report: dict[str, Any]) -> str:
         lines.append("")
     else:
         lines.extend(["No additional storage-related event-log observations were found.", ""])
+    setupapi = report.get("setupapi_observations") or []
+    lines.extend(["## SetupAPI Device Install Observations", ""])
+    if setupapi:
+        for row in setupapi[:50]:
+            lines.append(
+                "- "
+                f"`{row.get('event_time_utc') or ''}` "
+                f"`{row.get('operation') or ''}` "
+                f"`{row.get('device_instance_id') or ''}` "
+                f"serial `{row.get('serial') or ''}` "
+                f"VID/PID `{row.get('vendor_id') or ''}`/`{row.get('product_id') or ''}` "
+                f"service `{row.get('service') or ''}` "
+                f"source `{row.get('source_path') or ''}`"
+            )
+        if len(setupapi) > 50:
+            lines.append(f"- Report limited display to first 50 of `{len(setupapi)}` SetupAPI rows.")
+        lines.append("")
+    else:
+        lines.extend(["No SetupAPI device-install observations were found.", ""])
     return "\n".join(lines)
+
+
+def _external_storage_setupapi_rows(
+    db: Database,
+    case_id: str,
+    *,
+    devices: list[dict[str, Any]],
+    limit: int,
+) -> list[dict[str, Any]]:
+    rows = _query_report_rows(
+        db,
+        case_id,
+        "setupapi_device_events",
+        """
+        SELECT *
+        FROM setupapi_device_events
+        WHERE case_id = ?
+          AND (
+            UPPER(COALESCE(device_class, '')) IN ('USBSTOR', 'SCSI', 'WPDBUSENUM')
+            OR LOWER(COALESCE(service, '')) IN ('usbstor', 'uaspstor', 'wpdmtp')
+            OR UPPER(COALESCE(device_instance_id, '')) LIKE 'USBSTOR\\%'
+            OR UPPER(COALESCE(device_instance_id, '')) LIKE 'SCSI\\DISK%'
+            OR UPPER(COALESCE(device_instance_id, '')) LIKE 'WPDBUSENUM\\%'
+          )
+        ORDER BY event_time_utc, source_path, line_number
+        LIMIT ?
+        """,
+        (case_id, limit),
+    )
+    device_serials = {
+        _external_storage_serial_key(row.get("serial"))
+        for row in devices
+        if _external_storage_serial_key(row.get("serial"))
+    }
+    for row in rows:
+        serial_key = _external_storage_serial_key(row.get("serial"))
+        row["matches_reported_device"] = "true" if serial_key and serial_key in device_serials else "false"
+    return rows
+
+
+def _setupapi_storage_timeline(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    for row in rows:
+        timestamp = row.get("event_time_utc")
+        if not timestamp:
+            continue
+        events.append(
+            {
+                "timestamp": timestamp,
+                "event_type": row.get("operation") or "setupapi_device_event",
+                "source_artifact_type": "setupapi.dev.log",
+                "usb_serial": row.get("serial") or "",
+                "usb_volume_serial_number": "",
+                "description": row.get("device_instance_id") or row.get("section_title") or "",
+                "source_path": row.get("source_path") or "",
+                "confidence": row.get("confidence") or "",
+            }
+        )
+    return events
 
 
 def _external_storage_devices(db: Database, case_id: str, *, limit: int) -> list[dict[str, Any]]:
@@ -17822,6 +17906,7 @@ def device_inventory_report(db: Database, case_id: str, *, limit: int = 250) -> 
         """,
         (case_id, limit),
     )
+    rows = _merge_setupapi_device_inventory_rows(db, case_id, rows, limit=limit)
     counts: dict[str, int] = {}
     for row in rows:
         key = str(row.get("device_type") or "(unknown)")
@@ -17838,6 +17923,78 @@ def device_inventory_report(db: Database, case_id: str, *, limit: int = 250) -> 
         "devices": rows,
         "total_returned": len(rows),
     }
+
+
+def _merge_setupapi_device_inventory_rows(
+    db: Database,
+    case_id: str,
+    rows: list[dict[str, Any]],
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
+    existing_keys = {
+        (
+            str(row.get("device_instance_id") or "").lower(),
+            str(row.get("serial") or "").lower(),
+            str(row.get("vendor_id") or "").lower(),
+            str(row.get("product_id") or "").lower(),
+        )
+        for row in rows
+    }
+    setupapi_rows = _query_report_rows(
+        db,
+        case_id,
+        "setupapi_device_events",
+        """
+        SELECT
+          computer_id,
+          image_id,
+          COALESCE(NULLIF(device_class, ''), '(setupapi)') AS device_type,
+          COALESCE(NULLIF(serial, ''), NULLIF(device_instance_id, ''), '(unknown)') AS device_identifier,
+          vendor_id,
+          product_id,
+          '' AS vendor,
+          '' AS product,
+          '' AS revision,
+          device_instance_id AS friendly_name,
+          serial,
+          device_instance_id AS instance_id,
+          '' AS parent_id_prefix,
+          service AS device_service,
+          '' AS user_profile,
+          '' AS drive_letter,
+          '' AS volume_guid,
+          '' AS volume_serial_number,
+          '' AS volume_name,
+          MIN(event_time_utc) AS first_observed_utc,
+          MAX(event_time_utc) AS last_observed_utc,
+          COUNT(*) AS evidence_row_count,
+          'setupapi.dev.log' AS source_artifacts,
+          GROUP_CONCAT(DISTINCT source_path) AS source_paths
+        FROM setupapi_device_events
+        WHERE case_id = ?
+          AND COALESCE(NULLIF(device_instance_id, ''), NULLIF(serial, '')) IS NOT NULL
+        GROUP BY
+          computer_id, image_id, device_type, device_identifier, vendor_id,
+          product_id, friendly_name, serial, instance_id, device_service
+        ORDER BY last_observed_utc DESC, evidence_row_count DESC
+        LIMIT ?
+        """,
+        (case_id, limit),
+    )
+    merged = list(rows)
+    for row in setupapi_rows:
+        key = (
+            str(row.get("instance_id") or "").lower(),
+            str(row.get("serial") or "").lower(),
+            str(row.get("vendor_id") or "").lower(),
+            str(row.get("product_id") or "").lower(),
+        )
+        if key in existing_keys:
+            continue
+        existing_keys.add(key)
+        merged.append(row)
+    return merged[:limit]
 
 
 def _copied_indicator_filter_sql(

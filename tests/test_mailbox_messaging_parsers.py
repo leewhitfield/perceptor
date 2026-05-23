@@ -57,6 +57,9 @@ def test_mailbox_parser_extracts_eml_and_ingests_messages(tmp_path, monkeypatch)
         "Reply-To: Jane Reply <reply@example.test>\n"
         "Importance: high\n"
         "X-Originating-IP: [192.0.2.10]\n"
+        "Status: RO\n"
+        "X-Status: AF\n"
+        "Disposition-Notification-To: Jane <jane@example.test>\n"
         "Date: Sat, 14 Nov 2020 04:29:51 +0000\n"
         "\n"
         "The file is attached.\n",
@@ -87,7 +90,8 @@ def test_mailbox_parser_extracts_eml_and_ingests_messages(tmp_path, monkeypatch)
         "mailbox_messages",
         """
         SELECT source_format, parser_status, user_profile, attachment_count, has_attachments,
-               conversation_index, conversation_topic, references_header, reply_to, importance, x_originating_ip
+               conversation_index, conversation_topic, references_header, reply_to, importance, x_originating_ip,
+               message_status, message_status_flags, disposition_notification_to
         FROM mailbox_messages
         """
     )
@@ -117,6 +121,9 @@ def test_mailbox_parser_extracts_eml_and_ingests_messages(tmp_path, monkeypatch)
     assert metadata["reply_to"] == "Jane Reply <reply@example.test>"
     assert metadata["importance"] == "high"
     assert metadata["x_originating_ip"] == "[192.0.2.10]"
+    assert metadata["message_status"] == "RO;AF"
+    assert metadata["message_status_flags"] == "answered;flagged;old;read"
+    assert metadata["disposition_notification_to"] == "Jane <jane@example.test>"
     assert int(metadata["attachment_count"]) == 0
     assert metadata["has_attachments"] == "0"
     assert content_ref["content_role"] == "message_body"

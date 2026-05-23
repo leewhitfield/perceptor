@@ -48,6 +48,7 @@ from .registry import build_tool_command, required_paths
 from .rdp_cache import parse_rdp_cache_to_csv
 from .rdp_vision_review import parse_rdp_vision_review_to_csv
 from .sam import parse_sam_to_csv
+from .setupapi import parse_setupapi_logs_to_csv
 from .spotify import parse_spotify_artifacts_to_csv
 from .srum import parse_srum_artifacts_to_csv
 from .ual import parse_ual_artifacts_to_csv
@@ -181,6 +182,7 @@ def validate_tool(
         "internal_firefox",
         "internal_registry",
         "internal_registry_artifacts",
+        "internal_setupapi",
         "internal_file_metadata",
         "internal_file_content",
         "internal_archive_inventory",
@@ -852,6 +854,34 @@ def run_internal_package_artifacts_tool(
         artifact_name="package_artifact_profiles",
         parser_description="internal package artifact parser",
         parse_to_csv=parse_package_artifacts_to_csv,
+    )
+
+
+def run_internal_setupapi_tool(
+    *,
+    db: Database,
+    case_id: str,
+    image_id: str,
+    computer_id: str | None,
+    tool: ToolDefinition,
+    command: list[str],
+    output: Path,
+    artifacts: dict[str, Path],
+    dry_run: bool,
+) -> object:
+    return run_internal_csv_tool(
+        db=db,
+        case_id=case_id,
+        image_id=image_id,
+        computer_id=computer_id,
+        tool=tool,
+        command=command,
+        output=output,
+        artifacts=artifacts,
+        dry_run=dry_run,
+        artifact_name="setupapi_logs",
+        parser_description="internal SetupAPI device install parser",
+        parse_to_csv=parse_setupapi_logs_to_csv,
     )
 
 
@@ -1995,6 +2025,18 @@ def run_tool(
         )
     elif tool.type == "internal_package_artifacts":
         result = run_internal_package_artifacts_tool(
+            db=db,
+            case_id=case_id,
+            image_id=image_id,
+            computer_id=computer_id,
+            tool=tool,
+            command=command,
+            output=output,
+            artifacts=artifact_paths,
+            dry_run=dry_run,
+        )
+    elif tool.type == "internal_setupapi":
+        result = run_internal_setupapi_tool(
             db=db,
             case_id=case_id,
             image_id=image_id,

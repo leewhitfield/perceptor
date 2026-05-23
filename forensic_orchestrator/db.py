@@ -139,6 +139,7 @@ DEFAULT_PURGE_TABLES = (
     "shimcache_entries",
     "shellbag_entries",
     "usb_devices",
+    "setupapi_device_events",
     "mft_entries",
     "usn_journal_entries",
     "ntfs_logfile_entries",
@@ -254,6 +255,7 @@ TOOL_PURGE_TABLES = {
         "usb_devices",
         "tool_outputs",
     },
+    "SetupApiParser": {"setupapi_device_events", "tool_outputs"},
     "RECmd": {
         "registry_recentdocs",
         "registry_runmru",
@@ -1013,6 +1015,41 @@ class Database:
               ON usb_devices(case_id, image_id);
             CREATE INDEX IF NOT EXISTS idx_usb_devices_serial
               ON usb_devices(case_id, serial);
+
+            CREATE TABLE IF NOT EXISTS setupapi_device_events (
+              id TEXT PRIMARY KEY,
+              case_id TEXT NOT NULL,
+              computer_id TEXT NOT NULL,
+              image_id TEXT NOT NULL,
+              tool_output_id TEXT NOT NULL,
+              tool_name TEXT NOT NULL,
+              source_csv TEXT NOT NULL,
+              row_number INTEGER NOT NULL,
+              source_path TEXT,
+              line_number INTEGER,
+              section_title TEXT,
+              operation TEXT,
+              device_instance_id TEXT,
+              device_class TEXT,
+              vendor_id TEXT,
+              product_id TEXT,
+              serial TEXT,
+              service TEXT,
+              inf_path TEXT,
+              driver_package TEXT,
+              start_time_utc TEXT,
+              end_time_utc TEXT,
+              event_time_utc TEXT,
+              status TEXT,
+              confidence TEXT,
+              details_json TEXT,
+              error TEXT,
+              created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_setupapi_device_events_case_time
+              ON setupapi_device_events(case_id, event_time_utc);
+            CREATE INDEX IF NOT EXISTS idx_setupapi_device_events_case_serial
+              ON setupapi_device_events(case_id, serial);
 
             CREATE TABLE IF NOT EXISTS usb_storage_devices (
               id TEXT PRIMARY KEY, case_id TEXT NOT NULL, computer_id TEXT NOT NULL,
@@ -3478,6 +3515,10 @@ class Database:
               priority TEXT,
               sensitivity TEXT,
               x_originating_ip TEXT,
+              message_flags TEXT,
+              message_status TEXT,
+              message_status_flags TEXT,
+              disposition_notification_to TEXT,
               subject TEXT,
               sender TEXT,
               recipients TEXT,
@@ -3784,6 +3825,10 @@ class Database:
             "priority",
             "sensitivity",
             "x_originating_ip",
+            "message_flags",
+            "message_status",
+            "message_status_flags",
+            "disposition_notification_to",
         ):
             self._add_column_if_missing("mailbox_messages", column, "TEXT")
         for column in ("conversation_index", "conversation_topic"):
@@ -5897,6 +5942,20 @@ class Database:
             rows,
         )
 
+    def insert_setupapi_device_events(self, rows: list[dict[str, Any]]) -> None:
+        self._insert_rows(
+            "setupapi_device_events",
+            [
+                "id", "case_id", "computer_id", "image_id", "tool_output_id",
+                "tool_name", "source_csv", "row_number", "source_path", "line_number",
+                "section_title", "operation", "device_instance_id", "device_class",
+                "vendor_id", "product_id", "serial", "service", "inf_path",
+                "driver_package", "start_time_utc", "end_time_utc", "event_time_utc",
+                "status", "confidence", "details_json", "error", "created_at",
+            ],
+            rows,
+        )
+
     def delete_usb_storage_devices(self, *, case_id: str, image_id: str | None = None) -> None:
         params: list[Any] = [case_id]
         where = "case_id = ?"
@@ -6561,6 +6620,8 @@ class Database:
                 "in_reply_to", "references_header", "reply_to",
                 "conversation_index", "conversation_topic", "importance",
                 "priority", "sensitivity", "x_originating_ip", "subject", "sender",
+                "message_flags", "message_status", "message_status_flags",
+                "disposition_notification_to",
                 "recipients", "cc", "bcc", "message_date_utc", "body_text",
                 "body_html", "body_text_sha256", "body_html_sha256",
                 "body_text_length", "body_html_length", "opensearch_document_id",

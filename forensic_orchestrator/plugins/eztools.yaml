@@ -1436,6 +1436,30 @@ tools:
     outputs:
       - csv
 
+  SetupApiParser:
+    enabled: true
+    type: internal_setupapi
+    executable:
+    artifacts:
+      - name: setupapi_logs
+        source: "Windows/INF"
+        destination: "SetupAPI"
+        recursive: true
+        process_in_place: true
+        optional: true
+        patterns:
+          - "setupapi.dev.log"
+          - "setupapi.dev.log.old"
+          - "setupapi.app.log"
+    command:
+      - internal-setupapi-parser
+      - "{artifact:setupapi_logs}"
+      - "--csv"
+      - "{output}"
+    required_paths: []
+    outputs:
+      - csv
+
   TelemetryParser:
     enabled: true
     type: internal_telemetry
@@ -1956,6 +1980,7 @@ profiles:
       - RegistryParser
       - RECmd
       - RegistryArtifactParser
+      - SetupApiParser
       - SrumParser
       - UalParser
       - AmcacheParser
@@ -1982,6 +2007,7 @@ profiles:
       - RegistryParser
       - RECmd
       - RegistryArtifactParser
+      - SetupApiParser
       - SrumParser
       - UalParser
       - EvtxECmdTriage
@@ -2030,6 +2056,7 @@ profiles:
       - RegistryParser
       - RECmd
       - RegistryArtifactParser
+      - SetupApiParser
       - SrumParser
       - UalParser
       - AmcacheParser
@@ -2065,6 +2092,7 @@ profiles:
       - RegistryParser
       - RECmd
       - RegistryArtifactParser
+      - SetupApiParser
       - SrumParser
       - UalParser
       - AmcacheParser
@@ -2101,6 +2129,7 @@ profiles:
       - RegistryParser
       - RECmd
       - RegistryArtifactParser
+      - SetupApiParser
       - SrumParser
       - UalParser
       - AmcacheParser
@@ -2199,6 +2228,7 @@ profiles:
         - RegistryArtifactParser
         - SrumParser
       system_information:
+        - SetupApiParser
         - RegistryArtifactParser
         - RegistryParser
         - RECmd
@@ -2230,6 +2260,7 @@ profiles:
       - RegistryParser
       - RECmd
       - RegistryArtifactParser
+      - SetupApiParser
       - AmcacheParser
       - AppCompatCacheParser
       - PECmd
@@ -2279,6 +2310,7 @@ profiles:
       - RegistryParser
       - RECmd
       - RegistryArtifactParser
+      - SetupApiParser
       - AmcacheParser
       - AppCompatCacheParser
       - PECmd

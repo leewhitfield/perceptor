@@ -653,7 +653,9 @@ and logged as `artifact.prefetch_inventory`.
 Prefetch hash/path reference enrichment is supported without importing the
 reference dataset into case evidence. Set `FORENSIC_PREFETCH_HASH_LOOKUP_PATHS`
 to one or more tab-delimited lookup files separated by the platform path
-separator, or place the FOR500 lookup at
+separator. Set `FORENSIC_PREFETCH_HASH_LOOKUP_DIRS` to one or more directories
+to auto-discover files whose names look like Prefetch hash/path lookup lists, or
+place the FOR500 lookup at
 `/home/lee/reference/upload/FOR500_K01/Library/Analysis/prefetch_hashes_lookup.txt`.
 Matches populate `resolved_reference_*` fields on `prefetch_items` and should be
 treated as resolver enrichment, not proof of a path on the examined system unless
@@ -712,6 +714,11 @@ The project database also records computers and generated parser outputs:
   device friendly name, drive letter, volume GUID, volume serial number/name, capacity, alternate
   SCSI serial, related user profile, key/event time, and source property/value
   evidence.
+- `setupapi_device_events`: normalized `setupapi.dev.log` device install/start
+  sections with source path, line number, device instance ID, device class,
+  VID/PID, serial, service, INF/driver package, timestamp, status, and confidence.
+  These rows feed device inventory and external storage reports without storing
+  raw SetupAPI log bodies in DuckDB.
 - `usb_storage_devices`: one-row-per-storage-device summary rebuilt from USB
   evidence rows. This is the default `report usb` view.
 - `usb_file_correlations`: persisted LNK, Jump List, and Shellbag file artifact

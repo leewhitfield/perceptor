@@ -39,6 +39,10 @@ MAILBOX_FIELDS = [
     "priority",
     "sensitivity",
     "x_originating_ip",
+    "message_flags",
+    "message_status",
+    "message_status_flags",
+    "disposition_notification_to",
     "subject",
     "sender",
     "recipients",
@@ -277,6 +281,23 @@ def _message_row(
     priority = _header_limited(message, "priority") or _header_limited(message, "x-priority")
     sensitivity = _header_limited(message, "sensitivity")
     x_originating_ip = _header_limited(message, "x-originating-ip")
+    message_flags = (
+        _header_limited(message, "x-ms-exchange-organization-messageflags")
+        or _header_limited(message, "x-microsoft-message-flags")
+        or _header_limited(message, "x-message-flags")
+    )
+    message_status = ";".join(
+        part
+        for part in (
+            _header_limited(message, "status"),
+            _header_limited(message, "x-status"),
+            _header_limited(message, "x-mozilla-status"),
+            _header_limited(message, "x-mozilla-status2"),
+        )
+        if part
+    )
+    message_status_flags = _decode_message_status_flags(message_status)
+    disposition_notification_to = _header_limited(message, "disposition-notification-to")
     message_date = _message_date(_header(message, "date"))
     body_text, body_html, attachments = _message_parts(message, source_path=source_path, container=container, message_path=message_path)
     if not body_text.strip() and body_html.strip():
@@ -301,6 +322,10 @@ def _message_row(
         "priority": priority,
         "sensitivity": sensitivity,
         "x_originating_ip": x_originating_ip,
+        "message_flags": message_flags,
+        "message_status": message_status,
+        "message_status_flags": message_status_flags,
+        "disposition_notification_to": disposition_notification_to,
         "subject": subject,
         "sender": sender,
         "recipients": recipients,
@@ -355,6 +380,10 @@ def _status_row(path: Path, status: str, error: str, *, container: Path | None =
         "priority": "",
         "sensitivity": "",
         "x_originating_ip": "",
+        "message_flags": "",
+        "message_status": "",
+        "message_status_flags": "",
+        "disposition_notification_to": "",
         "subject": subject,
         "sender": "",
         "recipients": "",
@@ -589,6 +618,44 @@ def _message_date(value: str) -> str:
         return parsed.isoformat()
     except Exception:
         return value
+
+
+def _decode_message_status_flags(value: str) -> str:
+    if not value:
+        return ""
+    flags: list[str] = []
+    upper = value.upper()
+    text_flags = {
+        "R": "read",
+        "O": "old",
+        "A": "answered",
+        "D": "deleted",
+        "F": "flagged",
+        "T": "draft",
+    }
+    tokens = re.split(r"[^A-Z]+", upper)
+    for char, label in text_flags.items():
+        if char in tokens or any(char in token and len(token) <= 4 and token.isalpha() for token in tokens):
+            flags.append(label)
+    for hex_value in re.findall(r"0x[0-9A-F]+|\b[0-9A-F]{4,8}\b", upper):
+        try:
+            number = int(hex_value, 16)
+        except ValueError:
+            continue
+        bit_flags = [
+            (0x0001, "read"),
+            (0x0002, "unmodified"),
+            (0x0004, "submit"),
+            (0x0008, "unsent"),
+            (0x0010, "has_attachments"),
+            (0x0020, "from_me"),
+            (0x0040, "associated"),
+            (0x0080, "resend"),
+        ]
+        for bit, label in bit_flags:
+            if number & bit:
+                flags.append(label)
+    return ";".join(sorted(set(flags)))
 
 
 def _dedupe_key(subject: str, sender: str, recipients: str, date: str) -> str:

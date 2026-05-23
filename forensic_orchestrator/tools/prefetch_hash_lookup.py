@@ -11,6 +11,10 @@ from pathlib import Path
 DEFAULT_LOOKUP_PATHS = (
     Path("/home/lee/reference/upload/FOR500_K01/Library/Analysis/prefetch_hashes_lookup.txt"),
 )
+DEFAULT_LOOKUP_DIRS = (
+    Path("/home/lee/reference"),
+)
+LOOKUP_FILE_RE = re.compile(r"(?i)(prefetch|pf).*(hash|lookup).*\.(txt|tsv|csv)$")
 
 
 @dataclass(frozen=True)
@@ -67,9 +71,45 @@ def resolve_prefetch_hash(
 
 def prefetch_lookup_paths() -> tuple[Path, ...]:
     env_value = os.environ.get("FORENSIC_PREFETCH_HASH_LOOKUP_PATHS", "").strip()
+    directory_value = os.environ.get("FORENSIC_PREFETCH_HASH_LOOKUP_DIRS", "").strip()
+    discovered: list[Path] = []
     if env_value:
-        return tuple(Path(part).expanduser() for part in env_value.split(os.pathsep) if part.strip())
-    return tuple(path for path in DEFAULT_LOOKUP_PATHS if path.exists())
+        discovered.extend(Path(part).expanduser() for part in env_value.split(os.pathsep) if part.strip())
+        if not directory_value:
+            return tuple(_unique_paths(discovered))
+    else:
+        discovered.extend(path for path in DEFAULT_LOOKUP_PATHS if path.exists())
+    search_dirs = [
+        Path(part).expanduser()
+        for part in directory_value.split(os.pathsep)
+        if part.strip()
+    ] if directory_value else [path for path in DEFAULT_LOOKUP_DIRS if path.exists()]
+    for directory in search_dirs:
+        discovered.extend(_discover_lookup_files(directory))
+    return tuple(_unique_paths(discovered))
+
+
+def _discover_lookup_files(directory: Path) -> list[Path]:
+    if not directory.exists():
+        return []
+    if directory.is_file():
+        return [directory] if LOOKUP_FILE_RE.search(directory.name) else []
+    try:
+        return sorted(path for path in directory.rglob("*") if path.is_file() and LOOKUP_FILE_RE.search(path.name))
+    except OSError:
+        return []
+
+
+def _unique_paths(paths: list[Path]) -> list[Path]:
+    seen: set[str] = set()
+    unique: list[Path] = []
+    for path in paths:
+        key = str(path.expanduser())
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(path)
+    return unique
 
 
 @lru_cache(maxsize=1)
@@ -177,4 +217,3 @@ def _normalize_hash(value: str | None) -> str | None:
 
 def _unique_sorted(values: list[str]) -> list[str]:
     return sorted({value for value in values if value})
-

@@ -11,6 +11,7 @@ from forensic_orchestrator.tools.prefetch import (
 )
 from forensic_orchestrator.tools.prefetch_hash_lookup import (
     load_prefetch_hash_references,
+    prefetch_lookup_paths,
     resolve_prefetch_hash,
 )
 from forensic_orchestrator.tools.prefetch_items import normalized_prefetch_row
@@ -106,6 +107,27 @@ def test_prefetch_hash_lookup_resolves_local_reference_file(tmp_path, monkeypatc
     assert resolved["reference_os"] == "W7 (64-bit)"
     assert resolved["reference_description"] == "Mouse Properties"
     assert resolved["reference_match_count"] == "1"
+
+
+def test_prefetch_hash_lookup_discovers_reference_directories(tmp_path, monkeypatch):
+    lookup_dir = tmp_path / "refs"
+    lookup_dir.mkdir()
+    lookup = lookup_dir / "extra_prefetch_hash_lookup.tsv"
+    lookup.write_text(
+        "W7 (64-bit)\tAPP.EXE-11111111.pf\tC:\\Windows\\app.exe\t\t\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("FORENSIC_PREFETCH_HASH_LOOKUP_PATHS", raising=False)
+    monkeypatch.setenv("FORENSIC_PREFETCH_HASH_LOOKUP_DIRS", str(lookup_dir))
+    load_prefetch_hash_references.cache_clear()
+
+    assert lookup in prefetch_lookup_paths()
+    resolved = resolve_prefetch_hash(
+        prefetch_name="APP.EXE-11111111.pf",
+        executable_name="APP.EXE",
+        prefetch_hash="11111111",
+    )
+    assert resolved["reference_path"] == r"C:\Windows\app.exe"
 
 
 def test_normalized_prefetch_row_adds_reference_enrichment(tmp_path, monkeypatch):
