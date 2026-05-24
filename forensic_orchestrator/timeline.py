@@ -43,6 +43,8 @@ def timeline_events_from_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]
             events.extend(_windows_error_report_events(row))
         elif tool_name == "WindowsDefenderParser":
             events.extend(_windows_defender_events(row))
+        elif tool_name == "MemoryStringScanner":
+            events.extend(_memory_string_events(row))
         elif tool_name == "WebCacheParser" and row.get("local_path"):
             events.extend(_webcache_file_events(row))
         elif tool_name == "WebCacheParser":
@@ -99,6 +101,8 @@ def _source_table(row: dict[str, Any]) -> str:
         return "windows_error_reports"
     if tool_name == "WindowsDefenderParser":
         return "windows_defender_events"
+    if tool_name == "MemoryStringScanner":
+        return "memory_string_hits"
     if tool_name == "WebCacheParser":
         if row.get("local_path"):
             return "webcache_file_accesses"
@@ -218,6 +222,35 @@ def _windows_defender_events(row: dict[str, Any]) -> list[dict[str, Any]]:
             "action": row.get("action"),
             "path": row.get("path"),
             "resource": row.get("resource"),
+        },
+    )
+    return [event] if event else []
+
+
+def _memory_string_events(row: dict[str, Any]) -> list[dict[str, Any]]:
+    if not row.get("created_at"):
+        return []
+    source_type = row.get("source_artifact_type") or "memory"
+    hit_category = row.get("hit_category") or "string"
+    matched_term = row.get("matched_term") or ""
+    description = f"Memory {source_type} string hit: {hit_category} {matched_term}".strip()
+    event = _base(
+        row,
+        "memory_string_hit",
+        row.get("created_at"),
+        description,
+        {
+            "evidence_strength": "lead",
+            "source_artifact_type": source_type,
+            "source_path": row.get("source_path"),
+            "scanned_path": row.get("scanned_path"),
+            "hit_category": hit_category,
+            "matched_term": matched_term,
+            "string_sha256": row.get("string_sha256"),
+            "string_length": row.get("string_length"),
+            "offset": row.get("offset"),
+            "context_hint": row.get("context_hint"),
+            "caveat": "Memory string timeline timestamp is import time, not occurrence time.",
         },
     )
     return [event] if event else []

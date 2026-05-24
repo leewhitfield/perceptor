@@ -19,7 +19,11 @@ from forensic_orchestrator.reports import (
     brute_force_markdown,
     brute_force_report,
     case_summary_report,
+    case_overview_markdown,
+    case_overview_report,
     correlations_report,
+    crash_dump_analysis_markdown,
+    crash_dump_analysis_report,
     copied_file_groups_report,
     copied_file_indicators_report,
     copied_usb_files_report,
@@ -110,6 +114,7 @@ from forensic_orchestrator.reports import (
     remote_access_attribution_report,
     rdp_remote_access_markdown,
     remote_access_sessions_report,
+    regression_smoke_report,
     vpn_activity_report,
     vpn_config_report,
     vpn_connections_report,
@@ -190,6 +195,8 @@ def test_high_level_investigation_reports_smoke_on_empty_case(tmp_path):
     account = account_compromise_report(db, case.id, limit=5)
     provenance = program_provenance_report(db, case.id, limit=5)
     suspicious_exec = suspicious_executions_report(db, case.id, limit=5)
+    overview = case_overview_report(db, case.id, limit=5)
+    regression = regression_smoke_report(db, case.id, limit=5)
 
     assert suspicious["summary"]["window_count"] == 0
     assert triage["summary"]["cards"] >= 5
@@ -197,11 +204,14 @@ def test_high_level_investigation_reports_smoke_on_empty_case(tmp_path):
     assert account["summary"]["finding_count"] == 0
     assert provenance["summary"]["finding_count"] == 0
     assert suspicious_exec["summary"]["finding_count"] == 0
+    assert overview["summary"]["computers"] == 1
+    assert regression["summary"]["failed"] == 0
     assert "Suspicious Timeline Windows" in suspicious_timeline_windows_markdown(suspicious)
     assert "Investigation Triage Dashboard" in investigation_triage_dashboard_markdown(triage)
     assert "Data Exfiltration Report" in data_exfiltration_markdown(exfiltration)
     assert "Account Compromise Report" in account_compromise_markdown(account)
     assert "Program Provenance Report" in program_provenance_markdown(provenance)
+    assert "Case Overview" in case_overview_markdown(overview)
 
 
 def test_windows_search_report_surfaces_encrypted_sqlite_status(tmp_path):
@@ -256,13 +266,106 @@ def test_memory_artifacts_report_inventories_mounted_files(tmp_path):
     (volume / "hiberfil.sys").write_bytes(b"h" * 10)
     (volume / "pagefile.sys").write_bytes(b"p" * 20)
     (volume / "swapfile.sys").write_bytes(b"s" * 30)
+    (volume / "Windows" / "Minidump").mkdir(parents=True)
+    (volume / "Windows" / "Minidump" / "050124-12345-01.dmp").write_bytes(b"d" * 40)
 
     report = memory_artifacts_report(db, case.id)
 
-    assert report["summary"]["artifact_count"] == 3
-    assert report["summary"]["total_bytes"] == 60
-    assert {row["artifact_type"] for row in report["artifacts"]} == {"hiberfil", "pagefile", "swapfile"}
+    assert report["summary"]["artifact_count"] == 4
+    assert report["summary"]["total_bytes"] == 100
+    assert {row["artifact_type"] for row in report["artifacts"]} == {"hiberfil", "pagefile", "swapfile", "crash_dump"}
     assert "Memory Artifact Inventory" in memory_artifacts_markdown(report)
+
+
+def test_crash_dump_analysis_report_combines_dump_inventory_wer_and_strings(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    volume = case.root / "mounts" / "volumes" / "part-001"
+    dump_dir = volume / "Users" / "Maya" / "AppData" / "Local" / "CrashDumps"
+    dump_dir.mkdir(parents=True)
+    dump_path = dump_dir / "Mushy.exe.1234.dmp"
+    dump_path.write_bytes(b"token=abc")
+    db.insert_tool_output(
+        {
+            "id": "wer-output",
+            "case_id": case.id,
+            "computer_id": "computer-1",
+            "image_id": "image-1",
+            "job_id": None,
+            "tool_name": "WindowsErrorReportingParser",
+            "output_type": "csv",
+            "path": tmp_path / "wer.csv",
+            "row_count": 1,
+        }
+    )
+    db.insert_tool_output(
+        {
+            "id": "memory-output",
+            "case_id": case.id,
+            "computer_id": "computer-1",
+            "image_id": "image-1",
+            "job_id": None,
+            "tool_name": "MemoryStringScanner",
+            "output_type": "csv",
+            "path": tmp_path / "MemoryStringScanner.csv",
+            "row_count": 1,
+        }
+    )
+    db.insert_windows_error_reports(
+        [
+            {
+                "id": "wer-1",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "wer-output",
+                "tool_name": "WindowsErrorReportingParser",
+                "source_csv": str(tmp_path / "wer.csv"),
+                "row_number": 1,
+                "source_file": "Report.wer",
+                "report_folder": "AppCrash_Mushy.exe_1234",
+                "event_time_utc": "2026-05-12T13:00:00Z",
+                "app_name": "Mushy.exe",
+                "exception_code": "c0000005",
+            }
+        ]
+    )
+    db.insert_memory_string_hits(
+        [
+            {
+                "id": "mem-crash-1",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "memory-output",
+                "tool_name": "MemoryStringScanner",
+                "source_csv": str(tmp_path / "MemoryStringScanner.csv"),
+                "row_number": 1,
+                "source_artifact_type": "crash_dump",
+                "source_path": str(dump_path),
+                "scanned_path": str(dump_path),
+                "scanner": "strings",
+                "encoding": "utf-8",
+                "hit_category": "credentials",
+                "matched_term": "token",
+                "string_value": "token=abc",
+                "string_sha256": "sha1",
+                "string_length": 9,
+                "offset": "1",
+                "context_hint": "",
+            }
+        ]
+    )
+
+    report = crash_dump_analysis_report(db, case.id, limit=10)
+    markdown = crash_dump_analysis_markdown(report)
+
+    assert report["summary"]["dump_count"] == 1
+    assert report["summary"]["wer_report_count"] == 1
+    assert report["summary"]["memory_string_source_count"] == 1
+    assert "Crash Dump Analysis" in markdown
 
 
 def test_evidence_gaps_report_surfaces_windows_search_and_memory_limitations(tmp_path):
@@ -4764,6 +4867,45 @@ def test_suspicious_executions_report_combines_unusual_paths_commands_and_rules(
     ]
     db.insert_prefetch_items(prefetch_rows)
     db.insert_evtx_events(evtx_rows)
+    db.insert_tool_output(
+        {
+            "id": "memory-output-suspicious",
+            "case_id": case.id,
+            "computer_id": "computer-1",
+            "image_id": "image-1",
+            "job_id": None,
+            "tool_name": "MemoryStringScanner",
+            "output_type": "csv",
+            "path": tmp_path / "MemoryStringScanner.csv",
+            "row_count": 1,
+        }
+    )
+    db.insert_memory_string_hits(
+        [
+            {
+                "id": "mem-payload",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "memory-output-suspicious",
+                "tool_name": "MemoryStringScanner",
+                "source_csv": str(tmp_path / "MemoryStringScanner.csv"),
+                "row_number": 1,
+                "source_artifact_type": "pagefile",
+                "source_path": "/pagefile.sys",
+                "scanned_path": "/pagefile.sys",
+                "scanner": "strings",
+                "encoding": "utf-8",
+                "hit_category": "paths",
+                "matched_term": "c:\\users\\",
+                "string_value": "C:/Users/mayas/AppData/Local/Temp/payload.exe",
+                "string_sha256": "sha1",
+                "string_length": 46,
+                "offset": "100",
+                "context_hint": "",
+            }
+        ]
+    )
     db.insert_timeline_events(timeline_events_from_rows(prefetch_rows + evtx_rows))
 
     report = suspicious_executions_report(db, case.id, limit=10)
@@ -4776,6 +4918,7 @@ def test_suspicious_executions_report_combines_unusual_paths_commands_and_rules(
     assert any("sdelete" in row["matched_rules"] for row in report["findings"])
     assert any("-encodedcommand" in row["matched_rules"] for row in report["findings"])
     assert any(row.get("nearby_context") for row in report["findings"])
+    assert any(row.get("memory_corroboration") for row in report["findings"])
     assert "Suspicious Executions" in suspicious_executions_markdown(report)
 
     triage = investigation_triage_dashboard_report(db, case.id, limit=10)

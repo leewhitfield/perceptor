@@ -526,6 +526,7 @@ def ingest_csv_output(
                 + windows_search_gather_rows
                 + windows_error_report_rows
                 + windows_defender_event_rows
+                + memory_string_hit_rows
                 + registry_artifact_rows
                 + webcache_rows
                 + webcache_file_access_rows

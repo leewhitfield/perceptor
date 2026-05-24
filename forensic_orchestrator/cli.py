@@ -62,10 +62,14 @@ from .reports import (
     communication_groups_report,
     communications_report,
     case_summary_report,
+    case_overview_markdown,
+    case_overview_report,
     cleanup_candidates_report,
     correlations_report,
     correlation_group_detail_report,
     correlation_groups_report,
+    crash_dump_analysis_markdown,
+    crash_dump_analysis_report,
     deleted_folders_report,
     downloaded_files_report,
     database_storage_report,
@@ -153,6 +157,7 @@ from .reports import (
     remote_access_attribution_markdown,
     remote_access_attribution_report,
     rdp_remote_access_markdown,
+    regression_smoke_report,
     rdp_visual_observations_report,
     registry_artifacts_report,
     registry_activity_report,
@@ -1728,6 +1733,16 @@ def build_parser() -> argparse.ArgumentParser:
     report_case_review.add_argument("--limit", type=int, default=25)
     report_case_review.add_argument("--format", choices=["json", "table"], default="json")
     report_case_review.add_argument("--output")
+    report_case_overview = report_sub.add_parser("case-overview")
+    report_case_overview.add_argument("--case", required=True, dest="case_id")
+    report_case_overview.add_argument("--limit", type=int, default=25)
+    report_case_overview.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
+    report_case_overview.add_argument("--output")
+    report_regression_smoke = report_sub.add_parser("regression-smoke")
+    report_regression_smoke.add_argument("--case", required=True, dest="case_id")
+    report_regression_smoke.add_argument("--limit", type=int, default=10)
+    report_regression_smoke.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    report_regression_smoke.add_argument("--output")
     report_evidence_gaps = report_sub.add_parser("evidence-gaps")
     report_evidence_gaps.add_argument("--case", required=True, dest="case_id")
     report_evidence_gaps.add_argument("--limit", type=int, default=100)
@@ -1754,6 +1769,11 @@ def build_parser() -> argparse.ArgumentParser:
     report_memory_disk.add_argument("--limit", type=int, default=100)
     report_memory_disk.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
     report_memory_disk.add_argument("--output")
+    report_crash_dumps = report_sub.add_parser("crash-dump-analysis")
+    report_crash_dumps.add_argument("--case", required=True, dest="case_id")
+    report_crash_dumps.add_argument("--limit", type=int, default=100)
+    report_crash_dumps.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
+    report_crash_dumps.add_argument("--output")
     report_cloud_server = report_sub.add_parser("cloud-server-events")
     report_cloud_server.add_argument("--case", required=True, dest="case_id")
     report_cloud_server.add_argument("--limit", type=int, default=100)
@@ -2668,6 +2688,33 @@ def run(args: argparse.Namespace) -> int:
             print_json(case_summary_report(db, args.case_id))
             return 0
 
+        if args.resource == "report" and args.action == "case-overview":
+            report = case_overview_report(db, args.case_id, limit=args.limit)
+            if args.format == "md":
+                write_text_output(case_overview_markdown(report), args.output)
+            else:
+                write_report_output(
+                    report,
+                    report["top_suspicious_executions"],
+                    args.format,
+                    args.output,
+                    title=f"Case overview for case {args.case_id}",
+                    columns=["severity", "category", "application", "display_path", "reason"],
+                )
+            return 0
+
+        if args.resource == "report" and args.action == "regression-smoke":
+            report = regression_smoke_report(db, args.case_id, limit=args.limit)
+            write_report_output(
+                report,
+                report["checks"],
+                args.format,
+                args.output,
+                title=f"Regression smoke report for case {args.case_id}",
+                columns=["name", "status", "error"],
+            )
+            return 0
+
         if args.resource == "report" and args.action == "specs":
             specs = list_report_specs(plugin_paths=config.plugin_paths)
             rows = [
@@ -3357,6 +3404,21 @@ def run(args: argparse.Namespace) -> int:
                     args.output,
                     title=f"Memory and disk correlations for case {args.case_id}",
                     columns=["disk_artifact_family", "match_type", "match_value", "confidence", "source_artifact_type", "disk_table", "disk_path", "disk_url", "disk_email"],
+                )
+            return 0
+
+        if args.resource == "report" and args.action == "crash-dump-analysis":
+            report = crash_dump_analysis_report(db, args.case_id, limit=args.limit)
+            if args.format == "md":
+                write_text_output(crash_dump_analysis_markdown(report), args.output)
+            else:
+                write_report_output(
+                    report,
+                    report["dumps"],
+                    args.format,
+                    args.output,
+                    title=f"Crash dump analysis for case {args.case_id}",
+                    columns=["artifact_type", "path", "size_bytes", "source", "processed_status"],
                 )
             return 0
 

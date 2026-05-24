@@ -276,12 +276,19 @@ def _write_bstrings_terms(output_dir: Path, terms: dict[str, tuple[str, ...]]) -
 
 def memory_artifact_type(source: Path) -> str:
     name = source.name.lower()
+    lowered_path = str(source).replace("\\", "/").lower()
     if name == "hiberfil.sys":
         return "hiberfil"
     if name == "pagefile.sys":
         return "pagefile"
     if name == "swapfile.sys":
         return "swapfile"
+    if name.endswith((".dmp", ".dump", ".mdmp")):
+        if "/crashdumps/" in lowered_path or "/wer/" in lowered_path or "/minidump/" in lowered_path or name == "memory.dmp":
+            return "crash_dump"
+        return "process_dump"
+    if name.endswith((".raw", ".vmem", ".mem")):
+        return "full_memory_dump"
     return "memory"
 
 

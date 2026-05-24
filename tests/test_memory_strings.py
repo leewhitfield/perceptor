@@ -1,6 +1,7 @@
 from forensic_orchestrator.db import Database
 from forensic_orchestrator.tools.ingest import ingest_csv_output
-from forensic_orchestrator.tools.memory_strings import assess_hiberfil_source, scan_memory_strings_to_csv
+from forensic_orchestrator.tools.memory_strings import assess_hiberfil_source, memory_artifact_type, scan_memory_strings_to_csv
+from forensic_orchestrator.timeline import timeline_events_from_rows
 
 
 def test_memory_string_scanner_records_targeted_hits(tmp_path):
@@ -61,3 +62,39 @@ def test_hiberfil_assessment_detects_active_signature(tmp_path):
 
     assert status == "active_hibernation_header"
     assert "recognized" in note
+
+
+def test_memory_artifact_type_classifies_crash_and_process_dumps(tmp_path):
+    assert memory_artifact_type(tmp_path / "Windows" / "MEMORY.DMP") == "crash_dump"
+    assert memory_artifact_type(tmp_path / "Users" / "Maya" / "AppData" / "Local" / "CrashDumps" / "app.dmp") == "crash_dump"
+    assert memory_artifact_type(tmp_path / "lsass.dmp") == "process_dump"
+    assert memory_artifact_type(tmp_path / "sample.vmem") == "full_memory_dump"
+
+
+def test_memory_string_hits_emit_lead_timeline_events():
+    row = {
+        "id": "mem-1",
+        "case_id": "case-1",
+        "computer_id": "computer-1",
+        "image_id": "image-1",
+        "tool_output_id": "output-1",
+        "tool_name": "MemoryStringScanner",
+        "source_artifact_type": "pagefile",
+        "source_path": "/pagefile.sys",
+        "scanned_path": "/pagefile.sys",
+        "hit_category": "credentials",
+        "matched_term": "token",
+        "string_sha256": "sha1",
+        "string_length": 12,
+        "offset": "123",
+        "context_hint": "",
+        "created_at": "2026-05-24T00:00:00Z",
+    }
+
+    events = timeline_events_from_rows([row])
+
+    assert len(events) == 1
+    assert events[0]["source_table"] == "memory_string_hits"
+    assert events[0]["event_type"] == "memory_string_hit"
+    assert events[0]["details"]["evidence_strength"] == "lead"
+    assert events[0]["details"]["caveat"] == "Memory string timeline timestamp is import time, not occurrence time."

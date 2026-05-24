@@ -200,6 +200,125 @@ def case_summary_report(db: Database, case_id: str) -> dict[str, Any]:
     }
 
 
+def case_overview_report(db: Database, case_id: str, *, limit: int = 25) -> dict[str, Any]:
+    db.get_case(case_id)
+    summary = case_summary_report(db, case_id)
+    gaps = evidence_gaps_report(db, case_id, limit=limit)
+    memory = memory_analysis_report(db, case_id, limit=limit)
+    credentials = memory_credentials_report(db, case_id, limit=limit)
+    crash_dumps = crash_dump_analysis_report(db, case_id, limit=limit)
+    suspicious = suspicious_executions_report(db, case_id, limit=limit)
+    memory_disk = memory_disk_correlations_report(db, case_id, limit=limit)
+    return {
+        "case_id": case_id,
+        "case": summary.get("case"),
+        "summary": {
+            "computers": (summary.get("counts") or {}).get("computers", 0),
+            "images": (summary.get("counts") or {}).get("images", 0),
+            "tool_outputs": (summary.get("counts") or {}).get("outputs", 0),
+            "warnings": (summary.get("counts") or {}).get("warnings", 0),
+            "errors": (summary.get("counts") or {}).get("errors", 0),
+            "evidence_gaps": (gaps.get("summary") or {}).get("gap_count", 0),
+            "memory_artifacts": (memory.get("summary") or {}).get("memory_artifact_count", 0),
+            "memory_string_hits": (memory.get("summary") or {}).get("memory_string_hit_count", 0),
+            "memory_disk_correlations": (memory_disk.get("summary") or {}).get("correlation_count", 0),
+            "credential_likely_usable": (credentials.get("summary") or {}).get("likely_usable_count", 0),
+            "crash_dumps": (crash_dumps.get("summary") or {}).get("dump_count", 0),
+            "suspicious_executions": (suspicious.get("summary") or {}).get("finding_count", 0),
+        },
+        "top_evidence_gaps": (gaps.get("gaps") or [])[:limit],
+        "memory_findings": (memory.get("findings") or [])[:limit],
+        "credential_summary": credentials.get("summary") or {},
+        "crash_dump_summary": crash_dumps.get("summary") or {},
+        "top_suspicious_executions": (suspicious.get("findings") or [])[:limit],
+        "memory_disk_correlation_summary": memory_disk.get("summary") or {},
+        "report_paths": {
+            "memory": "report memory-analysis",
+            "credentials": "report memory-credentials",
+            "crash_dumps": "report crash-dump-analysis",
+            "suspicious_executions": "report suspicious-executions",
+            "evidence_gaps": "report evidence-gaps",
+            "memory_disk_correlations": "report memory-disk-correlations",
+        },
+    }
+
+
+def case_overview_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    lines = [
+        "# Case Overview",
+        "",
+        f"Case: `{report.get('case_id') or ''}`",
+        "",
+        "## Summary",
+        "",
+    ]
+    for key in (
+        "computers",
+        "images",
+        "tool_outputs",
+        "warnings",
+        "errors",
+        "evidence_gaps",
+        "memory_artifacts",
+        "memory_string_hits",
+        "memory_disk_correlations",
+        "credential_likely_usable",
+        "crash_dumps",
+        "suspicious_executions",
+    ):
+        lines.append(f"- {key.replace('_', ' ').title()}: `{summary.get(key, 0)}`")
+    lines.extend(["", "## High Priority", ""])
+    suspicious = report.get("top_suspicious_executions") if isinstance(report.get("top_suspicious_executions"), list) else []
+    if not suspicious:
+        lines.append("- No suspicious execution findings in this overview window.")
+    for row in suspicious[:10]:
+        lines.append(
+            f"- `{row.get('severity') or ''}` `{row.get('category') or ''}` "
+            f"`{row.get('application') or ''}` `{row.get('display_path') or ''}`"
+        )
+    lines.extend(["", "## Evidence Gaps", ""])
+    gaps = report.get("top_evidence_gaps") if isinstance(report.get("top_evidence_gaps"), list) else []
+    if not gaps:
+        lines.append("- No evidence gaps in this overview window.")
+    for row in gaps[:10]:
+        lines.append(f"- `{row.get('severity') or ''}` `{row.get('category') or ''}` {row.get('title') or ''}")
+    lines.extend(["", "## Report Commands", ""])
+    for label, command in (report.get("report_paths") or {}).items():
+        lines.append(f"- `{label}`: `{command}`")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def regression_smoke_report(db: Database, case_id: str, *, limit: int = 10) -> dict[str, Any]:
+    checks: list[dict[str, Any]] = []
+    report_specs = [
+        ("summary", lambda: case_summary_report(db, case_id)),
+        ("evidence_gaps", lambda: evidence_gaps_report(db, case_id, limit=limit)),
+        ("memory_artifacts", lambda: memory_artifacts_report(db, case_id, limit=limit)),
+        ("memory_analysis", lambda: memory_analysis_report(db, case_id, limit=limit)),
+        ("memory_credentials", lambda: memory_credentials_report(db, case_id, limit=limit)),
+        ("memory_disk_correlations", lambda: memory_disk_correlations_report(db, case_id, limit=limit)),
+        ("crash_dump_analysis", lambda: crash_dump_analysis_report(db, case_id, limit=limit)),
+        ("suspicious_executions", lambda: suspicious_executions_report(db, case_id, limit=limit)),
+        ("case_overview", lambda: case_overview_report(db, case_id, limit=limit)),
+    ]
+    for name, builder in report_specs:
+        try:
+            payload = builder()
+            checks.append({"name": name, "status": "passed", "summary": payload.get("summary") if isinstance(payload, dict) else {}})
+        except Exception as exc:
+            checks.append({"name": name, "status": "failed", "error": str(exc)})
+    return {
+        "case_id": case_id,
+        "summary": {
+            "check_count": len(checks),
+            "passed": sum(1 for row in checks if row.get("status") == "passed"),
+            "failed": sum(1 for row in checks if row.get("status") == "failed"),
+        },
+        "checks": checks,
+    }
+
+
 def issues_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str, Any]:
     db.get_case(case_id)
     rows = db.conn.execute(
@@ -16785,6 +16904,8 @@ def memory_artifacts_report(db: Database, case_id: str, *, limit: int = 100) -> 
             "hiberfil_present": any(row.get("artifact_type") == "hiberfil" for row in rows),
             "pagefile_present": any(row.get("artifact_type") == "pagefile" for row in rows),
             "swapfile_present": any(row.get("artifact_type") == "swapfile" for row in rows),
+            "crash_dump_present": any(row.get("artifact_type") == "crash_dump" for row in rows),
+            "process_dump_present": any(row.get("artifact_type") == "process_dump" for row in rows),
             "processed_count": sum(1 for row in rows if row.get("processed_status") == "processed"),
         },
         "artifacts": rows[:limit],
@@ -16810,6 +16931,8 @@ def memory_artifacts_markdown(report: dict[str, Any]) -> str:
         f"- Hibernation file present: `{summary.get('hiberfil_present', False)}`",
         f"- Pagefile present: `{summary.get('pagefile_present', False)}`",
         f"- Swapfile present: `{summary.get('swapfile_present', False)}`",
+        f"- Crash dump present: `{summary.get('crash_dump_present', False)}`",
+        f"- Process dump present: `{summary.get('process_dump_present', False)}`",
         "",
         "## Artifacts",
         "",
@@ -16858,6 +16981,7 @@ def memory_analysis_report(db: Database, case_id: str, *, limit: int = 100) -> d
         "findings": findings,
         "caveats": [
             "Memory strings and recovered pages are investigative leads unless corroborated by stronger artifacts.",
+            "Crash dumps can contain process-local memory. Treat crash-dump strings as memory leads and correlate with WER/process context before reporting conclusions.",
             "For encrypted Windows 11 Search SQLite databases, offline hiberfil/pagefile/swapfile scans may not recover the live AES-GCM material.",
             "The DPAPI/LSA workflow is a validation path, not a conclusion; report it only after extracted keys successfully decrypt the target database.",
             "To maximize Windows Search plaintext/key recovery, collect RAM while the relevant user session and SearchIndexer.exe are still live.",
@@ -17151,6 +17275,109 @@ def memory_disk_correlations_markdown(report: dict[str, Any]) -> str:
             f"- `{row.get('disk_artifact_family') or ''}` `{row.get('match_type') or ''}` "
             f"`{row.get('match_value') or ''}` confidence `{row.get('confidence') or ''}` "
             f"memory `{row.get('source_artifact_type') or ''}` -> `{row.get('disk_table') or ''}` `{disk_value}`"
+        )
+    lines.extend(["", "## Caveats", ""])
+    for caveat in report.get("caveats") or []:
+        lines.append(f"- {caveat}")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def crash_dump_analysis_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str, Any]:
+    db.get_case(case_id)
+    artifacts = [
+        row for row in (memory_artifacts_report(db, case_id, limit=max(limit, 1000)).get("artifacts") or [])
+        if row.get("artifact_type") in {"crash_dump", "process_dump", "full_memory_dump"}
+    ]
+    wer_rows = _query_report_rows(
+        db,
+        case_id,
+        "windows_error_reports",
+        """
+        SELECT id, source_file, report_folder, event_type, event_time_utc, app_name,
+               original_filename, fault_module_name, exception_code, is_fatal, ui_path
+        FROM windows_error_reports
+        WHERE case_id = ?
+        ORDER BY COALESCE(event_time_utc, '') DESC, app_name
+        LIMIT ?
+        """,
+        (case_id, limit),
+    )
+    string_rows = _query_report_rows(
+        db,
+        case_id,
+        "memory_string_hits",
+        """
+        SELECT source_artifact_type, source_path, hit_category, matched_term, COUNT(*) AS count
+        FROM memory_string_hits
+        WHERE case_id = ?
+          AND source_artifact_type IN ('crash_dump', 'process_dump', 'full_memory_dump')
+        GROUP BY source_artifact_type, source_path, hit_category, matched_term
+        ORDER BY count DESC, source_artifact_type, source_path
+        LIMIT ?
+        """,
+        (case_id, limit),
+    )
+    correlated = _correlate_crash_dumps_to_wer(artifacts, wer_rows)
+    return {
+        "case_id": case_id,
+        "summary": {
+            "dump_count": len(artifacts),
+            "wer_report_count": _report_table_count(db, case_id, "windows_error_reports"),
+            "memory_string_source_count": len({row.get("source_path") for row in string_rows if row.get("source_path")}),
+            "memory_string_hit_groups": len(string_rows),
+            "correlated_dump_count": sum(1 for row in correlated if row.get("wer_report_id")),
+        },
+        "dumps": artifacts[:limit],
+        "wer_reports": wer_rows[:limit],
+        "string_hit_summary": string_rows,
+        "correlations": correlated[:limit],
+        "caveats": [
+            "Crash dumps are process or kernel memory snapshots and may contain sensitive content.",
+            "WER metadata identifies the crashing application, but dump content still requires separate parsing or string review.",
+            "String hits from crash dumps are leads; validate with WER metadata, process context, and disk artifacts.",
+        ],
+    }
+
+
+def crash_dump_analysis_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    lines = [
+        "# Crash Dump Analysis",
+        "",
+        f"Case: `{report.get('case_id') or ''}`",
+        "",
+        "## Summary",
+        "",
+        f"- Dump artifacts: `{summary.get('dump_count', 0)}`",
+        f"- WER reports: `{summary.get('wer_report_count', 0)}`",
+        f"- Dump string-hit sources: `{summary.get('memory_string_source_count', 0)}`",
+        f"- Dump/WER correlations: `{summary.get('correlated_dump_count', 0)}`",
+        "",
+        "## Dump Artifacts",
+        "",
+    ]
+    dumps = report.get("dumps") if isinstance(report.get("dumps"), list) else []
+    if not dumps:
+        lines.append("- No crash/process dump artifacts were inventoried.")
+    for row in dumps[:25]:
+        lines.append(
+            f"- `{row.get('artifact_type') or ''}` `{row.get('path') or ''}` "
+            f"size `{row.get('size_bytes') or ''}` source `{row.get('source') or ''}`"
+        )
+    lines.extend(["", "## WER Reports", ""])
+    wer_rows = report.get("wer_reports") if isinstance(report.get("wer_reports"), list) else []
+    if not wer_rows:
+        lines.append("- No WER crash reports were imported.")
+    for row in wer_rows[:25]:
+        lines.append(
+            f"- `{row.get('event_time_utc') or ''}` app `{row.get('app_name') or row.get('original_filename') or ''}` "
+            f"module `{row.get('fault_module_name') or ''}` exception `{row.get('exception_code') or ''}`"
+        )
+    lines.extend(["", "## String Hit Summary", ""])
+    for row in (report.get("string_hit_summary") if isinstance(report.get("string_hit_summary"), list) else [])[:25]:
+        lines.append(
+            f"- `{row.get('source_artifact_type') or ''}` `{row.get('hit_category') or ''}` "
+            f"`{row.get('matched_term') or ''}` count `{row.get('count') or 0}` source `{row.get('source_path') or ''}`"
         )
     lines.extend(["", "## Caveats", ""])
     for caveat in report.get("caveats") or []:
@@ -21842,6 +22069,7 @@ def suspicious_executions_report(
     findings = findings[:limit]
     for row in findings:
         row["nearby_context"] = _suspicious_execution_nearby_context(db, case_id, row, window_minutes=30, limit=8)
+        row["memory_corroboration"] = _suspicious_execution_memory_corroboration(db, case_id, row, limit=5)
     severity_counts: dict[str, int] = {}
     category_counts: dict[str, int] = {}
     source_counts: dict[str, int] = {}
@@ -21866,6 +22094,7 @@ def suspicious_executions_report(
             "category_counts": [{"category": key, "count": value} for key, value in sorted(category_counts.items())],
             "source_counts": [{"source_table": key, "count": value} for key, value in sorted(source_counts.items())],
             "confidence_counts": [{"confidence": key, "count": value} for key, value in sorted(confidence_counts.items())],
+            "memory_corroborated_count": sum(1 for row in findings if row.get("memory_corroboration")),
         },
         "findings": findings,
         "total_returned": len(findings),
@@ -21921,6 +22150,14 @@ def suspicious_executions_markdown(report: dict[str, Any]) -> str:
         if rules:
             lines.append(f"  - matched: `{rules}`")
         nearby = row.get("nearby_context") if isinstance(row.get("nearby_context"), list) else []
+        memory_hits = row.get("memory_corroboration") if isinstance(row.get("memory_corroboration"), list) else []
+        if memory_hits:
+            lines.append(f"  - memory corroboration: `{len(memory_hits)}` hits")
+            for hit in memory_hits[:3]:
+                lines.append(
+                    f"    - `{hit.get('source_artifact_type') or ''}` `{hit.get('hit_category') or ''}` "
+                    f"`{hit.get('matched_term') or ''}` source `{hit.get('source_path') or ''}`"
+                )
         if nearby:
             lines.append(f"  - nearby timeline events: `{len(nearby)}`")
             for event in nearby[:3]:
@@ -21929,6 +22166,60 @@ def suspicious_executions_markdown(report: dict[str, Any]) -> str:
                     f"`{event.get('event_type') or ''}` {event.get('description') or ''}"
                 )
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _suspicious_execution_memory_corroboration(
+    db: Database,
+    case_id: str,
+    finding: dict[str, Any],
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
+    terms = _suspicious_execution_memory_terms(finding)
+    if not terms:
+        return []
+    where = " OR ".join("lower(COALESCE(string_value, '')) LIKE ?" for _ in terms)
+    rows = _query_report_rows(
+        db,
+        case_id,
+        "memory_string_hits",
+        f"""
+        SELECT id, source_artifact_type, source_path, hit_category, matched_term,
+               string_sha256, "offset", context_hint
+        FROM memory_string_hits
+        WHERE case_id = ?
+          AND ({where})
+        ORDER BY source_artifact_type, hit_category, matched_term
+        LIMIT ?
+        """,
+        [case_id, *[f"%{term}%" for term in terms], limit],
+    )
+    return rows
+
+
+def _suspicious_execution_memory_terms(finding: dict[str, Any]) -> list[str]:
+    values = [
+        finding.get("application"),
+        _basename_from_path(finding.get("display_path")),
+        _basename_from_path(finding.get("normalized_path")),
+    ]
+    details = finding.get("details") if isinstance(finding.get("details"), dict) else {}
+    values.extend(
+        [
+            details.get("resolved_reference_path"),
+            _basename_from_path(details.get("resolved_reference_path")),
+            details.get("location_category"),
+        ]
+    )
+    terms: list[str] = []
+    for value in values:
+        text = str(value or "").strip().casefold()
+        if not text or len(text) < 4:
+            continue
+        if text in {"temp", "path", "none", "null", "unknown"}:
+            continue
+        terms.append(text)
+    return _unique_nonempty(terms[:5])
 
 
 def _interesting_execution_candidates(rows: Any, *, evidence_type: str) -> list[dict[str, Any]]:
@@ -24920,7 +25211,7 @@ def _mounted_memory_artifacts(db: Database, case_id: str) -> list[dict[str, Any]
     paths: list[Path] = []
     for mounts in mount_roots:
         if mounts.exists():
-            paths.extend(sorted(mounts.glob("*/*")))
+            paths.extend(_mounted_memory_candidate_paths(mounts))
     for path in paths:
         try:
             is_file = path.is_file()
@@ -24955,7 +25246,7 @@ def _mft_memory_artifacts(db: Database, case_id: str, *, limit: int) -> list[dic
         return []
     if "file_name" not in columns:
         return []
-    select_columns = [column for column in ("file_name", "parent_path", "file_size", "created_si", "modified_si", "accessed_si", "source_csv") if column in columns]
+    select_columns = [column for column in ("file_name", "parent_path", "extension", "file_size", "created_si", "modified_si", "accessed_si", "source_csv") if column in columns]
     if not select_columns:
         return []
     rows = _query_report_rows(
@@ -24966,7 +25257,19 @@ def _mft_memory_artifacts(db: Database, case_id: str, *, limit: int) -> list[dic
         SELECT {', '.join(_quote_identifier(column) for column in select_columns)}
         FROM mft_entries
         WHERE case_id = ?
-          AND lower(file_name) IN ('hiberfil.sys', 'pagefile.sys', 'swapfile.sys')
+          AND (
+            lower(file_name) IN ('hiberfil.sys', 'pagefile.sys', 'swapfile.sys', 'memory.dmp')
+            OR (
+              lower(COALESCE(extension, '')) IN ('.dmp', 'dmp', '.mdmp', 'mdmp', '.dump', 'dump')
+              AND (
+                lower(COALESCE(parent_path, '')) LIKE '%minidump%'
+                OR lower(COALESCE(parent_path, '')) LIKE '%crashdumps%'
+                OR lower(COALESCE(parent_path, '')) LIKE '%windows error reporting%'
+                OR lower(COALESCE(parent_path, '')) LIKE '%/wer%'
+                OR lower(COALESCE(parent_path, '')) LIKE '%\\wer%'
+              )
+            )
+          )
         LIMIT ?
         """,
         (case_id, limit),
@@ -25003,7 +25306,58 @@ def _memory_artifact_type(name: Any) -> str | None:
         return "pagefile"
     if lowered == "swapfile.sys":
         return "swapfile"
+    if lowered == "memory.dmp" or lowered.endswith((".dmp", ".mdmp", ".dump")):
+        return "crash_dump"
+    if lowered.endswith((".raw", ".vmem", ".mem")):
+        return "full_memory_dump"
     return None
+
+
+def _mounted_memory_candidate_paths(mounts: Path) -> list[Path]:
+    paths: list[Path] = []
+    for volume in sorted(path for path in mounts.glob("*") if path.is_dir()):
+        for name in ("hiberfil.sys", "pagefile.sys", "swapfile.sys", "MEMORY.DMP", "memory.dmp"):
+            paths.append(volume / name)
+        patterns = (
+            "Windows/Minidump/*.dmp",
+            "Windows/LiveKernelReports/**/*.dmp",
+            "ProgramData/Microsoft/Windows/WER/**/*.dmp",
+            "Users/*/AppData/Local/CrashDumps/*.dmp",
+        )
+        for pattern in patterns:
+            paths.extend(volume.glob(pattern))
+    return sorted({path for path in paths if path.exists()})
+
+
+def _correlate_crash_dumps_to_wer(artifacts: list[dict[str, Any]], wer_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    correlations: list[dict[str, Any]] = []
+    for artifact in artifacts:
+        artifact_path = str(artifact.get("path") or artifact.get("actual_path") or "")
+        artifact_name = _basename(artifact_path) or ""
+        best: dict[str, Any] | None = None
+        for wer in wer_rows:
+            wer_text = " ".join(
+                str(wer.get(field) or "")
+                for field in ("source_file", "report_folder", "app_name", "original_filename", "ui_path")
+            )
+            if artifact_name and artifact_name.lower() in wer_text.lower():
+                best = wer
+                break
+            if artifact_path and _basename(str(wer.get("source_file") or "")) == artifact_name:
+                best = wer
+                break
+        correlations.append(
+            {
+                "dump_path": artifact_path,
+                "dump_type": artifact.get("artifact_type"),
+                "size_bytes": artifact.get("size_bytes"),
+                "wer_report_id": best.get("id") if best else None,
+                "app_name": best.get("app_name") if best else None,
+                "event_time_utc": best.get("event_time_utc") if best else None,
+                "exception_code": best.get("exception_code") if best else None,
+            }
+        )
+    return correlations
 
 
 def _dedupe_memory_artifacts(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
