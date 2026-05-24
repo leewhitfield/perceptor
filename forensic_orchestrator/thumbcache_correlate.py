@@ -33,11 +33,12 @@ def rebuild_thumbcache_search_correlations(
     if image_id:
         where.append("image_id = ?")
         params.append(image_id)
-    db.conn.execute(f"DELETE FROM thumbcache_search_correlations WHERE {' AND '.join(where)}", params)
+    db._delete_sqlite_if_exists("thumbcache_search_correlations", " AND ".join(where), params)
     if db.analytics is not None:
         db.analytics.delete_where("thumbcache_search_correlations", " AND ".join(where), params)
-    db.conn.execute(
-        f"DELETE FROM timeline_events WHERE {' AND '.join(where)} AND source_table = ?",
+    db._delete_sqlite_if_exists(
+        "timeline_events",
+        f"{' AND '.join(where)} AND source_table = ?",
         [*params, "thumbcache_search_correlations"],
     )
     if db.analytics is not None:

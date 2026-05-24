@@ -4,6 +4,7 @@ import argparse
 import csv
 import json
 import logging
+import shutil
 import sys
 import uuid
 from pathlib import Path
@@ -343,6 +344,44 @@ def write_report_output(report: dict[str, object], rows: list[dict[str, object]]
         write_text_output(json.dumps(report, indent=2, default=str), output)
 
 
+def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, limit: int = 100) -> dict[str, object]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    specs: list[tuple[str, str, str, object]] = [
+        ("case-overview", "md", "Case overview", case_overview_markdown(case_overview_report(db, case_id, limit=limit))),
+        ("evidence-gaps", "md", "Evidence gaps", evidence_gaps_markdown(evidence_gaps_report(db, case_id, limit=limit))),
+        ("memory-analysis", "md", "Memory analysis", memory_analysis_markdown(memory_analysis_report(db, case_id, limit=limit))),
+        ("memory-credentials", "md", "Memory credentials", memory_credentials_markdown(memory_credentials_report(db, case_id, limit=limit))),
+        ("memory-disk-correlations", "md", "Memory/disk correlations", memory_disk_correlations_markdown(memory_disk_correlations_report(db, case_id, limit=limit))),
+        ("crash-dump-analysis", "md", "Crash dump analysis", crash_dump_analysis_markdown(crash_dump_analysis_report(db, case_id, limit=limit))),
+        ("suspicious-executions", "md", "Suspicious executions", suspicious_executions_markdown(suspicious_executions_report(db, case_id, limit=limit))),
+        ("browser-activity", "json", "Browser activity", browser_activity_report(db, case_id, limit=limit)),
+        ("cloud-artifacts", "json", "Cloud artifacts", cloud_artifacts_report(db, case_id, limit=limit)),
+        ("email-artifacts", "json", "Email artifacts", email_artifacts_report(db, case_id, limit=limit)),
+        ("remote-access", "json", "Remote access", remote_access_sessions_report(db, case_id, limit=limit)),
+        ("regression-smoke", "json", "Regression smoke", regression_smoke_report(db, case_id, limit=min(limit, 25))),
+    ]
+    written: list[dict[str, object]] = []
+    for stem, extension, title, payload in specs:
+        path = output_dir / f"{stem}.{extension}"
+        if extension == "md":
+            write_text_output(str(payload), str(path))
+        else:
+            write_text_output(json.dumps(sanitize_report_paths(payload), indent=2, default=str), str(path))
+        written.append({"name": stem, "title": title, "path": str(path), "format": extension})
+    index_lines = ["# Case Report Bundle", "", f"Case: `{case_id}`", ""]
+    for item in written:
+        index_lines.append(f"- [{item['title']}]({Path(str(item['path'])).name})")
+    index_path = output_dir / "index.md"
+    write_text_output("\n".join(index_lines).rstrip() + "\n", str(index_path))
+    return {
+        "case_id": case_id,
+        "output_dir": str(output_dir),
+        "index": str(index_path),
+        "reports": written,
+        "total_written": len(written) + 1,
+    }
+
+
 def usb_files_table(report: dict[str, object]) -> str:
     devices = report.get("devices", [])
     items = report.get("items", [])
@@ -537,6 +576,12 @@ def build_parser() -> argparse.ArgumentParser:
     memory_strings.add_argument("--image", dest="image_id")
     memory_strings.add_argument("--min-length", type=int, default=6)
     memory_strings.add_argument("--no-decompress-hiberfil", action="store_true")
+    memory_crash_dumps = memory_sub.add_parser("crash-dumps")
+    memory_crash_dumps.add_argument("--case", required=True, dest="case_id")
+    memory_crash_dumps.add_argument("--computer", dest="computer_id")
+    memory_crash_dumps.add_argument("--image", dest="image_id")
+    memory_crash_dumps.add_argument("--min-length", type=int, default=6)
+    memory_crash_dumps.add_argument("--copy", action="store_true", help="Copy accessible crash dumps into the case supplemental folder before scanning")
     memory_search_carves = memory_sub.add_parser("windows-search-carves")
     memory_search_carves.add_argument("--case", required=True, dest="case_id")
     memory_search_carves.add_argument("--path", required=True, help="Directory or file containing SearchIndexer SQLite memory carves")
@@ -1743,6 +1788,12 @@ def build_parser() -> argparse.ArgumentParser:
     report_regression_smoke.add_argument("--limit", type=int, default=10)
     report_regression_smoke.add_argument("--format", choices=["json", "table", "csv"], default="json")
     report_regression_smoke.add_argument("--output")
+    report_regression_smoke.add_argument("--write-reports", action="store_true")
+    report_regression_smoke.add_argument("--output-dir")
+    report_write_bundle = report_sub.add_parser("write-bundle")
+    report_write_bundle.add_argument("--case", required=True, dest="case_id")
+    report_write_bundle.add_argument("--limit", type=int, default=100)
+    report_write_bundle.add_argument("--output-dir", required=True)
     report_evidence_gaps = report_sub.add_parser("evidence-gaps")
     report_evidence_gaps.add_argument("--case", required=True, dest="case_id")
     report_evidence_gaps.add_argument("--limit", type=int, default=100)
@@ -2179,6 +2230,117 @@ def run(args: argparse.Namespace) -> int:
                 details=metadata,
             )
             print_json({"case_id": args.case_id, "computer_id": computer_id, "image_id": image_id, "output": csv_path, "imported_rows": imported, **metadata})
+            return 0
+
+        if args.resource == "memory" and args.action == "crash-dumps":
+            db.get_case(args.case_id)
+            artifacts = [
+                row for row in memory_artifacts_report(db, args.case_id, limit=5000).get("artifacts") or []
+                if row.get("artifact_type") in {"crash_dump", "process_dump", "full_memory_dump"}
+            ]
+            base_output_dir = paths.case_dir(args.case_id) / "supplemental" / "crash-dump-strings" / str(uuid.uuid4())
+            scans: list[dict[str, object]] = []
+            total_imported = 0
+            for index, artifact in enumerate(artifacts, 1):
+                source_value = artifact.get("actual_path") or artifact.get("path")
+                source = Path(str(source_value or ""))
+                if not source.exists() or not source.is_file():
+                    scans.append(
+                        {
+                            "artifact_path": artifact.get("path"),
+                            "artifact_type": artifact.get("artifact_type"),
+                            "status": "skipped",
+                            "reason": "Dump was inventoried from metadata but no accessible file path is available.",
+                        }
+                    )
+                    continue
+                scan_source = source
+                output_dir = base_output_dir / f"{index:04d}"
+                if args.copy:
+                    output_dir.mkdir(parents=True, exist_ok=True)
+                    copied = output_dir / source.name
+                    shutil.copy2(source, copied)
+                    scan_source = copied
+                computer_id, image_id = _cloud_or_memory_evidence_ids(
+                    db,
+                    case_id=args.case_id,
+                    evidence_path=scan_source,
+                    computer_id=args.computer_id,
+                    image_id=args.image_id,
+                )
+                try:
+                    csv_path, metadata = scan_memory_strings_to_csv(
+                        scan_source,
+                        output_dir,
+                        min_length=args.min_length,
+                        decompress_hiberfil=False,
+                    )
+                    output_id = str(uuid.uuid4())
+                    db.insert_tool_output(
+                        {
+                            "id": output_id,
+                            "case_id": args.case_id,
+                            "computer_id": computer_id,
+                            "image_id": image_id,
+                            "job_id": None,
+                            "tool_name": "MemoryStringScanner",
+                            "output_type": "csv",
+                            "path": csv_path,
+                            "row_count": _count_csv_rows(csv_path),
+                        }
+                    )
+                    imported = ingest_csv_output(
+                        db=db,
+                        case_id=args.case_id,
+                        computer_id=computer_id,
+                        image_id=image_id,
+                        tool_output_id=output_id,
+                        tool_name="MemoryStringScanner",
+                        path=csv_path,
+                    )
+                    total_imported += imported
+                    scans.append(
+                        {
+                            "artifact_path": artifact.get("path"),
+                            "artifact_type": artifact.get("artifact_type"),
+                            "source": str(scan_source),
+                            "output": str(csv_path),
+                            "imported_rows": imported,
+                            "status": "scanned",
+                            **metadata,
+                        }
+                    )
+                except Exception as exc:
+                    db.log_activity(
+                        case_id=args.case_id,
+                        computer_id=computer_id,
+                        image_id=image_id,
+                        event="memory.crash_dump_scan_failed",
+                        level="warning",
+                        message=f"Crash dump string scan failed for {source}",
+                        details={"path": str(source), "error": str(exc)},
+                    )
+                    scans.append(
+                        {
+                            "artifact_path": artifact.get("path"),
+                            "artifact_type": artifact.get("artifact_type"),
+                            "source": str(scan_source),
+                            "status": "failed",
+                            "error": str(exc),
+                        }
+                    )
+            print_json(
+                {
+                    "case_id": args.case_id,
+                    "artifact_count": len(artifacts),
+                    "scanned_count": sum(1 for row in scans if row.get("status") == "scanned"),
+                    "skipped_count": sum(1 for row in scans if row.get("status") == "skipped"),
+                    "failed_count": sum(1 for row in scans if row.get("status") == "failed"),
+                    "imported_rows": total_imported,
+                    "output_dir": str(base_output_dir),
+                    "scans": scans,
+                }
+            )
             return 0
 
         if args.resource == "memory" and args.action == "windows-search-carves":
@@ -2705,6 +2867,9 @@ def run(args: argparse.Namespace) -> int:
 
         if args.resource == "report" and args.action == "regression-smoke":
             report = regression_smoke_report(db, args.case_id, limit=args.limit)
+            if args.write_reports:
+                output_dir = Path(args.output_dir) if args.output_dir else paths.case_dir(args.case_id) / "reports" / "regression-smoke-bundle"
+                report["written_reports"] = write_case_report_bundle(db, args.case_id, output_dir, limit=max(args.limit, 100))
             write_report_output(
                 report,
                 report["checks"],
@@ -2713,6 +2878,10 @@ def run(args: argparse.Namespace) -> int:
                 title=f"Regression smoke report for case {args.case_id}",
                 columns=["name", "status", "error"],
             )
+            return 0
+
+        if args.resource == "report" and args.action == "write-bundle":
+            print_json(write_case_report_bundle(db, args.case_id, Path(args.output_dir), limit=args.limit))
             return 0
 
         if args.resource == "report" and args.action == "specs":

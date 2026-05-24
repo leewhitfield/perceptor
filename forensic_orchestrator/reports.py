@@ -3418,6 +3418,7 @@ def remote_access_sessions_report(db: Database, case_id: str, *, limit: int = 10
             "vpn_context_source_counts": _vpn_source_counts(vpn_context_rows),
             "vpn_context_profile_count": len(_vpn_context_groups(vpn_context_rows)),
         },
+        "memory_corroboration": _memory_domain_corroboration(db, case_id, "remote_access", limit=min(limit, 50)),
         "vpn_context": _vpn_context_groups(vpn_context_rows),
         "vpn_context_rows": vpn_context_rows[:50],
         "remote_access_sessions": session_rows[:limit],
@@ -7508,6 +7509,7 @@ def browser_activity_report(
     return {
         "case_id": case_id,
         "filters": {"browser": browser, "user": user, "exclude_noise": exclude_noise},
+        "memory_corroboration": _memory_domain_corroboration(db, case_id, "browser", limit=min(limit, 50)),
         "top_hosts": hosts,
         "downloads": downloads[:limit],
         "webcache_file_accesses": webcache_files[:limit],
@@ -8027,7 +8029,12 @@ def cloud_artifacts_report(db: Database, case_id: str, *, limit: int = 100) -> d
         rows.append(item)
     remaining = max(0, limit - len(rows))
     if not remaining:
-        return {"case_id": case_id, "cloud_artifacts": rows, "total_returned": len(rows)}
+        return {
+            "case_id": case_id,
+            "memory_corroboration": _memory_domain_corroboration(db, case_id, "cloud", limit=min(limit, 50)),
+            "cloud_artifacts": rows,
+            "total_returned": len(rows),
+        }
     for row in _query_report_rows(
         db,
         case_id,
@@ -8113,7 +8120,12 @@ def cloud_artifacts_report(db: Database, case_id: str, *, limit: int = 100) -> d
             item = dict(row)
             item["evidence_tags"] = ["cloud_path_indicator", "webcache_file_access_present"]
             rows.append(item)
-    return {"case_id": case_id, "cloud_artifacts": rows, "total_returned": len(rows)}
+    return {
+        "case_id": case_id,
+        "memory_corroboration": _memory_domain_corroboration(db, case_id, "cloud", limit=min(limit, 50)),
+        "cloud_artifacts": rows,
+        "total_returned": len(rows),
+    }
 
 
 def cloud_files_report(
@@ -8505,6 +8517,7 @@ def email_artifacts_report(db: Database, case_id: str, *, limit: int = 100) -> d
         row["dedupe_key"] = row.get("dedupe_key") or _email_dedupe_key(row)
     return {
         "case_id": case_id,
+        "memory_corroboration": _memory_domain_corroboration(db, case_id, "email", limit=min(limit, 50)),
         "email_artifacts": file_rows,
         "deduplicated": _dedupe_email_rows(file_rows),
         "total_returned": len(file_rows),
@@ -17282,6 +17295,23 @@ def memory_disk_correlations_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _memory_domain_corroboration(db: Database, case_id: str, family: str, *, limit: int = 50) -> dict[str, Any]:
+    report = memory_disk_correlations_report(db, case_id, limit=max(limit * 10, 250))
+    rows = [
+        row for row in report.get("correlations") or []
+        if str(row.get("disk_artifact_family") or "") == family
+    ][:limit]
+    return {
+        "summary": {
+            "correlation_count": len(rows),
+            "source_counts": _count_by_key(rows, "source_artifact_type"),
+            "match_types": _count_by_key(rows, "match_type"),
+        },
+        "correlations": rows,
+        "caveat": "Memory correlations are deduped leads and do not prove user action without stronger artifact context.",
+    }
+
+
 def crash_dump_analysis_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str, Any]:
     db.get_case(case_id)
     artifacts = [
@@ -17520,6 +17550,11 @@ def _memory_disk_reference_rows(db: Database, case_id: str, *, max_rows: int) ->
         ("onedrive_items", "cloud", "id", "name", "path", "NULL", "account"),
         ("mailbox_messages", "email", "id", "subject", "coalesce(message_path, source_path)", "NULL", "sender"),
         ("mailbox_attachments", "email", "id", "attachment_name", "coalesce(message_path, source_path)", "NULL", "sender"),
+        ("shortcut_items", "remote_access", "id", "coalesce(artifact_name, file_name, app_id_description)", "coalesce(artifact_path, command_line_arguments, working_directory, network_path)", "network_path", "NULL"),
+        ("rdp_cache_items", "remote_access", "id", "file_name", "coalesce(source_cache_path, fragment_path, contact_sheet_path)", "NULL", "NULL"),
+        ("rdp_visual_observations", "remote_access", "id", "coalesce(observed_application, observation_type)", "coalesce(observed_path, source_cache_path, contact_sheet_path)", "NULL", "NULL"),
+        ("evtx_events", "remote_access", "id", "coalesce(remote_host, provider, map_description)", "executable_info", "remote_host", "NULL"),
+        ("srum_records", "remote_access", "id", "coalesce(app_name, vpn_profile_name, vpn_server)", "coalesce(app_path, vpn_phonebook_path)", "vpn_server", "NULL"),
     ]
     refs: list[dict[str, Any]] = []
     per_table_limit = max(50, max_rows // max(len(specs), 1))
@@ -22057,7 +22092,7 @@ def suspicious_executions_report(
             }
         )
 
-    findings = _dedupe_suspicious_execution_rows(findings)
+    findings = _group_suspicious_execution_rows(_dedupe_suspicious_execution_rows(findings))
     findings.sort(
         key=lambda row: (
             INTERESTING_SEVERITY_RANK.get(str(row.get("severity") or "medium"), 9),
@@ -22145,6 +22180,11 @@ def suspicious_executions_markdown(report: dict[str, Any]) -> str:
             f"  - source `{row.get('source_table') or ''}` event `{row.get('event_type') or ''}` "
             f"path `{row.get('display_path') or ''}`"
         )
+        if row.get("event_count"):
+            lines.append(
+                f"  - grouped events: `{row.get('event_count')}` first/last "
+                f"`{row.get('first_seen_utc') or ''}` / `{row.get('last_seen_utc') or ''}`"
+            )
         if row.get("reason"):
             lines.append(f"  - reason: {row.get('reason')}")
         if rules:
@@ -22155,8 +22195,9 @@ def suspicious_executions_markdown(report: dict[str, Any]) -> str:
             lines.append(f"  - memory corroboration: `{len(memory_hits)}` hits")
             for hit in memory_hits[:3]:
                 lines.append(
-                    f"    - `{hit.get('source_artifact_type') or ''}` `{hit.get('hit_category') or ''}` "
-                    f"`{hit.get('matched_term') or ''}` source `{hit.get('source_path') or ''}`"
+                    f"    - `{hit.get('confidence') or ''}` `{hit.get('match_type') or ''}` "
+                    f"`{hit.get('match_value') or hit.get('matched_term') or ''}` "
+                    f"source `{hit.get('source_path') or ''}`"
                 )
         if nearby:
             lines.append(f"  - nearby timeline events: `{len(nearby)}`")
@@ -22175,51 +22216,232 @@ def _suspicious_execution_memory_corroboration(
     *,
     limit: int,
 ) -> list[dict[str, Any]]:
-    terms = _suspicious_execution_memory_terms(finding)
-    if not terms:
+    indicators = _suspicious_execution_memory_indicators(finding)
+    if not indicators:
         return []
-    where = " OR ".join("lower(COALESCE(string_value, '')) LIKE ?" for _ in terms)
+    where = " OR ".join("lower(COALESCE(string_value, '')) LIKE ?" for _ in indicators)
     rows = _query_report_rows(
         db,
         case_id,
         "memory_string_hits",
         f"""
         SELECT id, source_artifact_type, source_path, hit_category, matched_term,
-               string_sha256, "offset", context_hint
+               string_value, string_sha256, "offset", context_hint
         FROM memory_string_hits
         WHERE case_id = ?
           AND ({where})
         ORDER BY source_artifact_type, hit_category, matched_term
         LIMIT ?
         """,
-        [case_id, *[f"%{term}%" for term in terms], limit],
+        [case_id, *[f"%{indicator['value']}%" for indicator in indicators], limit * 4],
     )
-    return rows
+    output: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for row in rows:
+        haystack = str(row.get("string_value") or "").casefold()
+        best = next((indicator for indicator in indicators if indicator["value"] in haystack), None)
+        if not best:
+            continue
+        item = dict(row)
+        item.pop("string_value", None)
+        item.update(
+            {
+                "match_type": best["match_type"],
+                "match_value": best["display_value"],
+                "confidence": best["confidence"],
+            }
+        )
+        key = (
+            str(item.get("source_path") or ""),
+            str(item.get("offset") or ""),
+            str(item.get("match_type") or ""),
+            str(item.get("match_value") or ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(item)
+        if len(output) >= limit:
+            break
+    return output
 
 
-def _suspicious_execution_memory_terms(finding: dict[str, Any]) -> list[str]:
-    values = [
-        finding.get("application"),
-        _basename_from_path(finding.get("display_path")),
-        _basename_from_path(finding.get("normalized_path")),
-    ]
+_SUSPICIOUS_MEMORY_GENERIC_TERMS = {
+    "appdata",
+    "application",
+    "cache",
+    "crashdumps",
+    "download",
+    "downloads",
+    "local",
+    "program",
+    "program files",
+    "programdata",
+    "temp",
+    "tmp",
+    "user",
+    "users",
+    "windows",
+}
+
+
+def _suspicious_execution_memory_indicators(finding: dict[str, Any]) -> list[dict[str, str]]:
     details = finding.get("details") if isinstance(finding.get("details"), dict) else {}
-    values.extend(
-        [
-            details.get("resolved_reference_path"),
-            _basename_from_path(details.get("resolved_reference_path")),
-            details.get("location_category"),
-        ]
-    )
-    terms: list[str] = []
-    for value in values:
+    candidates = [
+        ("path", finding.get("display_path")),
+        ("path", finding.get("normalized_path")),
+        ("path", details.get("resolved_reference_path")),
+        ("path", details.get("resolved_reference_device_path")),
+        ("command_line", details.get("resolved_reference_command_line")),
+        ("application", finding.get("application")),
+    ]
+    output: list[dict[str, str]] = []
+    for match_type, value in candidates:
+        for indicator in _memory_indicators_from_execution_value(value, match_type=match_type):
+            if any(existing["value"] == indicator["value"] for existing in output):
+                continue
+            output.append(indicator)
+    return output[:8]
+
+
+def _memory_indicators_from_execution_value(value: Any, *, match_type: str) -> list[dict[str, str]]:
+    text = str(value or "").strip()
+    if not text:
+        return []
+    values: list[tuple[str, str, str]] = []
+    normalized = text.replace("\\", "/")
+    lowered = normalized.casefold()
+    basename = _basename_from_path(normalized) or _basename_from_path(text)
+    if _strong_memory_path_indicator(lowered):
+        values.append(("full_path", lowered, "path_match"))
+    if basename:
+        base = basename.casefold()
+        if _strong_memory_executable_name(base):
+            values.append(("executable_name", base, "name_match"))
+    if match_type == "command_line":
+        for token in re.findall(r"(?i)(?:[A-Z]:[\\/]|\\\\|/)[^\s\"']+\.(?:exe|dll|ps1|bat|cmd|vbs|js|msi)", text):
+            token_norm = token.replace("\\", "/").casefold()
+            if _strong_memory_path_indicator(token_norm):
+                values.append(("command_line_path", token_norm, "path_match"))
+            token_base = _basename_from_path(token_norm)
+            if _strong_memory_executable_name(token_base):
+                values.append(("command_line_executable", str(token_base).casefold(), "name_match"))
+    output = []
+    for indicator_type, indicator_value, confidence in values:
+        if indicator_value in _SUSPICIOUS_MEMORY_GENERIC_TERMS:
+            continue
+        output.append(
+            {
+                "match_type": indicator_type,
+                "value": indicator_value,
+                "display_value": indicator_value,
+                "confidence": confidence,
+            }
+        )
+    return output
+
+
+def _strong_memory_path_indicator(value: str) -> bool:
+    if len(value) < 12 or "." not in value:
+        return False
+    if not _path_looks_executable_or_script(value, _basename_from_path(value)):
+        return False
+    separators = value.count("/")
+    return separators >= 2 and any(marker in value for marker in ("/users/", "/windows/", "/program files", "/programdata/", "/appdata/", "/temp/", "/downloads/"))
+
+
+def _strong_memory_executable_name(value: Any) -> bool:
+    text = str(value or "").strip().casefold()
+    if len(text) < 6 or text in _SUSPICIOUS_MEMORY_GENERIC_TERMS:
+        return False
+    return _path_looks_executable_or_script(text, text)
+
+
+def _group_suspicious_execution_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for row in rows:
+        key = (
+            str(row.get("category") or ""),
+            _suspicious_execution_group_identity(row),
+            ",".join(sorted(str(rule) for rule in row.get("matched_rules") or [])),
+        )
+        item = grouped.get(key)
+        if not item:
+            item = dict(row)
+            item["event_count"] = 1
+            item["first_seen_utc"] = row.get("timestamp_utc")
+            item["last_seen_utc"] = row.get("timestamp_utc")
+            item["evidence"] = [_suspicious_execution_evidence_summary(row)]
+            grouped[key] = item
+            continue
+        item["event_count"] = int(item.get("event_count") or 1) + 1
+        item["evidence"].append(_suspicious_execution_evidence_summary(row))
+        item["first_seen_utc"] = _min_timestamp(item.get("first_seen_utc"), row.get("timestamp_utc"))
+        item["last_seen_utc"] = _max_timestamp(item.get("last_seen_utc"), row.get("timestamp_utc"))
+        item["timestamp_utc"] = item.get("first_seen_utc")
+        item["source_table"] = ",".join(sorted(_unique_nonempty([*(str(item.get("source_table") or "").split(",")), str(row.get("source_table") or "")])))
+        item["event_type"] = ",".join(sorted(_unique_nonempty([*(str(item.get("event_type") or "").split(",")), str(row.get("event_type") or "")])))
+        item["confidence"] = _strongest_suspicious_confidence(item.get("confidence"), row.get("confidence"))
+        item["severity"] = _strongest_suspicious_severity(item.get("severity"), row.get("severity"))
+        item["matched_rules"] = sorted({str(rule) for rule in item.get("matched_rules") or []} | {str(rule) for rule in row.get("matched_rules") or []})
+    return list(grouped.values())
+
+
+def _suspicious_execution_group_identity(row: dict[str, Any]) -> str:
+    for value in (
+        _basename_from_path(row.get("normalized_path")),
+        _basename_from_path(row.get("display_path")),
+        row.get("application"),
+        row.get("display_path"),
+    ):
         text = str(value or "").strip().casefold()
-        if not text or len(text) < 4:
-            continue
-        if text in {"temp", "path", "none", "null", "unknown"}:
-            continue
-        terms.append(text)
-    return _unique_nonempty(terms[:5])
+        if text:
+            return text
+    return str(row.get("source_row_id") or uuid.uuid4())
+
+
+def _suspicious_execution_evidence_summary(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "timestamp_utc": row.get("timestamp_utc"),
+        "source_table": row.get("source_table"),
+        "source_row_id": row.get("source_row_id"),
+        "event_type": row.get("event_type"),
+        "display_path": row.get("display_path"),
+    }
+
+
+def _min_timestamp(left: Any, right: Any) -> Any:
+    if not left:
+        return right
+    if not right:
+        return left
+    return left if str(left) <= str(right) else right
+
+
+def _max_timestamp(left: Any, right: Any) -> Any:
+    if not left:
+        return right
+    if not right:
+        return left
+    return left if str(left) >= str(right) else right
+
+
+def _strongest_suspicious_confidence(left: Any, right: Any) -> str:
+    if not left:
+        return str(right or "")
+    if not right:
+        return str(left or "")
+    return str(left if _suspicious_execution_confidence_rank(left) <= _suspicious_execution_confidence_rank(right) else right)
+
+
+def _strongest_suspicious_severity(left: Any, right: Any) -> str:
+    if not left:
+        return str(right or "medium")
+    if not right:
+        return str(left or "medium")
+    left_rank = INTERESTING_SEVERITY_RANK.get(str(left or "medium"), 9)
+    right_rank = INTERESTING_SEVERITY_RANK.get(str(right or "medium"), 9)
+    return str(left if left_rank <= right_rank else right)
 
 
 def _interesting_execution_candidates(rows: Any, *, evidence_type: str) -> list[dict[str, Any]]:
