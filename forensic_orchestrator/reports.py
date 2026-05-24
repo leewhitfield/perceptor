@@ -21931,6 +21931,484 @@ def _dedupe_malware_indicator_rows(rows: list[dict[str, Any]]) -> list[dict[str,
     return deduped
 
 
+def suspicious_timeline_windows_report(
+    db: Database,
+    case_id: str,
+    *,
+    window_minutes: int = 30,
+    limit: int = 100,
+) -> dict[str, Any]:
+    db.get_case(case_id)
+    events = _suspicious_window_seed_events(db, case_id, limit=max(limit * 10, 500))
+    windows = _cluster_suspicious_events(events, window_minutes=window_minutes)
+    windows.sort(key=lambda row: (-int(row.get("score") or 0), row.get("start_utc") or ""))
+    return {
+        "case_id": case_id,
+        "summary": {
+            "seed_event_count": len(events),
+            "window_count": len(windows),
+            "window_minutes": window_minutes,
+            "returned_windows": min(len(windows), limit),
+        },
+        "windows": windows[:limit],
+        "events": events[: max(limit * 5, limit)],
+        "total_returned": min(len(windows), limit),
+    }
+
+
+def suspicious_timeline_windows_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    lines = [
+        "# Suspicious Timeline Windows",
+        "",
+        f"Case: `{report.get('case_id') or ''}`",
+        "",
+        "## Summary",
+        "",
+        f"- Seed events considered: `{summary.get('seed_event_count', 0)}`",
+        f"- Suspicious windows: `{summary.get('window_count', 0)}`",
+        f"- Window size: `{summary.get('window_minutes', 0)}` minutes",
+        "",
+        "## Windows",
+        "",
+    ]
+    windows = report.get("windows") if isinstance(report.get("windows"), list) else []
+    if not windows:
+        lines.append("- No suspicious timeline windows were identified.")
+    for index, window in enumerate(windows, start=1):
+        categories = ", ".join(str(item) for item in window.get("categories") or [])
+        lines.extend(
+            [
+                f"### {index}. `{window.get('start_utc') or ''}` to `{window.get('end_utc') or ''}`",
+                "",
+                f"- Score: `{window.get('score') or 0}`",
+                f"- Event count: `{window.get('event_count') or 0}`",
+                f"- Categories: `{categories}`",
+                f"- Rationale: {window.get('rationale') or ''}",
+                "",
+            ]
+        )
+        for event in (window.get("events") or [])[:12]:
+            lines.append(
+                f"- `{event.get('timestamp_utc') or ''}` `{event.get('category') or ''}` "
+                f"`{event.get('source') or ''}` {event.get('description') or ''}"
+            )
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def investigation_triage_dashboard_report(db: Database, case_id: str, *, limit: int = 25) -> dict[str, Any]:
+    db.get_case(case_id)
+    completeness = artifact_completeness_report(db, case_id, limit=limit)
+    quality = evidence_quality_report(db, case_id, limit=limit)
+    suspicious = suspicious_timeline_windows_report(db, case_id, limit=limit)
+    brute = brute_force_report(db, case_id, limit=limit)
+    remote = remote_access_sessions_report(db, case_id, limit=limit)
+    external = external_storage_report(db, case_id, limit=limit)
+    malware = malware_hiding_places_report(db, case_id, limit=limit)
+    interesting = interesting_executables_report(db, case_id, limit=limit)
+    exfil = data_exfiltration_report(db, case_id, limit=limit)
+    account = account_compromise_report(db, case_id, limit=limit)
+    cards = [
+        _triage_card("artifact_completeness", "Artifact Completeness", completeness.get("summary") or {}),
+        _triage_card("evidence_quality", "Evidence Quality", quality.get("summary") or {}),
+        _triage_card("suspicious_windows", "Suspicious Windows", suspicious.get("summary") or {}),
+        _triage_card("brute_force", "Brute Force / Password Spraying", brute.get("summary") or {}),
+        _triage_card("remote_access", "Remote Access", remote.get("summary") or {}),
+        _triage_card("external_storage", "External Storage", external.get("summary") or {}),
+        _triage_card("malware_hiding", "Malware Hiding Places", malware.get("summary") or {}),
+        _triage_card("interesting_executables", "Interesting Executables", interesting.get("summary") or {}),
+        _triage_card("data_exfiltration", "Data Exfiltration", exfil.get("summary") or {}),
+        _triage_card("account_compromise", "Account Compromise", account.get("summary") or {}),
+    ]
+    return {
+        "case_id": case_id,
+        "summary": {
+            "cards": len(cards),
+            "top_suspicious_windows": len(suspicious.get("windows") or []),
+            "data_exfiltration_findings": (exfil.get("summary") or {}).get("finding_count", 0),
+            "account_compromise_findings": (account.get("summary") or {}).get("finding_count", 0),
+        },
+        "cards": cards,
+        "top_windows": (suspicious.get("windows") or [])[:10],
+        "top_data_exfiltration_findings": (exfil.get("findings") or [])[:10],
+        "top_account_compromise_findings": (account.get("findings") or [])[:10],
+        "recommended_reports": [
+            {"report": "suspicious-timeline-windows", "reason": "Review clustered high-signal activity."},
+            {"report": "data-exfiltration", "reason": "Review removable media, cloud, archive, browser, and email movement leads."},
+            {"report": "account-compromise", "reason": "Review logon failures, successful access, and remote-access context."},
+            {"report": "program-provenance", "reason": "Review how notable executables arrived and whether they ran."},
+        ],
+    }
+
+
+def investigation_triage_dashboard_markdown(report: dict[str, Any]) -> str:
+    lines = ["# Investigation Triage Dashboard", "", f"Case: `{report.get('case_id') or ''}`", "", "## Score Cards", ""]
+    for card in report.get("cards") or []:
+        lines.append(
+            f"- `{card.get('id')}` {card.get('title')}: severity `{card.get('severity')}`, "
+            f"score `{card.get('score')}`, summary `{card.get('summary_text')}`"
+        )
+    lines.extend(["", "## Top Suspicious Windows", ""])
+    for window in (report.get("top_windows") or [])[:10]:
+        lines.append(
+            f"- `{window.get('start_utc') or ''}` to `{window.get('end_utc') or ''}` "
+            f"score `{window.get('score') or 0}` categories `{', '.join(window.get('categories') or [])}`"
+        )
+    if not report.get("top_windows"):
+        lines.append("- No suspicious windows were found.")
+    lines.extend(["", "## Top Data Movement Leads", ""])
+    for finding in (report.get("top_data_exfiltration_findings") or [])[:10]:
+        lines.append(
+            f"- `{finding.get('severity') or ''}` `{finding.get('category') or ''}` "
+            f"{finding.get('description') or ''} source `{finding.get('source') or ''}`"
+        )
+    if not report.get("top_data_exfiltration_findings"):
+        lines.append("- No data movement leads were found.")
+    lines.extend(["", "## Recommended Next Reports", ""])
+    for item in report.get("recommended_reports") or []:
+        lines.append(f"- `{item.get('report')}`: {item.get('reason')}")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def data_exfiltration_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str, Any]:
+    db.get_case(case_id)
+    findings: list[dict[str, Any]] = []
+    external = external_storage_report(db, case_id, limit=limit)
+    for row in external.get("devices") or []:
+        if row.get("file_activity_detected"):
+            findings.append(_finding("medium", "external_storage_file_activity", "external-storage", row.get("serial") or row.get("friendly_name"), row))
+    for row in external.get("file_activity") or []:
+        findings.append(_finding("medium", "usb_file_activity", "usb_file_correlations", row.get("file_location") or row.get("file_name"), row))
+    cloud = cloud_files_report(db, case_id, limit=limit)
+    for row in cloud.get("cloud_files") or []:
+        severity = "medium" if str(row.get("is_deleted") or "").lower() in {"1", "true", "yes"} else "low"
+        findings.append(_finding(severity, "cloud_file_activity", row.get("source_table"), row.get("cloud_path") or row.get("file_name"), row))
+    downloads = browser_downloads_report(db, case_id, limit=limit)
+    for row in downloads.get("browser_downloads") or downloads.get("items") or []:
+        findings.append(_finding("low", "browser_download", "browser_downloads", row.get("target_path") or row.get("url"), row))
+    attachments = mailbox_attachments_report(db, case_id, limit=limit)
+    for row in attachments.get("mailbox_attachments") or []:
+        findings.append(_finding("low", "email_attachment", "mailbox_attachments", row.get("attachment_name"), row))
+    for row in _archive_exfil_rows(db, case_id, limit=limit):
+        findings.append(_finding("medium", "archive_staging", "archive_entries", row.get("archive_path") or row.get("member_path"), row))
+    copied = copied_file_indicators_report(db, case_id, limit=limit)
+    for row in copied.get("items") or copied.get("copied_file_indicators") or []:
+        findings.append(_finding("medium", "copied_file_indicator", "copied_file_indicators", row.get("file_location") or row.get("file_name"), row))
+    findings = _dedupe_findings(findings)
+    findings.sort(key=lambda row: (_severity_rank(row.get("severity")), str(row.get("category") or ""), str(row.get("description") or "")))
+    return {
+        "case_id": case_id,
+        "summary": {
+            "finding_count": len(findings),
+            "category_counts": _count_by_key(findings, "category"),
+            "external_storage_devices": (external.get("summary") or {}).get("device_count", 0),
+            "cloud_file_rows": len(cloud.get("cloud_files") or []),
+            "email_attachment_rows": len(attachments.get("mailbox_attachments") or []),
+        },
+        "findings": findings[:limit],
+        "external_storage_summary": external.get("summary"),
+        "cloud_summary": cloud.get("summary"),
+    }
+
+
+def data_exfiltration_markdown(report: dict[str, Any]) -> str:
+    return _findings_markdown("Data Exfiltration Report", report, "Data movement leads")
+
+
+def account_compromise_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str, Any]:
+    db.get_case(case_id)
+    findings: list[dict[str, Any]] = []
+    brute = brute_force_report(db, case_id, limit=limit)
+    for row in brute.get("source_ips") or []:
+        severity = "high" if row.get("classification") in {"password_spraying", "brute_force"} else "medium"
+        findings.append(_finding(severity, "failed_logon_pattern", "brute-force", row.get("source_ip"), row))
+    for row in brute.get("target_accounts") or []:
+        findings.append(_finding("medium", "targeted_account", "brute-force", row.get("target_account"), row))
+    remote = remote_access_sessions_report(db, case_id, limit=limit)
+    for row in remote.get("sessions") or remote.get("remote_access_sessions") or []:
+        findings.append(_finding("high", "remote_access_session", "remote-access", row.get("remote_host") or row.get("username") or row.get("session_id"), row))
+    attribution = remote_access_attribution_report(db, case_id, limit=limit)
+    for row in attribution.get("windows") or []:
+        if row.get("external_storage_count") or row.get("local_activity_count") or row.get("cloud_activity_count"):
+            findings.append(_finding("high", "remote_access_with_local_context", "remote-access-attribution", row.get("window_label") or row.get("remote_host"), row))
+    for row in _successful_logon_rows(db, case_id, limit=limit):
+        findings.append(_finding("low", "successful_logon", "evtx_events", row.get("description") or row.get("remote_host") or row.get("user_name"), row))
+    findings = _dedupe_findings(findings)
+    findings.sort(key=lambda row: (_severity_rank(row.get("severity")), str(row.get("category") or ""), str(row.get("description") or "")))
+    return {
+        "case_id": case_id,
+        "summary": {
+            "finding_count": len(findings),
+            "category_counts": _count_by_key(findings, "category"),
+            "failed_logon_events": (brute.get("summary") or {}).get("failure_event_count", 0),
+            "source_ip_count": (brute.get("summary") or {}).get("source_ip_count", 0),
+            "remote_access_sessions": len(remote.get("sessions") or remote.get("remote_access_sessions") or []),
+        },
+        "findings": findings[:limit],
+        "brute_force_summary": brute.get("summary"),
+    }
+
+
+def account_compromise_markdown(report: dict[str, Any]) -> str:
+    return _findings_markdown("Account Compromise Report", report, "Account and remote-access leads")
+
+
+def program_provenance_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str, Any]:
+    db.get_case(case_id)
+    interesting = interesting_executables_report(db, case_id, limit=limit)
+    findings: list[dict[str, Any]] = []
+    for row in interesting.get("matches") or interesting.get("findings") or []:
+        name = row.get("file_name") or row.get("application") or row.get("description") or row.get("path")
+        payload = dict(row)
+        payload["related_sources"] = _program_related_sources(db, case_id, name, limit=20)
+        findings.append(_finding(row.get("severity") or "medium", "interesting_program", row.get("source_table") or "interesting-executables", name, payload))
+    for row in _downloaded_executable_rows(db, case_id, limit=limit):
+        name = row.get("file_name") or row.get("target_path") or row.get("url")
+        payload = dict(row)
+        payload["related_sources"] = _program_related_sources(db, case_id, name, limit=20)
+        findings.append(_finding("medium", "downloaded_executable", "browser_downloads", name, payload))
+    findings = _dedupe_findings(findings)
+    findings.sort(key=lambda row: (_severity_rank(row.get("severity")), str(row.get("description") or "")))
+    return {
+        "case_id": case_id,
+        "summary": {"finding_count": len(findings), "category_counts": _count_by_key(findings, "category")},
+        "findings": findings[:limit],
+    }
+
+
+def program_provenance_markdown(report: dict[str, Any]) -> str:
+    return _findings_markdown("Program Provenance Report", report, "Executable provenance leads")
+
+
+def _suspicious_window_seed_events(db: Database, case_id: str, *, limit: int) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    for event in (execution_report(db, case_id, limit=limit).get("events") or []):
+        events.append(_seed_event(event.get("timestamp_utc"), "execution", "execution", event.get("description"), event, weight=3))
+    for row in (brute_force_report(db, case_id, limit=limit).get("source_ips") or []):
+        events.append(_seed_event(row.get("first_seen_utc"), "authentication", "brute-force", row.get("source_ip"), row, weight=5))
+        events.append(_seed_event(row.get("last_seen_utc"), "authentication", "brute-force", row.get("source_ip"), row, weight=5))
+    for row in (external_storage_report(db, case_id, limit=limit).get("timeline") or []):
+        events.append(_seed_event(row.get("timestamp"), "external_storage", "external-storage", row.get("description"), row, weight=5))
+    for row in (cloud_files_report(db, case_id, limit=limit).get("cloud_files") or []):
+        events.append(_seed_event(row.get("event_time_utc"), "cloud", row.get("source_table"), row.get("cloud_path") or row.get("file_name"), row, weight=3))
+    for row in _archive_exfil_rows(db, case_id, limit=limit):
+        events.append(_seed_event(row.get("archive_modified_time_utc"), "archive", "archive_entries", row.get("archive_path"), row, weight=4))
+    output = [event for event in events if event.get("timestamp_utc")]
+    output.sort(key=lambda row: _timestamp_sort_key(row.get("timestamp_utc")))
+    return output
+
+
+def _seed_event(timestamp: Any, category: str, source: Any, description: Any, row: dict[str, Any], *, weight: int) -> dict[str, Any]:
+    return {"timestamp_utc": timestamp, "category": category, "source": source, "description": description, "weight": weight, "row": row}
+
+
+def _cluster_suspicious_events(events: list[dict[str, Any]], *, window_minutes: int) -> list[dict[str, Any]]:
+    parsed = [(event, _parse_report_timestamp(str(event.get("timestamp_utc") or ""))) for event in events]
+    parsed = [(event, ts) for event, ts in parsed if ts is not None]
+    windows: list[dict[str, Any]] = []
+    used: set[int] = set()
+    for index, (_event, start) in enumerate(parsed):
+        if index in used:
+            continue
+        end = start
+        members: list[dict[str, Any]] = []
+        for other_index, (other, other_ts) in enumerate(parsed):
+            if other_index in used:
+                continue
+            if abs((other_ts - start).total_seconds()) <= window_minutes * 60:
+                used.add(other_index)
+                members.append(other)
+                if other_ts > end:
+                    end = other_ts
+        categories = sorted({str(member.get("category") or "") for member in members if member.get("category")})
+        score = sum(int(member.get("weight") or 1) for member in members) + max(0, len(categories) - 1) * 4
+        if len(members) < 2 and score < 6:
+            continue
+        windows.append(
+            {
+                "start_utc": _format_report_timestamp(start),
+                "end_utc": _format_report_timestamp(end),
+                "event_count": len(members),
+                "categories": categories,
+                "score": score,
+                "rationale": _suspicious_window_rationale(categories, len(members)),
+                "events": members,
+            }
+        )
+    return windows
+
+
+def _suspicious_window_rationale(categories: list[str], event_count: int) -> str:
+    if len(categories) > 1:
+        return f"{event_count} high-signal events across {len(categories)} categories occurred in a short window."
+    return f"{event_count} high-signal events occurred close together."
+
+
+def _triage_card(identifier: str, title: str, summary: dict[str, Any]) -> dict[str, Any]:
+    score = _triage_score(summary)
+    return {
+        "id": identifier,
+        "title": title,
+        "score": score,
+        "severity": "high" if score >= 50 else "medium" if score >= 15 else "low",
+        "summary_text": _triage_summary_text(summary),
+        "summary": summary,
+    }
+
+
+def _triage_score(summary: dict[str, Any]) -> int:
+    total = 0
+    for key, value in summary.items():
+        if isinstance(value, int) and any(token in key for token in ("count", "events", "findings", "failures", "windows")):
+            total += min(value, 50)
+    return total
+
+
+def _triage_summary_text(summary: dict[str, Any]) -> str:
+    parts = []
+    for key, value in summary.items():
+        if isinstance(value, (str, int, float)) and len(parts) < 4:
+            parts.append(f"{key}={value}")
+    return "; ".join(parts)
+
+
+def _finding(severity: Any, category: Any, source: Any, description: Any, row: dict[str, Any]) -> dict[str, Any]:
+    return {"severity": severity or "low", "category": category or "unknown", "source": source or "unknown", "description": description or "", "details": row}
+
+
+def _dedupe_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[tuple[str, str, str]] = set()
+    output = []
+    for finding in findings:
+        key = (str(finding.get("category") or ""), str(finding.get("source") or ""), str(finding.get("description") or "").casefold())
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(finding)
+    return output
+
+
+def _severity_rank(value: Any) -> int:
+    return {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}.get(str(value or "").lower(), 5)
+
+
+def _count_by_key(rows: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        value = str(row.get(key) or "unknown")
+        counts[value] = counts.get(value, 0) + 1
+    return [{"value": value, "count": count} for value, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))]
+
+
+def _findings_markdown(title: str, report: dict[str, Any], heading: str) -> str:
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    lines = [f"# {title}", "", f"Case: `{report.get('case_id') or ''}`", "", "## Summary", "", f"- Findings: `{summary.get('finding_count', 0)}`", ""]
+    counts = summary.get("category_counts") if isinstance(summary.get("category_counts"), list) else []
+    if counts:
+        lines.extend(["Category counts:", ""])
+        for row in counts:
+            lines.append(f"- `{row.get('value')}`: `{row.get('count')}`")
+        lines.append("")
+    lines.extend([f"## {heading}", ""])
+    findings = report.get("findings") if isinstance(report.get("findings"), list) else []
+    if not findings:
+        lines.append("- No findings were produced.")
+    for finding in findings:
+        lines.append(f"- `{finding.get('severity') or ''}` `{finding.get('category') or ''}` {finding.get('description') or ''} source `{finding.get('source') or ''}`")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _archive_exfil_rows(db: Database, case_id: str, *, limit: int) -> list[dict[str, Any]]:
+    return _query_report_rows(
+        db,
+        case_id,
+        "archive_entries",
+        """
+        SELECT *
+        FROM archive_entries
+        WHERE case_id = ?
+          AND (member_path IS NULL OR COALESCE(member_path, '') = '')
+        ORDER BY archive_modified_time_utc DESC, archive_path
+        LIMIT ?
+        """,
+        (case_id, limit),
+    )
+
+
+def _successful_logon_rows(db: Database, case_id: str, *, limit: int) -> list[dict[str, Any]]:
+    return _query_report_rows(
+        db,
+        case_id,
+        "evtx_events",
+        """
+        SELECT *
+        FROM evtx_events
+        WHERE case_id = ?
+          AND event_id IN ('4624', '4776', '4778')
+          AND COALESCE(time_created, '') != ''
+        ORDER BY time_created DESC
+        LIMIT ?
+        """,
+        (case_id, limit),
+    )
+
+
+def _downloaded_executable_rows(db: Database, case_id: str, *, limit: int) -> list[dict[str, Any]]:
+    columns = _report_table_columns(db, case_id, "browser_downloads")
+    candidate_columns = [
+        column
+        for column in ("target_path", "file_name", "url", "tab_url", "site_url", "referrer")
+        if column in columns
+    ]
+    if not candidate_columns:
+        return []
+    name_expr = f"COALESCE({', '.join(candidate_columns)}, '')"
+    return _query_report_rows(
+        db,
+        case_id,
+        "browser_downloads",
+        f"""
+        SELECT *
+        FROM browser_downloads
+        WHERE case_id = ?
+          AND (
+            lower({name_expr}) LIKE '%.exe%'
+            OR lower({name_expr}) LIKE '%.dll%'
+            OR lower({name_expr}) LIKE '%.ps1%'
+            OR lower({name_expr}) LIKE '%.bat%'
+            OR lower({name_expr}) LIKE '%.msi%'
+          )
+        ORDER BY COALESCE(end_time_utc, start_time_utc, '') DESC
+        LIMIT ?
+        """,
+        (case_id, limit),
+    )
+
+
+def _program_related_sources(db: Database, case_id: str, name: Any, *, limit: int) -> dict[str, Any]:
+    text = str(name or "").strip()
+    basename = Path(text.replace("\\", "/")).name if text else ""
+    if not basename:
+        return {"executed": False, "sources": []}
+    pattern = f"%{basename}%"
+    sources: list[dict[str, Any]] = []
+    for table, column in (
+        ("prefetch_items", "executable_name"),
+        ("browser_downloads", "target_path"),
+        ("zone_identifier_ads", "file_path"),
+        ("mailbox_attachments", "attachment_name"),
+        ("usb_file_correlations", "file_name"),
+    ):
+        try:
+            rows = _query_report_rows(db, case_id, table, f"SELECT * FROM {table} WHERE case_id = ? AND {column} LIKE ? LIMIT ?", (case_id, pattern, limit))
+        except Exception:
+            rows = []
+        if rows:
+            sources.append({"source_table": table, "match_count": len(rows), "examples": rows[:5]})
+    return {"executed": any(source.get("source_table") == "prefetch_items" for source in sources), "sources": sources}
+
+
 def shortcuts_report(db: Database, case_id: str, *, artifact_type: str | None = None, limit: int = 100) -> dict[str, Any]:
     db.get_case(case_id)
     params: list[Any] = [case_id]

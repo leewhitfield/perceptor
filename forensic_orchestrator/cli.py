@@ -28,6 +28,8 @@ from .paths import WorkspacePaths
 from .report_paths import sanitize_report_paths, sanitize_report_text
 from .reports import (
     accounts_report,
+    account_compromise_markdown,
+    account_compromise_report,
     amcache_report,
     artifact_sources_report,
     artifact_completeness_report,
@@ -65,6 +67,8 @@ from .reports import (
     deleted_folders_report,
     downloaded_files_report,
     database_storage_report,
+    data_exfiltration_markdown,
+    data_exfiltration_report,
     email_artifacts_report,
     encrypted_volume_indicators_report,
     event_interpretation_report,
@@ -95,6 +99,8 @@ from .reports import (
     filesystem_review_report,
     firefox_report,
     image_analysis_report,
+    investigation_triage_dashboard_markdown,
+    investigation_triage_dashboard_report,
     interesting_executables_markdown,
     interesting_executables_report,
     activity_summary_report,
@@ -125,6 +131,8 @@ from .reports import (
     persistence_report,
     process_timing_markdown,
     process_timing_report,
+    program_provenance_markdown,
+    program_provenance_report,
     recycle_report,
     rdp_cache_report,
     remote_access_attribution_markdown,
@@ -139,6 +147,8 @@ from .reports import (
     session_detail_report,
     sessions_report,
     storage_policy_report,
+    suspicious_timeline_windows_markdown,
+    suspicious_timeline_windows_report,
     sdelete_report,
     srum_app_network_usage_report,
     srum_context_report,
@@ -810,6 +820,32 @@ def build_parser() -> argparse.ArgumentParser:
     report_interesting_executables.add_argument("--rules", help="Path to an editable interesting executables YAML rule file")
     report_interesting_executables.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
     report_interesting_executables.add_argument("--output")
+    report_suspicious_windows = report_sub.add_parser("suspicious-timeline-windows")
+    report_suspicious_windows.add_argument("--case", required=True, dest="case_id")
+    report_suspicious_windows.add_argument("--limit", type=int, default=100)
+    report_suspicious_windows.add_argument("--window-minutes", type=int, default=30)
+    report_suspicious_windows.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
+    report_suspicious_windows.add_argument("--output")
+    report_triage_dashboard = report_sub.add_parser("triage-dashboard")
+    report_triage_dashboard.add_argument("--case", required=True, dest="case_id")
+    report_triage_dashboard.add_argument("--limit", type=int, default=25)
+    report_triage_dashboard.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
+    report_triage_dashboard.add_argument("--output")
+    report_data_exfiltration = report_sub.add_parser("data-exfiltration")
+    report_data_exfiltration.add_argument("--case", required=True, dest="case_id")
+    report_data_exfiltration.add_argument("--limit", type=int, default=100)
+    report_data_exfiltration.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
+    report_data_exfiltration.add_argument("--output")
+    report_account_compromise = report_sub.add_parser("account-compromise")
+    report_account_compromise.add_argument("--case", required=True, dest="case_id")
+    report_account_compromise.add_argument("--limit", type=int, default=100)
+    report_account_compromise.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
+    report_account_compromise.add_argument("--output")
+    report_program_provenance = report_sub.add_parser("program-provenance")
+    report_program_provenance.add_argument("--case", required=True, dest="case_id")
+    report_program_provenance.add_argument("--limit", type=int, default=100)
+    report_program_provenance.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
+    report_program_provenance.add_argument("--output")
     report_cd_burning = report_sub.add_parser("cd-burning")
     report_cd_burning.add_argument("--case", required=True, dest="case_id")
     report_cd_burning.add_argument("--limit", type=int, default=250)
@@ -2584,6 +2620,86 @@ def run(args: argparse.Namespace) -> int:
                     "applications",
                     "paths",
                 ],
+            )
+            return 0
+
+        if args.resource == "report" and args.action == "suspicious-timeline-windows":
+            report = suspicious_timeline_windows_report(
+                db,
+                args.case_id,
+                window_minutes=args.window_minutes,
+                limit=args.limit,
+            )
+            if args.format == "md":
+                write_text_output(suspicious_timeline_windows_markdown(report), args.output)
+                return 0
+            write_report_output(
+                report,
+                report["windows"],
+                args.format,
+                args.output,
+                title=f"Suspicious timeline windows for case {args.case_id}",
+                columns=["start_utc", "end_utc", "score", "event_count", "categories", "rationale"],
+            )
+            return 0
+
+        if args.resource == "report" and args.action == "triage-dashboard":
+            report = investigation_triage_dashboard_report(db, args.case_id, limit=args.limit)
+            if args.format == "md":
+                write_text_output(investigation_triage_dashboard_markdown(report), args.output)
+                return 0
+            write_report_output(
+                report,
+                report["cards"],
+                args.format,
+                args.output,
+                title=f"Investigation triage dashboard for case {args.case_id}",
+                columns=["id", "title", "severity", "score", "summary_text"],
+            )
+            return 0
+
+        if args.resource == "report" and args.action == "data-exfiltration":
+            report = data_exfiltration_report(db, args.case_id, limit=args.limit)
+            if args.format == "md":
+                write_text_output(data_exfiltration_markdown(report), args.output)
+                return 0
+            write_report_output(
+                report,
+                report["findings"],
+                args.format,
+                args.output,
+                title=f"Data exfiltration report for case {args.case_id}",
+                columns=["severity", "category", "source", "description"],
+            )
+            return 0
+
+        if args.resource == "report" and args.action == "account-compromise":
+            report = account_compromise_report(db, args.case_id, limit=args.limit)
+            if args.format == "md":
+                write_text_output(account_compromise_markdown(report), args.output)
+                return 0
+            write_report_output(
+                report,
+                report["findings"],
+                args.format,
+                args.output,
+                title=f"Account compromise report for case {args.case_id}",
+                columns=["severity", "category", "source", "description"],
+            )
+            return 0
+
+        if args.resource == "report" and args.action == "program-provenance":
+            report = program_provenance_report(db, args.case_id, limit=args.limit)
+            if args.format == "md":
+                write_text_output(program_provenance_markdown(report), args.output)
+                return 0
+            write_report_output(
+                report,
+                report["findings"],
+                args.format,
+                args.output,
+                title=f"Program provenance report for case {args.case_id}",
+                columns=["severity", "category", "source", "description"],
             )
             return 0
 

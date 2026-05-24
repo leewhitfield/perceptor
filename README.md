@@ -846,6 +846,25 @@ The report commands are intentionally thin JSON views over SQLite:
   network utilities. The default editable rule list is
   `forensic_orchestrator/plugins/interesting_executables.yaml`; pass `--rules`
   to use a case/team-specific YAML list.
+- `report suspicious-timeline-windows`: clusters high-signal events such as
+  execution, authentication failures, USB activity, cloud activity, and archive
+  staging into short time windows for rapid investigative triage.
+- `report triage-dashboard`: a high-level case dashboard that composes artifact
+  completeness, evidence quality, suspicious timeline windows, brute-force
+  activity, remote access, external storage, malware hiding, interesting
+  executables, data movement, and account-compromise leads. This report is best
+  run on demand or as a background report pack because it intentionally calls
+  several lower-level reports.
+- `report data-exfiltration`: consolidated data-movement leads from external
+  storage, USB file activity, cloud file activity, browser downloads, email
+  attachments, archive staging, and copied-file indicators.
+- `report account-compromise`: authentication and remote-access triage from
+  brute-force/password-spraying output, successful logons, RDP/remote-access
+  sessions, and remote-access attribution context.
+- `report program-provenance`: notable executable provenance, combining the
+  configurable interesting-executables rules with browser-downloaded
+  executables and related execution, Zone.Identifier, email attachment, and USB
+  file-correlation sources.
 - `report activity-summary`: higher-level recent activity slices for accounts, execution, file activity, browser history, logons, Recycle Bin, and copied-file indicators.
 - `report accounts`: local account records parsed from the SAM hive.
 - `report users`: local user-focused account records.

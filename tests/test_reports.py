@@ -11,6 +11,8 @@ from forensic_orchestrator.db import Database
 from forensic_orchestrator.filesystem_review import rebuild_filesystem_review
 from forensic_orchestrator.reports import (
     accounts_report,
+    account_compromise_markdown,
+    account_compromise_report,
     artifact_correlations_report,
     autostarts_markdown,
     autostarts_report,
@@ -23,6 +25,8 @@ from forensic_orchestrator.reports import (
     copied_usb_files_report,
     common_dialog_items_report,
     artifact_completeness_report,
+    data_exfiltration_markdown,
+    data_exfiltration_report,
     file_dossier_report,
     communication_review_report,
     cloud_artifacts_report,
@@ -39,6 +43,8 @@ from forensic_orchestrator.reports import (
     external_storage_report,
     interesting_executables_markdown,
     interesting_executables_report,
+    investigation_triage_dashboard_markdown,
+    investigation_triage_dashboard_report,
     execution_markdown,
     execution_report,
     execution_correlation_report,
@@ -63,6 +69,8 @@ from forensic_orchestrator.reports import (
     srum_context_report,
     srum_networks_report,
     storage_policy_report,
+    suspicious_timeline_windows_markdown,
+    suspicious_timeline_windows_report,
     shortcuts_report,
     usn_path_report,
     usn_reasons_report,
@@ -82,6 +90,8 @@ from forensic_orchestrator.reports import (
     cd_burning_activity_markdown,
     cd_burning_activity_report,
     persistence_report,
+    program_provenance_markdown,
+    program_provenance_report,
     registry_activity_report,
     registry_artifacts_report,
     remote_access_attribution_markdown,
@@ -153,6 +163,30 @@ def test_summary_report_counts_outputs_artifacts_and_issues(tmp_path):
     assert report["artifact_counts"] == [
         {"image_id": "image-1", "artifact": "prefetch_files", "count": 3}
     ]
+
+
+def test_high_level_investigation_reports_smoke_on_empty_case(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+
+    suspicious = suspicious_timeline_windows_report(db, case.id, limit=5)
+    triage = investigation_triage_dashboard_report(db, case.id, limit=5)
+    exfiltration = data_exfiltration_report(db, case.id, limit=5)
+    account = account_compromise_report(db, case.id, limit=5)
+    provenance = program_provenance_report(db, case.id, limit=5)
+
+    assert suspicious["summary"]["window_count"] == 0
+    assert triage["summary"]["cards"] >= 5
+    assert exfiltration["summary"]["finding_count"] == 0
+    assert account["summary"]["finding_count"] == 0
+    assert provenance["summary"]["finding_count"] == 0
+    assert "Suspicious Timeline Windows" in suspicious_timeline_windows_markdown(suspicious)
+    assert "Investigation Triage Dashboard" in investigation_triage_dashboard_markdown(triage)
+    assert "Data Exfiltration Report" in data_exfiltration_markdown(exfiltration)
+    assert "Account Compromise Report" in account_compromise_markdown(account)
+    assert "Program Provenance Report" in program_provenance_markdown(provenance)
 
 
 def test_storage_policy_report_counts_content_heavy_tables_and_output_files(tmp_path):
