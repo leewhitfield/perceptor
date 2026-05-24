@@ -72,6 +72,24 @@ ANALYTICS_TABLE_COLUMNS: dict[str, list[str]] = {
         "multipart_related_parts", "parser_status", "recommendation",
         "created_at",
     ],
+    "cloud_server_events": [
+        "id", "case_id", "computer_id", "image_id", "tool_output_id",
+        "tool_name", "source_csv", "row_number", "provider", "service",
+        "event_type", "event_time_utc", "actor", "actor_id", "actor_ip",
+        "target", "target_id", "target_type", "operation", "result",
+        "user_agent", "client_app", "file_name", "file_path", "url",
+        "message_id", "conversation_id", "content_sha256", "content_length",
+        "opensearch_document_id", "source_log_type", "source_record_id",
+        "raw_fields_json", "created_at",
+    ],
+    "memory_string_hits": [
+        "id", "case_id", "computer_id", "image_id", "tool_output_id",
+        "tool_name", "source_csv", "row_number", "source_artifact_type",
+        "source_path", "scanned_path", "decompressed_path", "scanner",
+        "encoding", "hit_category", "matched_term", "string_value",
+        "string_sha256", "string_length", "offset", "context_hint",
+        "created_at",
+    ],
 }
 
 

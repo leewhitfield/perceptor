@@ -16470,6 +16470,7 @@ def case_review_report(db: Database, case_id: str, *, limit: int = 25) -> dict[s
         "top_evidence_gaps": gaps["gaps"][:limit],
         "memory_artifacts_summary": memory["summary"],
         "memory_artifacts": memory["artifacts"][:limit],
+        "evidence_strength_guide": evidence_strength_guide(),
         "artifact_completeness_summary": completeness["summary"],
         "artifact_completeness_by_tool": completeness["tools"][:limit],
         "copied_files": copied["copied_file_indicators"],
@@ -16481,6 +16482,31 @@ def case_review_report(db: Database, case_id: str, *, limit: int = 25) -> dict[s
         "evtx_recovery": evtx["evtx_recovery"],
         "activity_counts": activity["counts"],
     }
+
+
+def evidence_strength_guide() -> list[dict[str, str]]:
+    return [
+        {
+            "strength": "strong",
+            "meaning": "Direct timestamped source or multiple independent sources agree.",
+            "report_use": "Can support a conclusion when provenance and parsing status are sound.",
+        },
+        {
+            "strength": "moderate",
+            "meaning": "Single parsed artifact or inferred correlation with clear source details.",
+            "report_use": "Use as support with corroboration where available.",
+        },
+        {
+            "strength": "lead",
+            "meaning": "String hit, cache remnant, inventory artifact, or weak temporal/path correlation.",
+            "report_use": "Treat as an investigative lead, not standalone proof.",
+        },
+        {
+            "strength": "limitation",
+            "meaning": "Unsupported, encrypted, missing, partial, failed, or skipped evidence source.",
+            "report_use": "Disclose explicitly when absence could affect an opinion.",
+        },
+    ]
 
 
 def memory_artifacts_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str, Any]:
@@ -16540,6 +16566,69 @@ def memory_artifacts_markdown(report: dict[str, Any]) -> str:
     for note in report.get("notes") or []:
         lines.append(f"- {note}")
     return "\n".join(lines).rstrip() + "\n"
+
+
+def cloud_server_events_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str, Any]:
+    db.get_case(case_id)
+    rows = _query_report_rows(
+        db,
+        case_id,
+        "cloud_server_events",
+        """
+        SELECT *
+        FROM cloud_server_events
+        WHERE case_id = ?
+        ORDER BY COALESCE(event_time_utc, '') DESC, provider, service
+        LIMIT ?
+        """,
+        (case_id, limit),
+    )
+    return {
+        "case_id": case_id,
+        "summary": {
+            "event_count": _report_table_count(db, case_id, "cloud_server_events"),
+            "providers": _count_by_key(rows, "provider"),
+            "services": _count_by_key(rows, "service"),
+            "content_reference_count": sum(1 for row in rows if row.get("opensearch_document_id")),
+        },
+        "events": rows,
+        "total_returned": len(rows),
+        "caveats": [
+            "Server-side cloud logs are supplemental evidence and should be source-labeled separately from disk-image artifacts.",
+            "Rows are normalized from provider exports; field availability depends on the export type.",
+        ],
+    }
+
+
+def memory_string_hits_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str, Any]:
+    db.get_case(case_id)
+    rows = _query_report_rows(
+        db,
+        case_id,
+        "memory_string_hits",
+        """
+        SELECT *
+        FROM memory_string_hits
+        WHERE case_id = ?
+        ORDER BY hit_category, matched_term, source_path
+        LIMIT ?
+        """,
+        (case_id, limit),
+    )
+    return {
+        "case_id": case_id,
+        "summary": {
+            "hit_count": _report_table_count(db, case_id, "memory_string_hits"),
+            "categories": _count_by_key(rows, "hit_category"),
+            "sources": _count_by_key(rows, "source_artifact_type"),
+        },
+        "hits": rows,
+        "total_returned": len(rows),
+        "caveats": [
+            "String hits are investigative leads, not standalone proof of use or access.",
+            "Hiberfil decompression depends on external tooling; if unavailable, the scanner records strings from the original file where possible.",
+        ],
+    }
 
 
 def evidence_gaps_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str, Any]:

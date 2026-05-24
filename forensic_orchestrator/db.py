@@ -196,6 +196,8 @@ DEFAULT_PURGE_TABLES = (
     "etl_events",
     "tool_outputs",
     "content_references",
+    "cloud_server_events",
+    "memory_string_hits",
 )
 
 SQLITE_ONLY_PURGE_TABLES = {
@@ -277,6 +279,8 @@ TOOL_PURGE_TABLES = {
         "content_references",
         "tool_outputs",
     },
+    "CloudServerLogImporter": {"cloud_server_events", "content_references", "tool_outputs"},
+    "MemoryStringScanner": {"memory_string_hits", "tool_outputs"},
 }
 
 
@@ -3661,6 +3665,76 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_content_refs_output
               ON content_references(tool_output_id);
 
+            CREATE TABLE IF NOT EXISTS cloud_server_events (
+              id TEXT PRIMARY KEY,
+              case_id TEXT NOT NULL REFERENCES cases(id),
+              computer_id TEXT REFERENCES computers(id),
+              image_id TEXT REFERENCES images(id),
+              tool_output_id TEXT NOT NULL REFERENCES tool_outputs(id),
+              tool_name TEXT NOT NULL,
+              source_csv TEXT NOT NULL,
+              row_number INTEGER NOT NULL,
+              provider TEXT,
+              service TEXT,
+              event_type TEXT,
+              event_time_utc TEXT,
+              actor TEXT,
+              actor_id TEXT,
+              actor_ip TEXT,
+              target TEXT,
+              target_id TEXT,
+              target_type TEXT,
+              operation TEXT,
+              result TEXT,
+              user_agent TEXT,
+              client_app TEXT,
+              file_name TEXT,
+              file_path TEXT,
+              url TEXT,
+              message_id TEXT,
+              conversation_id TEXT,
+              content_sha256 TEXT,
+              content_length INTEGER,
+              opensearch_document_id TEXT,
+              source_log_type TEXT,
+              source_record_id TEXT,
+              raw_fields_json TEXT NOT NULL DEFAULT '{}',
+              created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_cloud_server_events_case_time
+              ON cloud_server_events(case_id, event_time_utc);
+            CREATE INDEX IF NOT EXISTS idx_cloud_server_events_case_provider
+              ON cloud_server_events(case_id, provider, service);
+
+            CREATE TABLE IF NOT EXISTS memory_string_hits (
+              id TEXT PRIMARY KEY,
+              case_id TEXT NOT NULL REFERENCES cases(id),
+              computer_id TEXT REFERENCES computers(id),
+              image_id TEXT REFERENCES images(id),
+              tool_output_id TEXT NOT NULL REFERENCES tool_outputs(id),
+              tool_name TEXT NOT NULL,
+              source_csv TEXT NOT NULL,
+              row_number INTEGER NOT NULL,
+              source_artifact_type TEXT,
+              source_path TEXT,
+              scanned_path TEXT,
+              decompressed_path TEXT,
+              scanner TEXT,
+              encoding TEXT,
+              hit_category TEXT,
+              matched_term TEXT,
+              string_value TEXT,
+              string_sha256 TEXT,
+              string_length INTEGER,
+              offset TEXT,
+              context_hint TEXT,
+              created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_memory_string_hits_case_category
+              ON memory_string_hits(case_id, hit_category);
+            CREATE INDEX IF NOT EXISTS idx_memory_string_hits_output
+              ON memory_string_hits(tool_output_id);
+
             CREATE TABLE IF NOT EXISTS messaging_records (
               id TEXT PRIMARY KEY,
               case_id TEXT NOT NULL REFERENCES cases(id),
@@ -3951,6 +4025,26 @@ class Database:
                 "event_type": "TEXT", "event_source": "TEXT", "event_id": "TEXT",
                 "record_number": "TEXT", "source_path": "TEXT", "key_path": "TEXT",
                 "property_name": "TEXT", "property_value": "TEXT", "capacity_bytes": "TEXT",
+            },
+            "cloud_server_events": {
+                "provider": "TEXT", "service": "TEXT", "event_type": "TEXT",
+                "event_time_utc": "TEXT", "actor": "TEXT", "actor_id": "TEXT",
+                "actor_ip": "TEXT", "target": "TEXT", "target_id": "TEXT",
+                "target_type": "TEXT", "operation": "TEXT", "result": "TEXT",
+                "user_agent": "TEXT", "client_app": "TEXT", "file_name": "TEXT",
+                "file_path": "TEXT", "url": "TEXT", "message_id": "TEXT",
+                "conversation_id": "TEXT", "content_sha256": "TEXT",
+                "content_length": "INTEGER", "opensearch_document_id": "TEXT",
+                "source_log_type": "TEXT", "source_record_id": "TEXT",
+                "raw_fields_json": "TEXT NOT NULL DEFAULT '{}'",
+            },
+            "memory_string_hits": {
+                "source_artifact_type": "TEXT", "source_path": "TEXT",
+                "scanned_path": "TEXT", "decompressed_path": "TEXT",
+                "scanner": "TEXT", "encoding": "TEXT", "hit_category": "TEXT",
+                "matched_term": "TEXT", "string_value": "TEXT",
+                "string_sha256": "TEXT", "string_length": "INTEGER",
+                "offset": "TEXT", "context_hint": "TEXT",
             },
             "usn_journal_entries": {
                 "source_file": "TEXT", "update_sequence_number": "TEXT",
@@ -6690,6 +6784,37 @@ class Database:
                 "source_tool", "source_table", "source_row_id", "content_role",
                 "opensearch_document_id", "content_sha256", "content_length",
                 "source_path", "created_at",
+            ],
+            rows,
+        )
+
+    def insert_cloud_server_events(self, rows: list[dict[str, Any]]) -> None:
+        rows = [self._metadata_only_content_row(row, "cloud_server_events", ("_opensearch_content_text",)) for row in rows]
+        self._insert_rows(
+            "cloud_server_events",
+            [
+                "id", "case_id", "computer_id", "image_id", "tool_output_id",
+                "tool_name", "source_csv", "row_number", "provider", "service",
+                "event_type", "event_time_utc", "actor", "actor_id", "actor_ip",
+                "target", "target_id", "target_type", "operation", "result",
+                "user_agent", "client_app", "file_name", "file_path", "url",
+                "message_id", "conversation_id", "content_sha256",
+                "content_length", "opensearch_document_id", "source_log_type",
+                "source_record_id", "raw_fields_json", "created_at",
+            ],
+            rows,
+        )
+
+    def insert_memory_string_hits(self, rows: list[dict[str, Any]]) -> None:
+        self._insert_rows(
+            "memory_string_hits",
+            [
+                "id", "case_id", "computer_id", "image_id", "tool_output_id",
+                "tool_name", "source_csv", "row_number", "source_artifact_type",
+                "source_path", "scanned_path", "decompressed_path", "scanner",
+                "encoding", "hit_category", "matched_term", "string_value",
+                "string_sha256", "string_length", "offset", "context_hint",
+                "created_at",
             ],
             rows,
         )

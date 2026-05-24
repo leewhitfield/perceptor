@@ -3063,6 +3063,93 @@ def normalized_archive_entry_row(
     }
 
 
+def normalized_cloud_server_event_row(
+    *,
+    case_id: str,
+    computer_id: str,
+    image_id: str,
+    tool_output_id: str,
+    tool_name: str,
+    source_csv: Path,
+    row_number: int,
+    row: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "id": str(uuid.uuid4()),
+        "case_id": case_id,
+        "computer_id": computer_id,
+        "image_id": image_id,
+        "tool_output_id": tool_output_id,
+        "tool_name": tool_name,
+        "source_csv": source_csv,
+        "row_number": row_number,
+        "provider": _text(row.get("provider")),
+        "service": _text(row.get("service")),
+        "event_type": _text(row.get("event_type")),
+        "event_time_utc": _text(row.get("event_time_utc")),
+        "actor": _text(row.get("actor")),
+        "actor_id": _text(row.get("actor_id")),
+        "actor_ip": _text(row.get("actor_ip")),
+        "target": _text(row.get("target")),
+        "target_id": _text(row.get("target_id")),
+        "target_type": _text(row.get("target_type")),
+        "operation": _text(row.get("operation")),
+        "result": _text(row.get("result")),
+        "user_agent": _text(row.get("user_agent")),
+        "client_app": _text(row.get("client_app")),
+        "file_name": _text(row.get("file_name")),
+        "file_path": _text(row.get("file_path")),
+        "url": _text(row.get("url")),
+        "message_id": _text(row.get("message_id")),
+        "conversation_id": _text(row.get("conversation_id")),
+        "content_sha256": _text(row.get("content_sha256")),
+        "content_length": _int(row.get("content_length")),
+        "opensearch_document_id": _text(row.get("opensearch_document_id")),
+        "_opensearch_content_text": _text(row.get("_opensearch_content_text")),
+        "source_log_type": _text(row.get("source_log_type")),
+        "source_record_id": _text(row.get("source_record_id")),
+        "raw_fields_json": _text(row.get("raw_fields_json")) or "{}",
+        "created_at": utc_now(),
+    }
+
+
+def normalized_memory_string_hit_row(
+    *,
+    case_id: str,
+    computer_id: str,
+    image_id: str,
+    tool_output_id: str,
+    tool_name: str,
+    source_csv: Path,
+    row_number: int,
+    row: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "id": str(uuid.uuid4()),
+        "case_id": case_id,
+        "computer_id": computer_id,
+        "image_id": image_id,
+        "tool_output_id": tool_output_id,
+        "tool_name": tool_name,
+        "source_csv": source_csv,
+        "row_number": row_number,
+        "source_artifact_type": _text(row.get("source_artifact_type")),
+        "source_path": _text(row.get("source_path")),
+        "scanned_path": _text(row.get("scanned_path")),
+        "decompressed_path": _text(row.get("decompressed_path")),
+        "scanner": _text(row.get("scanner")),
+        "encoding": _text(row.get("encoding")),
+        "hit_category": _text(row.get("hit_category")),
+        "matched_term": _text(row.get("matched_term")),
+        "string_value": _text(row.get("string_value")),
+        "string_sha256": _text(row.get("string_sha256")),
+        "string_length": _int(row.get("string_length")),
+        "offset": _text(row.get("offset")),
+        "context_hint": _text(row.get("context_hint")),
+        "created_at": utc_now(),
+    }
+
+
 def _row_json(row: dict[str, Any]) -> str:
     normalized = {
         str(key) if key is not None else "_extra": value

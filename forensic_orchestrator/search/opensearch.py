@@ -287,6 +287,36 @@ def messaging_message_document(row: dict[str, Any], *, message_text: str, messag
     )
 
 
+def generic_content_document(
+    row: dict[str, Any],
+    *,
+    source_type: str,
+    source_table: str,
+    content: str,
+    title: str | None = None,
+    timestamp: str | None = None,
+    source_path: str | Path | None = None,
+) -> dict[str, Any] | None:
+    if not content.strip():
+        return None
+    return _base_document(
+        case_id=row["case_id"],
+        computer_id=row.get("computer_id"),
+        image_id=row.get("image_id"),
+        source_type=source_type,
+        source_table=source_table,
+        source_record_id=row["id"],
+        document_id=row.get("opensearch_document_id"),
+        source_path=str(source_path or row.get("source_path") or ""),
+        container_path=row.get("container_path") or "",
+        title=title,
+        content=content,
+        timestamp=timestamp,
+        user_profile=row.get("user_profile"),
+        extra={key: row.get(key) for key in ("provider", "service", "event_type", "operation", "actor", "target", "source_log_type")},
+    )
+
+
 def search_case_content(
     *,
     case_id: str,

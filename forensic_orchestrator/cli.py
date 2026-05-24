@@ -5,6 +5,7 @@ import csv
 import json
 import logging
 import sys
+import uuid
 from pathlib import Path
 
 from .config import load_config
@@ -51,6 +52,7 @@ from .reports import (
     cloud_artifacts_report,
     cloud_configuration_report,
     cloud_files_report,
+    cloud_server_events_report,
     copied_files_report,
     copied_file_drilldown_report,
     copied_file_groups_report,
@@ -118,6 +120,7 @@ from .reports import (
     malware_hiding_places_report,
     memory_artifacts_markdown,
     memory_artifacts_report,
+    memory_string_hits_report,
     communication_review_report,
     computer_inventory_report,
     device_inventory_report,
@@ -225,12 +228,47 @@ from .sessions import rebuild_sessions
 from .timeline_dedupe import rebuild_timeline_windows_old_dedupe
 from .tools.profiles import run_profile
 from .tools.registry import ToolRegistry
+from .tools.cloud_server_import import import_cloud_server_logs_to_csv
+from .tools.ingest import ingest_csv_output
+from .tools.memory_strings import scan_memory_strings_to_csv
 
 logger = logging.getLogger(__name__)
 
 
 def print_json(value: object) -> None:
     print(json.dumps(sanitize_report_paths(value), indent=2, default=str))
+
+
+def _count_csv_rows(path: Path) -> int:
+    with path.open("r", encoding="utf-8-sig", errors="replace", newline="") as handle:
+        return max(0, sum(1 for _ in csv.DictReader(handle)))
+
+
+def _cloud_or_memory_evidence_ids(
+    db: Database,
+    *,
+    case_id: str,
+    evidence_path: Path,
+    computer_id: str | None,
+    image_id: str | None = None,
+) -> tuple[str, str]:
+    db.get_case(case_id)
+    if computer_id is None:
+        computer_id = str(uuid.uuid4())
+        db.create_computer(
+            computer_id=computer_id,
+            case_id=case_id,
+            label="Non-image supplemental evidence",
+            notes="Created automatically for server-side cloud or memory-adjacent supplemental evidence.",
+        )
+    else:
+        db.get_computer(computer_id, case_id)
+    if image_id is None:
+        image_id = str(uuid.uuid4())
+        db.add_image(image_id, case_id, evidence_path, computer_id=computer_id)
+    else:
+        db.get_image(image_id, case_id)
+    return computer_id, image_id
 
 
 def write_text_output(text: str, output: str | None = None) -> None:
@@ -460,6 +498,25 @@ def build_parser() -> argparse.ArgumentParser:
         dest="use_sudo_mount",
         help="Use non-interactive sudo for the unmount command",
     )
+
+    cloud = subparsers.add_parser("cloud")
+    cloud_sub = cloud.add_subparsers(dest="action", required=True)
+    cloud_import = cloud_sub.add_parser("import-logs")
+    cloud_import.add_argument("--case", required=True, dest="case_id")
+    cloud_import.add_argument("--path", required=True)
+    cloud_import.add_argument("--computer", dest="computer_id")
+    cloud_import.add_argument("--provider")
+    cloud_import.add_argument("--service")
+
+    memory = subparsers.add_parser("memory")
+    memory_sub = memory.add_subparsers(dest="action", required=True)
+    memory_strings = memory_sub.add_parser("strings")
+    memory_strings.add_argument("--case", required=True, dest="case_id")
+    memory_strings.add_argument("--path", required=True)
+    memory_strings.add_argument("--computer", dest="computer_id")
+    memory_strings.add_argument("--image", dest="image_id")
+    memory_strings.add_argument("--min-length", type=int, default=6)
+    memory_strings.add_argument("--no-decompress-hiberfil", action="store_true")
 
     vsc = subparsers.add_parser("vsc")
     vsc_sub = vsc.add_subparsers(dest="action", required=True)
@@ -1649,6 +1706,16 @@ def build_parser() -> argparse.ArgumentParser:
     report_memory_artifacts.add_argument("--limit", type=int, default=100)
     report_memory_artifacts.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
     report_memory_artifacts.add_argument("--output")
+    report_cloud_server = report_sub.add_parser("cloud-server-events")
+    report_cloud_server.add_argument("--case", required=True, dest="case_id")
+    report_cloud_server.add_argument("--limit", type=int, default=100)
+    report_cloud_server.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    report_cloud_server.add_argument("--output")
+    report_memory_strings = report_sub.add_parser("memory-string-hits")
+    report_memory_strings.add_argument("--case", required=True, dest="case_id")
+    report_memory_strings.add_argument("--limit", type=int, default=100)
+    report_memory_strings.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    report_memory_strings.add_argument("--output")
     report_manifest = report_sub.add_parser("operation-manifest")
     report_manifest.add_argument("--case", required=True, dest="case_id")
     report_manifest.add_argument("--limit", type=int, default=500)
@@ -1958,6 +2025,92 @@ def run(args: argparse.Namespace) -> int:
         if args.resource in {"case", "project"} and args.action == "rebuild-sessions":
             stats = rebuild_sessions(db, case_id=args.case_id, image_id=args.image_id)
             print_json(stats)
+            return 0
+
+        if args.resource == "cloud" and args.action == "import-logs":
+            source = Path(args.path)
+            computer_id, image_id = _cloud_or_memory_evidence_ids(
+                db,
+                case_id=args.case_id,
+                evidence_path=source,
+                computer_id=args.computer_id,
+            )
+            output_dir = paths.case_dir(args.case_id) / "supplemental" / "cloud-server-logs" / str(uuid.uuid4())
+            csv_path = import_cloud_server_logs_to_csv(source, output_dir, provider=args.provider, service=args.service)
+            output_id = str(uuid.uuid4())
+            db.insert_tool_output(
+                {
+                    "id": output_id,
+                    "case_id": args.case_id,
+                    "computer_id": computer_id,
+                    "image_id": image_id,
+                    "job_id": None,
+                    "tool_name": "CloudServerLogImporter",
+                    "output_type": "csv",
+                    "path": csv_path,
+                    "row_count": _count_csv_rows(csv_path),
+                }
+            )
+            imported = ingest_csv_output(
+                db=db,
+                case_id=args.case_id,
+                computer_id=computer_id,
+                image_id=image_id,
+                tool_output_id=output_id,
+                tool_name="CloudServerLogImporter",
+                path=csv_path,
+            )
+            print_json({"case_id": args.case_id, "computer_id": computer_id, "image_id": image_id, "output": csv_path, "imported_rows": imported})
+            return 0
+
+        if args.resource == "memory" and args.action == "strings":
+            source = Path(args.path)
+            computer_id, image_id = _cloud_or_memory_evidence_ids(
+                db,
+                case_id=args.case_id,
+                evidence_path=source,
+                computer_id=args.computer_id,
+                image_id=args.image_id,
+            )
+            output_dir = paths.case_dir(args.case_id) / "supplemental" / "memory-strings" / str(uuid.uuid4())
+            csv_path, metadata = scan_memory_strings_to_csv(
+                source,
+                output_dir,
+                min_length=args.min_length,
+                decompress_hiberfil=not args.no_decompress_hiberfil,
+            )
+            output_id = str(uuid.uuid4())
+            db.insert_tool_output(
+                {
+                    "id": output_id,
+                    "case_id": args.case_id,
+                    "computer_id": computer_id,
+                    "image_id": image_id,
+                    "job_id": None,
+                    "tool_name": "MemoryStringScanner",
+                    "output_type": "csv",
+                    "path": csv_path,
+                    "row_count": _count_csv_rows(csv_path),
+                }
+            )
+            imported = ingest_csv_output(
+                db=db,
+                case_id=args.case_id,
+                computer_id=computer_id,
+                image_id=image_id,
+                tool_output_id=output_id,
+                tool_name="MemoryStringScanner",
+                path=csv_path,
+            )
+            db.log_activity(
+                case_id=args.case_id,
+                computer_id=computer_id,
+                image_id=image_id,
+                event="memory.strings_scanned",
+                message="Scanned memory-adjacent artifact for targeted strings",
+                details=metadata,
+            )
+            print_json({"case_id": args.case_id, "computer_id": computer_id, "image_id": image_id, "output": csv_path, "imported_rows": imported, **metadata})
             return 0
 
         if args.resource == "search" and args.action == "query":
@@ -3025,6 +3178,30 @@ def run(args: argparse.Namespace) -> int:
                     title=f"Memory artifacts for case {args.case_id}",
                     columns=["artifact_type", "path", "size_bytes", "source", "processed_status", "notes"],
                 )
+            return 0
+
+        if args.resource == "report" and args.action == "cloud-server-events":
+            report = cloud_server_events_report(db, args.case_id, limit=args.limit)
+            write_report_output(
+                report,
+                report["events"],
+                args.format,
+                args.output,
+                title=f"Cloud server events for case {args.case_id}",
+                columns=["event_time_utc", "provider", "service", "event_type", "actor", "actor_ip", "target", "operation", "result", "opensearch_document_id"],
+            )
+            return 0
+
+        if args.resource == "report" and args.action == "memory-string-hits":
+            report = memory_string_hits_report(db, args.case_id, limit=args.limit)
+            write_report_output(
+                report,
+                report["hits"],
+                args.format,
+                args.output,
+                title=f"Memory string hits for case {args.case_id}",
+                columns=["hit_category", "matched_term", "string_value", "source_artifact_type", "source_path", "offset", "context_hint"],
+            )
             return 0
 
         if args.resource == "report" and args.action == "copied-file-drilldown":

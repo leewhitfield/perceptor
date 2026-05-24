@@ -58,6 +58,14 @@ These improve coverage but are not required for every case:
   `cases/<case>/vsc-work/`, while supported parsed rows are promoted into the
   main case DuckDB after dedupe.
 - `sidr`: Windows Search index parsing. Set `SIDR_BIN=/path/to/sidr` when not on `PATH`.
+- `bstrings`: preferred string scanner for memory-adjacent triage. The
+  `memory strings` command checks `BSTRINGS_BIN`, `PATH`, and
+  `/home/lee/tools/bstrings/bstrings.dll`, then falls back to system `strings`
+  if unavailable.
+- `hibr2bin` or `HibernationRecon`: optional hiberfil decompression before
+  targeted string scanning. If absent, the scanner records the limitation and
+  scans the original file where possible. Hibr2Bin source is available from
+  Magnet Forensics: `https://github.com/MagnetForensics/Hibr2Bin`.
 - `poppler-utils`: `pdftotext` for faster PDF text extraction into
   OpenSearch-backed user-file content rows. If unavailable, the Python `pypdf`
   fallback is used.

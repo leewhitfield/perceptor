@@ -904,6 +904,15 @@ The report commands are intentionally thin JSON views over SQLite:
 - `report memory-artifacts`: inventory of hibernation, pagefile, and swapfile
   artifacts found in mounted volumes or MFT data so later memory work is visible
   in the case record.
+- `memory strings`: scans hibernation/page/swap or memory files for targeted
+  strings using `bstrings` when available, falling back to `strings`. It tries
+  supported hiberfil decompression first and stores hits in `memory_string_hits`.
+  Set `BSTRINGS_BIN` when `bstrings` is installed outside `PATH`; the default
+  local EZ-tools location `/home/lee/tools/bstrings/bstrings.dll` is also
+  checked.
+- `report memory-string-hits`: reviews targeted memory string leads by category,
+  matched term, source artifact, path, and offset. These are leads, not
+  standalone proof.
 - `report validate`: operator validation view for missing expected tool outputs,
   failed or unfinished jobs, warning/error counts, skipped activity, and EVTX
   recovery status.
@@ -950,6 +959,11 @@ The report commands are intentionally thin JSON views over SQLite:
   inside known USB connection windows.
 - `report cloud-artifacts`: cloud storage indicators from MFT and WebCache
   local-file activity for OneDrive, Google Drive/DriveFS, Dropbox, and iCloud.
+- `cloud import-logs`: imports supplemental server-side cloud CSV/JSON/JSONL
+  exports such as Microsoft 365 audit/Purview or Google Workspace/Vault logs
+  into `cloud_server_events`. Body/content fields go to OpenSearch when present.
+- `report cloud-server-events`: reviews imported server-side cloud events with
+  provider, service, actor, operation, target, result, and OpenSearch reference.
 - `report cloud-configuration`: registry-backed cloud account and sync
   configuration, including OneDrive account/sync-engine values, SharePoint/Teams
   URL namespaces and SPO resource IDs, Google DriveFS mount points, Dropbox

@@ -16,6 +16,7 @@ from forensic_orchestrator.db import Database, utc_now
 from forensic_orchestrator.search.opensearch import (
     IngestContentIndexer,
     OpenSearchConfig,
+    generic_content_document,
     mailbox_attachment_document,
     mailbox_message_document,
     messaging_message_document,
@@ -39,6 +40,7 @@ from forensic_orchestrator.tools.normalized import (
     normalized_windows_mail_store_row,
     normalized_messaging_message_row,
     normalized_messaging_record_row,
+    normalized_memory_string_hit_row,
     normalized_package_artifact_row,
     normalized_package_cache_entry_row,
     normalized_rdp_cache_item_row,
@@ -51,6 +53,7 @@ from forensic_orchestrator.tools.normalized import (
     normalized_browser_notification_row,
     normalized_browser_session_entry_row,
     normalized_browser_site_setting_row,
+    normalized_cloud_server_event_row,
     normalized_cloud_sync_artifact_row,
     normalized_google_drive_cache_map_row,
     normalized_onedrive_item_row,
@@ -202,6 +205,8 @@ def ingest_csv_output(
     webcache_file_access_rows = []
     file_internal_metadata_rows = []
     archive_entry_rows = []
+    cloud_server_event_rows = []
+    memory_string_hit_rows = []
     mailbox_message_rows = []
     mailbox_attachment_rows = []
     windows_mail_store_rows = []
@@ -267,6 +272,8 @@ def ingest_csv_output(
         "AmcacheParser",
         "AppCompatCacheParser",
         "SBECmd",
+        "CloudServerLogImporter",
+        "MemoryStringScanner",
     }
     manifest_cache: dict[Path, dict[str, dict[str, str]]] = {}
     recmd_ownership_cache: dict[Path, list[dict[str, object]]] = {}
@@ -340,6 +347,8 @@ def ingest_csv_output(
         nonlocal webcache_file_access_rows
         nonlocal file_internal_metadata_rows
         nonlocal archive_entry_rows
+        nonlocal cloud_server_event_rows
+        nonlocal memory_string_hit_rows
         nonlocal mailbox_message_rows
         nonlocal mailbox_attachment_rows
         nonlocal windows_mail_store_rows
@@ -390,6 +399,19 @@ def ingest_csv_output(
             content_indexer.add(document)
             if document:
                 content_reference_rows.append(_content_reference_from_document(row, document, "chat_message"))
+        for row in cloud_server_event_rows:
+            document = generic_content_document(
+                row,
+                source_type="cloud_server_log",
+                source_table="cloud_server_events",
+                content=str(row.get("_opensearch_content_text") or ""),
+                title=str(row.get("event_type") or row.get("operation") or row.get("provider") or ""),
+                timestamp=row.get("event_time_utc"),
+                source_path=row.get("source_csv"),
+            )
+            content_indexer.add(document)
+            if document:
+                content_reference_rows.append(_content_reference_from_document(row, document, "cloud_log_content"))
         write_phase = "database"
         def insert_normalized(table: str, table_rows: list[dict[str, object]], legacy_insert) -> None:
             if db.analytics_only:
@@ -477,6 +499,8 @@ def ingest_csv_output(
         insert_normalized("webcache_file_accesses", webcache_file_access_rows, db.insert_webcache_file_accesses)
         insert_normalized("file_internal_metadata", file_internal_metadata_rows, db.insert_file_internal_metadata)
         insert_normalized("archive_entries", archive_entry_rows, db.insert_archive_entries)
+        insert_normalized("cloud_server_events", cloud_server_event_rows, db.insert_cloud_server_events)
+        insert_normalized("memory_string_hits", memory_string_hit_rows, db.insert_memory_string_hits)
         insert_normalized("mailbox_messages", mailbox_message_rows, db.insert_mailbox_messages)
         insert_normalized("mailbox_attachments", mailbox_attachment_rows, db.insert_mailbox_attachments)
         insert_normalized("windows_mail_store_rows", windows_mail_store_rows, db.insert_windows_mail_store_rows)
@@ -572,6 +596,8 @@ def ingest_csv_output(
         webcache_file_access_rows = []
         file_internal_metadata_rows = []
         archive_entry_rows = []
+        cloud_server_event_rows = []
+        memory_string_hit_rows = []
         mailbox_message_rows = []
         mailbox_attachment_rows = []
         windows_mail_store_rows = []
@@ -1085,6 +1111,32 @@ def ingest_csv_output(
                     if tool_name == "ArchiveInventoryParser":
                         archive_entry_rows.append(
                             normalized_archive_entry_row(
+                                case_id=case_id,
+                                computer_id=computer_id,
+                                image_id=image_id,
+                                tool_output_id=tool_output_id,
+                                tool_name=tool_name,
+                                source_csv=path,
+                                row_number=row_number,
+                                row=dict(row),
+                            )
+                        )
+                    if tool_name == "CloudServerLogImporter":
+                        cloud_server_event_rows.append(
+                            normalized_cloud_server_event_row(
+                                case_id=case_id,
+                                computer_id=computer_id,
+                                image_id=image_id,
+                                tool_output_id=tool_output_id,
+                                tool_name=tool_name,
+                                source_csv=path,
+                                row_number=row_number,
+                                row=dict(row),
+                            )
+                        )
+                    if tool_name == "MemoryStringScanner":
+                        memory_string_hit_rows.append(
+                            normalized_memory_string_hit_row(
                                 case_id=case_id,
                                 computer_id=computer_id,
                                 image_id=image_id,
