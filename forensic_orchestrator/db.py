@@ -154,6 +154,9 @@ DEFAULT_PURGE_TABLES = (
     "windows_search_email_indicators",
     "windows_search_indexed_content",
     "windows_search_properties",
+    "windows_search_memory_carves",
+    "windows_search_memory_objects",
+    "windows_search_memory_rows",
     "windows_error_reports",
     "windows_defender_events",
     "browser_history",
@@ -281,6 +284,12 @@ TOOL_PURGE_TABLES = {
     },
     "CloudServerLogImporter": {"cloud_server_events", "content_references", "tool_outputs"},
     "MemoryStringScanner": {"memory_string_hits", "tool_outputs"},
+    "WindowsSearchMemoryCarveParser": {
+        "windows_search_memory_carves",
+        "windows_search_memory_objects",
+        "windows_search_memory_rows",
+        "tool_outputs",
+    },
 }
 
 
@@ -1791,6 +1800,91 @@ class Database:
               ON windows_search_properties(case_id, property_name);
             CREATE INDEX IF NOT EXISTS idx_windows_search_properties_output
               ON windows_search_properties(tool_output_id);
+
+            CREATE TABLE IF NOT EXISTS windows_search_memory_carves (
+              id TEXT PRIMARY KEY,
+              case_id TEXT NOT NULL REFERENCES cases(id),
+              computer_id TEXT NOT NULL REFERENCES computers(id),
+              image_id TEXT NOT NULL REFERENCES images(id),
+              tool_output_id TEXT NOT NULL REFERENCES tool_outputs(id),
+              tool_name TEXT NOT NULL,
+              source_csv TEXT NOT NULL,
+              row_number INTEGER NOT NULL,
+              carve_path TEXT NOT NULL,
+              carve_name TEXT,
+              carve_size TEXT,
+              carve_sha256 TEXT,
+              source_process TEXT,
+              source_pid TEXT,
+              virtual_address TEXT,
+              detected_format TEXT,
+              page_size TEXT,
+              reserved_bytes TEXT,
+              parser_status TEXT,
+              parser_error TEXT,
+              table_count TEXT,
+              object_count TEXT,
+              extractable_row_count TEXT,
+              matched_disk_db TEXT,
+              matched_disk_page TEXT,
+              matched_tail_hex TEXT,
+              notes TEXT,
+              created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_windows_search_memory_carves_case
+              ON windows_search_memory_carves(case_id, parser_status);
+            CREATE INDEX IF NOT EXISTS idx_windows_search_memory_carves_output
+              ON windows_search_memory_carves(tool_output_id);
+
+            CREATE TABLE IF NOT EXISTS windows_search_memory_objects (
+              id TEXT PRIMARY KEY,
+              case_id TEXT NOT NULL REFERENCES cases(id),
+              computer_id TEXT NOT NULL REFERENCES computers(id),
+              image_id TEXT NOT NULL REFERENCES images(id),
+              tool_output_id TEXT NOT NULL REFERENCES tool_outputs(id),
+              tool_name TEXT NOT NULL,
+              source_csv TEXT NOT NULL,
+              row_number INTEGER NOT NULL,
+              carve_id TEXT NOT NULL,
+              carve_path TEXT NOT NULL,
+              object_type TEXT,
+              object_name TEXT,
+              table_name TEXT,
+              rootpage TEXT,
+              sql_text TEXT,
+              parser_status TEXT,
+              parser_error TEXT,
+              created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_windows_search_memory_objects_case
+              ON windows_search_memory_objects(case_id, object_type, object_name);
+            CREATE INDEX IF NOT EXISTS idx_windows_search_memory_objects_output
+              ON windows_search_memory_objects(tool_output_id);
+
+            CREATE TABLE IF NOT EXISTS windows_search_memory_rows (
+              id TEXT PRIMARY KEY,
+              case_id TEXT NOT NULL REFERENCES cases(id),
+              computer_id TEXT NOT NULL REFERENCES computers(id),
+              image_id TEXT NOT NULL REFERENCES images(id),
+              tool_output_id TEXT NOT NULL REFERENCES tool_outputs(id),
+              tool_name TEXT NOT NULL,
+              source_csv TEXT NOT NULL,
+              row_number INTEGER NOT NULL,
+              carve_id TEXT NOT NULL,
+              carve_path TEXT NOT NULL,
+              table_name TEXT,
+              table_row_number TEXT,
+              row_json TEXT NOT NULL,
+              row_text TEXT,
+              row_sha256 TEXT,
+              parser_status TEXT,
+              parser_error TEXT,
+              created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_windows_search_memory_rows_case
+              ON windows_search_memory_rows(case_id, table_name);
+            CREATE INDEX IF NOT EXISTS idx_windows_search_memory_rows_output
+              ON windows_search_memory_rows(tool_output_id);
 
             CREATE TABLE IF NOT EXISTS file_internal_metadata (
               id TEXT PRIMARY KEY,
@@ -4228,6 +4322,49 @@ class Database:
                 "normalized_name": "TEXT",
                 "timestamp": "TEXT",
             },
+            "windows_search_memory_carves": {
+                "carve_path": "TEXT NOT NULL DEFAULT ''",
+                "carve_name": "TEXT",
+                "carve_size": "TEXT",
+                "carve_sha256": "TEXT",
+                "source_process": "TEXT",
+                "source_pid": "TEXT",
+                "virtual_address": "TEXT",
+                "detected_format": "TEXT",
+                "page_size": "TEXT",
+                "reserved_bytes": "TEXT",
+                "parser_status": "TEXT",
+                "parser_error": "TEXT",
+                "table_count": "TEXT",
+                "object_count": "TEXT",
+                "extractable_row_count": "TEXT",
+                "matched_disk_db": "TEXT",
+                "matched_disk_page": "TEXT",
+                "matched_tail_hex": "TEXT",
+                "notes": "TEXT",
+            },
+            "windows_search_memory_objects": {
+                "carve_id": "TEXT NOT NULL DEFAULT ''",
+                "carve_path": "TEXT NOT NULL DEFAULT ''",
+                "object_type": "TEXT",
+                "object_name": "TEXT",
+                "table_name": "TEXT",
+                "rootpage": "TEXT",
+                "sql_text": "TEXT",
+                "parser_status": "TEXT",
+                "parser_error": "TEXT",
+            },
+            "windows_search_memory_rows": {
+                "carve_id": "TEXT NOT NULL DEFAULT ''",
+                "carve_path": "TEXT NOT NULL DEFAULT ''",
+                "table_name": "TEXT",
+                "table_row_number": "TEXT",
+                "row_json": "TEXT NOT NULL DEFAULT '{}'",
+                "row_text": "TEXT",
+                "row_sha256": "TEXT",
+                "parser_status": "TEXT",
+                "parser_error": "TEXT",
+            },
             "file_internal_metadata": {
                 "source_file": "TEXT", "original_path": "TEXT", "file_name": "TEXT",
                 "extension": "TEXT", "parser": "TEXT", "metadata_group": "TEXT",
@@ -6648,6 +6785,55 @@ class Database:
                 "tool_name", "source_csv", "source_table", "source_record_id",
                 "row_number", "work_id", "item_path", "property_name",
                 "property_value", "normalized_name", "timestamp", "created_at",
+            ],
+            rows,
+        )
+
+    def insert_windows_search_memory_carves(self, rows: list[dict[str, Any]]) -> None:
+        self._insert_rows(
+            "windows_search_memory_carves",
+            [
+                "id", "case_id", "computer_id", "image_id", "tool_output_id",
+                "tool_name", "source_csv", "row_number", "carve_path",
+                "carve_name", "carve_size", "carve_sha256", "source_process",
+                "source_pid", "virtual_address", "detected_format", "page_size",
+                "reserved_bytes", "parser_status", "parser_error", "table_count",
+                "object_count", "extractable_row_count", "matched_disk_db",
+                "matched_disk_page", "matched_tail_hex", "notes", "created_at",
+            ],
+            rows,
+        )
+
+    def insert_windows_search_memory_objects(self, rows: list[dict[str, Any]]) -> None:
+        self._insert_rows(
+            "windows_search_memory_objects",
+            [
+                "id", "case_id", "computer_id", "image_id", "tool_output_id",
+                "tool_name", "source_csv", "row_number", "carve_id",
+                "carve_path", "object_type", "object_name", "table_name",
+                "rootpage", "sql_text", "parser_status", "parser_error",
+                "created_at",
+            ],
+            rows,
+        )
+
+    def insert_windows_search_memory_rows(self, rows: list[dict[str, Any]]) -> None:
+        rows = [
+            {
+                **row,
+                "row_json": row.get("row_json") or "{}",
+                "row_sha256": row.get("row_sha256") or _text_hash(row.get("row_json") or ""),
+            }
+            for row in rows
+        ]
+        self._insert_rows(
+            "windows_search_memory_rows",
+            [
+                "id", "case_id", "computer_id", "image_id", "tool_output_id",
+                "tool_name", "source_csv", "row_number", "carve_id",
+                "carve_path", "table_name", "table_row_number", "row_json",
+                "row_text", "row_sha256", "parser_status", "parser_error",
+                "created_at",
             ],
             rows,
         )

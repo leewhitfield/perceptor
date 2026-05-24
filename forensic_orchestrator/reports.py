@@ -5501,6 +5501,229 @@ def windows_search_report(db: Database, case_id: str, *, report_type: str = "fil
     return report
 
 
+def windows_search_combined_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str, Any]:
+    db.get_case(case_id)
+    parser_status = _windows_search_parser_status(db, case_id)
+    disk_files = _query_report_rows(
+        db,
+        case_id,
+        "windows_search_files",
+        """
+        SELECT 'disk_index' AS source, 'file' AS artifact_type,
+               gather_time AS timestamp, item_path AS path, file_name AS name,
+               COALESCE(is_deleted, '') AS status,
+               COALESCE(item_type, '') AS details
+        FROM windows_search_files
+        WHERE case_id = ?
+        ORDER BY COALESCE(gather_time, ''), COALESCE(item_path, '')
+        LIMIT ?
+        """,
+        (case_id, limit),
+    )
+    gather_logs = _query_report_rows(
+        db,
+        case_id,
+        "windows_search_gather_logs",
+        """
+        SELECT 'disk_gather_log' AS source, COALESCE(log_type, 'gather') AS artifact_type,
+               timestamp_utc AS timestamp, item_path AS path, source_name AS name,
+               CASE WHEN is_deleted_path = 'true' THEN 'deleted_path' ELSE '' END AS status,
+               'document_id=' || COALESCE(document_id, '') || ' scope_id=' || COALESCE(scope_id, '') AS details
+        FROM windows_search_gather_logs
+        WHERE case_id = ?
+        ORDER BY COALESCE(timestamp_utc, ''), COALESCE(item_path, '')
+        LIMIT ?
+        """,
+        (case_id, limit),
+    )
+    memory_carves = _query_report_rows(
+        db,
+        case_id,
+        "windows_search_memory_carves",
+        """
+        SELECT 'memory_carve' AS source, detected_format AS artifact_type,
+               '' AS timestamp, carve_path AS path, carve_name AS name,
+               parser_status AS status,
+               'tables=' || COALESCE(table_count, '0') ||
+                 ' objects=' || COALESCE(object_count, '0') ||
+                 ' rows=' || COALESCE(extractable_row_count, '0') AS details
+        FROM windows_search_memory_carves
+        WHERE case_id = ?
+        ORDER BY row_number
+        LIMIT ?
+        """,
+        (case_id, limit),
+    )
+    memory_objects = _query_report_rows(
+        db,
+        case_id,
+        "windows_search_memory_objects",
+        """
+        SELECT 'memory_schema' AS source, object_type AS artifact_type,
+               '' AS timestamp, carve_path AS path, object_name AS name,
+               parser_status AS status,
+               COALESCE(sql_text, '') AS details
+        FROM windows_search_memory_objects
+        WHERE case_id = ?
+        ORDER BY row_number
+        LIMIT ?
+        """,
+        (case_id, limit),
+    )
+    memory_rows = _query_report_rows(
+        db,
+        case_id,
+        "windows_search_memory_rows",
+        """
+        SELECT 'memory_row' AS source, table_name AS artifact_type,
+               '' AS timestamp, carve_path AS path, table_name AS name,
+               parser_status AS status,
+               COALESCE(row_text, parser_error, '') AS details
+        FROM windows_search_memory_rows
+        WHERE case_id = ?
+        ORDER BY row_number
+        LIMIT ?
+        """,
+        (case_id, limit),
+    )
+    combined = _dedupe_windows_search_combined_rows([*disk_files, *gather_logs, *memory_carves, *memory_objects, *memory_rows])
+    combined.sort(
+        key=lambda row: (
+            _windows_search_combined_source_rank(row.get("source")),
+            str(row.get("timestamp") or "9999"),
+            str(row.get("source") or ""),
+            str(row.get("path") or ""),
+            str(row.get("name") or ""),
+        )
+    )
+    combined = combined[:limit]
+    counts = {
+        "windows_search_files": _report_table_count(db, case_id, "windows_search_files"),
+        "windows_search_gather_logs": _report_table_count(db, case_id, "windows_search_gather_logs"),
+        "windows_search_indexed_content": _report_table_count(db, case_id, "windows_search_indexed_content"),
+        "windows_search_properties": _report_table_count(db, case_id, "windows_search_properties"),
+        "windows_search_memory_carves": _report_table_count(db, case_id, "windows_search_memory_carves"),
+        "windows_search_memory_objects": _report_table_count(db, case_id, "windows_search_memory_objects"),
+        "windows_search_memory_rows": _report_table_count(db, case_id, "windows_search_memory_rows"),
+    }
+    memory_parsed_rows = _report_table_count_where(
+        db,
+        case_id,
+        "windows_search_memory_rows",
+        "parser_status = ?",
+        ("parsed",),
+    )
+    return {
+        "case_id": case_id,
+        "summary": {
+            **counts,
+            "windows_search_memory_parsed_rows": memory_parsed_rows,
+            "combined_returned": len(combined),
+            "parser_status": parser_status.get("summary_status"),
+            "memory_carves_with_schema": sum(1 for row in memory_carves if str(row.get("details") or "").find("objects=0") < 0),
+            "dedupe_basis": "normalized source/artifact/path/name/status/details",
+        },
+        "parser_status": parser_status,
+        "combined_artifacts": combined,
+        "memory_carves": memory_carves,
+        "memory_schema_objects": memory_objects,
+        "memory_rows": memory_rows,
+        "disk_files": disk_files,
+        "gather_logs": gather_logs,
+        "caveats": [
+            "Memory SQLite carves may be partial or malformed; schema-only recovery is still useful evidence that SearchIndexer held decrypted Search pages.",
+            "Disk gather logs provide crawl/indexing context but are not equivalent to full indexed Search rows.",
+            "Encrypted AesGcm1 SQLite databases remain unsupported unless a usable key or live plaintext cache is recovered.",
+        ],
+    }
+
+
+def _dedupe_windows_search_combined_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[tuple[str, str, str, str, str, str]] = set()
+    output: list[dict[str, Any]] = []
+    for row in rows:
+        key = (
+            str(row.get("source") or "").lower(),
+            str(row.get("artifact_type") or "").lower(),
+            _normalize_windows_search_path(row.get("path")),
+            str(row.get("name") or "").lower(),
+            str(row.get("status") or "").lower(),
+            hashlib.sha256(str(row.get("details") or "").encode("utf-8", errors="replace")).hexdigest(),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(row)
+    return output
+
+
+def _windows_search_combined_source_rank(value: Any) -> int:
+    source = str(value or "")
+    return {
+        "disk_index": 0,
+        "memory_carve": 1,
+        "memory_schema": 2,
+        "memory_row": 3,
+        "disk_gather_log": 4,
+    }.get(source, 9)
+
+
+def _normalize_windows_search_path(value: Any) -> str:
+    text = str(value or "").replace("/", "\\").strip().lower()
+    text = re.sub(r"^file:\\+", "", text)
+    text = re.sub(r"\\+", r"\\", text)
+    return text.rstrip("\\")
+
+
+def windows_search_combined_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    lines = [
+        "# Combined Windows Search Artifacts",
+        "",
+        f"Case: `{report.get('case_id') or ''}`",
+        "",
+        "## Summary",
+        "",
+        f"- Parser status: `{summary.get('parser_status') or ''}`",
+        f"- Disk Search file rows: `{summary.get('windows_search_files', 0)}`",
+        f"- Disk gather log rows: `{summary.get('windows_search_gather_logs', 0)}`",
+        f"- Indexed content rows: `{summary.get('windows_search_indexed_content', 0)}`",
+        f"- Property rows: `{summary.get('windows_search_properties', 0)}`",
+        f"- Memory carves: `{summary.get('windows_search_memory_carves', 0)}`",
+        f"- Memory schema objects: `{summary.get('windows_search_memory_objects', 0)}`",
+        f"- Memory parsed rows: `{summary.get('windows_search_memory_parsed_rows', 0)}`",
+        f"- Memory row-attempt records: `{summary.get('windows_search_memory_rows', 0)}`",
+        "",
+        "## Parser Status",
+        "",
+    ]
+    status = report.get("parser_status") if isinstance(report.get("parser_status"), dict) else {}
+    lines.append(f"- {status.get('summary_note') or ''}")
+    inventories = status.get("inventories") if isinstance(status.get("inventories"), list) else []
+    for item in inventories[:10]:
+        lines.append(
+            f"- `{item.get('detected_format') or ''}` `{item.get('parser_status') or ''}` "
+            f"{item.get('source_path') or ''}"
+        )
+    lines.extend(["", "## Combined View", ""])
+    combined = report.get("combined_artifacts") if isinstance(report.get("combined_artifacts"), list) else []
+    if not combined:
+        lines.append("- No Windows Search disk or memory rows were available.")
+    for row in combined[:50]:
+        details = str(row.get("details") or "").replace("\n", " ")
+        if len(details) > 220:
+            details = details[:217] + "..."
+        lines.append(
+            f"- `{row.get('source') or ''}` `{row.get('artifact_type') or ''}` "
+            f"`{row.get('status') or ''}` {row.get('timestamp') or ''} "
+            f"{row.get('path') or row.get('name') or ''} {details}"
+        )
+    lines.extend(["", "## Caveats", ""])
+    for caveat in report.get("caveats") or []:
+        lines.append(f"- {caveat}")
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def _windows_search_parser_status(db: Database, case_id: str) -> dict[str, Any]:
     db.get_case(case_id)
     outputs = [
@@ -24410,6 +24633,25 @@ def _report_table_count(db: Database, case_id: str, table: str) -> int:
     except Exception:
         return 0
     return int(row["count"] or 0) if row else 0
+
+
+def _report_table_count_where(
+    db: Database,
+    case_id: str,
+    table: str,
+    where: str,
+    params: tuple[Any, ...] | list[Any],
+) -> int:
+    if not _safe_identifier(table):
+        raise ValueError(f"Unsafe report table name: {table}")
+    rows = _query_report_rows(
+        db,
+        case_id,
+        table,
+        f"SELECT COUNT(*) AS count FROM {_quote_identifier(table)} WHERE case_id = ? AND {where}",
+        (case_id, *tuple(params)),
+    )
+    return int(rows[0].get("count") or 0) if rows else 0
 
 
 def _table_report(db: Database, case_id: str, table: str, key: str, limit: int) -> dict[str, Any]:

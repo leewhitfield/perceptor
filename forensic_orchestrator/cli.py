@@ -123,6 +123,8 @@ from .reports import (
     memory_artifacts_markdown,
     memory_artifacts_report,
     memory_string_hits_report,
+    windows_search_combined_markdown,
+    windows_search_combined_report,
     communication_review_report,
     computer_inventory_report,
     device_inventory_report,
@@ -235,6 +237,7 @@ from .tools.registry import ToolRegistry
 from .tools.cloud_server_import import import_cloud_server_logs_to_csv
 from .tools.ingest import ingest_csv_output
 from .tools.memory_strings import scan_memory_strings_to_csv
+from .tools.windows_search_memory import parse_windows_search_memory_carves
 
 logger = logging.getLogger(__name__)
 
@@ -257,6 +260,10 @@ def _cloud_or_memory_evidence_ids(
     image_id: str | None = None,
 ) -> tuple[str, str]:
     db.get_case(case_id)
+    if image_id is not None and computer_id is None:
+        image = db.get_image(image_id, case_id)
+        if image.computer_id:
+            computer_id = image.computer_id
     if computer_id is None:
         computer_id = str(uuid.uuid4())
         db.create_computer(
@@ -521,6 +528,12 @@ def build_parser() -> argparse.ArgumentParser:
     memory_strings.add_argument("--image", dest="image_id")
     memory_strings.add_argument("--min-length", type=int, default=6)
     memory_strings.add_argument("--no-decompress-hiberfil", action="store_true")
+    memory_search_carves = memory_sub.add_parser("windows-search-carves")
+    memory_search_carves.add_argument("--case", required=True, dest="case_id")
+    memory_search_carves.add_argument("--path", required=True, help="Directory or file containing SearchIndexer SQLite memory carves")
+    memory_search_carves.add_argument("--computer", dest="computer_id")
+    memory_search_carves.add_argument("--image", dest="image_id")
+    memory_search_carves.add_argument("--max-rows-per-table", type=int, default=100)
 
     vsc = subparsers.add_parser("vsc")
     vsc_sub = vsc.add_subparsers(dest="action", required=True)
@@ -1480,6 +1493,11 @@ def build_parser() -> argparse.ArgumentParser:
         dest="report_type",
     )
     report_search.add_argument("--limit", type=int, default=100)
+    report_search_combined = report_sub.add_parser("windows-search-combined")
+    report_search_combined.add_argument("--case", required=True, dest="case_id")
+    report_search_combined.add_argument("--limit", type=int, default=100)
+    report_search_combined.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
+    report_search_combined.add_argument("--output")
     report_file_metadata = report_sub.add_parser("file-metadata")
     report_file_metadata.add_argument("--case", required=True, dest="case_id")
     report_file_metadata.add_argument("--limit", type=int, default=100)
@@ -2126,6 +2144,62 @@ def run(args: argparse.Namespace) -> int:
                 details=metadata,
             )
             print_json({"case_id": args.case_id, "computer_id": computer_id, "image_id": image_id, "output": csv_path, "imported_rows": imported, **metadata})
+            return 0
+
+        if args.resource == "memory" and args.action == "windows-search-carves":
+            source = Path(args.path)
+            computer_id, image_id = _cloud_or_memory_evidence_ids(
+                db,
+                case_id=args.case_id,
+                evidence_path=source,
+                computer_id=args.computer_id,
+                image_id=args.image_id,
+            )
+            output_dir = paths.case_dir(args.case_id) / "supplemental" / "windows-search-memory-carves" / str(uuid.uuid4())
+            output_dir.mkdir(parents=True, exist_ok=True)
+            output_path = output_dir / "WindowsSearchMemoryCarveParser.json"
+            output_id = str(uuid.uuid4())
+            parsed = parse_windows_search_memory_carves(
+                source,
+                case_id=args.case_id,
+                computer_id=computer_id,
+                image_id=image_id,
+                tool_output_id=output_id,
+                source_csv=output_path,
+                max_rows_per_table=args.max_rows_per_table,
+            )
+            output_payload = {
+                "source": str(source),
+                "carves": len(parsed["carves"]),
+                "objects": len(parsed["objects"]),
+                "rows": len(parsed["rows"]),
+            }
+            output_path.write_text(json.dumps(output_payload, indent=2, sort_keys=True), encoding="utf-8")
+            db.insert_tool_output(
+                {
+                    "id": output_id,
+                    "case_id": args.case_id,
+                    "computer_id": computer_id,
+                    "image_id": image_id,
+                    "job_id": None,
+                    "tool_name": "WindowsSearchMemoryCarveParser",
+                    "output_type": "json",
+                    "path": output_path,
+                    "row_count": len(parsed["carves"]) + len(parsed["objects"]) + len(parsed["rows"]),
+                }
+            )
+            db.insert_windows_search_memory_carves(parsed["carves"])
+            db.insert_windows_search_memory_objects(parsed["objects"])
+            db.insert_windows_search_memory_rows(parsed["rows"])
+            db.log_activity(
+                case_id=args.case_id,
+                computer_id=computer_id,
+                image_id=image_id,
+                event="memory.windows_search_carves_imported",
+                message="Imported Windows Search SQLite memory carves",
+                details=output_payload,
+            )
+            print_json({"case_id": args.case_id, "computer_id": computer_id, "image_id": image_id, "output": output_path, **output_payload})
             return 0
 
         if args.resource == "search" and args.action == "query":
@@ -3866,6 +3940,24 @@ def run(args: argparse.Namespace) -> int:
 
         if args.resource == "report" and args.action == "windows-search":
             print_json(windows_search_report(db, args.case_id, report_type=args.report_type, limit=args.limit))
+            return 0
+
+        if args.resource == "report" and args.action == "windows-search-combined":
+            report = windows_search_combined_report(db, args.case_id, limit=args.limit)
+            if args.format == "md":
+                write_text_output(windows_search_combined_markdown(report), args.output)
+                return 0
+            if args.format == "json":
+                print_json(report)
+                return 0
+            write_report_output(
+                report,
+                report["combined_artifacts"],
+                args.format,
+                args.output,
+                title=f"Combined Windows Search artifacts for case {args.case_id}",
+                columns=["source", "artifact_type", "timestamp", "path", "name", "status", "details"],
+            )
             return 0
 
         if args.resource == "report" and args.action == "file-metadata":

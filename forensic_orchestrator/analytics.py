@@ -90,6 +90,29 @@ ANALYTICS_TABLE_COLUMNS: dict[str, list[str]] = {
         "string_sha256", "string_length", "offset", "context_hint",
         "created_at",
     ],
+    "windows_search_memory_carves": [
+        "id", "case_id", "computer_id", "image_id", "tool_output_id",
+        "tool_name", "source_csv", "row_number", "carve_path",
+        "carve_name", "carve_size", "carve_sha256", "source_process",
+        "source_pid", "virtual_address", "detected_format", "page_size",
+        "reserved_bytes", "parser_status", "parser_error", "table_count",
+        "object_count", "extractable_row_count", "matched_disk_db",
+        "matched_disk_page", "matched_tail_hex", "notes", "created_at",
+    ],
+    "windows_search_memory_objects": [
+        "id", "case_id", "computer_id", "image_id", "tool_output_id",
+        "tool_name", "source_csv", "row_number", "carve_id",
+        "carve_path", "object_type", "object_name", "table_name",
+        "rootpage", "sql_text", "parser_status", "parser_error",
+        "created_at",
+    ],
+    "windows_search_memory_rows": [
+        "id", "case_id", "computer_id", "image_id", "tool_output_id",
+        "tool_name", "source_csv", "row_number", "carve_id",
+        "carve_path", "table_name", "table_row_number", "row_json",
+        "row_text", "row_sha256", "parser_status", "parser_error",
+        "created_at",
+    ],
 }
 
 
