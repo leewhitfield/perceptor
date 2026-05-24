@@ -54,10 +54,10 @@ def display_evidence_path(value: Any) -> str:
     for anchor in (
         "/Windows.old/",
         "/Users/",
-        "/Windows/",
         "/ProgramData/",
         "/Program Files/",
         "/Program Files (x86)/",
+        "/Windows/",
         "/$Recycle.Bin/",
         "/Recovery/",
     ):

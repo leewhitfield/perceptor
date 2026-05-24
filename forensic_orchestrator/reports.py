@@ -5479,7 +5479,111 @@ def windows_search_report(db: Database, case_id: str, *, report_type: str = "fil
         "properties": ("windows_search_properties", "properties"),
     }
     table, key = tables[report_type]
-    return _table_report(db, case_id, table, key, limit)
+    report = _table_report(db, case_id, table, key, limit)
+    report["parser_status"] = _windows_search_parser_status(db, case_id)
+    return report
+
+
+def _windows_search_parser_status(db: Database, case_id: str) -> dict[str, Any]:
+    db.get_case(case_id)
+    outputs = [
+        dict(row)
+        for row in db.conn.execute(
+            """
+            SELECT tool_outputs.*, jobs.exit_code, jobs.stdout_path, jobs.stderr_path, jobs.output_folder,
+                   jobs.start_time, jobs.end_time
+            FROM tool_outputs
+            LEFT JOIN jobs ON jobs.id = tool_outputs.job_id
+            WHERE tool_outputs.case_id = ?
+              AND tool_outputs.tool_name IN ('SIDR', 'WindowsSearchESEParser', 'WindowsSearchGatherParser')
+            ORDER BY COALESCE(jobs.start_time, tool_outputs.created_at), tool_outputs.tool_name
+            """,
+            (case_id,),
+        ).fetchall()
+    ]
+    inventories: list[dict[str, Any]] = []
+    for output in outputs:
+        if output.get("tool_name") != "WindowsSearchESEParser":
+            continue
+        inventory_path = Path(str(output.get("path") or "")).parent / "WindowsSearchParserInventory.json"
+        if not inventory_path.exists():
+            continue
+        try:
+            data = json.loads(inventory_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            inventories.append(
+                {
+                    "source_path": "",
+                    "detected_format": "inventory_unreadable",
+                    "parser_status": "inventory_unreadable",
+                    "parser_note": str(exc),
+                    "inventory_path": display_evidence_path(inventory_path),
+                }
+            )
+            continue
+        for item in data if isinstance(data, list) else [data]:
+            if not isinstance(item, dict):
+                continue
+            normalized = dict(item)
+            if normalized.get("source_path"):
+                normalized["source_path"] = _windows_search_display_path(normalized.get("source_path"))
+            normalized["inventory_path"] = display_evidence_path(inventory_path)
+            inventories.append(normalized)
+
+    table_counts = {
+        "windows_search_files": _report_table_count(db, case_id, "windows_search_files"),
+        "windows_search_properties": _report_table_count(db, case_id, "windows_search_properties"),
+        "windows_search_indexed_content": _report_table_count(db, case_id, "windows_search_indexed_content"),
+        "windows_search_gather_logs": _report_table_count(db, case_id, "windows_search_gather_logs"),
+    }
+    statuses = {str(item.get("parser_status") or "") for item in inventories}
+    formats = {str(item.get("detected_format") or "") for item in inventories}
+    if "unsupported_encrypted_sqlite" in statuses:
+        summary_status = "partial_unsupported_encrypted_sqlite"
+        summary_note = "Windows Search database was found but is encrypted AesGcm1 SQLite; full index rows were not parsed. Gather logs may still provide limited context."
+    elif "unsupported_sqlite" in statuses:
+        summary_status = "partial_unsupported_sqlite"
+        summary_note = "Windows Search SQLite database was found but no SQLite schema parser is available. Gather logs may still provide limited context."
+    elif "parsed" in statuses:
+        summary_status = "parsed"
+        summary_note = "Windows Search index parser produced normalized rows."
+    elif "not_found" in statuses:
+        summary_status = "not_found"
+        summary_note = "Windows Search index database was not found in the extracted artifact path."
+    elif inventories:
+        summary_status = "unknown_or_unparsed"
+        summary_note = "Windows Search parser inventory exists but did not report a parsed index."
+    else:
+        summary_status = "no_parser_inventory"
+        summary_note = "No Windows Search parser inventory was found for this case."
+
+    return {
+        "summary_status": summary_status,
+        "summary_note": summary_note,
+        "detected_formats": sorted(item for item in formats if item),
+        "inventories": inventories,
+        "table_counts": table_counts,
+        "tool_outputs": [
+            {
+                "tool_name": output.get("tool_name"),
+                "path": display_evidence_path(output.get("path")),
+                "row_count": output.get("row_count"),
+                "exit_code": output.get("exit_code"),
+                "start_time": output.get("start_time"),
+                "end_time": output.get("end_time"),
+            }
+            for output in outputs
+        ],
+    }
+
+
+def _windows_search_display_path(path: Any) -> str:
+    text = str(path or "").replace("\\", "/")
+    marker = "/WindowsSearch/Applications/Windows/"
+    index = text.lower().find(marker.lower())
+    if index >= 0:
+        return "/ProgramData/Microsoft/Search/Data/Applications/Windows/" + text[index + len(marker):].lstrip("/")
+    return display_evidence_path(path)
 
 
 def file_metadata_report(
@@ -23068,6 +23172,25 @@ def _basename(path: str | None) -> str | None:
         return None
     normalized = path.replace("\\", "/").rstrip("/")
     return normalized.rsplit("/", 1)[-1] if normalized else None
+
+
+def _report_table_count(db: Database, case_id: str, table: str) -> int:
+    if not _safe_identifier(table):
+        raise ValueError(f"Unsafe report table name: {table}")
+    if table in ANALYTICS_TABLES or _duckdb_table_available(db, case_id, table):
+        rows = _query_report_rows(
+            db,
+            case_id,
+            table,
+            f"SELECT COUNT(*) AS count FROM {_quote_identifier(table)} WHERE case_id = ?",
+            (case_id,),
+        )
+        return int(rows[0].get("count") or 0) if rows else 0
+    try:
+        row = db.conn.execute(f"SELECT COUNT(*) AS count FROM {_quote_identifier(table)} WHERE case_id = ?", (case_id,)).fetchone()
+    except Exception:
+        return 0
+    return int(row["count"] or 0) if row else 0
 
 
 def _table_report(db: Database, case_id: str, table: str, key: str, limit: int) -> dict[str, Any]:

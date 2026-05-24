@@ -115,6 +115,7 @@ from forensic_orchestrator.reports import (
     user_activity_report,
     virtualization_indicators_report,
     web_cloud_correlations_report,
+    windows_search_report,
 )
 from forensic_orchestrator.report_specs import list_report_specs, run_report_spec
 from forensic_orchestrator.tools.ingest import ingest_csv_output
@@ -187,6 +188,48 @@ def test_high_level_investigation_reports_smoke_on_empty_case(tmp_path):
     assert "Data Exfiltration Report" in data_exfiltration_markdown(exfiltration)
     assert "Account Compromise Report" in account_compromise_markdown(account)
     assert "Program Provenance Report" in program_provenance_markdown(provenance)
+
+
+def test_windows_search_report_surfaces_encrypted_sqlite_status(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    output_dir = tmp_path / "outputs" / "WindowsSearchESEParser"
+    output_dir.mkdir(parents=True)
+    csv_path = output_dir / "WindowsSearchESEParser.csv"
+    csv_path.write_text("WorkId,System_Search_GatherTime,System_ItemPathDisplay\n", encoding="utf-8")
+    (output_dir / "WindowsSearchParserInventory.json").write_text(
+        """[
+  {
+    "detected_format": "encrypted_sqlite",
+    "parser_note": "Windows 11 Search database uses AesGcm1 SQLite3 format; contents are encrypted and were not parsed.",
+    "parser_status": "unsupported_encrypted_sqlite",
+    "source_path": "/cases/11111111-1111-1111-1111-111111111111/artifacts/image-id/WindowsSearch/Applications/Windows/Windows.db"
+  }
+]""",
+        encoding="utf-8",
+    )
+    db.insert_tool_output(
+        {
+            "id": "search-output-1",
+            "case_id": case.id,
+            "computer_id": "computer-1",
+            "image_id": "image-1",
+            "job_id": None,
+            "tool_name": "WindowsSearchESEParser",
+            "output_type": "csv",
+            "path": csv_path,
+            "row_count": 0,
+        }
+    )
+
+    report = windows_search_report(db, case.id, report_type="files", limit=10)
+
+    assert report["files"] == []
+    assert report["parser_status"]["summary_status"] == "partial_unsupported_encrypted_sqlite"
+    assert report["parser_status"]["detected_formats"] == ["encrypted_sqlite"]
+    assert report["parser_status"]["inventories"][0]["source_path"] == "/ProgramData/Microsoft/Search/Data/Applications/Windows/Windows.db"
 
 
 def test_storage_policy_report_counts_content_heavy_tables_and_output_files(tmp_path):

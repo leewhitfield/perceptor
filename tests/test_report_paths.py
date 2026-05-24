@@ -24,6 +24,12 @@ def test_display_evidence_path_strips_case_artifact_prefixes():
         )
         == "/Users/Jane/Documents/report.docx"
     )
+    assert (
+        display_evidence_path(
+            "/mnt/forensic-ssd/cases/case-1/artifacts/image-1/ProgramData/Microsoft/Search/Data/Applications/Windows/Windows.db"
+        )
+        == "/ProgramData/Microsoft/Search/Data/Applications/Windows/Windows.db"
+    )
 
 
 def test_display_evidence_path_strips_uuid_case_prefixes():

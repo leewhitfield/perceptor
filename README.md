@@ -1043,7 +1043,7 @@ The report commands are intentionally thin JSON views over SQLite:
 - `report filesystem-review`: combined filesystem metadata review across MFT,
   USN, `$LogFile`, `$I30`, and namespace reconciliation rows. Supports
   `--contains`, `--event-type`, `--status`, and `--source-table`.
-- `report windows-search --type files|internet|activity|emails|content|properties`: SIDR Windows Search rows split into focused tables. `content` contains indexed text recovered for any indexed item, not just email. `properties` records every raw SIDR property/value pair, including normalized names for SIDR extra fields such as size, owner, computer name, and indexed content.
+- `report windows-search --type files|internet|activity|emails|content|properties`: SIDR Windows Search rows split into focused tables. `content` contains indexed text recovered for any indexed item, not just email. `properties` records every raw SIDR property/value pair, including normalized names for SIDR extra fields such as size, owner, computer name, and indexed content. Every Windows Search report also includes `parser_status`, so unsupported Windows 11 encrypted `AesGcm1 SQLite3` Search databases are shown explicitly even when the full index tables have zero rows; gather logs are still reported when available.
 - `report file-metadata`: embedded/internal file metadata extracted with `exiftool`.
 - `report evtx-recovery`: per-log EVTX copy, partial extraction, salvage, recovered event count, and parser error details.
 - `report recycle`: top-level Recycle Bin entries with child counts.
