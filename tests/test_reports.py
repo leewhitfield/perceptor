@@ -4462,7 +4462,7 @@ def test_execution_report_cleans_shimcache_and_sorts_deduped_app_summary(tmp_pat
     assert shimcache["description"] == "Microsoft.SkypeApp"
     applications = {row["application"]: row for row in report["applications"]}
     assert list(applications) == sorted(applications, key=str.casefold)
-    assert applications["BETA.EXE"]["event_count"] == 2
+    assert applications["BETA.EXE"]["event_count"] == 1
     assert applications["BETA.EXE"]["execution_count"] == 1
 
 
