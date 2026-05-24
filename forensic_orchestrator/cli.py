@@ -72,6 +72,8 @@ from .reports import (
     email_artifacts_report,
     encrypted_volume_indicators_report,
     event_interpretation_report,
+    evidence_gaps_markdown,
+    evidence_gaps_report,
     evidence_quality_report,
     evtx_report,
     evtx_recovery_report,
@@ -114,6 +116,8 @@ from .reports import (
     mailbox_messages_report,
     malware_hiding_places_markdown,
     malware_hiding_places_report,
+    memory_artifacts_markdown,
+    memory_artifacts_report,
     communication_review_report,
     computer_inventory_report,
     device_inventory_report,
@@ -1635,6 +1639,16 @@ def build_parser() -> argparse.ArgumentParser:
     report_case_review.add_argument("--limit", type=int, default=25)
     report_case_review.add_argument("--format", choices=["json", "table"], default="json")
     report_case_review.add_argument("--output")
+    report_evidence_gaps = report_sub.add_parser("evidence-gaps")
+    report_evidence_gaps.add_argument("--case", required=True, dest="case_id")
+    report_evidence_gaps.add_argument("--limit", type=int, default=100)
+    report_evidence_gaps.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
+    report_evidence_gaps.add_argument("--output")
+    report_memory_artifacts = report_sub.add_parser("memory-artifacts")
+    report_memory_artifacts.add_argument("--case", required=True, dest="case_id")
+    report_memory_artifacts.add_argument("--limit", type=int, default=100)
+    report_memory_artifacts.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
+    report_memory_artifacts.add_argument("--output")
     report_manifest = report_sub.add_parser("operation-manifest")
     report_manifest.add_argument("--case", required=True, dest="case_id")
     report_manifest.add_argument("--limit", type=int, default=500)
@@ -2981,6 +2995,36 @@ def run(args: argparse.Namespace) -> int:
                 )
             else:
                 write_text_output(json.dumps(report, indent=2, default=str), args.output)
+            return 0
+
+        if args.resource == "report" and args.action == "evidence-gaps":
+            report = evidence_gaps_report(db, args.case_id, limit=args.limit)
+            if args.format == "md":
+                write_text_output(evidence_gaps_markdown(report), args.output)
+            else:
+                write_report_output(
+                    report,
+                    report["gaps"],
+                    args.format,
+                    args.output,
+                    title=f"Evidence gaps and limitations for case {args.case_id}",
+                    columns=["severity", "category", "title", "summary", "recommendation"],
+                )
+            return 0
+
+        if args.resource == "report" and args.action == "memory-artifacts":
+            report = memory_artifacts_report(db, args.case_id, limit=args.limit)
+            if args.format == "md":
+                write_text_output(memory_artifacts_markdown(report), args.output)
+            else:
+                write_report_output(
+                    report,
+                    report["artifacts"],
+                    args.format,
+                    args.output,
+                    title=f"Memory artifacts for case {args.case_id}",
+                    columns=["artifact_type", "path", "size_bytes", "source", "processed_status", "notes"],
+                )
             return 0
 
         if args.resource == "report" and args.action == "copied-file-drilldown":

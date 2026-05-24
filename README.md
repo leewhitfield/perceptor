@@ -335,8 +335,9 @@ forensic-orchestrator --root /tmp/fo run --case CASE_ID --image IMAGE_ID --profi
 ```
 
 Experimental Volume Shadow Copy work is kept outside normal profile ingestion.
-Use the `vsc` sidecar commands to inventory, mount, and extract one test
-artifact under `cases/<case>/vsc-work/`; see `docs/vsc-sidecar.md`.
+Use the `vsc` commands to inventory, mount, and parse selected snapshot
+artifacts. Temporary work files stay under `cases/<case>/vsc-work/`; supported
+parsed rows are promoted into the main case DuckDB. See `docs/vsc-sidecar.md`.
 
 `windows-basic` is kept as an alias for `windows-basic-evtx`.
 `windows-srum`, `windows-search`, and `windows-webcache` are useful for testing those larger
@@ -897,6 +898,12 @@ The report commands are intentionally thin JSON views over SQLite:
   USB file-correlation reports.
 - `report case-review`: case-level review summary for copied files, copied USB
   files, USB devices, parser warnings/errors, EVTX recovery, and tool status.
+- `report evidence-gaps`: consolidated evidence limitations from parser status,
+  failed jobs, extraction caveats, skipped artifacts, partial EVTX recovery,
+  OpenSearch write failures, and memory artifacts awaiting analysis.
+- `report memory-artifacts`: inventory of hibernation, pagefile, and swapfile
+  artifacts found in mounted volumes or MFT data so later memory work is visible
+  in the case record.
 - `report validate`: operator validation view for missing expected tool outputs,
   failed or unfinished jobs, warning/error counts, skipped activity, and EVTX
   recovery status.

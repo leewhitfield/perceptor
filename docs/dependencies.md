@@ -53,10 +53,10 @@ These improve coverage but are not required for every case:
 
 - `libfsntfs-utils`, `python3-libfsntfs`: recovery of compressed NTFS files
 - `libvshadow-utils` / `libvshadow-tools`: experimental Volume Shadow Copy
-  sidecar workflow. Provides `vshadowinfo` and `vshadowmount`; generated VSC
-  inventory, mounts, manifests, and test extractions stay under
-  `cases/<case>/vsc-work/` and are not ingested into the main SQLite/DuckDB
-  stores yet.
+  workflow. Provides `vshadowinfo` and `vshadowmount`; generated VSC inventory,
+  mounts, manifests, intermediate databases, and comparison reports stay under
+  `cases/<case>/vsc-work/`, while supported parsed rows are promoted into the
+  main case DuckDB after dedupe.
 - `sidr`: Windows Search index parsing. Set `SIDR_BIN=/path/to/sidr` when not on `PATH`.
 - `poppler-utils`: `pdftotext` for faster PDF text extraction into
   OpenSearch-backed user-file content rows. If unavailable, the Python `pypdf`

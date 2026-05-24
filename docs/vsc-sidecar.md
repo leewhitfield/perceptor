@@ -1,8 +1,10 @@
-# Volume Shadow Copy Sidecar
+# Volume Shadow Copy Work Area and Promotion
 
 This is the experimental workflow for Volume Shadow Copy review. It is
-intentionally separate from normal profile execution and does not write parsed
-VSC rows into the main SQLite or DuckDB stores yet.
+intentionally separate from normal profile execution, but supported parsed rows
+are promoted into the main case DuckDB after source-aware dedupe. The
+`vsc-work` area remains the temporary workspace for mounts, extracted files,
+intermediate databases, and comparison reports.
 
 ## Workspace
 
@@ -13,7 +15,7 @@ under:
 cases/<case_id>/vsc-work/
 ```
 
-The current sidecar layout is:
+The current work-area layout is:
 
 ```text
 vsc-work/
@@ -57,7 +59,7 @@ uv run forensic-orchestrator --root /path/to/case-root \
   vsc unmount --case CASE_ID --snapshot vss1 --sudo
 ```
 
-Run the current Prefetch sidecar pass across all discovered snapshots:
+Run the current Prefetch pass across all discovered snapshots:
 
 ```bash
 uv run forensic-orchestrator --root /path/to/case-root \
@@ -65,13 +67,13 @@ uv run forensic-orchestrator --root /path/to/case-root \
 ```
 
 The Prefetch scan mounts one snapshot at a time, extracts only
-`Windows/Prefetch`, stores lean parsed metadata in `vsc-work/parsed/vsc.duckdb`,
-and writes `vsc-work/reports/prefetch-vsc-comparison.md`. The scan uses MD5,
-file size, Prefetch modified time, run counts, and embedded run timestamps for
-change detection. Raw Prefetch blobs and large referenced-string dumps are not
-stored in the sidecar database.
+`Windows/Prefetch`, stages lean parsed metadata in `vsc-work/parsed/vsc.duckdb`,
+promotes distinct run-time rows into the main case DuckDB, and writes
+`vsc-work/reports/prefetch-vsc-comparison.md`. The scan uses MD5, file size,
+Prefetch modified time, run counts, and embedded run timestamps for change
+detection. Raw Prefetch blobs and large referenced-string dumps are not stored.
 
-Run the current Registry sidecar pass across all discovered snapshots:
+Run the current Registry pass across all discovered snapshots:
 
 ```bash
 uv run forensic-orchestrator --root /path/to/case-root \
@@ -81,8 +83,8 @@ uv run forensic-orchestrator --root /path/to/case-root \
 The Registry scan mounts one snapshot at a time, copies targeted hives
 (`SYSTEM`, `SOFTWARE`, per-user `NTUSER.DAT`, and per-user `UsrClass.dat`),
 parses them with the internal registry artifact rules, stores lean rows in
-`vsc-work/parsed/vsc.duckdb`, and writes
-`vsc-work/reports/registry-vsc-comparison.md`.
+`vsc-work/parsed/vsc.duckdb`, promotes distinct rows into the main case DuckDB,
+and writes `vsc-work/reports/registry-vsc-comparison.md`.
 
 This first Registry pass is scoped to activity, persistence, cloud, network,
 and application-use keys. ShellBags are intentionally excluded from this pass
@@ -94,7 +96,5 @@ when needed.
 - `vshadowinfo` and `vshadowmount` are required.
 - The normal image preparation step must already have recorded a raw image path
   and partition offset.
-- Do not run broad profile parsing against VSCs until source-aware dedupe is in
-  place.
-- The first live test should be a single small artifact family such as
-  `Windows/Prefetch` or one registry hive.
+- Keep VSC parsing scoped to artifact families where the live parser and VSC
+  parser share the same normalized schema and dedupe rules.

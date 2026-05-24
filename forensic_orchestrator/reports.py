@@ -5561,6 +5561,10 @@ def _windows_search_parser_status(db: Database, case_id: str) -> dict[str, Any]:
         "summary_status": summary_status,
         "summary_note": summary_note,
         "detected_formats": sorted(item for item in formats if item),
+        "fallback_context": {
+            "gather_logs_available": table_counts["windows_search_gather_logs"] > 0,
+            "gather_log_value": "Gather logs can provide crawl/indexing timestamps, document IDs, and occasional item URLs or paths, but they are not equivalent to full indexed file/property/content rows.",
+        },
         "inventories": inventories,
         "table_counts": table_counts,
         "tool_outputs": [
@@ -16435,6 +16439,8 @@ def process_timing_markdown(report: dict[str, Any]) -> str:
 def case_review_report(db: Database, case_id: str, *, limit: int = 25) -> dict[str, Any]:
     db.get_case(case_id)
     completeness = artifact_completeness_report(db, case_id, limit=limit)
+    gaps = evidence_gaps_report(db, case_id, limit=limit)
+    memory = memory_artifacts_report(db, case_id, limit=limit)
     copied = copied_file_indicators_report(db, case_id, limit=limit)
     copied_groups = copied_file_groups_report(db, case_id, limit=limit)
     copied_usb = copied_usb_files_report(db, case_id, limit=limit, grouped=True)
@@ -16457,7 +16463,13 @@ def case_review_report(db: Database, case_id: str, *, limit: int = 25) -> dict[s
             "tools_with_errors": completeness["summary"]["tools_with_errors"],
             "tools_with_warnings": completeness["summary"]["tools_with_warnings"],
             "tools_without_output": completeness["summary"]["tools_without_output"],
+            "evidence_gap_count": gaps["summary"]["gap_count"],
+            "memory_artifact_count": memory["summary"]["artifact_count"],
         },
+        "evidence_gaps_summary": gaps["summary"],
+        "top_evidence_gaps": gaps["gaps"][:limit],
+        "memory_artifacts_summary": memory["summary"],
+        "memory_artifacts": memory["artifacts"][:limit],
         "artifact_completeness_summary": completeness["summary"],
         "artifact_completeness_by_tool": completeness["tools"][:limit],
         "copied_files": copied["copied_file_indicators"],
@@ -16469,6 +16481,194 @@ def case_review_report(db: Database, case_id: str, *, limit: int = 25) -> dict[s
         "evtx_recovery": evtx["evtx_recovery"],
         "activity_counts": activity["counts"],
     }
+
+
+def memory_artifacts_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str, Any]:
+    db.get_case(case_id)
+    mounted = _mounted_memory_artifacts(db, case_id)
+    mft = _mft_memory_artifacts(db, case_id, limit=limit)
+    rows = _dedupe_memory_artifacts([*mounted, *mft])
+    rows.sort(key=lambda row: (row.get("artifact_type") or "", row.get("path") or ""))
+    total_bytes = sum(int(row.get("size_bytes") or 0) for row in rows)
+    return {
+        "case_id": case_id,
+        "summary": {
+            "artifact_count": len(rows),
+            "total_bytes": total_bytes,
+            "hiberfil_present": any(row.get("artifact_type") == "hiberfil" for row in rows),
+            "pagefile_present": any(row.get("artifact_type") == "pagefile" for row in rows),
+            "swapfile_present": any(row.get("artifact_type") == "swapfile" for row in rows),
+            "processed_count": sum(1 for row in rows if row.get("processed_status") == "processed"),
+        },
+        "artifacts": rows[:limit],
+        "notes": [
+            "This report inventories on-disk memory-adjacent artifacts. It does not parse memory contents.",
+            "Use these paths as candidates for later memory analysis alongside any separate RAM image.",
+        ],
+        "total_returned": min(len(rows), limit),
+    }
+
+
+def memory_artifacts_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") or {}
+    lines = [
+        "# Memory Artifact Inventory",
+        "",
+        f"Case: `{report.get('case_id') or ''}`",
+        "",
+        "## Summary",
+        "",
+        f"- Artifacts: `{summary.get('artifact_count', 0)}`",
+        f"- Total bytes: `{summary.get('total_bytes', 0)}`",
+        f"- Hibernation file present: `{summary.get('hiberfil_present', False)}`",
+        f"- Pagefile present: `{summary.get('pagefile_present', False)}`",
+        f"- Swapfile present: `{summary.get('swapfile_present', False)}`",
+        "",
+        "## Artifacts",
+        "",
+    ]
+    rows = report.get("artifacts") or []
+    if not rows:
+        lines.append("- No on-disk memory artifacts were found.")
+    for row in rows:
+        lines.append(
+            f"- `{row.get('artifact_type') or ''}` `{row.get('path') or ''}` "
+            f"size `{row.get('size_bytes') or ''}` source `{row.get('source') or ''}` "
+            f"status `{row.get('processed_status') or ''}`"
+        )
+    lines.extend(["", "## Notes", ""])
+    for note in report.get("notes") or []:
+        lines.append(f"- {note}")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def evidence_gaps_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str, Any]:
+    db.get_case(case_id)
+    gaps: list[dict[str, Any]] = []
+    completeness = artifact_completeness_report(db, case_id, limit=limit)
+    search_status = _windows_search_parser_status(db, case_id)
+    memory = memory_artifacts_report(db, case_id, limit=limit)
+    search_has_signal = bool(
+        search_status.get("inventories")
+        or search_status.get("tool_outputs")
+        or any((search_status.get("table_counts") or {}).values())
+    )
+    if search_has_signal and search_status["summary_status"] != "parsed":
+        severity = "warning" if search_status["summary_status"].startswith("partial_") else "info"
+        gaps.append(
+            {
+                "severity": severity,
+                "category": "windows_search",
+                "title": "Windows Search full index coverage is limited",
+                "summary": search_status["summary_note"],
+                "details": search_status,
+                "recommendation": "Use gather logs, MFT/USN, file-history artifacts, and content parsers as fallback. If a memory image is available, consider looking for SearchIndexer plaintext/key material.",
+            }
+        )
+    if memory["summary"]["artifact_count"]:
+        gaps.append(
+            {
+                "severity": "info",
+                "category": "memory_artifacts",
+                "title": "On-disk memory artifacts are present but not parsed",
+                "summary": f"{memory['summary']['artifact_count']} memory-adjacent artifacts are available for later analysis.",
+                "details": memory["summary"],
+                "recommendation": "Process hibernation/page/swap files with the memory workflow when available.",
+            }
+        )
+    for job in completeness.get("failed_jobs", []):
+        gaps.append(
+            {
+                "severity": "error",
+                "category": "failed_job",
+                "title": f"{job.get('tool_name')} failed",
+                "summary": f"Exit code {job.get('exit_code')}",
+                "details": job,
+                "recommendation": "Review stderr and rerun or classify as unsupported/input-specific.",
+            }
+        )
+    for caveat in completeness.get("extraction_caveats", []):
+        gaps.append(
+            {
+                "severity": "warning",
+                "category": "extraction_caveat",
+                "title": f"Extraction caveat: {caveat.get('target') or caveat.get('tool_name')}",
+                "summary": caveat.get("error") or caveat.get("caveat_type") or "",
+                "details": caveat,
+                "recommendation": "Confirm whether the caveat affects relevant evidence before relying on absence.",
+            }
+        )
+    for skipped in completeness.get("skipped", []):
+        gaps.append(
+            {
+                "severity": "warning",
+                "category": "skipped_artifact",
+                "title": skipped.get("message") or skipped.get("event"),
+                "summary": f"{skipped.get('count', 0)} matching activity records",
+                "details": skipped,
+                "recommendation": "Review whether this was expected for the OS/application mix.",
+            }
+        )
+    for row in completeness.get("evtx_recovery", []):
+        if row.get("status") in {"partial", "salvaged_partial"}:
+            gaps.append(
+                {
+                    "severity": "warning",
+                    "category": "evtx_recovery",
+                    "title": f"Event log recovery was {row.get('status')}",
+                    "summary": row.get("source_path") or row.get("log_name") or "",
+                    "details": row,
+                    "recommendation": "Use recovered events with caveats and corroborate with adjacent logs/artifacts.",
+                }
+            )
+    gaps.extend(_opensearch_gap_rows(db, case_id))
+    gaps = _dedupe_gap_rows(gaps)
+    gaps.sort(key=lambda row: (_gap_severity_rank(row.get("severity")), row.get("category") or "", row.get("title") or ""))
+    severity_counts = _count_by_key(gaps, "severity")
+    category_counts = _count_by_key(gaps, "category")
+    return {
+        "case_id": case_id,
+        "summary": {
+            "gap_count": len(gaps),
+            "severity_counts": severity_counts,
+            "category_counts": category_counts,
+            "windows_search_status": search_status["summary_status"],
+            "memory_artifacts": memory["summary"]["artifact_count"],
+        },
+        "gaps": gaps[:limit],
+        "windows_search_status": search_status,
+        "memory_artifacts": memory,
+        "total_returned": min(len(gaps), limit),
+    }
+
+
+def evidence_gaps_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") or {}
+    lines = [
+        "# Evidence Gaps and Limitations",
+        "",
+        f"Case: `{report.get('case_id') or ''}`",
+        "",
+        "## Summary",
+        "",
+        f"- Gaps: `{summary.get('gap_count', 0)}`",
+        f"- Windows Search status: `{summary.get('windows_search_status') or ''}`",
+        f"- Memory artifacts: `{summary.get('memory_artifacts', 0)}`",
+        "",
+        "## Findings",
+        "",
+    ]
+    gaps = report.get("gaps") or []
+    if not gaps:
+        lines.append("- No evidence gaps or limitations were identified.")
+    for gap in gaps:
+        lines.append(
+            f"- `{gap.get('severity') or ''}` `{gap.get('category') or ''}` "
+            f"{gap.get('title') or ''}: {gap.get('summary') or ''}"
+        )
+        if gap.get("recommendation"):
+            lines.append(f"  Recommendation: {gap.get('recommendation')}")
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def file_dossier_report(
@@ -17093,7 +17293,10 @@ def _safe_duckdb_table_count(db: Database, table: str, case_id: str) -> int | No
     db_path = _duckdb_path_for_case(db, case_id)
     if not db_path.exists():
         return None
-    conn, should_close = _duckdb_report_connection(db, case_id, db_path)
+    try:
+        conn, should_close = _duckdb_report_connection(db, case_id, db_path)
+    except duckdb.Error:
+        return None
     try:
         if not _duckdb_table_exists(conn, table):
             return None
@@ -17450,6 +17653,18 @@ def evidence_quality_report(
                     "details": row,
                 }
             )
+    gaps = evidence_gaps_report(db, case_id, limit=limit)
+    for gap in gaps.get("gaps", []):
+        if gap.get("category") in {"failed_job", "extraction_caveat", "skipped_artifact", "evtx_recovery"}:
+            continue
+        findings.append(
+            {
+                "severity": gap.get("severity") or "info",
+                "category": f"evidence_gap:{gap.get('category') or 'unknown'}",
+                "title": gap.get("title") or "Evidence gap",
+                "details": gap,
+            }
+        )
     findings.extend(registry_timestamp_cluster_findings(db, case_id))
     severity_counts: dict[str, int] = {}
     for finding in findings:
@@ -17460,9 +17675,11 @@ def evidence_quality_report(
             "finding_count": len(findings),
             "severity_counts": [{"severity": key, "count": value} for key, value in sorted(severity_counts.items())],
             "completeness": completeness["summary"],
+            "gaps": gaps["summary"],
         },
         "findings": findings[:limit],
         "completeness": completeness,
+        "evidence_gaps": gaps,
         "total_returned": min(len(findings), limit),
     }
 
@@ -22105,6 +22322,8 @@ def investigation_triage_dashboard_report(db: Database, case_id: str, *, limit: 
     db.get_case(case_id)
     completeness = artifact_completeness_report(db, case_id, limit=limit)
     quality = evidence_quality_report(db, case_id, limit=limit)
+    gaps = evidence_gaps_report(db, case_id, limit=limit)
+    memory = memory_artifacts_report(db, case_id, limit=limit)
     suspicious = suspicious_timeline_windows_report(db, case_id, limit=limit)
     brute = brute_force_report(db, case_id, limit=limit)
     remote = remote_access_sessions_report(db, case_id, limit=limit)
@@ -22116,6 +22335,8 @@ def investigation_triage_dashboard_report(db: Database, case_id: str, *, limit: 
     cards = [
         _triage_card("artifact_completeness", "Artifact Completeness", completeness.get("summary") or {}),
         _triage_card("evidence_quality", "Evidence Quality", quality.get("summary") or {}),
+        _triage_card("evidence_gaps", "Evidence Gaps", gaps.get("summary") or {}),
+        _triage_card("memory_artifacts", "Memory Artifacts", memory.get("summary") or {}),
         _triage_card("suspicious_windows", "Suspicious Windows", suspicious.get("summary") or {}),
         _triage_card("brute_force", "Brute Force / Password Spraying", brute.get("summary") or {}),
         _triage_card("remote_access", "Remote Access", remote.get("summary") or {}),
@@ -22132,13 +22353,19 @@ def investigation_triage_dashboard_report(db: Database, case_id: str, *, limit: 
             "top_suspicious_windows": len(suspicious.get("windows") or []),
             "data_exfiltration_findings": (exfil.get("summary") or {}).get("finding_count", 0),
             "account_compromise_findings": (account.get("summary") or {}).get("finding_count", 0),
+            "evidence_gaps": (gaps.get("summary") or {}).get("gap_count", 0),
+            "memory_artifacts": (memory.get("summary") or {}).get("artifact_count", 0),
         },
         "cards": cards,
+        "top_evidence_gaps": (gaps.get("gaps") or [])[:10],
+        "memory_artifacts": (memory.get("artifacts") or [])[:10],
         "top_windows": (suspicious.get("windows") or [])[:10],
         "top_data_exfiltration_findings": (exfil.get("findings") or [])[:10],
         "top_account_compromise_findings": (account.get("findings") or [])[:10],
         "recommended_reports": [
             {"report": "suspicious-timeline-windows", "reason": "Review clustered high-signal activity."},
+            {"report": "evidence-gaps", "reason": "Review unsupported, encrypted, partial, or skipped evidence sources."},
+            {"report": "memory-artifacts", "reason": "Inventory hibernation, pagefile, and swapfile candidates for later memory analysis."},
             {"report": "data-exfiltration", "reason": "Review removable media, cloud, archive, browser, and email movement leads."},
             {"report": "account-compromise", "reason": "Review logon failures, successful access, and remote-access context."},
             {"report": "program-provenance", "reason": "Review how notable executables arrived and whether they ran."},
@@ -22161,6 +22388,19 @@ def investigation_triage_dashboard_markdown(report: dict[str, Any]) -> str:
         )
     if not report.get("top_windows"):
         lines.append("- No suspicious windows were found.")
+    lines.extend(["", "## Evidence Gaps", ""])
+    for gap in (report.get("top_evidence_gaps") or [])[:10]:
+        lines.append(f"- `{gap.get('severity') or ''}` `{gap.get('category') or ''}` {gap.get('title') or ''}")
+    if not report.get("top_evidence_gaps"):
+        lines.append("- No evidence gaps were found.")
+    lines.extend(["", "## Memory Artifacts", ""])
+    for artifact in (report.get("memory_artifacts") or [])[:10]:
+        lines.append(
+            f"- `{artifact.get('artifact_type') or ''}` `{artifact.get('path') or ''}` "
+            f"size `{artifact.get('size_bytes') or ''}`"
+        )
+    if not report.get("memory_artifacts"):
+        lines.append("- No on-disk memory artifacts were found.")
     lines.extend(["", "## Top Data Movement Leads", ""])
     for finding in (report.get("top_data_exfiltration_findings") or [])[:10]:
         lines.append(
@@ -23174,6 +23414,158 @@ def _basename(path: str | None) -> str | None:
     return normalized.rsplit("/", 1)[-1] if normalized else None
 
 
+def _mounted_memory_artifacts(db: Database, case_id: str) -> list[dict[str, Any]]:
+    case = db.get_case(case_id)
+    rows: list[dict[str, Any]] = []
+    mounts = case.root / "mounts" / "volumes"
+    if not mounts.exists():
+        return rows
+    for path in sorted(mounts.glob("*/*")):
+        try:
+            is_file = path.is_file()
+        except OSError:
+            continue
+        if not is_file:
+            continue
+        artifact_type = _memory_artifact_type(path.name)
+        if not artifact_type:
+            continue
+        try:
+            size = path.stat().st_size
+        except OSError:
+            size = None
+        rows.append(
+            {
+                "artifact_type": artifact_type,
+                "path": display_evidence_path(path),
+                "size_bytes": size,
+                "source": "mounted_filesystem",
+                "processed_status": "not_processed",
+                "notes": "Candidate for later memory analysis.",
+            }
+        )
+    return rows
+
+
+def _mft_memory_artifacts(db: Database, case_id: str, *, limit: int) -> list[dict[str, Any]]:
+    columns = _report_table_columns(db, case_id, "mft_entries")
+    if not columns:
+        return []
+    if "file_name" not in columns:
+        return []
+    select_columns = [column for column in ("file_name", "parent_path", "file_size", "created_si", "modified_si", "accessed_si", "source_csv") if column in columns]
+    if not select_columns:
+        return []
+    rows = _query_report_rows(
+        db,
+        case_id,
+        "mft_entries",
+        f"""
+        SELECT {', '.join(_quote_identifier(column) for column in select_columns)}
+        FROM mft_entries
+        WHERE case_id = ?
+          AND lower(file_name) IN ('hiberfil.sys', 'pagefile.sys', 'swapfile.sys')
+        LIMIT ?
+        """,
+        (case_id, limit),
+    )
+    output = []
+    for row in rows:
+        name = str(row.get("file_name") or "")
+        parent = str(row.get("parent_path") or "").replace("\\", "/").rstrip("/")
+        if parent in {"", ".", "/"}:
+            parent = ""
+        path = f"{parent}/{name}" if parent else f"/{name}"
+        output.append(
+            {
+                "artifact_type": _memory_artifact_type(name),
+                "path": display_evidence_path(path),
+                "size_bytes": _int_or_none(row.get("file_size")),
+                "source": "mft_entries",
+                "processed_status": "not_processed",
+                "created_time": row.get("created_si"),
+                "modified_time": row.get("modified_si"),
+                "accessed_time": row.get("accessed_si"),
+                "source_csv": display_evidence_path(row.get("source_csv")),
+                "notes": "Candidate for later memory analysis.",
+            }
+        )
+    return output
+
+
+def _memory_artifact_type(name: Any) -> str | None:
+    lowered = str(name or "").lower()
+    if lowered == "hiberfil.sys":
+        return "hiberfil"
+    if lowered == "pagefile.sys":
+        return "pagefile"
+    if lowered == "swapfile.sys":
+        return "swapfile"
+    return None
+
+
+def _dedupe_memory_artifacts(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[tuple[str, str]] = set()
+    output = []
+    for row in rows:
+        path_key = str(row.get("path") or "").replace("\\", "/")
+        path_key = re.sub(r"^\./", "/", path_key)
+        key = (str(row.get("artifact_type") or ""), path_key.casefold())
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(row)
+    return output
+
+
+def _opensearch_gap_rows(db: Database, case_id: str) -> list[dict[str, Any]]:
+    rows = db.conn.execute(
+        """
+        SELECT created_at, level, event, message, details_json
+        FROM activity_log
+        WHERE case_id = ?
+          AND (event LIKE 'search.opensearch%failed%' OR event = 'search.opensearch_write_failed')
+        ORDER BY created_at DESC
+        LIMIT 50
+        """,
+        (case_id,),
+    ).fetchall()
+    return [
+        {
+            "severity": "error",
+            "category": "opensearch",
+            "title": row["message"] or row["event"],
+            "summary": row["created_at"],
+            "details": dict(row),
+            "recommendation": "Confirm OpenSearch availability and rerun the content-producing parser if searchable body/content is required.",
+        }
+        for row in rows
+    ]
+
+
+def _dedupe_gap_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[tuple[str, str, str]] = set()
+    output = []
+    for row in rows:
+        key = (str(row.get("severity") or ""), str(row.get("category") or ""), str(row.get("title") or ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(row)
+    return output
+
+
+def _gap_severity_rank(value: Any) -> int:
+    return {"error": 0, "warning": 1, "info": 2}.get(str(value or "").lower(), 3)
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _report_table_count(db: Database, case_id: str, table: str) -> int:
     if not _safe_identifier(table):
         raise ValueError(f"Unsafe report table name: {table}")
@@ -23315,7 +23707,10 @@ def _duckdb_table_available(db: Database, case_id: str, table: str) -> bool:
     db_path = _duckdb_path_for_case(db, case_id)
     if not db_path.exists():
         return False
-    conn, should_close = _duckdb_report_connection(db, case_id, db_path)
+    try:
+        conn, should_close = _duckdb_report_connection(db, case_id, db_path)
+    except duckdb.Error:
+        return False
     try:
         return _duckdb_table_exists(conn, table)
     finally:

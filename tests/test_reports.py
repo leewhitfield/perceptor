@@ -36,6 +36,8 @@ from forensic_orchestrator.reports import (
     computer_inventory_report,
     device_inventory_report,
     email_artifacts_report,
+    evidence_gaps_markdown,
+    evidence_gaps_report,
     encrypted_volume_indicators_report,
     event_interpretation_report,
     evidence_quality_report,
@@ -60,6 +62,8 @@ from forensic_orchestrator.reports import (
     mailbox_attachment_coverage_report,
     malware_hiding_places_markdown,
     malware_hiding_places_report,
+    memory_artifacts_markdown,
+    memory_artifacts_report,
     messaging_artifacts_report,
     mft_report,
     office_trust_report,
@@ -230,6 +234,70 @@ def test_windows_search_report_surfaces_encrypted_sqlite_status(tmp_path):
     assert report["parser_status"]["summary_status"] == "partial_unsupported_encrypted_sqlite"
     assert report["parser_status"]["detected_formats"] == ["encrypted_sqlite"]
     assert report["parser_status"]["inventories"][0]["source_path"] == "/ProgramData/Microsoft/Search/Data/Applications/Windows/Windows.db"
+
+
+def test_memory_artifacts_report_inventories_mounted_files(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    volume = case.root / "mounts" / "volumes" / "part-001"
+    volume.mkdir(parents=True)
+    (volume / "hiberfil.sys").write_bytes(b"h" * 10)
+    (volume / "pagefile.sys").write_bytes(b"p" * 20)
+    (volume / "swapfile.sys").write_bytes(b"s" * 30)
+
+    report = memory_artifacts_report(db, case.id)
+
+    assert report["summary"]["artifact_count"] == 3
+    assert report["summary"]["total_bytes"] == 60
+    assert {row["artifact_type"] for row in report["artifacts"]} == {"hiberfil", "pagefile", "swapfile"}
+    assert "Memory Artifact Inventory" in memory_artifacts_markdown(report)
+
+
+def test_evidence_gaps_report_surfaces_windows_search_and_memory_limitations(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    volume = case.root / "mounts" / "volumes" / "part-001"
+    volume.mkdir(parents=True)
+    (volume / "hiberfil.sys").write_bytes(b"h")
+    output_dir = tmp_path / "outputs" / "WindowsSearchESEParser"
+    output_dir.mkdir(parents=True)
+    csv_path = output_dir / "WindowsSearchESEParser.csv"
+    csv_path.write_text("WorkId,System_Search_GatherTime,System_ItemPathDisplay\n", encoding="utf-8")
+    (output_dir / "WindowsSearchParserInventory.json").write_text(
+        """[
+  {
+    "detected_format": "encrypted_sqlite",
+    "parser_note": "Windows 11 Search database uses AesGcm1 SQLite3 format; contents are encrypted and were not parsed.",
+    "parser_status": "unsupported_encrypted_sqlite",
+    "source_path": "/ProgramData/Microsoft/Search/Data/Applications/Windows/Windows.db"
+  }
+]""",
+        encoding="utf-8",
+    )
+    db.insert_tool_output(
+        {
+            "id": "search-output-1",
+            "case_id": case.id,
+            "computer_id": "computer-1",
+            "image_id": "image-1",
+            "job_id": None,
+            "tool_name": "WindowsSearchESEParser",
+            "output_type": "csv",
+            "path": csv_path,
+            "row_count": 0,
+        }
+    )
+
+    report = evidence_gaps_report(db, case.id)
+
+    categories = {row["category"] for row in report["gaps"]}
+    assert {"windows_search", "memory_artifacts"} <= categories
+    assert report["summary"]["windows_search_status"] == "partial_unsupported_encrypted_sqlite"
+    assert "Evidence Gaps and Limitations" in evidence_gaps_markdown(report)
 
 
 def test_storage_policy_report_counts_content_heavy_tables_and_output_files(tmp_path):
