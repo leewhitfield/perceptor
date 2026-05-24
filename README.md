@@ -104,13 +104,13 @@ By default, case data is stored under:
 Override it with either:
 
 ```bash
-export FORENSIC_ORCHESTRATOR_ROOT=/tmp/forensic-orchestrator
+export FORENSIC_ORCHESTRATOR_ROOT=/mnt/forensic-ssd/forensic-orchestrator
 ```
 
 or:
 
 ```bash
-forensic-orchestrator --root /tmp/forensic-orchestrator ...
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator ...
 ```
 
 If Eric Zimmerman tools are installed somewhere other than `/opt/eztools`, set:
@@ -173,7 +173,7 @@ OpenSearch. See `docs/report-specs.md` for the spec format.
 Dry-run first:
 
 ```bash
-forensic-orchestrator --root /tmp/fo --dry-run process \
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator --dry-run process \
   --path /evidence/disk.E01 \
   --computer-label "Laptop 1" \
   --profile windows-basic-evtx \
@@ -184,7 +184,7 @@ forensic-orchestrator --root /tmp/fo --dry-run process \
 Run for real:
 
 ```bash
-forensic-orchestrator --root /tmp/fo process \
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator process \
   --path /evidence/disk.E01 \
   --computer-label "Laptop 1" \
   --profile windows-basic-evtx \
@@ -197,39 +197,25 @@ Use `--keep-mounted` when you intentionally want to leave the read-only volume
 mounted for manual inspection. Without it, `process --filesystem` unmounts the
 volume after the profile finishes.
 
-## ROCBA Mounting Caveat
+## Mount Namespace
 
-The ROCBA VM currently has a legacy sudoers NOPASSWD allowance hardcoded to
-`/tmp/forensic-orchestrator-rocba-case` and `/tmp/rocba-cdrive.e01`. Keep durable
-data on `/mnt/forensic-ssd`; use `/tmp` only as a symlink compatibility path for
-that exact sudoers rule.
+Live EWF and NTFS mount points are under `/tmp/forensic-orchestrator-mounts` by
+default. This is intentional: mount points disappear after reboot anyway, while
+durable case data stays under the configured workspace root. Use
+`FORENSIC_MOUNT_ROOT=/path/to/mount-root` to choose a different live mount
+namespace.
 
-Create the compatibility symlink when needed:
+Default live paths look like:
 
-```bash
-ln -s /mnt/forensic-ssd/forensic-orchestrator-rocba-case /tmp/forensic-orchestrator-rocba-case
+```text
+/tmp/forensic-orchestrator-mounts/cases/CASE_ID/ewf/ewf1
+/tmp/forensic-orchestrator-mounts/cases/CASE_ID/volumes/PARTITION_ID
 ```
 
-The EWF layer can be mounted as the normal user:
+Verify a live NTFS mount with:
 
 ```bash
-ewfmount -X allow_other \
-  /mnt/forensic-ssd/evidence/rocba/rocba-cdrive.e01 \
-  /mnt/forensic-ssd/forensic-orchestrator-rocba-case/cases/CASE_ID/mounts/ewf
-```
-
-The NTFS layer must use the legacy sudoers command path through the symlink:
-
-```bash
-sudo -n /usr/bin/ntfs-3g -o ro,show_sys_files,streams_interface=windows,norecover,offset=0 \
-  /tmp/forensic-orchestrator-rocba-case/cases/CASE_ID/mounts/ewf/ewf1 \
-  /tmp/forensic-orchestrator-rocba-case/cases/CASE_ID/mounts/volumes/volume-ntfs
-```
-
-Verify the real SSD-backed mount target:
-
-```bash
-findmnt /mnt/forensic-ssd/forensic-orchestrator-rocba-case/cases/CASE_ID/mounts/volumes/volume-ntfs
+findmnt /tmp/forensic-orchestrator-mounts/cases/CASE_ID/volumes/PARTITION_ID
 ```
 
 Full profiles should run against a mounted NTFS volume. Broad recursive TSK
@@ -241,13 +227,13 @@ only when intentionally using the fallback path.
 Create a project:
 
 ```bash
-forensic-orchestrator --root /tmp/fo project create
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator project create
 ```
 
 Add a computer to the project:
 
 ```bash
-forensic-orchestrator --root /tmp/fo computer add \
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator computer add \
   --case CASE_ID \
   --label "Laptop 1" \
   --hostname LAPTOP-1
@@ -256,7 +242,7 @@ forensic-orchestrator --root /tmp/fo computer add \
 Add an E01 image:
 
 ```bash
-forensic-orchestrator --root /tmp/fo image add \
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator image add \
   --case CASE_ID \
   --computer COMPUTER_ID \
   --path /evidence/disk.E01
@@ -265,19 +251,19 @@ forensic-orchestrator --root /tmp/fo image add \
 Dry-run image preparation:
 
 ```bash
-forensic-orchestrator --root /tmp/fo --dry-run image mount --case CASE_ID --image IMAGE_ID
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator --dry-run image mount --case CASE_ID --image IMAGE_ID
 ```
 
 Prepare the image for processing:
 
 ```bash
-forensic-orchestrator --root /tmp/fo image mount --case CASE_ID --image IMAGE_ID
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator image mount --case CASE_ID --image IMAGE_ID
 ```
 
 Optionally mount the selected NTFS volume read-only with non-interactive sudo:
 
 ```bash
-forensic-orchestrator --root /tmp/fo image mount \
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator image mount \
   --case CASE_ID \
   --image IMAGE_ID \
   --filesystem \
@@ -293,7 +279,7 @@ ro,show_sys_files,streams_interface=windows,norecover,offset=<bytes>
 Unmount the recorded filesystem mount:
 
 ```bash
-forensic-orchestrator --root /tmp/fo image unmount \
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator image unmount \
   --case CASE_ID \
   --image IMAGE_ID \
   --sudo
@@ -302,36 +288,36 @@ forensic-orchestrator --root /tmp/fo image unmount \
 List configured tools and profiles:
 
 ```bash
-forensic-orchestrator --root /tmp/fo tools list
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator tools list
 ```
 
 Dry-run the Windows basic EVTX triage profile:
 
 ```bash
-forensic-orchestrator --root /tmp/fo --dry-run run --case CASE_ID --image IMAGE_ID --profile windows-basic
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator --dry-run run --case CASE_ID --image IMAGE_ID --profile windows-basic
 ```
 
 Run one of the Windows profiles:
 
 ```bash
-forensic-orchestrator --root /tmp/fo run --case CASE_ID --image IMAGE_ID --profile windows-no-evtx
-forensic-orchestrator --root /tmp/fo run --case CASE_ID --image IMAGE_ID --profile windows-basic-evtx
-forensic-orchestrator --root /tmp/fo run --case CASE_ID --image IMAGE_ID --profile windows-full-evtx
-forensic-orchestrator --root /tmp/fo run --case CASE_ID --image IMAGE_ID --profile windows-srum
-forensic-orchestrator --root /tmp/fo run --case CASE_ID --image IMAGE_ID --profile windows-search
-forensic-orchestrator --root /tmp/fo run --case CASE_ID --image IMAGE_ID --profile windows-webcache
-forensic-orchestrator --root /tmp/fo run --case CASE_ID --image IMAGE_ID --profile windows-search-srum
-forensic-orchestrator --root /tmp/fo run --case CASE_ID --image IMAGE_ID --profile file-metadata-office
-forensic-orchestrator --root /tmp/fo run --case CASE_ID --image IMAGE_ID --profile file-metadata-pictures
-forensic-orchestrator --root /tmp/fo run --case CASE_ID --image IMAGE_ID --profile file-metadata-pictures-deep
-forensic-orchestrator --root /tmp/fo run --case CASE_ID --image IMAGE_ID --profile file-metadata-pictures-user-content
-forensic-orchestrator --root /tmp/fo run --case CASE_ID --image IMAGE_ID --profile file-metadata-videos
-forensic-orchestrator --root /tmp/fo run --case CASE_ID --image IMAGE_ID --profile file-metadata-executables
-forensic-orchestrator --root /tmp/fo run --case CASE_ID --image IMAGE_ID --profile file-metadata-documents
-forensic-orchestrator --root /tmp/fo run --case CASE_ID --image IMAGE_ID --profile file-metadata-all
-forensic-orchestrator --root /tmp/fo run --case CASE_ID --image IMAGE_ID --profile windows-rdp-cache
-forensic-orchestrator --root /tmp/fo run --case CASE_ID --image IMAGE_ID --profile windows-deep
-forensic-orchestrator --root /tmp/fo run --case CASE_ID --image IMAGE_ID --profile windows-old
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator run --case CASE_ID --image IMAGE_ID --profile windows-no-evtx
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator run --case CASE_ID --image IMAGE_ID --profile windows-basic-evtx
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator run --case CASE_ID --image IMAGE_ID --profile windows-full-evtx
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator run --case CASE_ID --image IMAGE_ID --profile windows-srum
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator run --case CASE_ID --image IMAGE_ID --profile windows-search
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator run --case CASE_ID --image IMAGE_ID --profile windows-webcache
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator run --case CASE_ID --image IMAGE_ID --profile windows-search-srum
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator run --case CASE_ID --image IMAGE_ID --profile file-metadata-office
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator run --case CASE_ID --image IMAGE_ID --profile file-metadata-pictures
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator run --case CASE_ID --image IMAGE_ID --profile file-metadata-pictures-deep
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator run --case CASE_ID --image IMAGE_ID --profile file-metadata-pictures-user-content
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator run --case CASE_ID --image IMAGE_ID --profile file-metadata-videos
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator run --case CASE_ID --image IMAGE_ID --profile file-metadata-executables
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator run --case CASE_ID --image IMAGE_ID --profile file-metadata-documents
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator run --case CASE_ID --image IMAGE_ID --profile file-metadata-all
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator run --case CASE_ID --image IMAGE_ID --profile windows-rdp-cache
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator run --case CASE_ID --image IMAGE_ID --profile windows-deep
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator run --case CASE_ID --image IMAGE_ID --profile windows-old
 ```
 
 Experimental Volume Shadow Copy work is kept outside normal profile ingestion.
@@ -379,135 +365,136 @@ case/image/tool, the run stops and logs `tool.duplicate_output_detected`.
 Choose the rerun behavior explicitly:
 
 ```bash
-forensic-orchestrator --root /tmp/fo run --case CASE_ID --image IMAGE_ID --profile windows-basic --accept-duplicate
-forensic-orchestrator --root /tmp/fo run --case CASE_ID --image IMAGE_ID --profile windows-basic --replace-existing
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator run --case CASE_ID --image IMAGE_ID --profile windows-basic --accept-duplicate
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator run --case CASE_ID --image IMAGE_ID --profile windows-basic --replace-existing
 ```
 
 MFT-driven metadata extraction processes live MFT entries by default. Include
 deleted/orphaned MFT entries explicitly when you want that broader sweep:
 
 ```bash
-forensic-orchestrator --root /tmp/fo run --case CASE_ID --image IMAGE_ID --profile file-metadata-pictures-deep --include-deleted-mft
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator run --case CASE_ID --image IMAGE_ID --profile file-metadata-pictures-deep --include-deleted-mft
 ```
 
 Start Menu shortcuts are excluded from LNK parsing by default to reduce noisy
 program shortcut findings. Include them explicitly when needed:
 
 ```bash
-forensic-orchestrator --root /tmp/fo run --case CASE_ID --image IMAGE_ID --profile windows-basic --include-start-menu-lnk
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator run --case CASE_ID --image IMAGE_ID --profile windows-basic --include-start-menu-lnk
 ```
 
 Check case status:
 
 ```bash
-forensic-orchestrator --root /tmp/fo case status CASE_ID
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator case status CASE_ID
 ```
 
 View the activity log:
 
 ```bash
-forensic-orchestrator --root /tmp/fo case activity CASE_ID
-forensic-orchestrator --root /tmp/fo case activity CASE_ID --level warning
-forensic-orchestrator --root /tmp/fo case activity CASE_ID --level error
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator case activity CASE_ID
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator case activity CASE_ID --level warning
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator case activity CASE_ID --level error
 ```
 
 Generate investigator-facing JSON reports:
 
 ```bash
-forensic-orchestrator --root /tmp/fo report summary --case CASE_ID
-forensic-orchestrator --root /tmp/fo report specs
-forensic-orchestrator --root /tmp/fo report spec --case CASE_ID --name mft-recent --format table
-forensic-orchestrator --root /tmp/fo report issues --case CASE_ID
-forensic-orchestrator --root /tmp/fo report execution --case CASE_ID --limit 100
-forensic-orchestrator --root /tmp/fo report interesting-executables --case CASE_ID --format md
-forensic-orchestrator --root /tmp/fo report interesting-executables --case CASE_ID --rules ./my-interesting-tools.yaml --format table
-forensic-orchestrator --root /tmp/fo report accounts --case CASE_ID
-forensic-orchestrator --root /tmp/fo report users --case CASE_ID
-forensic-orchestrator --root /tmp/fo report files --case CASE_ID --user Devon
-forensic-orchestrator --root /tmp/fo report file-names --case CASE_ID --format table --limit 100
-forensic-orchestrator --root /tmp/fo report file-names --case CASE_ID --contains "GunStar" --format table
-forensic-orchestrator --root /tmp/fo report file-name-drilldown --case CASE_ID --name "GunStar Death Blossom Data.docx" --format table
-forensic-orchestrator --root /tmp/fo report file-history --case CASE_ID --name "GunStar Death Blossom Data.docx" --format table
-forensic-orchestrator --root /tmp/fo report file-history --case CASE_ID --mft-entry 130698 --filesystem-only --format table
-forensic-orchestrator --root /tmp/fo report copied-files --case CASE_ID
-forensic-orchestrator --root /tmp/fo report copied-file-indicators --case CASE_ID
-forensic-orchestrator --root /tmp/fo report copied-file-groups --case CASE_ID
-forensic-orchestrator --root /tmp/fo report copied-usb-files --case CASE_ID --grouped
-forensic-orchestrator --root /tmp/fo report copied-file-indicators --case CASE_ID --include-mft-only --include-system
-forensic-orchestrator --root /tmp/fo report copied-file-drilldown --case CASE_ID --path "E:\\copied.docx"
-forensic-orchestrator --root /tmp/fo report usb-dossier --case CASE_ID --volume-serial-number 2CB9-F845
-forensic-orchestrator --root /tmp/fo report device-inventory --case CASE_ID --format table
-forensic-orchestrator --root /tmp/fo report case-review --case CASE_ID --format table
-forensic-orchestrator --root /tmp/fo report correlations --case CASE_ID
-forensic-orchestrator --root /tmp/fo report artifact-summary --case CASE_ID
-forensic-orchestrator --root /tmp/fo report tool-runs --case CASE_ID --limit 250
-forensic-orchestrator --root /tmp/fo report mft --case CASE_ID --limit 100
-forensic-orchestrator --root /tmp/fo report usn --case CASE_ID --limit 100
-forensic-orchestrator --root /tmp/fo report prefetch --case CASE_ID --limit 100
-forensic-orchestrator --root /tmp/fo report evtx --case CASE_ID --limit 100
-forensic-orchestrator --root /tmp/fo report evtx-recovery --case CASE_ID
-forensic-orchestrator --root /tmp/fo report recycle --case CASE_ID --user Jean
-forensic-orchestrator --root /tmp/fo report deleted-folders --case CASE_ID
-forensic-orchestrator --root /tmp/fo report firefox --case CASE_ID --limit 100
-forensic-orchestrator --root /tmp/fo report browser --case CASE_ID --type history --limit 100
-forensic-orchestrator --root /tmp/fo report browser --case CASE_ID --type downloads --limit 100
-forensic-orchestrator --root /tmp/fo report browser-downloads --case CASE_ID --format table --limit 100
-forensic-orchestrator --root /tmp/fo report browser-cache --case CASE_ID --browser edge --host microsoft.com --format table --limit 100
-forensic-orchestrator --root /tmp/fo report browser-cache --case CASE_ID --exclude-noise --format table --limit 100
-forensic-orchestrator --root /tmp/fo report browser-hosts --case CASE_ID --exclude-noise --format table --limit 100
-forensic-orchestrator --root /tmp/fo report browser-cache-correlations --case CASE_ID --format table --limit 100
-forensic-orchestrator --root /tmp/fo report browser-activity --case CASE_ID --format table --limit 100
-forensic-orchestrator --root /tmp/fo report browser-deep-storage --case CASE_ID --format table --limit 100
-forensic-orchestrator --root /tmp/fo report webcache --case CASE_ID --application "Microsoft Edge" --exclude-metadata --format table --limit 100
-forensic-orchestrator --root /tmp/fo report webcache-files --case CASE_ID --usb-overlap --format table --limit 100
-forensic-orchestrator --root /tmp/fo report windows-activities --case CASE_ID --files-only --format table --limit 100
-forensic-orchestrator --root /tmp/fo report uninstalled-app-artifacts --case CASE_ID --format table
-forensic-orchestrator --root /tmp/fo report tor-usage --case CASE_ID --format table
-forensic-orchestrator --root /tmp/fo report encrypted-volumes --case CASE_ID --format table
-forensic-orchestrator --root /tmp/fo report phone-link --case CASE_ID --format table
-forensic-orchestrator --root /tmp/fo report virtualization --case CASE_ID --format table
-forensic-orchestrator --root /tmp/fo report cloud-artifacts --case CASE_ID --format table --limit 100
-forensic-orchestrator --root /tmp/fo report srum-context --case CASE_ID --format table --limit 250
-forensic-orchestrator --root /tmp/fo report vpn-local-activity --case CASE_ID --format md --limit 500
-forensic-orchestrator --root /tmp/fo report web-cloud-correlations --case CASE_ID --category webmail --format table --limit 100
-forensic-orchestrator --root /tmp/fo report web-cloud-correlations --case CASE_ID --provider "Google Drive" --format table --limit 100
-forensic-orchestrator --root /tmp/fo report messaging-artifacts --case CASE_ID --format table --limit 100
-forensic-orchestrator --root /tmp/fo report messaging-artifacts --case CASE_ID --application Slack --user fredr --contains frocba --format table
-forensic-orchestrator --root /tmp/fo report event-interpretation --case CASE_ID --category usb --format table --limit 100
-forensic-orchestrator --root /tmp/fo report email-artifacts --case CASE_ID --format table --limit 100
-forensic-orchestrator --root /tmp/fo report mailbox-messages --case CASE_ID --format table --limit 100
-forensic-orchestrator --root /tmp/fo report mailbox-messages --case CASE_ID --user fredr --status parsed --contains SharePoint --format table
-forensic-orchestrator --root /tmp/fo report timeline --case CASE_ID --contains "report.docx"
-forensic-orchestrator --root /tmp/fo report user-timeline --case CASE_ID --user Jean --format table --limit 250
-forensic-orchestrator --root /tmp/fo report validate --case CASE_ID
-forensic-orchestrator --root /tmp/fo report registry --case CASE_ID --limit 100
-forensic-orchestrator --root /tmp/fo report registry-artifacts --case CASE_ID --artifact usb_device_history
-forensic-orchestrator --root /tmp/fo report registry-activity --case CASE_ID --artifact runmru --user Jean
-forensic-orchestrator --root /tmp/fo report registry-activity --case CASE_ID --artifact recentdocs --user Devon
-forensic-orchestrator --root /tmp/fo report common-dialog-items --case CASE_ID --limit 100
-forensic-orchestrator --root /tmp/fo report amcache --case CASE_ID --limit 100
-forensic-orchestrator --root /tmp/fo report shimcache --case CASE_ID --limit 100
-forensic-orchestrator --root /tmp/fo report shellbags --case CASE_ID --limit 100
-forensic-orchestrator --root /tmp/fo report usb --case CASE_ID --limit 100
-forensic-orchestrator --root /tmp/fo report usb --case CASE_ID --breakdown
-forensic-orchestrator --root /tmp/fo report usb-files --case CASE_ID --format table --limit 500
-forensic-orchestrator --root /tmp/fo report usb-files --case CASE_ID --grouped --format csv --output usb-files-deduped.csv
-forensic-orchestrator --root /tmp/fo report usb-files --case CASE_ID --format csv --output usb-files.csv
-forensic-orchestrator --root /tmp/fo report usb-timeline --case CASE_ID --format table --limit 500
-forensic-orchestrator --root /tmp/fo report export --case CASE_ID --preset usb-summary --output usb-summary.csv
-forensic-orchestrator --root /tmp/fo report export --case CASE_ID --preset usb-file-correlations --output usb-file-correlations.csv
-forensic-orchestrator --root /tmp/fo report export --case CASE_ID --preset usb-timeline --output usb-timeline.csv
-forensic-orchestrator --root /tmp/fo report file-metadata --case CASE_ID --user-only --exclude-system --limit 100
-forensic-orchestrator --root /tmp/fo report file-metadata --case CASE_ID --extension .docx --property Creator
-forensic-orchestrator --root /tmp/fo report file-metadata --case CASE_ID --source-folder Users/fredr/Downloads
-forensic-orchestrator --root /tmp/fo report file-metadata-folders --case CASE_ID --tool FileMetadataPicturesUserContent
-forensic-orchestrator --root /tmp/fo report file-metadata-skipped --case CASE_ID --latest
-forensic-orchestrator --root /tmp/fo report file-metadata-skipped-deleted --case CASE_ID --latest
-forensic-orchestrator --root /tmp/fo report file-metadata-unresolved --case CASE_ID --latest
-forensic-orchestrator --root /tmp/fo report file-metadata-summary --case CASE_ID
-forensic-orchestrator --root /tmp/fo report activity-summary --case CASE_ID --user Jean
-forensic-orchestrator --root /tmp/fo report shortcuts --case CASE_ID --type lnk
-forensic-orchestrator --root /tmp/fo report shortcuts --case CASE_ID --type jumplist
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report summary --case CASE_ID
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report specs
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report spec --case CASE_ID --name mft-recent --format table
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report issues --case CASE_ID
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report execution --case CASE_ID --limit 100
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report suspicious-executions --case CASE_ID --format md
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report interesting-executables --case CASE_ID --format md
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report interesting-executables --case CASE_ID --rules ./my-interesting-tools.yaml --format table
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report accounts --case CASE_ID
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report users --case CASE_ID
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report files --case CASE_ID --user Devon
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report file-names --case CASE_ID --format table --limit 100
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report file-names --case CASE_ID --contains "GunStar" --format table
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report file-name-drilldown --case CASE_ID --name "GunStar Death Blossom Data.docx" --format table
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report file-history --case CASE_ID --name "GunStar Death Blossom Data.docx" --format table
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report file-history --case CASE_ID --mft-entry 130698 --filesystem-only --format table
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report copied-files --case CASE_ID
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report copied-file-indicators --case CASE_ID
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report copied-file-groups --case CASE_ID
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report copied-usb-files --case CASE_ID --grouped
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report copied-file-indicators --case CASE_ID --include-mft-only --include-system
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report copied-file-drilldown --case CASE_ID --path "E:\\copied.docx"
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report usb-dossier --case CASE_ID --volume-serial-number 2CB9-F845
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report device-inventory --case CASE_ID --format table
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report case-review --case CASE_ID --format table
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report correlations --case CASE_ID
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report artifact-summary --case CASE_ID
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report tool-runs --case CASE_ID --limit 250
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report mft --case CASE_ID --limit 100
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report usn --case CASE_ID --limit 100
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report prefetch --case CASE_ID --limit 100
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report evtx --case CASE_ID --limit 100
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report evtx-recovery --case CASE_ID
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report recycle --case CASE_ID --user Jean
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report deleted-folders --case CASE_ID
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report firefox --case CASE_ID --limit 100
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report browser --case CASE_ID --type history --limit 100
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report browser --case CASE_ID --type downloads --limit 100
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report browser-downloads --case CASE_ID --format table --limit 100
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report browser-cache --case CASE_ID --browser edge --host microsoft.com --format table --limit 100
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report browser-cache --case CASE_ID --exclude-noise --format table --limit 100
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report browser-hosts --case CASE_ID --exclude-noise --format table --limit 100
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report browser-cache-correlations --case CASE_ID --format table --limit 100
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report browser-activity --case CASE_ID --format table --limit 100
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report browser-deep-storage --case CASE_ID --format table --limit 100
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report webcache --case CASE_ID --application "Microsoft Edge" --exclude-metadata --format table --limit 100
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report webcache-files --case CASE_ID --usb-overlap --format table --limit 100
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report windows-activities --case CASE_ID --files-only --format table --limit 100
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report uninstalled-app-artifacts --case CASE_ID --format table
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report tor-usage --case CASE_ID --format table
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report encrypted-volumes --case CASE_ID --format table
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report phone-link --case CASE_ID --format table
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report virtualization --case CASE_ID --format table
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report cloud-artifacts --case CASE_ID --format table --limit 100
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report srum-context --case CASE_ID --format table --limit 250
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report vpn-local-activity --case CASE_ID --format md --limit 500
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report web-cloud-correlations --case CASE_ID --category webmail --format table --limit 100
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report web-cloud-correlations --case CASE_ID --provider "Google Drive" --format table --limit 100
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report messaging-artifacts --case CASE_ID --format table --limit 100
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report messaging-artifacts --case CASE_ID --application Slack --user fredr --contains frocba --format table
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report event-interpretation --case CASE_ID --category usb --format table --limit 100
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report email-artifacts --case CASE_ID --format table --limit 100
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report mailbox-messages --case CASE_ID --format table --limit 100
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report mailbox-messages --case CASE_ID --user fredr --status parsed --contains SharePoint --format table
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report timeline --case CASE_ID --contains "report.docx"
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report user-timeline --case CASE_ID --user Jean --format table --limit 250
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report validate --case CASE_ID
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report registry --case CASE_ID --limit 100
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report registry-artifacts --case CASE_ID --artifact usb_device_history
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report registry-activity --case CASE_ID --artifact runmru --user Jean
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report registry-activity --case CASE_ID --artifact recentdocs --user Devon
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report common-dialog-items --case CASE_ID --limit 100
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report amcache --case CASE_ID --limit 100
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report shimcache --case CASE_ID --limit 100
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report shellbags --case CASE_ID --limit 100
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report usb --case CASE_ID --limit 100
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report usb --case CASE_ID --breakdown
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report usb-files --case CASE_ID --format table --limit 500
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report usb-files --case CASE_ID --grouped --format csv --output usb-files-deduped.csv
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report usb-files --case CASE_ID --format csv --output usb-files.csv
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report usb-timeline --case CASE_ID --format table --limit 500
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report export --case CASE_ID --preset usb-summary --output usb-summary.csv
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report export --case CASE_ID --preset usb-file-correlations --output usb-file-correlations.csv
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report export --case CASE_ID --preset usb-timeline --output usb-timeline.csv
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report file-metadata --case CASE_ID --user-only --exclude-system --limit 100
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report file-metadata --case CASE_ID --extension .docx --property Creator
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report file-metadata --case CASE_ID --source-folder Users/fredr/Downloads
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report file-metadata-folders --case CASE_ID --tool FileMetadataPicturesUserContent
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report file-metadata-skipped --case CASE_ID --latest
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report file-metadata-skipped-deleted --case CASE_ID --latest
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report file-metadata-unresolved --case CASE_ID --latest
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report file-metadata-summary --case CASE_ID
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report activity-summary --case CASE_ID --user Jean
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report shortcuts --case CASE_ID --type lnk
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report shortcuts --case CASE_ID --type jumplist
 ```
 
 `case` remains as a CLI alias while the MVP evolves toward project terminology.
@@ -813,7 +800,7 @@ SQLite is the case system of record, not the universal content store.
 Review the current case against this boundary with:
 
 ```bash
-forensic-orchestrator --root /tmp/fo report storage-policy \
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report storage-policy \
   --case CASE_ID \
   --format table
 ```
@@ -842,6 +829,10 @@ The report commands are intentionally thin JSON views over SQLite:
   mappings to cloud sync metadata. Rows preserve source table/row IDs, match
   type, key, and confidence.
 - `report execution`: persisted timeline events from normalized parser rows. LNK and Jump List target metadata is checked for copied-file behavior: if the target creation time is later than the target modification time, the timeline contains a `copied_file_indicator`.
+- `report suspicious-executions`: higher-signal execution review combining
+  unusual executable/script locations, suspicious command-line or living-off-the-land
+  tool tokens, and configured interesting-executable rules. It keeps evidence
+  confidence explicit so Prefetch/RunMRU proof is separated from activity context.
 - `report interesting-executables`: configurable matches for tools such as
   SDelete, CCleaner, credential recovery utilities, remote access tools, and
   network utilities. The default editable rule list is
@@ -904,15 +895,31 @@ The report commands are intentionally thin JSON views over SQLite:
 - `report memory-artifacts`: inventory of hibernation, pagefile, and swapfile
   artifacts found in mounted volumes or MFT data so later memory work is visible
   in the case record.
+- `report memory-analysis`: investigator-facing memory processing workflow and
+  findings report. It combines memory artifact inventory, imported targeted
+  string hits, tool availability, MemProcFS/Volatility/bstrings next steps, and
+  the Windows Search encrypted SQLite assessment.
 - `memory strings`: scans hibernation/page/swap or memory files for targeted
   strings using `bstrings` when available, falling back to `strings`. It tries
   supported hiberfil decompression first and stores hits in `memory_string_hits`.
   Set `BSTRINGS_BIN` when `bstrings` is installed outside `PATH`; the default
   local EZ-tools location `/home/lee/tools/bstrings/bstrings.dll` is also
-  checked.
+  checked. For hibernation decompression, the scanner checks `HIBR2BIN_BIN`,
+  `PATH`, `/home/lee/tools/Hibr2Bin-linux/hibr2bin-linux`, and known local
+  Hibr2Bin Windows builds.
 - `report memory-string-hits`: reviews targeted memory string leads by category,
   matched term, source artifact, path, and offset. These are leads, not
   standalone proof.
+- Windows 11 encrypted Search SQLite databases (`AesGcm1`) have been tested with
+  the offline memory-support-file workflow. When no usable key/plaintext is
+  recovered from the RAM image, hiberfil, pagefile, or swapfile, the practical
+  collection requirement is live RAM acquisition while the relevant user is
+  logged in and `SearchIndexer.exe` is still running.
+- If live memory and triage registry hives are available, validate a separate
+  DPAPI/LSA workflow: enumerate/dump hives with Volatility, extract LSA and
+  DPAPI material with tools such as pypykatz or Mimikatz, and only report Search
+  database decryption if the extracted material actually opens the target
+  `Windows.db`.
 - `report validate`: operator validation view for missing expected tool outputs,
   failed or unfinished jobs, warning/error counts, skipped activity, and EVTX
   recovery status.
@@ -1135,13 +1142,13 @@ parsing together. It also includes browser cache URL reference extraction and
 Windows Activities parsing:
 
 ```bash
-forensic-orchestrator --root /tmp/fo run --case CASE_ID --image IMAGE_ID --profile windows-browsers
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator run --case CASE_ID --image IMAGE_ID --profile windows-browsers
 ```
 
 Use `windows-activities` when you only want Windows Activities:
 
 ```bash
-forensic-orchestrator --root /tmp/fo run --case CASE_ID --image IMAGE_ID --profile windows-activities
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator run --case CASE_ID --image IMAGE_ID --profile windows-activities
 ```
 
 ## WebCache
@@ -1173,7 +1180,7 @@ path for new cases.
 Query the index:
 
 ```bash
-forensic-orchestrator --root /tmp/fo search query \
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator search query \
   --case CASE_ID \
   --url http://localhost:9200 \
   --index forensic-content \
@@ -1186,7 +1193,7 @@ backend URL, index name, backend version, document counts by source type, start
 and end times, status, and any error. Review those records with:
 
 ```bash
-forensic-orchestrator --root /tmp/fo report search-index-runs \
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report search-index-runs \
   --case CASE_ID \
   --format table
 ```
@@ -1195,7 +1202,7 @@ Search results include `source_table` and `source_record_id`. Use those for a
 SQLite drilldown back to the record, related message copies, and attachments:
 
 ```bash
-forensic-orchestrator --root /tmp/fo search show \
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator search show \
   --case CASE_ID \
   --source-table mailbox_attachments \
   --source-id ROW_ID
@@ -1209,9 +1216,9 @@ comma-separated synonym file with `--synonyms`.
 RDP bitmap cache and generic image-analysis reports:
 
 ```bash
-forensic-orchestrator --root /tmp/fo report rdp-cache --case CASE_ID --format table
-forensic-orchestrator --root /tmp/fo report rdp-visual-observations --case CASE_ID --format table
-forensic-orchestrator --root /tmp/fo report image-analysis --case CASE_ID --source-artifact-type rdp_bitmap_cache --format table
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report rdp-cache --case CASE_ID --format table
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report rdp-visual-observations --case CASE_ID --format table
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report image-analysis --case CASE_ID --source-artifact-type rdp_bitmap_cache --format table
 ```
 
 Remote access correlation ties RDP client events to nearby VPN activity and RDP
@@ -1220,7 +1227,7 @@ contact sheets, they are included as corroborating screen evidence rather than
 execution proof:
 
 ```bash
-forensic-orchestrator --root /tmp/fo report remote-access --case CASE_ID --format table
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report remote-access --case CASE_ID --format table
 ```
 
 For authenticated clusters, use `--username` and `--password`, or set
@@ -1243,14 +1250,16 @@ test clusters with self-signed TLS, pass `--insecure`.
 
 The CLI uses `sudo -n` only when `image mount --filesystem --sudo` or
 `image unmount --sudo` is passed. `ewfmount` itself is run without sudo and
-requires the FUSE `user_allow_other` setting above. Configure a narrow sudoers
-rule for the worker user and workspace root. Replace `lee` and `/tmp/fo` with
-your worker user and root path.
+requires the FUSE `user_allow_other` setting above. Live EWF and NTFS mount
+points are intentionally created under `/tmp/forensic-orchestrator-mounts` by
+default; case data, extracted artifacts, logs, reports, SQLite, and DuckDB stay
+under the configured workspace root. Override the live mount namespace with
+`FORENSIC_MOUNT_ROOT=/path/to/mount-root` if needed.
 
 Check command paths first:
 
 ```bash
-command -v mount
+command -v ntfs-3g
 command -v umount
 ```
 
@@ -1260,10 +1269,10 @@ Create the rule with `visudo`:
 sudo visudo -f /etc/sudoers.d/forensic-orchestrator
 ```
 
-Example rule:
+Default mount namespace rule:
 
 ```text
-lee ALL=(root) NOPASSWD: /usr/bin/ntfs-3g -o ro\,show_sys_files\,streams_interface=windows\,norecover\,offset=* /tmp/fo/cases/*/mounts/ewf/ewf1 /tmp/fo/cases/*/mounts/volumes/*, /usr/bin/umount /tmp/fo/cases/*/mounts/volumes/*
+lee ALL=(root) NOPASSWD: /usr/bin/ntfs-3g -o ro\,show_sys_files\,streams_interface\=windows\,norecover\,offset\=* /tmp/forensic-orchestrator-mounts/cases/*/ewf/ewf1 /tmp/forensic-orchestrator-mounts/cases/*/volumes/*, /usr/bin/umount /tmp/forensic-orchestrator-mounts/cases/*/volumes/*
 ```
 
 The application still validates and records the exact subprocess array it runs.

@@ -57,15 +57,27 @@ These improve coverage but are not required for every case:
   mounts, manifests, intermediate databases, and comparison reports stay under
   `cases/<case>/vsc-work/`, while supported parsed rows are promoted into the
   main case DuckDB after dedupe.
-- `sidr`: Windows Search index parsing. Set `SIDR_BIN=/path/to/sidr` when not on `PATH`.
+- `sidr`: Windows Search index parsing for supported Windows Search formats. Set
+  `SIDR_BIN=/path/to/sidr` when not on `PATH`. Current case testing did not
+  identify a SIDR option that decrypts Windows 11 `AesGcm1` encrypted SQLite
+  Search databases offline; when that format is encountered, collect live RAM
+  while the target user is logged in and SearchIndexer.exe is running if full
+  Search contents are required.
+- `pypykatz` or `mimikatz`: optional DPAPI/LSA validation path for live-memory
+  plus registry-hive cases. Use these only as a controlled follow-up to
+  Volatility hive/secret extraction, and document the result only if the
+  extracted material decrypts the target database.
 - `bstrings`: preferred string scanner for memory-adjacent triage. The
   `memory strings` command checks `BSTRINGS_BIN`, `PATH`, and
   `/home/lee/tools/bstrings/bstrings.dll`, then falls back to system `strings`
   if unavailable.
 - `hibr2bin` or `HibernationRecon`: optional hiberfil decompression before
   targeted string scanning. If absent, the scanner records the limitation and
-  scans the original file where possible. Hibr2Bin source is available from
-  Magnet Forensics: `https://github.com/MagnetForensics/Hibr2Bin`.
+  scans the original file where possible. A native Linux Hibr2Bin wrapper can be
+  built with `third_party/hibr2bin_linux/build.sh`; the scanner checks
+  `/home/lee/tools/Hibr2Bin-linux/hibr2bin-linux` before Windows-only builds.
+  Hibr2Bin source is available from Magnet Forensics:
+  `https://github.com/MagnetForensics/Hibr2Bin`.
 - `poppler-utils`: `pdftotext` for faster PDF text extraction into
   OpenSearch-backed user-file content rows. If unavailable, the Python `pypdf`
   fallback is used.

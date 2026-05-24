@@ -118,6 +118,8 @@ from .reports import (
     mailbox_messages_report,
     malware_hiding_places_markdown,
     malware_hiding_places_report,
+    memory_analysis_markdown,
+    memory_analysis_report,
     memory_artifacts_markdown,
     memory_artifacts_report,
     memory_string_hits_report,
@@ -154,6 +156,8 @@ from .reports import (
     session_detail_report,
     sessions_report,
     storage_policy_report,
+    suspicious_executions_markdown,
+    suspicious_executions_report,
     suspicious_timeline_windows_markdown,
     suspicious_timeline_windows_report,
     sdelete_report,
@@ -881,6 +885,12 @@ def build_parser() -> argparse.ArgumentParser:
     report_interesting_executables.add_argument("--rules", help="Path to an editable interesting executables YAML rule file")
     report_interesting_executables.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
     report_interesting_executables.add_argument("--output")
+    report_suspicious_executions = report_sub.add_parser("suspicious-executions")
+    report_suspicious_executions.add_argument("--case", required=True, dest="case_id")
+    report_suspicious_executions.add_argument("--limit", type=int, default=100)
+    report_suspicious_executions.add_argument("--rules", help="Path to an editable interesting executables YAML rule file")
+    report_suspicious_executions.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
+    report_suspicious_executions.add_argument("--output")
     report_suspicious_windows = report_sub.add_parser("suspicious-timeline-windows")
     report_suspicious_windows.add_argument("--case", required=True, dest="case_id")
     report_suspicious_windows.add_argument("--limit", type=int, default=100)
@@ -1706,6 +1716,11 @@ def build_parser() -> argparse.ArgumentParser:
     report_memory_artifacts.add_argument("--limit", type=int, default=100)
     report_memory_artifacts.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
     report_memory_artifacts.add_argument("--output")
+    report_memory_analysis = report_sub.add_parser("memory-analysis")
+    report_memory_analysis.add_argument("--case", required=True, dest="case_id")
+    report_memory_analysis.add_argument("--limit", type=int, default=100)
+    report_memory_analysis.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
+    report_memory_analysis.add_argument("--output")
     report_cloud_server = report_sub.add_parser("cloud-server-events")
     report_cloud_server.add_argument("--case", required=True, dest="case_id")
     report_cloud_server.add_argument("--limit", type=int, default=100)
@@ -2790,6 +2805,37 @@ def run(args: argparse.Namespace) -> int:
             )
             return 0
 
+        if args.resource == "report" and args.action == "suspicious-executions":
+            report = suspicious_executions_report(
+                db,
+                args.case_id,
+                limit=args.limit,
+                rules_path=args.rules,
+            )
+            if args.format == "md":
+                write_text_output(suspicious_executions_markdown(report), args.output)
+                return 0
+            write_report_output(
+                report,
+                report["findings"],
+                args.format,
+                args.output,
+                title=f"Suspicious executions for case {args.case_id}",
+                columns=[
+                    "severity",
+                    "confidence",
+                    "category",
+                    "timestamp_utc",
+                    "source_table",
+                    "event_type",
+                    "application",
+                    "display_path",
+                    "matched_rules",
+                    "reason",
+                ],
+            )
+            return 0
+
         if args.resource == "report" and args.action == "suspicious-timeline-windows":
             report = suspicious_timeline_windows_report(
                 db,
@@ -3177,6 +3223,21 @@ def run(args: argparse.Namespace) -> int:
                     args.output,
                     title=f"Memory artifacts for case {args.case_id}",
                     columns=["artifact_type", "path", "size_bytes", "source", "processed_status", "notes"],
+                )
+            return 0
+
+        if args.resource == "report" and args.action == "memory-analysis":
+            report = memory_analysis_report(db, args.case_id, limit=args.limit)
+            if args.format == "md":
+                write_text_output(memory_analysis_markdown(report), args.output)
+            else:
+                write_report_output(
+                    report,
+                    report["findings"],
+                    args.format,
+                    args.output,
+                    title=f"Memory processing and analysis for case {args.case_id}",
+                    columns=["severity", "category", "title", "summary"],
                 )
             return 0
 

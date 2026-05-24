@@ -6,7 +6,9 @@ import hashlib
 import html
 import csv
 import json
+import os
 import re
+import shutil
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -2391,7 +2393,12 @@ def filesystem_review_report(
     limit: int = 100,
 ) -> dict[str, Any]:
     db.get_case(case_id)
-    where = ["filesystem_review.case_id = ?", _artifact_duplicate_condition("filesystem_review")]
+    duplicate_condition = (
+        _artifact_duplicate_condition("filesystem_review")
+        if db.analytics_mode == "sqlite"
+        else "1=1"
+    )
+    where = ["filesystem_review.case_id = ?", duplicate_condition]
     params: list[Any] = [case_id]
     if contains:
         where.append(
@@ -2408,11 +2415,18 @@ def filesystem_review_report(
         where.append("filesystem_review.source_table = ?")
         params.append(source_table)
     clause = " AND ".join(where)
-    total = db.conn.execute(
+    total_rows = _query_report_rows(
+        db,
+        case_id,
+        "filesystem_review",
         f"SELECT COUNT(*) AS count FROM filesystem_review WHERE {clause}",
         params,
-    ).fetchone()["count"]
-    source_counts = db.conn.execute(
+    )
+    total = int((total_rows[0] if total_rows else {}).get("count") or 0)
+    source_counts = _query_report_rows(
+        db,
+        case_id,
+        "filesystem_review",
         f"""
         SELECT source_table, event_type, status, COUNT(*) AS count
         FROM filesystem_review
@@ -2422,14 +2436,14 @@ def filesystem_review_report(
         LIMIT 50
         """,
         params,
-    ).fetchall()
-    rows = db.conn.execute(
+    )
+    rows = _query_report_rows(
+        db,
+        case_id,
+        "filesystem_review",
         f"""
-        SELECT filesystem_review.*, computers.label AS computer_label, images.path AS image_path,
-               {_artifact_source_count_sql("filesystem_review")} AS source_count
+        SELECT filesystem_review.*
         FROM filesystem_review
-        LEFT JOIN computers ON filesystem_review.computer_id = computers.id
-        LEFT JOIN images ON filesystem_review.image_id = images.id
         WHERE {clause}
         ORDER BY COALESCE(filesystem_review.event_time, '') DESC,
                  filesystem_review.file_path,
@@ -2437,10 +2451,13 @@ def filesystem_review_report(
         LIMIT ?
         """,
         [*params, limit],
-    ).fetchall()
+    )
+    source_counts_by_id = _source_counts(db, "filesystem_review")
+    _fill_computer_image_fields(db, case_id, rows)
     items = []
     for row in rows:
         item = dict(row)
+        item["source_count"] = source_counts_by_id.get(str(item.get("id")), 0)
         item["details"] = _json_details(item.pop("details_json", None))
         items.append(item)
     return {
@@ -10299,7 +10316,10 @@ def timeline_review_report(
         mft_filters.append("(parent_path LIKE ? OR file_name LIKE ?)")
         mft_params.extend([f"%{contains}%", f"%{contains}%"])
     mft_params.append(source_limit)
-    for row in db.conn.execute(
+    for row in _query_report_rows(
+        db,
+        case_id,
+        "mft_entries",
         f"""
         SELECT id, parent_path, file_name, created_si, modified_si, accessed_si,
                record_changed_si, in_use
@@ -10337,7 +10357,10 @@ def timeline_review_report(
         usn_filters.append("(full_path LIKE ? OR file_name LIKE ? OR LOWER(COALESCE(reason, '')) LIKE LOWER(?))")
         usn_params.extend([f"%{contains}%", f"%{contains}%", f"%{contains}%"])
     usn_params.append(source_limit)
-    for row in db.conn.execute(
+    for row in _query_report_rows(
+        db,
+        case_id,
+        "usn_journal_entries",
         f"""
         SELECT id, update_timestamp, reason, file_name, full_path
         FROM usn_journal_entries
@@ -10367,7 +10390,10 @@ def timeline_review_report(
         shortcut_filters.append("(artifact_path LIKE ? OR file_location LIKE ? OR file_name LIKE ? OR artifact_name LIKE ?)")
         shortcut_params.extend([f"%{contains}%"] * 4)
     shortcut_params.append(source_limit)
-    for row in db.conn.execute(
+    for row in _query_report_rows(
+        db,
+        case_id,
+        "shortcut_items",
         f"""
         SELECT id, artifact_type, artifact_name, artifact_path, file_name, file_location,
                target_created, target_modified, target_accessed
@@ -10405,7 +10431,10 @@ def timeline_review_report(
         shellbag_filters.append("absolute_path LIKE ?")
         shellbag_params.append(f"%{contains}%")
     shellbag_params.append(source_limit)
-    for row in db.conn.execute(
+    for row in _query_report_rows(
+        db,
+        case_id,
+        "shellbag_entries",
         f"""
         SELECT id, user_profile, absolute_path, created_on, modified_on, accessed_on,
                first_interacted, last_interacted
@@ -10444,7 +10473,10 @@ def timeline_review_report(
         registry_filters.append("(artifact LIKE ? OR key_path LIKE ? OR value_name LIKE ? OR value_data LIKE ?)")
         registry_params.extend([f"%{contains}%"] * 4)
     registry_params.append(source_limit)
-    for row in db.conn.execute(
+    for row in _query_report_rows(
+        db,
+        case_id,
+        "registry_artifacts",
         f"""
         SELECT id, artifact, user_profile, event_time_utc, key_path, value_name, value_data
         FROM registry_artifacts
@@ -14524,7 +14556,12 @@ def file_history_report(
         raise ValueError("file_history_report requires name, path, or mft_entry")
 
     derived_name = name or _basename_from_path(path)
-    filters = ["filesystem_review.case_id = ?", _artifact_duplicate_condition("filesystem_review")]
+    duplicate_condition = (
+        _artifact_duplicate_condition("filesystem_review")
+        if db.analytics_mode == "sqlite"
+        else "1=1"
+    )
+    filters = ["filesystem_review.case_id = ?", duplicate_condition]
     params: list[Any] = [case_id]
     if mft_entry:
         filters.append("filesystem_review.mft_entry_number = ?")
@@ -14541,11 +14578,8 @@ def file_history_report(
         case_id,
         "filesystem_review",
         f"""
-        SELECT filesystem_review.*, computers.label AS computer_label, images.path AS image_path,
-               {_artifact_source_count_sql("filesystem_review")} AS source_count
+        SELECT filesystem_review.*
         FROM filesystem_review
-        LEFT JOIN computers ON filesystem_review.computer_id = computers.id
-        LEFT JOIN images ON filesystem_review.image_id = images.id
         WHERE {where}
         ORDER BY COALESCE(filesystem_review.event_time, '') ASC,
                  filesystem_review.source_table,
@@ -14554,6 +14588,10 @@ def file_history_report(
         """,
         [*params, limit],
     )
+    _fill_computer_image_fields(db, case_id, fs_rows)
+    source_counts_by_id = _source_counts(db, "filesystem_review")
+    for row in fs_rows:
+        row["source_count"] = source_counts_by_id.get(str(row.get("id")), 0)
     if not fs_rows:
         fs_rows = _duckdb_file_history_rows(
             db,
@@ -16568,6 +16606,101 @@ def memory_artifacts_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def memory_analysis_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str, Any]:
+    db.get_case(case_id)
+    artifacts = memory_artifacts_report(db, case_id, limit=max(limit, 1000))
+    string_hits = memory_string_hits_report(db, case_id, limit=limit)
+    search_status = _windows_search_parser_status(db, case_id)
+    workflow = _memory_processing_workflow(case_id, artifacts.get("artifacts") or [])
+    useful_hits = _memory_useful_hits(string_hits.get("hits") or [], limit=limit)
+    search_assessment = _memory_windows_search_assessment(search_status, string_hits)
+    findings = _memory_analysis_findings(artifacts, string_hits, search_assessment)
+    return {
+        "case_id": case_id,
+        "summary": {
+            "memory_artifact_count": (artifacts.get("summary") or {}).get("artifact_count", 0),
+            "memory_string_hit_count": (string_hits.get("summary") or {}).get("hit_count", 0),
+            "useful_memory_hit_count": len(useful_hits),
+            "windows_search_status": search_status.get("summary_status"),
+            "windows_search_memory_result": search_assessment.get("result"),
+            "workflow_step_count": len(workflow),
+            "finding_count": len(findings),
+        },
+        "tool_availability": _memory_tool_availability(),
+        "workflow": workflow,
+        "artifacts": (artifacts.get("artifacts") or [])[:limit],
+        "memory_string_summary": string_hits.get("summary") or {},
+        "useful_hits": useful_hits,
+        "windows_search_assessment": search_assessment,
+        "findings": findings,
+        "caveats": [
+            "Memory strings and recovered pages are investigative leads unless corroborated by stronger artifacts.",
+            "For encrypted Windows 11 Search SQLite databases, offline hiberfil/pagefile/swapfile scans may not recover the live AES-GCM material.",
+            "The DPAPI/LSA workflow is a validation path, not a conclusion; report it only after extracted keys successfully decrypt the target database.",
+            "To maximize Windows Search plaintext/key recovery, collect RAM while the relevant user session and SearchIndexer.exe are still live.",
+        ],
+    }
+
+
+def memory_analysis_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    lines = [
+        "# Memory Processing and Analysis",
+        "",
+        f"Case: `{report.get('case_id') or ''}`",
+        "",
+        "## Summary",
+        "",
+        f"- Memory artifacts: `{summary.get('memory_artifact_count', 0)}`",
+        f"- Memory string hits: `{summary.get('memory_string_hit_count', 0)}`",
+        f"- Useful memory hits: `{summary.get('useful_memory_hit_count', 0)}`",
+        f"- Windows Search status: `{summary.get('windows_search_status') or ''}`",
+        f"- Windows Search memory result: `{summary.get('windows_search_memory_result') or ''}`",
+        "",
+        "## Tool Availability",
+        "",
+    ]
+    for row in report.get("tool_availability") or []:
+        lines.append(f"- `{row.get('tool')}`: `{row.get('status')}` {row.get('path') or ''}")
+    lines.extend(["", "## Workflow", ""])
+    for step in report.get("workflow") or []:
+        lines.append(f"- `{step.get('step')}` {step.get('purpose')}")
+        command = step.get("command")
+        if command:
+            lines.append(f"  - command: `{command}`")
+        if step.get("output"):
+            lines.append(f"  - output: {step.get('output')}")
+    lines.extend(["", "## Findings", ""])
+    findings = report.get("findings") if isinstance(report.get("findings"), list) else []
+    if not findings:
+        lines.append("- No memory-analysis findings were produced.")
+    for finding in findings:
+        lines.append(
+            f"- `{finding.get('severity') or ''}` `{finding.get('category') or ''}` "
+            f"{finding.get('title') or ''}: {finding.get('summary') or ''}"
+        )
+    lines.extend(["", "## Useful String Hits", ""])
+    hits = report.get("useful_hits") if isinstance(report.get("useful_hits"), list) else []
+    if not hits:
+        lines.append("- No targeted memory string hits were imported.")
+    for hit in hits[:25]:
+        lines.append(
+            f"- `{hit.get('hit_category') or ''}` `{hit.get('matched_term') or ''}` "
+            f"source `{hit.get('source_artifact_type') or ''}` offset `{hit.get('offset') or ''}` "
+            f"{hit.get('context_hint') or ''}"
+        )
+    lines.extend(["", "## Windows Search Assessment", ""])
+    assessment = report.get("windows_search_assessment") if isinstance(report.get("windows_search_assessment"), dict) else {}
+    lines.append(f"- Result: `{assessment.get('result') or ''}`")
+    lines.append(f"- Recommendation: {assessment.get('recommendation') or ''}")
+    if assessment.get("note"):
+        lines.append(f"- Note: {assessment.get('note')}")
+    lines.extend(["", "## Caveats", ""])
+    for caveat in report.get("caveats") or []:
+        lines.append(f"- {caveat}")
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def cloud_server_events_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str, Any]:
     db.get_case(case_id)
     rows = _query_report_rows(
@@ -16629,6 +16762,195 @@ def memory_string_hits_report(db: Database, case_id: str, *, limit: int = 100) -
             "Hiberfil decompression depends on external tooling; if unavailable, the scanner records strings from the original file where possible.",
         ],
     }
+
+
+def _memory_tool_availability() -> list[dict[str, str]]:
+    tools = [
+        ("memprocfs", ("memprocfs", "MemProcFS")),
+        ("volatility3", ("vol", "vol.py", "volatility3")),
+        ("pypykatz", ("pypykatz",)),
+        ("mimikatz", ("mimikatz", "mimikatz.exe")),
+        ("bstrings", ("bstrings",)),
+        ("strings", ("strings",)),
+        ("hibr2bin", ("hibr2bin", "Hibr2Bin", "HIBR2BIN")),
+    ]
+    rows = []
+    for label, candidates in tools:
+        path = next((shutil.which(candidate) for candidate in candidates if shutil.which(candidate)), None)
+        if label == "bstrings" and not path:
+            for candidate in ("/home/lee/tools/bstrings/bstrings.dll", "/home/lee/tools/eztools/bstrings/bstrings.dll"):
+                if Path(candidate).exists():
+                    path = candidate
+                    break
+        if label == "hibr2bin" and not path:
+            for candidate in (
+                "/home/lee/tools/Hibr2Bin-linux/hibr2bin-linux",
+                "/home/lee/tools/Hibr2Bin-build/Hibr2Bin.exe",
+                "/home/lee/tools/Hibr2Bin/Hibr2Bin.exe",
+            ):
+                if Path(candidate).exists():
+                    path = candidate
+                    break
+        rows.append({"tool": label, "status": "available" if path else "missing", "path": path or ""})
+    return rows
+
+
+def _memory_processing_workflow(case_id: str, artifacts: list[dict[str, Any]]) -> list[dict[str, str]]:
+    paths = [str(row.get("actual_path") or row.get("path") or "") for row in artifacts if row.get("actual_path") or row.get("path")]
+    existing_paths = [path for path in paths if Path(path).exists()]
+    candidate_paths = existing_paths or paths
+    primary = next(
+        (path for path in candidate_paths if not path.lower().endswith(("pagefile.sys", "swapfile.sys"))),
+        candidate_paths[0] if candidate_paths else "MEMORY_OR_HIBERFIL_PATH",
+    )
+    workflow = [
+        {
+            "step": "inventory",
+            "purpose": "Inventory RAM, hiberfil, pagefile, and swapfile candidates before content analysis.",
+            "command": f"forensic-orchestrator report memory-artifacts --case {case_id} --format table",
+            "output": "Memory-adjacent artifact list with source paths and sizes.",
+        },
+        {
+            "step": "targeted_strings",
+            "purpose": "Run targeted bstrings/strings collection over each memory artifact and import hits.",
+            "command": f"forensic-orchestrator memory strings --case {case_id} --path {primary}",
+            "output": "Rows in memory_string_hits for credentials, paths, cloud, browser, Search, and email leads.",
+        },
+        {
+            "step": "memprocfs_mount",
+            "purpose": "Mount a full RAM image or decompressed hibernation image for process, VAD, handle, module, and file-object review.",
+            "command": f"memprocfs -device {primary} -mount /tmp/memprocfs-{case_id} -forensic 1",
+            "output": "MemProcFS process trees, modules, VADs, handles, files, registry, and forensic CSV views.",
+        },
+        {
+            "step": "volatility_inventory",
+            "purpose": "Build a process/module/network inventory and identify target processes such as SearchIndexer.exe.",
+            "command": f"vol -f {primary} windows.pslist.PsList",
+            "output": "Process list used to pick focused follow-up plugins and VAD dumps.",
+        },
+        {
+            "step": "searchindexer_vads",
+            "purpose": "Dump SearchIndexer.exe VADs when Windows Search encrypted SQLite recovery is in scope.",
+            "command": f"vol -f {primary} windows.vaddump.VadDump --pid SEARCHINDEXER_PID --dump-dir CASE_OUTPUT/searchindexer-vads",
+            "output": "Process-specific memory regions for targeted plaintext/key-material scanning.",
+        },
+        {
+            "step": "dpapi_lsa_validation",
+            "purpose": "When the memory image is live and registry hives are available, test whether system DPAPI/LSA material can unwrap Search-related database keys.",
+            "command": f"vol -f {primary} windows.registry.hivelist.HiveList && pypykatz registry --sam SAM --security SECURITY --system SYSTEM",
+            "output": "Extracted LSA/DPAPI material for a controlled decrypt attempt; treat as unproven until it opens the target Windows.db.",
+        },
+        {
+            "step": "report",
+            "purpose": "Summarize processed memory artifacts, useful string hits, limitations, and follow-up actions.",
+            "command": f"forensic-orchestrator report memory-analysis --case {case_id} --format md",
+            "output": "Investigator-facing memory processing and analysis report.",
+        },
+    ]
+    if not paths:
+        workflow.insert(
+            1,
+            {
+                "step": "collect_live_memory",
+                "purpose": "Acquire RAM before relying on hiberfil/pagefile/swapfile-only workflows.",
+                "command": "Acquire a full memory image from the live host while the relevant user session is logged in.",
+                "output": "Full RAM image suitable for MemProcFS and Volatility analysis.",
+            },
+        )
+    return workflow
+
+
+def _memory_useful_hits(hits: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
+    priority = {
+        "credentials": 0,
+        "search": 1,
+        "browser": 2,
+        "cloud": 3,
+        "remote_access": 4,
+        "email": 5,
+        "paths": 6,
+    }
+    rows = [dict(hit) for hit in hits if isinstance(hit, dict)]
+    rows.sort(
+        key=lambda row: (
+            priority.get(str(row.get("hit_category") or ""), 99),
+            str(row.get("source_artifact_type") or ""),
+            str(row.get("matched_term") or ""),
+            str(row.get("source_path") or ""),
+        )
+    )
+    return rows[:limit]
+
+
+def _memory_windows_search_assessment(search_status: dict[str, Any], string_hits: dict[str, Any]) -> dict[str, Any]:
+    status = str(search_status.get("summary_status") or "")
+    hit_categories = (string_hits.get("summary") or {}).get("categories") or []
+    search_hit_count = sum(int(row.get("count") or 0) for row in hit_categories if row.get("value") == "search")
+    if status == "partial_unsupported_encrypted_sqlite":
+        if search_hit_count:
+            result = "encrypted_sqlite_memory_leads_only"
+            note = f"{search_hit_count} Windows Search string hits were imported, but string hits do not decrypt the encrypted SQLite database."
+        else:
+            result = "encrypted_sqlite_no_memory_key"
+            note = "No imported memory string hits currently indicate usable Windows Search plaintext or AES-GCM key material."
+        recommendation = (
+            "Treat offline memory-support-file recovery as tested but not sufficient for this case unless a usable key/plaintext is later found. "
+            "For future acquisitions, collect RAM while the user is logged in and SearchIndexer.exe is live. "
+            "If live memory and registry hives are available, separately validate the DPAPI/LSA key-unwrapping path before claiming Search database decryption."
+        )
+    elif status == "parsed":
+        result = "search_index_parsed"
+        note = "The Windows Search parser produced normalized rows; memory work is optional corroboration."
+        recommendation = "Use memory analysis only for corroboration or recovery of artifacts absent from the parsed Search rows."
+    else:
+        result = "memory_followup_optional"
+        note = search_status.get("summary_note") or ""
+        recommendation = "Run memory strings and process-specific memory review when Search or user-session artifacts are material to the investigation."
+    return {
+        "result": result,
+        "search_string_hit_count": search_hit_count,
+        "windows_search_status": status,
+        "note": note,
+        "recommendation": recommendation,
+    }
+
+
+def _memory_analysis_findings(
+    artifacts: dict[str, Any],
+    string_hits: dict[str, Any],
+    search_assessment: dict[str, Any],
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    artifact_count = int((artifacts.get("summary") or {}).get("artifact_count") or 0)
+    if artifact_count:
+        findings.append(
+            {
+                "severity": "info",
+                "category": "memory_artifacts",
+                "title": "Memory-adjacent artifacts available",
+                "summary": f"{artifact_count} hiberfil/pagefile/swapfile or memory artifacts are available for processing.",
+            }
+        )
+    hit_count = int((string_hits.get("summary") or {}).get("hit_count") or 0)
+    if hit_count:
+        findings.append(
+            {
+                "severity": "lead",
+                "category": "memory_strings",
+                "title": "Targeted memory string hits imported",
+                "summary": f"{hit_count} memory string hits are available for review and corroboration.",
+            }
+        )
+    if search_assessment.get("result") in {"encrypted_sqlite_no_memory_key", "encrypted_sqlite_memory_leads_only"}:
+        findings.append(
+            {
+                "severity": "limitation",
+                "category": "windows_search",
+                "title": "Encrypted Windows 11 Search database remains offline-limited",
+                "summary": search_assessment.get("note") or "",
+            }
+        )
+    return findings
 
 
 def evidence_gaps_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str, Any]:
@@ -16810,7 +17132,10 @@ def file_dossier_report(
             }
         )
 
-    mft_rows = db.conn.execute(
+    mft_rows = _query_report_rows(
+        db,
+        case_id,
+        "mft_entries",
         """
         SELECT id, file_name, parent_path, created_si, modified_si, accessed_si,
                record_changed_si, in_use, is_directory, entry_number, sequence_number
@@ -16820,7 +17145,7 @@ def file_dossier_report(
         LIMIT ?
         """,
         (case_id, basename, limit),
-    ).fetchall()
+    )
     for row in mft_rows:
         row_path = _join_path(row["parent_path"], row["file_name"])
         for event_type, timestamp in (
@@ -16846,7 +17171,10 @@ def file_dossier_report(
                     },
                 )
 
-    fs_rows = db.conn.execute(
+    fs_rows = _query_report_rows(
+        db,
+        case_id,
+        "filesystem_review",
         """
         SELECT *
         FROM filesystem_review
@@ -16855,7 +17183,7 @@ def file_dossier_report(
         LIMIT ?
         """,
         (case_id, basename, limit),
-    ).fetchall()
+    )
     for row in fs_rows:
         add_row(
             category=_dossier_category(row["source_table"]),
@@ -16875,7 +17203,10 @@ def file_dossier_report(
             },
         )
 
-    shortcut_rows = db.conn.execute(
+    shortcut_rows = _query_report_rows(
+        db,
+        case_id,
+        "shortcut_items",
         """
         SELECT id, artifact_type, artifact_name, artifact_path, file_name, file_location,
                target_created, target_modified, target_accessed, device_type,
@@ -16886,7 +17217,7 @@ def file_dossier_report(
         LIMIT ?
         """,
         (case_id, basename, limit),
-    ).fetchall()
+    )
     for row in shortcut_rows:
         add_row(
             category="shortcuts",
@@ -20750,6 +21081,181 @@ def interesting_executables_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def suspicious_executions_report(
+    db: Database,
+    case_id: str,
+    *,
+    limit: int = 100,
+    rules_path: str | None = None,
+) -> dict[str, Any]:
+    db.get_case(case_id)
+    execution = execution_report(db, case_id, limit=max(limit * 10, 1000))
+    interesting = interesting_executables_report(db, case_id, limit=max(limit * 5, 250), rules_path=rules_path)
+    autostart_references = _malware_autostart_references(db, case_id)
+    findings: list[dict[str, Any]] = []
+
+    for row in _malware_unusual_execution_rows(execution, autostart_references=autostart_references):
+        if str(row.get("event_type") or "").casefold() == "copied_file_indicator":
+            continue
+        findings.append(
+            {
+                "severity": row.get("severity") or "medium",
+                "confidence": _suspicious_execution_confidence(row.get("source_table")),
+                "category": "unusual_execution_location",
+                "timestamp_utc": row.get("timestamp_utc"),
+                "source_table": row.get("source_table"),
+                "source_row_id": row.get("source_row_id"),
+                "event_type": row.get("event_type") or row.get("indicator_type"),
+                "application": row.get("application") or row.get("description"),
+                "display_path": row.get("display_path"),
+                "normalized_path": row.get("normalized_path"),
+                "reason": row.get("reason"),
+                "matched_rules": [row.get("location_category")] if row.get("location_category") else [],
+                "details": {
+                    "location_category": row.get("location_category"),
+                    "source_file": row.get("source_file"),
+                    "registry_key": row.get("registry_key"),
+                    "autostart_references": row.get("autostart_references") or [],
+                },
+            }
+        )
+
+    for candidate in _suspicious_command_execution_rows(execution):
+        findings.append(candidate)
+
+    for candidate in _suspicious_resolved_reference_execution_rows(execution):
+        findings.append(candidate)
+
+    for row in interesting.get("evidence") if isinstance(interesting.get("evidence"), list) else []:
+        if not isinstance(row, dict):
+            continue
+        evidence_type = str(row.get("evidence_type") or "")
+        if evidence_type not in {"execution", "process_activity"}:
+            continue
+        findings.append(
+            {
+                "severity": row.get("severity") or "medium",
+                "confidence": "execution_proof" if evidence_type == "execution" else "process_activity",
+                "category": row.get("category") or "interesting_executable",
+                "timestamp_utc": row.get("timestamp_utc"),
+                "source_table": row.get("source_table"),
+                "source_row_id": row.get("source_row_id"),
+                "event_type": row.get("event_type"),
+                "application": row.get("application") or row.get("executable_name"),
+                "display_path": row.get("display_path"),
+                "normalized_path": _normalize_artifact_path(row.get("display_path")),
+                "reason": row.get("description") or row.get("label") or "Matched configured interesting executable rule.",
+                "matched_rules": [row.get("rule_id")] if row.get("rule_id") else [],
+                "details": {
+                    "label": row.get("label"),
+                    "matched_terms": row.get("matched_terms") or [],
+                    "evidence_type": evidence_type,
+                    **(row.get("details") if isinstance(row.get("details"), dict) else {}),
+                },
+            }
+        )
+
+    findings = _dedupe_suspicious_execution_rows(findings)
+    findings.sort(
+        key=lambda row: (
+            INTERESTING_SEVERITY_RANK.get(str(row.get("severity") or "medium"), 9),
+            _suspicious_execution_confidence_rank(row.get("confidence")),
+            _timestamp_sort_key(row.get("timestamp_utc")),
+            str(row.get("application") or "").casefold(),
+        )
+    )
+    findings = findings[:limit]
+    for row in findings:
+        row["nearby_context"] = _suspicious_execution_nearby_context(db, case_id, row, window_minutes=30, limit=8)
+    severity_counts: dict[str, int] = {}
+    category_counts: dict[str, int] = {}
+    source_counts: dict[str, int] = {}
+    confidence_counts: dict[str, int] = {}
+    for row in findings:
+        for counts, key in (
+            (severity_counts, str(row.get("severity") or "unknown")),
+            (category_counts, str(row.get("category") or "unknown")),
+            (source_counts, str(row.get("source_table") or "unknown")),
+            (confidence_counts, str(row.get("confidence") or "unknown")),
+        ):
+            counts[key] = counts.get(key, 0) + 1
+    return {
+        "case_id": case_id,
+        "filters": {
+            "limit": limit,
+            "rules_path": rules_path or "default",
+        },
+        "summary": {
+            "finding_count": len(findings),
+            "severity_counts": [{"severity": key, "count": value} for key, value in sorted(severity_counts.items())],
+            "category_counts": [{"category": key, "count": value} for key, value in sorted(category_counts.items())],
+            "source_counts": [{"source_table": key, "count": value} for key, value in sorted(source_counts.items())],
+            "confidence_counts": [{"confidence": key, "count": value} for key, value in sorted(confidence_counts.items())],
+        },
+        "findings": findings,
+        "total_returned": len(findings),
+    }
+
+
+def suspicious_executions_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    findings = report.get("findings") if isinstance(report.get("findings"), list) else []
+    lines = [
+        "# Suspicious Executions",
+        "",
+        f"Case: `{report.get('case_id') or ''}`",
+        f"Rules: `{(report.get('filters') or {}).get('rules_path') or 'default'}`",
+        "",
+        "## Summary",
+        "",
+        f"- Findings: `{summary.get('finding_count', 0)}`",
+        "",
+    ]
+    for heading, key, label_key in (
+        ("Severity", "severity_counts", "severity"),
+        ("Categories", "category_counts", "category"),
+        ("Sources", "source_counts", "source_table"),
+        ("Confidence", "confidence_counts", "confidence"),
+    ):
+        rows = summary.get(key) if isinstance(summary.get(key), list) else []
+        if not rows:
+            continue
+        lines.extend([f"## {heading}", ""])
+        for row in rows:
+            if isinstance(row, dict):
+                lines.append(f"- `{row.get(label_key) or ''}`: `{row.get('count') or 0}`")
+        lines.append("")
+    lines.extend(["## Findings", ""])
+    if not findings:
+        lines.append("- No suspicious execution findings were identified.")
+    for row in findings:
+        if not isinstance(row, dict):
+            continue
+        rules = ",".join(str(item) for item in row.get("matched_rules") or [])
+        lines.append(
+            f"- `{row.get('timestamp_utc') or ''}` `{row.get('severity') or ''}` "
+            f"`{row.get('confidence') or ''}` `{row.get('category') or ''}` "
+            f"`{row.get('application') or ''}`"
+        )
+        lines.append(
+            f"  - source `{row.get('source_table') or ''}` event `{row.get('event_type') or ''}` "
+            f"path `{row.get('display_path') or ''}`"
+        )
+        if row.get("reason"):
+            lines.append(f"  - reason: {row.get('reason')}")
+        if rules:
+            lines.append(f"  - matched: `{rules}`")
+        nearby = row.get("nearby_context") if isinstance(row.get("nearby_context"), list) else []
+        if nearby:
+            lines.append(f"  - nearby timeline events: `{len(nearby)}`")
+            for event in nearby[:3]:
+                lines.append(
+                    f"    - `{event.get('timestamp_utc') or ''}` `{event.get('source_table') or ''}` "
+                    f"`{event.get('event_type') or ''}` {event.get('description') or ''}"
+                )
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def _interesting_execution_candidates(rows: Any, *, evidence_type: str) -> list[dict[str, Any]]:
     output = []
     for row in rows if isinstance(rows, list) else []:
@@ -20771,6 +21277,201 @@ def _interesting_execution_candidates(rows: Any, *, evidence_type: str) -> list[
             }
         )
     return output
+
+
+def _suspicious_command_execution_rows(execution: dict[str, Any]) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    suspicious_tokens = tuple(token.strip().casefold() for token in MALWARE_REPORT_COMMAND_TEXT_TOKENS)
+    for source_name in ("events", "process_activity"):
+        rows = execution.get(source_name) if isinstance(execution.get(source_name), list) else []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            source_table = str(row.get("source_table") or "")
+            if source_table not in {"prefetch_items", "evtx_events", "registry_artifacts", "registry_runmru"}:
+                continue
+            details = row.get("details") if isinstance(row.get("details"), dict) else {}
+            text_parts = [
+                row.get("application"),
+                row.get("description"),
+                row.get("display_path"),
+                row.get("path"),
+                details.get("resolved_reference_command_line"),
+                details.get("payload_data1"),
+                details.get("payload_data2"),
+                details.get("payload_data3"),
+                details.get("map_description"),
+                details.get("value_data"),
+            ]
+            text = " ".join(str(value or "") for value in text_parts).casefold()
+            matched = [token for token in suspicious_tokens if _suspicious_command_token_matches(text, token)]
+            if str(row.get("event_type") or "").casefold() == "registry_userassist":
+                continue
+            if set(matched).issubset({"powershell", "cmd.exe"}):
+                continue
+            if not matched:
+                continue
+            severity = "high" if any(token in matched for token in ("-enc", "-encodedcommand", "frombase64string", "downloadstring", "iex")) else "medium"
+            candidates.append(
+                {
+                    "severity": severity,
+                    "confidence": _suspicious_execution_confidence(source_table),
+                    "category": "suspicious_command_or_lolbin",
+                    "timestamp_utc": row.get("timestamp_utc"),
+                    "source_table": source_table,
+                    "source_row_id": row.get("source_row_id"),
+                    "event_type": row.get("event_type") or row.get("indicator_type"),
+                    "application": row.get("application") or row.get("description"),
+                    "display_path": row.get("display_path") or display_evidence_path(row.get("path")),
+                    "normalized_path": _normalize_artifact_path(row.get("display_path") or row.get("path")),
+                    "reason": "Execution evidence contains suspicious command-line or living-off-the-land tool tokens.",
+                    "matched_rules": matched,
+                    "details": details,
+                }
+            )
+    return candidates
+
+
+def _suspicious_command_token_matches(text: str, token: str) -> bool:
+    if not token:
+        return False
+    if token in {"iex"}:
+        return re.search(r"(?<![a-z0-9])iex(?![a-z0-9])", text, re.IGNORECASE) is not None
+    if token.startswith("-"):
+        return re.search(rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])", text, re.IGNORECASE) is not None
+    return token in text
+
+
+def _suspicious_resolved_reference_execution_rows(execution: dict[str, Any]) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    rows = execution.get("events") if isinstance(execution.get("events"), list) else []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        details = row.get("details") if isinstance(row.get("details"), dict) else {}
+        path = str(details.get("resolved_reference_path") or details.get("resolved_reference_device_path") or "")
+        category = _unusual_execution_location(path)
+        if not category:
+            continue
+        if not _path_looks_executable_or_script(path, row.get("application") or row.get("description")):
+            continue
+        benign_reason = _malware_report_benign_suppression_reason(path, row.get("application") or row.get("description"))
+        if benign_reason:
+            continue
+        source_table = str(row.get("source_table") or "")
+        candidates.append(
+            {
+                "severity": "high" if source_table in {"prefetch_items", "registry_runmru"} else "medium",
+                "confidence": _suspicious_execution_confidence(source_table),
+                "category": "unusual_execution_location",
+                "timestamp_utc": row.get("timestamp_utc"),
+                "source_table": source_table,
+                "source_row_id": row.get("source_row_id"),
+                "event_type": row.get("event_type") or row.get("indicator_type"),
+                "application": row.get("application") or row.get("description"),
+                "display_path": display_evidence_path(path),
+                "normalized_path": _normalize_artifact_path(path),
+                "reason": f"Executable/script resolved from unusual location category `{category}`.",
+                "matched_rules": [category],
+                "details": {
+                    "location_category": category,
+                    "prefetch_artifact_path": row.get("display_path") or row.get("path"),
+                    "source_file": details.get("source_file"),
+                    **details,
+                },
+            }
+        )
+    return candidates
+
+
+def _suspicious_execution_nearby_context(
+    db: Database,
+    case_id: str,
+    finding: dict[str, Any],
+    *,
+    window_minutes: int,
+    limit: int,
+) -> list[dict[str, Any]]:
+    timestamp = _parse_report_timestamp(str(finding.get("timestamp_utc") or ""))
+    if timestamp is None:
+        return []
+    start = timestamp - timedelta(minutes=window_minutes)
+    end = timestamp + timedelta(minutes=window_minutes)
+    if not _table_exists(db, "timeline_events"):
+        return []
+    rows = _query_report_rows(
+        db,
+        case_id,
+        "timeline_events",
+        """
+        SELECT id, timestamp_utc, source_tool, source_table, source_row_id, event_type, description, details_json
+        FROM timeline_events
+        WHERE case_id = ?
+          AND (dedupe_status IS NULL OR dedupe_status != 'duplicate')
+        ORDER BY timestamp_utc, source_table, event_type
+        LIMIT ?
+        """,
+        (case_id, 500),
+    )
+    output = []
+    finding_source = str(finding.get("source_table") or "")
+    finding_row_id = str(finding.get("source_row_id") or "")
+    for row in rows:
+        row_timestamp = _parse_report_timestamp(str(row.get("timestamp_utc") or ""))
+        if row_timestamp is None or row_timestamp < start or row_timestamp > end:
+            continue
+        if str(row.get("source_table") or "") == finding_source and str(row.get("source_row_id") or "") == finding_row_id:
+            continue
+        parsed = dict(row)
+        details = parsed.get("details_json")
+        if isinstance(details, str) and details:
+            try:
+                parsed["details"] = json.loads(details)
+            except json.JSONDecodeError:
+                parsed["details"] = {}
+        parsed.pop("details_json", None)
+        output.append(parsed)
+        if len(output) >= limit:
+            break
+    return output
+
+
+def _suspicious_execution_confidence(source_table: Any) -> str:
+    source = str(source_table or "")
+    if source in {"prefetch_items", "registry_runmru"}:
+        return "execution_proof"
+    if source == "evtx_events":
+        return "process_activity"
+    if source in {"registry_artifacts", "srum_records", "windows_activities", "shortcut_items"}:
+        return "activity_context"
+    return "context"
+
+
+def _suspicious_execution_confidence_rank(value: Any) -> int:
+    return {
+        "execution_proof": 0,
+        "process_activity": 1,
+        "activity_context": 2,
+        "context": 3,
+    }.get(str(value or ""), 9)
+
+
+def _dedupe_suspicious_execution_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str, str, str]] = set()
+    for row in rows:
+        key = (
+            str(row.get("source_table") or ""),
+            str(row.get("source_row_id") or ""),
+            str(row.get("category") or ""),
+            str(row.get("application") or "").casefold(),
+            str(row.get("display_path") or "").casefold(),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(row)
+    return deduped
 
 
 def _interesting_installed_application_candidates(db: Database, case_id: str, *, limit: int) -> list[dict[str, Any]]:
@@ -22419,6 +23120,7 @@ def investigation_triage_dashboard_report(db: Database, case_id: str, *, limit: 
     external = external_storage_report(db, case_id, limit=limit)
     malware = malware_hiding_places_report(db, case_id, limit=limit)
     interesting = interesting_executables_report(db, case_id, limit=limit)
+    suspicious_exec = suspicious_executions_report(db, case_id, limit=limit)
     exfil = data_exfiltration_report(db, case_id, limit=limit)
     account = account_compromise_report(db, case_id, limit=limit)
     cards = [
@@ -22432,6 +23134,7 @@ def investigation_triage_dashboard_report(db: Database, case_id: str, *, limit: 
         _triage_card("external_storage", "External Storage", external.get("summary") or {}),
         _triage_card("malware_hiding", "Malware Hiding Places", malware.get("summary") or {}),
         _triage_card("interesting_executables", "Interesting Executables", interesting.get("summary") or {}),
+        _triage_card("suspicious_executions", "Suspicious Executions", suspicious_exec.get("summary") or {}),
         _triage_card("data_exfiltration", "Data Exfiltration", exfil.get("summary") or {}),
         _triage_card("account_compromise", "Account Compromise", account.get("summary") or {}),
     ]
@@ -22444,15 +23147,18 @@ def investigation_triage_dashboard_report(db: Database, case_id: str, *, limit: 
             "account_compromise_findings": (account.get("summary") or {}).get("finding_count", 0),
             "evidence_gaps": (gaps.get("summary") or {}).get("gap_count", 0),
             "memory_artifacts": (memory.get("summary") or {}).get("artifact_count", 0),
+            "suspicious_execution_findings": (suspicious_exec.get("summary") or {}).get("finding_count", 0),
         },
         "cards": cards,
         "top_evidence_gaps": (gaps.get("gaps") or [])[:10],
         "memory_artifacts": (memory.get("artifacts") or [])[:10],
         "top_windows": (suspicious.get("windows") or [])[:10],
+        "top_suspicious_executions": (suspicious_exec.get("findings") or [])[:10],
         "top_data_exfiltration_findings": (exfil.get("findings") or [])[:10],
         "top_account_compromise_findings": (account.get("findings") or [])[:10],
         "recommended_reports": [
             {"report": "suspicious-timeline-windows", "reason": "Review clustered high-signal activity."},
+            {"report": "suspicious-executions", "reason": "Review notable executions, suspicious command tokens, and unusual execution locations."},
             {"report": "evidence-gaps", "reason": "Review unsupported, encrypted, partial, or skipped evidence sources."},
             {"report": "memory-artifacts", "reason": "Inventory hibernation, pagefile, and swapfile candidates for later memory analysis."},
             {"report": "data-exfiltration", "reason": "Review removable media, cloud, archive, browser, and email movement leads."},
@@ -22477,6 +23183,25 @@ def investigation_triage_dashboard_markdown(report: dict[str, Any]) -> str:
         )
     if not report.get("top_windows"):
         lines.append("- No suspicious windows were found.")
+    lines.extend(["", "## Top Suspicious Executions", ""])
+    for finding in (report.get("top_suspicious_executions") or [])[:10]:
+        details = finding.get("details") if isinstance(finding.get("details"), dict) else {}
+        path = (
+            finding.get("display_path")
+            or finding.get("normalized_path")
+            or details.get("path")
+            or details.get("resolved_path")
+            or details.get("process_path")
+            or ""
+        )
+        app = finding.get("application") or details.get("application") or details.get("file_name") or details.get("process_name") or ""
+        source = finding.get("source_table") or finding.get("source") or ""
+        lines.append(
+            f"- `{finding.get('severity') or ''}` `{finding.get('category') or ''}` "
+            f"{app or finding.get('description') or ''} source `{source}` path `{path}`"
+        )
+    if not report.get("top_suspicious_executions"):
+        lines.append("- No suspicious execution leads were found.")
     lines.extend(["", "## Evidence Gaps", ""])
     for gap in (report.get("top_evidence_gaps") or [])[:10]:
         lines.append(f"- `{gap.get('severity') or ''}` `{gap.get('category') or ''}` {gap.get('title') or ''}")
@@ -22966,7 +23691,14 @@ def _content_heavy_storage(db: Database, case_id: str | None) -> list[dict[str, 
         if not _table_exists(db, table):
             continue
         if case_id and _table_has_column(db, table, "case_id"):
-            row_count = db.conn.execute(f"SELECT COUNT(*) AS count FROM {table} WHERE case_id = ?", (case_id,)).fetchone()["count"]
+            count_rows = _query_report_rows(
+                db,
+                case_id,
+                table,
+                f"SELECT COUNT(*) AS count FROM {table} WHERE case_id = ?",
+                (case_id,),
+            )
+            row_count = int((count_rows[0] if count_rows else {}).get("count") or 0)
         elif case_id:
             continue
         else:
@@ -23506,10 +24238,15 @@ def _basename(path: str | None) -> str | None:
 def _mounted_memory_artifacts(db: Database, case_id: str) -> list[dict[str, Any]]:
     case = db.get_case(case_id)
     rows: list[dict[str, Any]] = []
-    mounts = case.root / "mounts" / "volumes"
-    if not mounts.exists():
-        return rows
-    for path in sorted(mounts.glob("*/*")):
+    mount_roots = [
+        case.root / "mounts" / "volumes",
+        Path(os.environ.get("FORENSIC_MOUNT_ROOT", "/tmp/forensic-orchestrator-mounts")) / "cases" / case_id / "volumes",
+    ]
+    paths: list[Path] = []
+    for mounts in mount_roots:
+        if mounts.exists():
+            paths.extend(sorted(mounts.glob("*/*")))
+    for path in paths:
         try:
             is_file = path.is_file()
         except OSError:
@@ -23527,6 +24264,7 @@ def _mounted_memory_artifacts(db: Database, case_id: str) -> list[dict[str, Any]
             {
                 "artifact_type": artifact_type,
                 "path": display_evidence_path(path),
+                "actual_path": str(path),
                 "size_bytes": size,
                 "source": "mounted_filesystem",
                 "processed_status": "not_processed",

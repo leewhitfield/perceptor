@@ -238,6 +238,20 @@ internal-ual-parser {artifact:ual_sum_dir} {output}
 {executable} -f csv -o {output} {artifact:windows_search_index}
 ```
 
+Operational note: Windows 11 `Windows.db` files may be SQLite databases using
+`AesGcm1` encryption. The offline workflow has been tested against this format;
+SIDR did not provide a project-known option to decrypt those databases without
+usable live key/plaintext material. If full Search index contents are required
+from that format, prioritize live RAM collection while the target user is logged
+in and SearchIndexer.exe is running.
+
+If live memory and triage registry hives are available, treat DPAPI/LSA recovery
+as a separate validation branch: use Volatility to enumerate/dump registry hives
+and memory-backed secrets, process the hives or memory artifacts with pypykatz
+or Mimikatz, and then test the resulting material against the specific
+`Windows.db`. This should be reported as successful only after it decrypts the
+target database.
+
 ### WindowsSearchESEParser
 
 - Type: `internal_windows_search_ese`

@@ -6,7 +6,7 @@ import duckdb
 
 from forensic_orchestrator.common_dialog import rebuild_common_dialog_items
 from forensic_orchestrator.copied_indicators import rebuild_copied_file_indicators
-from forensic_orchestrator.analytics_query import query_one
+from forensic_orchestrator.analytics_query import query_one, query_rows
 from forensic_orchestrator.db import Database
 from forensic_orchestrator.filesystem_review import rebuild_filesystem_review
 from forensic_orchestrator.reports import (
@@ -62,6 +62,8 @@ from forensic_orchestrator.reports import (
     mailbox_attachment_coverage_report,
     malware_hiding_places_markdown,
     malware_hiding_places_report,
+    memory_analysis_markdown,
+    memory_analysis_report,
     memory_artifacts_markdown,
     memory_artifacts_report,
     messaging_artifacts_report,
@@ -73,6 +75,8 @@ from forensic_orchestrator.reports import (
     srum_context_report,
     srum_networks_report,
     storage_policy_report,
+    suspicious_executions_markdown,
+    suspicious_executions_report,
     suspicious_timeline_windows_markdown,
     suspicious_timeline_windows_report,
     shortcuts_report,
@@ -181,12 +185,14 @@ def test_high_level_investigation_reports_smoke_on_empty_case(tmp_path):
     exfiltration = data_exfiltration_report(db, case.id, limit=5)
     account = account_compromise_report(db, case.id, limit=5)
     provenance = program_provenance_report(db, case.id, limit=5)
+    suspicious_exec = suspicious_executions_report(db, case.id, limit=5)
 
     assert suspicious["summary"]["window_count"] == 0
     assert triage["summary"]["cards"] >= 5
     assert exfiltration["summary"]["finding_count"] == 0
     assert account["summary"]["finding_count"] == 0
     assert provenance["summary"]["finding_count"] == 0
+    assert suspicious_exec["summary"]["finding_count"] == 0
     assert "Suspicious Timeline Windows" in suspicious_timeline_windows_markdown(suspicious)
     assert "Investigation Triage Dashboard" in investigation_triage_dashboard_markdown(triage)
     assert "Data Exfiltration Report" in data_exfiltration_markdown(exfiltration)
@@ -298,6 +304,118 @@ def test_evidence_gaps_report_surfaces_windows_search_and_memory_limitations(tmp
     assert {"windows_search", "memory_artifacts"} <= categories
     assert report["summary"]["windows_search_status"] == "partial_unsupported_encrypted_sqlite"
     assert "Evidence Gaps and Limitations" in evidence_gaps_markdown(report)
+
+
+def test_memory_analysis_report_combines_workflow_hits_and_search_limitation(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    volume = case.root / "mounts" / "volumes" / "part-001"
+    volume.mkdir(parents=True)
+    pagefile = volume / "pagefile.sys"
+    pagefile.write_bytes(b"token=abc windows.db SearchIndexer c:\\users\\maya\\documents\\note.txt")
+    output_dir = tmp_path / "outputs" / "WindowsSearchESEParser"
+    output_dir.mkdir(parents=True)
+    csv_path = output_dir / "WindowsSearchESEParser.csv"
+    csv_path.write_text("WorkId,System_Search_GatherTime,System_ItemPathDisplay\n", encoding="utf-8")
+    (output_dir / "WindowsSearchParserInventory.json").write_text(
+        """[
+  {
+    "detected_format": "encrypted_sqlite",
+    "parser_note": "Windows 11 Search database uses AesGcm1 SQLite3 format; contents are encrypted and were not parsed.",
+    "parser_status": "unsupported_encrypted_sqlite",
+    "source_path": "/ProgramData/Microsoft/Search/Data/Applications/Windows/Windows.db"
+  }
+]""",
+        encoding="utf-8",
+    )
+    db.insert_tool_output(
+        {
+            "id": "search-output-1",
+            "case_id": case.id,
+            "computer_id": "computer-1",
+            "image_id": "image-1",
+            "job_id": None,
+            "tool_name": "WindowsSearchESEParser",
+            "output_type": "csv",
+            "path": csv_path,
+            "row_count": 0,
+        }
+    )
+    db.insert_tool_output(
+        {
+            "id": "memory-output-1",
+            "case_id": case.id,
+            "computer_id": "computer-1",
+            "image_id": "image-1",
+            "job_id": None,
+            "tool_name": "MemoryStringScanner",
+            "output_type": "csv",
+            "path": tmp_path / "MemoryStringScanner.csv",
+            "row_count": 2,
+        }
+    )
+    db.insert_memory_string_hits(
+        [
+            {
+                "id": "mem-hit-1",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "memory-output-1",
+                "tool_name": "MemoryStringScanner",
+                "source_csv": str(tmp_path / "MemoryStringScanner.csv"),
+                "row_number": 1,
+                "source_artifact_type": "pagefile",
+                "source_path": str(pagefile),
+                "scanned_path": str(pagefile),
+                "scanner": "strings",
+                "encoding": "utf-8/utf-16le",
+                "hit_category": "search",
+                "matched_term": "windows.db",
+                "string_value": "windows.db SearchIndexer",
+                "string_sha256": "sha1",
+                "string_length": 24,
+                "offset": "12",
+                "context_hint": "path",
+            },
+            {
+                "id": "mem-hit-2",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "memory-output-1",
+                "tool_name": "MemoryStringScanner",
+                "source_csv": str(tmp_path / "MemoryStringScanner.csv"),
+                "row_number": 2,
+                "source_artifact_type": "pagefile",
+                "source_path": str(pagefile),
+                "scanned_path": str(pagefile),
+                "scanner": "strings",
+                "encoding": "utf-8/utf-16le",
+                "hit_category": "credentials",
+                "matched_term": "token",
+                "string_value": "token=abc",
+                "string_sha256": "sha2",
+                "string_length": 9,
+                "offset": "1",
+                "context_hint": "",
+            },
+        ]
+    )
+
+    report = memory_analysis_report(db, case.id, limit=10)
+    markdown = memory_analysis_markdown(report)
+
+    assert report["summary"]["memory_artifact_count"] == 1
+    assert report["summary"]["memory_string_hit_count"] == 2
+    assert report["windows_search_assessment"]["result"] == "encrypted_sqlite_memory_leads_only"
+    assert any(step["step"] == "memprocfs_mount" for step in report["workflow"])
+    assert any(step["step"] == "dpapi_lsa_validation" for step in report["workflow"])
+    assert any(row["category"] == "windows_search" for row in report["findings"])
+    assert "Memory Processing and Analysis" in markdown
+    assert "collect RAM while the user is logged in" in markdown
 
 
 def test_storage_policy_report_counts_content_heavy_tables_and_output_files(tmp_path):
@@ -1274,34 +1392,29 @@ def test_operator_review_reports_cover_timeline_file_user_and_completeness(tmp_p
             "row_count": 1,
         }
     )
-    db.conn.execute(
-        """
-        INSERT INTO mft_entries (
-          id, case_id, computer_id, image_id, tool_output_id, tool_name, source_csv,
-          row_number, entry_number, sequence_number, in_use, parent_path, file_name,
-          created_si, modified_si, accessed_si, record_changed_si, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            "mft-1",
-            case.id,
-            "computer-1",
-            "image-1",
-            "output-1",
-            "MFTECmd",
-            "/tmp/MFT.csv",
-            1,
-            "42",
-            "1",
-            "True",
-            "/Users/Jane/Documents",
-            "plan.docx",
-            "2020-01-01T00:00:00+00:00",
-            "2020-01-02T00:00:00+00:00",
-            "",
-            "",
-            "2020-01-03T00:00:00+00:00",
-        ),
+    db.insert_mft_entries(
+        [
+            {
+                "id": "mft-1",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "output-1",
+                "tool_name": "MFTECmd",
+                "source_csv": "/tmp/MFT.csv",
+                "row_number": 1,
+                "entry_number": "42",
+                "sequence_number": "1",
+                "in_use": "True",
+                "parent_path": "/Users/Jane/Documents",
+                "file_name": "plan.docx",
+                "created_si": "2020-01-01T00:00:00+00:00",
+                "modified_si": "2020-01-02T00:00:00+00:00",
+                "accessed_si": "",
+                "record_changed_si": "",
+                "created_at": "2020-01-03T00:00:00+00:00",
+            }
+        ]
     )
     db.log_activity(
         case_id=case.id,
@@ -2718,22 +2831,31 @@ def test_copied_file_indicators_table_combines_mft_shortcuts_shellbags_and_regis
             }
         ]
     )
-    db.conn.execute(
-        """
-        INSERT INTO registry_office_mru (
-          id, case_id, computer_id, image_id, tool_output_id, tool_name, source_csv,
-          row_number, hive_path, hive_type, user_profile, category, key_path,
-          key_last_write_timestamp, recmd_description, value_name, batch_key_path,
-          last_opened, batch_value_name, last_closed, file_name, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            "office-1", case.id, "computer-1", "image-1", "output-recmd", "RECmd",
-            str(tmp_path / "RECmd.csv"), 1, "NTUSER.DAT", "ntuser", "fredr",
-            "user_activity", "Software\\Microsoft\\Office", None, None, "Item 1",
-            "Office", "2020-01-04T10:00:00Z", None, None,
-            "C:\\Users\\fredr\\Documents\\office.docx", "2020-01-05T00:00:00Z",
-        ),
+    db.insert_recmd_artifact_rows(
+        {
+            "registry_office_mru": [
+                {
+                    "id": "office-1",
+                    "case_id": case.id,
+                    "computer_id": "computer-1",
+                    "image_id": "image-1",
+                    "tool_output_id": "output-recmd",
+                    "tool_name": "RECmd",
+                    "source_csv": str(tmp_path / "RECmd.csv"),
+                    "row_number": 1,
+                    "hive_path": "NTUSER.DAT",
+                    "hive_type": "ntuser",
+                    "user_profile": "fredr",
+                    "category": "user_activity",
+                    "key_path": "Software\\Microsoft\\Office",
+                    "value_name": "Item 1",
+                    "batch_key_path": "Office",
+                    "last_opened": "2020-01-04T10:00:00Z",
+                    "file_name": "C:\\Users\\fredr\\Documents\\office.docx",
+                    "created_at": "2020-01-05T00:00:00Z",
+                }
+            ]
+        }
     )
 
     count = rebuild_copied_file_indicators(db, case_id=case.id, image_id="image-1")
@@ -3854,14 +3976,17 @@ def test_filesystem_review_projects_windows_search_properties(tmp_path):
     )
 
     count = rebuild_filesystem_review(db, case_id=case.id, image_id="image-1")
-    rows = db.conn.execute(
+    rows = query_rows(
+        db,
+        "filesystem_review",
         """
         SELECT event_type, event_time, file_name, file_path, operation, status, details_json
         FROM filesystem_review
-        WHERE source_table = 'windows_search_properties'
+        WHERE case_id = ? AND source_table = 'windows_search_properties'
         ORDER BY event_type
-        """
-    ).fetchall()
+        """,
+        [case.id],
+    )
     history = file_history_report(db, case.id, name="photo.jpg", limit=10)
 
     assert count == 3
@@ -4407,6 +4532,95 @@ def test_execution_report_labels_vsc_prefetch_rows(tmp_path):
     assert report["events"][0]["details"]["snapshots"] == ["vss1", "vss2"]
     assert "source_scope=VSC" in markdown
     assert "snapshots=vss1, vss2" in markdown
+
+
+def test_suspicious_executions_report_combines_unusual_paths_commands_and_rules(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    prefetch_rows = [
+        {
+            "id": "pf-temp",
+            "case_id": case.id,
+            "computer_id": "computer-1",
+            "image_id": "image-1",
+            "tool_output_id": "output-1",
+            "tool_name": "PrefetchParser",
+            "source_csv": tmp_path / "PrefetchParser.csv",
+            "row_number": 1,
+            "prefetch_name": "PAYLOAD.EXE-12345678.pf",
+            "artifact_path": "/artifacts/Prefetch/PAYLOAD.EXE-12345678.pf",
+            "original_path": "Windows/Prefetch/PAYLOAD.EXE-12345678.pf",
+            "executable_name": "PAYLOAD.EXE",
+            "prefetch_hash": "12345678",
+            "run_count": "1",
+            "last_run_time_utc": "2026-05-12T13:14:15Z",
+            "last_run_times_utc": '["2026-05-12T13:14:15Z"]',
+            "resolved_reference_path": "C:/Users/mayas/AppData/Local/Temp/payload.exe",
+        },
+        {
+            "id": "pf-sdelete",
+            "case_id": case.id,
+            "computer_id": "computer-1",
+            "image_id": "image-1",
+            "tool_output_id": "output-1",
+            "tool_name": "PrefetchParser",
+            "source_csv": tmp_path / "PrefetchParser.csv",
+            "row_number": 2,
+            "prefetch_name": "SDELETE.EXE-87654321.pf",
+            "artifact_path": "/artifacts/Prefetch/SDELETE.EXE-87654321.pf",
+            "original_path": "Windows/Prefetch/SDELETE.EXE-87654321.pf",
+            "executable_name": "SDELETE.EXE",
+            "prefetch_hash": "87654321",
+            "run_count": "1",
+            "last_run_time_utc": "2026-05-12T13:20:00Z",
+            "last_run_times_utc": '["2026-05-12T13:20:00Z"]',
+        },
+    ]
+    evtx_rows = [
+        {
+            "id": "evtx-powershell",
+            "case_id": case.id,
+            "computer_id": "computer-1",
+            "image_id": "image-1",
+            "tool_output_id": "output-2",
+            "tool_name": "EvtxECmd",
+            "source_csv": tmp_path / "Security.csv",
+            "row_number": 1,
+            "time_created": "2026-05-12T13:21:00Z",
+            "event_id": "4688",
+            "provider": "Microsoft-Windows-Security-Auditing",
+            "channel": "Security",
+            "computer": "DESKTOP",
+            "map_description": "A new process has been created",
+            "executable_info": "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
+            "payload_data1": "powershell.exe -NoP -EncodedCommand SQBFAFgA",
+        }
+    ]
+    db.insert_prefetch_items(prefetch_rows)
+    db.insert_evtx_events(evtx_rows)
+    db.insert_timeline_events(timeline_events_from_rows(prefetch_rows + evtx_rows))
+
+    report = suspicious_executions_report(db, case.id, limit=10)
+
+    categories = {row["category"] for row in report["findings"]}
+    assert "unusual_execution_location" in categories
+    assert "secure_deletion_wiping" in categories
+    assert "suspicious_command_or_lolbin" in categories
+    assert any(row["application"] == "PAYLOAD.EXE" for row in report["findings"])
+    assert any("sdelete" in row["matched_rules"] for row in report["findings"])
+    assert any("-encodedcommand" in row["matched_rules"] for row in report["findings"])
+    assert any(row.get("nearby_context") for row in report["findings"])
+    assert "Suspicious Executions" in suspicious_executions_markdown(report)
+
+    triage = investigation_triage_dashboard_report(db, case.id, limit=10)
+    triage_card_ids = {card["id"] for card in triage["cards"]}
+    triage_markdown = investigation_triage_dashboard_markdown(triage)
+    assert "suspicious_executions" in triage_card_ids
+    assert triage["summary"]["suspicious_execution_findings"] >= 3
+    assert any(row["category"] == "unusual_execution_location" for row in triage["top_suspicious_executions"])
+    assert "Top Suspicious Executions" in triage_markdown
 
 
 def test_userassist_reports_include_corroboration_caveat(tmp_path):
