@@ -6,6 +6,7 @@ import hashlib
 import re
 import shutil
 import subprocess
+from collections.abc import Iterator
 from pathlib import Path
 
 
@@ -35,15 +36,23 @@ def scan_memory_strings_to_csv(
     scanned_path = source
     decompressed_path = ""
     decompress_status = "not_applicable"
+    decompress_error = ""
+    hiberfil_status = "not_applicable"
+    hiberfil_note = ""
     if decompress_hiberfil and source.name.lower() == "hiberfil.sys":
+        hiberfil_status, hiberfil_note = assess_hiberfil_source(source)
         target = output_dir / "hiberfil.decompressed.bin"
         decompressed = decompress_hiberfil_candidate(source, target)
         decompress_status = decompressed["status"]
+        decompress_error = decompressed.get("error", "")
         if decompressed.get("path"):
             scanned_path = Path(decompressed["path"])
             decompressed_path = str(scanned_path)
+        elif hiberfil_status == "zeroed_or_inactive":
+            scanned_path = None
     output = output_dir / "MemoryStringScanner.csv"
     scanner = "bstrings" if _bstrings_command() else "strings"
+    term_file = _write_bstrings_terms(output_dir, terms) if scanner == "bstrings" else None
     with output.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(
             handle,
@@ -64,18 +73,33 @@ def scan_memory_strings_to_csv(
             ],
         )
         writer.writeheader()
-        for row in iter_string_hits(scanned_path, scanner=scanner, terms=terms, min_length=min_length, context_limit=context_limit):
-            row.update(
-                {
-                    "source_artifact_type": memory_artifact_type(source),
-                    "source_path": str(source),
-                    "scanned_path": str(scanned_path),
-                    "decompressed_path": decompressed_path,
-                    "scanner": scanner,
-                }
-            )
-            writer.writerow(row)
-    return output, {"scanner": scanner, "decompress_status": decompress_status, "scanned_path": str(scanned_path)}
+        if scanned_path is not None:
+            for row in iter_string_hits(
+                scanned_path,
+                scanner=scanner,
+                terms=terms,
+                min_length=min_length,
+                context_limit=context_limit,
+                term_file=term_file,
+            ):
+                row.update(
+                    {
+                        "source_artifact_type": memory_artifact_type(source),
+                        "source_path": str(source),
+                        "scanned_path": str(scanned_path),
+                        "decompressed_path": decompressed_path,
+                        "scanner": scanner,
+                    }
+                )
+                writer.writerow(row)
+    return output, {
+        "scanner": scanner,
+        "decompress_status": decompress_status,
+        "decompress_error": decompress_error,
+        "hiberfil_status": hiberfil_status,
+        "hiberfil_note": hiberfil_note,
+        "scanned_path": str(scanned_path or source),
+    }
 
 
 def decompress_hiberfil_candidate(source: Path, target: Path) -> dict[str, str]:
@@ -105,6 +129,37 @@ def decompress_hiberfil_candidate(source: Path, target: Path) -> dict[str, str]:
     return {"status": "decompressor_unavailable_or_failed", "error": locals().get("last_error", "no supported hiberfil decompressor found")}
 
 
+def assess_hiberfil_source(source: Path, *, sample_size: int = 4096) -> tuple[str, str]:
+    try:
+        size = source.stat().st_size
+    except OSError as exc:
+        return "unreadable", str(exc)
+    if size == 0:
+        return "empty", "hiberfil.sys is zero bytes."
+    offsets = [0, min(0x1000, max(size - sample_size, 0))]
+    if size > sample_size:
+        offsets.extend([size // 4, size // 2, (size * 3) // 4, max(size - sample_size, 0)])
+    nonzero_samples = 0
+    first = b""
+    try:
+        with source.open("rb") as handle:
+            for offset in dict.fromkeys(offsets):
+                handle.seek(offset)
+                data = handle.read(sample_size)
+                if offset == 0:
+                    first = data
+                if any(data):
+                    nonzero_samples += 1
+    except OSError as exc:
+        return "unreadable", str(exc)
+    header = first[:16]
+    if header.startswith((b"hibr", b"HIBR", b"wake", b"WAKE", b"RSTR")):
+        return "active_hibernation_header", f"hiberfil.sys has a recognized hibernation signature: {header[:4]!r}."
+    if nonzero_samples == 0:
+        return "zeroed_or_inactive", "Sampled hiberfil.sys regions are all zeroed; no active hibernation payload was detected."
+    return "unknown_or_compressed", "hiberfil.sys has non-zero data but no recognized active hibernation header in sampled regions."
+
+
 def _hibr2bin_command() -> list[str] | None:
     explicit = os.environ.get("HIBR2BIN_BIN")
     candidates = [explicit] if explicit else []
@@ -113,6 +168,7 @@ def _hibr2bin_command() -> list[str] | None:
         if found:
             candidates.append(found)
     for candidate in (
+        "/home/lee/tools/Hibr2Bin-linux/hibr2bin-linux",
         "/home/lee/tools/Hibr2Bin-build/Hibr2Bin.exe",
         "/home/lee/tools/Hibr2Bin/Hibr2Bin.exe",
     ):
@@ -147,28 +203,10 @@ def iter_string_hits(
     terms: dict[str, tuple[str, ...]],
     min_length: int,
     context_limit: int,
-) -> list[dict[str, str]]:
-    outputs = []
-    if scanner == "bstrings":
-        command = _bstrings_command()
-        if command:
-            with source.open("rb") as handle:
-                completed = subprocess.run(
-                    [*command, "-m", str(min_length), "--off", "-q"],
-                    stdin=handle,
-                    capture_output=True,
-                    text=True,
-                    errors="replace",
-                    check=False,
-                )
-            outputs.append(completed.stdout)
-    else:
-        for command in _scanner_commands(scanner, source, min_length):
-            completed = subprocess.run(command, capture_output=True, text=True, errors="replace", check=False)
-            outputs.append(completed.stdout)
-    hits = []
+    term_file: Path | None = None,
+) -> Iterator[dict[str, str]]:
     seen: set[tuple[str, str, str]] = set()
-    for line in "\n".join(outputs).splitlines():
+    for line in _iter_scanner_lines(source, scanner=scanner, min_length=min_length, term_file=term_file):
         offset, text = _split_offset(line, scanner)
         lowered = text.lower()
         for category, needles in terms.items():
@@ -180,19 +218,60 @@ def iter_string_hits(
                 if key in seen:
                     continue
                 seen.add(key)
-                hits.append(
-                    {
-                        "encoding": "utf-8/utf-16le",
-                        "hit_category": category,
-                        "matched_term": term,
-                        "string_value": value,
-                        "string_sha256": key[2],
-                        "string_length": str(len(text)),
-                        "offset": offset,
-                        "context_hint": _context_hint(text),
-                    }
-                )
-    return hits
+                yield {
+                    "encoding": "utf-8/utf-16le",
+                    "hit_category": category,
+                    "matched_term": term,
+                    "string_value": value,
+                    "string_sha256": key[2],
+                    "string_length": str(len(text)),
+                    "offset": offset,
+                    "context_hint": _context_hint(text),
+                }
+
+
+def _iter_scanner_lines(source: Path, *, scanner: str, min_length: int, term_file: Path | None = None) -> Iterator[str]:
+    if scanner == "bstrings":
+        command = _bstrings_command()
+        if not command:
+            return
+        bstrings_args = [*command, "-m", str(min_length), "-b", "64", "--off", "-q"]
+        if term_file:
+            bstrings_args.extend(["--fs", str(term_file)])
+        with source.open("rb") as handle:
+            process = subprocess.Popen(
+                bstrings_args,
+                stdin=handle,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                errors="replace",
+            )
+            assert process.stdout is not None
+            for line in process.stdout:
+                yield line.rstrip("\n")
+            process.wait()
+        return
+    for command in _scanner_commands(scanner, source, min_length):
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            errors="replace",
+        )
+        assert process.stdout is not None
+        for line in process.stdout:
+            yield line.rstrip("\n")
+        process.wait()
+
+
+def _write_bstrings_terms(output_dir: Path, terms: dict[str, tuple[str, ...]]) -> Path:
+    term_file = output_dir / "MemoryStringTerms.txt"
+    all_terms = {term for needles in terms.values() for term in needles}
+    unique_terms = sorted(all_terms | {term.lower() for term in all_terms})
+    term_file.write_text("\n".join(unique_terms) + "\n", encoding="utf-8")
+    return term_file
 
 
 def memory_artifact_type(source: Path) -> str:

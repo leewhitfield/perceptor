@@ -16987,6 +16987,452 @@ def memory_string_hits_report(db: Database, case_id: str, *, limit: int = 100) -
     }
 
 
+def memory_credentials_report(db: Database, case_id: str, *, limit: int = 100, reveal: bool = False) -> dict[str, Any]:
+    db.get_case(case_id)
+    rows = _query_report_rows(
+        db,
+        case_id,
+        "memory_string_hits",
+        """
+        SELECT *
+        FROM memory_string_hits
+        WHERE case_id = ?
+          AND hit_category = 'credentials'
+        ORDER BY source_artifact_type, source_path, CAST(COALESCE("offset", '0') AS BIGINT)
+        LIMIT ?
+        """,
+        (case_id, max(limit * 10, limit)),
+    )
+    reviewed: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        assessment = _assess_memory_credential_hit(item.get("string_value"), item.get("matched_term"))
+        item.update(assessment)
+        item["display_value"] = item.get("string_value") if reveal else _redact_memory_credential(item.get("string_value"))
+        reviewed.append(item)
+    reviewed = _dedupe_memory_credentials(reviewed)[:limit]
+    return {
+        "case_id": case_id,
+        "summary": {
+            "credential_hit_count": _report_table_count_where(db, case_id, "memory_string_hits", "hit_category = ?", ("credentials",)),
+            "likely_usable_count": sum(1 for row in reviewed if row.get("credential_status") == "likely_usable_secret"),
+            "possible_secret_count": sum(1 for row in reviewed if row.get("credential_status") == "possible_secret"),
+            "false_positive_or_label_count": sum(1 for row in reviewed if row.get("credential_status") == "label_or_false_positive"),
+        },
+        "credentials": reviewed,
+        "total_returned": len(reviewed),
+        "caveats": [
+            "Credential string hits are memory artifacts and must be validated before use or reporting as active credentials.",
+            "Values are redacted by default; use reveal only in controlled examiner output.",
+            "PublicKeyToken, CancellationToken, UI labels, and configuration words are not usable credentials.",
+        ],
+    }
+
+
+def memory_credentials_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    lines = [
+        "# Memory Credential Review",
+        "",
+        f"Case: `{report.get('case_id') or ''}`",
+        "",
+        "## Summary",
+        "",
+        f"- Credential string hits: `{summary.get('credential_hit_count', 0)}`",
+        f"- Likely usable secrets: `{summary.get('likely_usable_count', 0)}`",
+        f"- Possible secrets: `{summary.get('possible_secret_count', 0)}`",
+        f"- Labels/false positives: `{summary.get('false_positive_or_label_count', 0)}`",
+        "",
+        "## Reviewed Hits",
+        "",
+    ]
+    rows = report.get("credentials") if isinstance(report.get("credentials"), list) else []
+    if not rows:
+        lines.append("- No memory credential hits were imported.")
+    for row in rows:
+        lines.append(
+            f"- `{row.get('credential_status') or ''}` `{row.get('matched_term') or ''}` "
+            f"source `{row.get('source_artifact_type') or ''}` offset `{row.get('offset') or ''}` "
+            f"value `{row.get('display_value') or ''}` reason: {row.get('credential_reason') or ''}"
+        )
+    lines.extend(["", "## Caveats", ""])
+    for caveat in report.get("caveats") or []:
+        lines.append(f"- {caveat}")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def memory_disk_correlations_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str, Any]:
+    db.get_case(case_id)
+    memory_hits = _query_report_rows(
+        db,
+        case_id,
+        "memory_string_hits",
+        """
+        SELECT id, case_id, computer_id, image_id, source_artifact_type, source_path,
+               hit_category, matched_term, string_value, string_sha256, "offset", context_hint
+        FROM memory_string_hits
+        WHERE case_id = ?
+        ORDER BY hit_category, source_artifact_type, source_path
+        LIMIT ?
+        """,
+        (case_id, max(limit * 20, 1000)),
+    )
+    disk_refs = _memory_disk_reference_rows(db, case_id, max_rows=5000)
+    correlations: list[dict[str, Any]] = []
+    for hit in memory_hits:
+        extracted = _memory_extracted_indicators(hit.get("string_value"))
+        for ref in disk_refs:
+            match = _memory_disk_match(extracted, ref)
+            if not match:
+                continue
+            correlations.append(
+                {
+                    "memory_hit_id": hit.get("id"),
+                    "source_artifact_type": hit.get("source_artifact_type"),
+                    "memory_source_path": hit.get("source_path"),
+                    "hit_category": hit.get("hit_category"),
+                    "matched_term": hit.get("matched_term"),
+                    "memory_offset": hit.get("offset"),
+                    "memory_context": hit.get("context_hint"),
+                    "disk_table": ref.get("source_table"),
+                    "disk_row_id": ref.get("source_row_id"),
+                    "disk_artifact_family": ref.get("artifact_family"),
+                    "disk_label": ref.get("label"),
+                    "disk_path": ref.get("path"),
+                    "disk_url": ref.get("url"),
+                    "disk_email": ref.get("email"),
+                    "match_type": match["match_type"],
+                    "match_value": match["match_value"],
+                    "confidence": match["confidence"],
+                }
+            )
+    correlations = _dedupe_memory_disk_correlations(correlations)[:limit]
+    return {
+        "case_id": case_id,
+        "summary": {
+            "memory_hit_count": _report_table_count(db, case_id, "memory_string_hits"),
+            "disk_reference_count": len(disk_refs),
+            "correlation_count": len(correlations),
+            "families": _count_by_key(correlations, "disk_artifact_family"),
+            "match_types": _count_by_key(correlations, "match_type"),
+        },
+        "correlations": correlations,
+        "total_returned": len(correlations),
+        "caveats": [
+            "This report dedupes memory-to-disk matches by artifact family, disk row, match type, and match value.",
+            "Memory evidence corroborates that strings existed in memory or support files; it does not prove user action by itself.",
+            "Credential-looking memory hits are reviewed separately because most token/password term hits are labels, code names, or public metadata.",
+        ],
+    }
+
+
+def memory_disk_correlations_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    lines = [
+        "# Memory and Disk Correlations",
+        "",
+        f"Case: `{report.get('case_id') or ''}`",
+        "",
+        "## Summary",
+        "",
+        f"- Memory string hits: `{summary.get('memory_hit_count', 0)}`",
+        f"- Disk references considered: `{summary.get('disk_reference_count', 0)}`",
+        f"- Deduped correlations returned: `{summary.get('correlation_count', 0)}`",
+        "",
+        "## Correlations",
+        "",
+    ]
+    rows = report.get("correlations") if isinstance(report.get("correlations"), list) else []
+    if not rows:
+        lines.append("- No memory strings were correlated to imported disk artifacts.")
+    for row in rows:
+        disk_value = row.get("disk_path") or row.get("disk_url") or row.get("disk_email") or row.get("disk_label") or ""
+        lines.append(
+            f"- `{row.get('disk_artifact_family') or ''}` `{row.get('match_type') or ''}` "
+            f"`{row.get('match_value') or ''}` confidence `{row.get('confidence') or ''}` "
+            f"memory `{row.get('source_artifact_type') or ''}` -> `{row.get('disk_table') or ''}` `{disk_value}`"
+        )
+    lines.extend(["", "## Caveats", ""])
+    for caveat in report.get("caveats") or []:
+        lines.append(f"- {caveat}")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+_MEMORY_CREDENTIAL_ASSIGNMENT_RE = re.compile(
+    r"(?i)\b(?P<name>password|passwd|pwd|token|bearer|refresh_token|credential|secret|apikey|api_key)"
+    r"[\w .:/\\-]{0,32}(?:=|:)\s*[\"']?(?P<secret>[A-Za-z0-9._~+/=-]{4,})"
+)
+_MEMORY_BEARER_RE = re.compile(r"(?i)\bbearer\s+(?P<secret>[A-Za-z0-9._~+/=-]{12,})")
+_MEMORY_EMAIL_RE = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
+_MEMORY_URL_RE = re.compile(r"(?i)\bhttps?://[^\s\"'<>]+")
+_MEMORY_WINDOWS_PATH_RE = re.compile(r"(?i)(?:[A-Z]:\\|\\\\|\\Users\\|/Users/)[^\s\"'<>|]{4,}")
+
+
+def _assess_memory_credential_hit(value: Any, matched_term: Any) -> dict[str, str]:
+    text = str(value or "")
+    lowered = text.lower()
+    if not text.strip():
+        return {"credential_status": "label_or_false_positive", "credential_reason": "Empty memory string."}
+    false_positive_terms = (
+        "publickeytoken",
+        "cancellationtoken",
+        "securitytokenreference",
+        "tokenbinding",
+        "passwordchar",
+        "passwordbox",
+        "credential provider",
+        "credentialprovider",
+        "credential manager",
+    )
+    if any(term in lowered for term in false_positive_terms):
+        return {"credential_status": "label_or_false_positive", "credential_reason": "Known token/password label or API type, not a secret value."}
+    assignment = _MEMORY_CREDENTIAL_ASSIGNMENT_RE.search(text) or _MEMORY_BEARER_RE.search(text)
+    if assignment:
+        secret = assignment.group("secret")
+        if _memory_secret_is_placeholder(secret):
+            return {"credential_status": "label_or_false_positive", "credential_reason": "Credential assignment value is a common placeholder or field name."}
+        if len(secret) >= 12 or str(matched_term or "").lower() in {"password", "passwd", "pwd=", "refresh_token", "bearer "}:
+            return {"credential_status": "likely_usable_secret", "credential_reason": "Credential keyword is paired with an assigned value or bearer token."}
+        return {"credential_status": "possible_secret", "credential_reason": "Credential keyword has an assigned value but the value is short."}
+    if re.search(r"(?i)\b(token|password|passwd|credential)\b", text):
+        return {"credential_status": "possible_secret", "credential_reason": "Credential keyword present without a clear extractable value."}
+    return {"credential_status": "label_or_false_positive", "credential_reason": "No clear credential assignment pattern was found."}
+
+
+def _redact_memory_credential(value: Any) -> str:
+    text = str(value or "")
+    if not text:
+        return ""
+    redacted = _MEMORY_CREDENTIAL_ASSIGNMENT_RE.sub(lambda match: f"{match.group('name')}=<redacted:{_short_hash(match.group('secret'))}>", text)
+    redacted = _MEMORY_BEARER_RE.sub(lambda match: f"Bearer <redacted:{_short_hash(match.group('secret'))}>", redacted)
+    if redacted != text:
+        return redacted[:240]
+    return f"<redacted-context:{_short_hash(text)}>"
+
+
+def _memory_secret_is_placeholder(value: Any) -> bool:
+    text = str(value or "").strip().strip("\"'").casefold()
+    if not text:
+        return True
+    placeholders = {
+        "password",
+        "passwd",
+        "pwd",
+        "token",
+        "bearer",
+        "credential",
+        "secret",
+        "changeme",
+        "example",
+        "sample",
+        "null",
+        "none",
+        "undefined",
+        "true",
+        "false",
+    }
+    return text in placeholders or bool(re.fullmatch(r"(x+|\*+|#+|0+|1+|a+|test|dummy)", text))
+
+
+def _short_hash(value: Any) -> str:
+    return hashlib.sha256(str(value or "").encode("utf-8", errors="replace")).hexdigest()[:12]
+
+
+def _dedupe_memory_credentials(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[tuple[str, str, str, str]] = set()
+    output: list[dict[str, Any]] = []
+    for row in rows:
+        key = (
+            str(row.get("credential_status") or ""),
+            str(row.get("matched_term") or "").casefold(),
+            str(row.get("string_sha256") or _short_hash(row.get("string_value"))),
+            str(row.get("source_artifact_type") or ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(row)
+    status_order = {"likely_usable_secret": 0, "possible_secret": 1, "label_or_false_positive": 2}
+    output.sort(key=lambda row: (status_order.get(str(row.get("credential_status") or ""), 9), str(row.get("source_artifact_type") or ""), str(row.get("offset") or "")))
+    return output
+
+
+def _memory_extracted_indicators(value: Any) -> dict[str, list[str]]:
+    text = str(value or "")
+    paths = [_normalize_memory_path(match.group(0)) for match in _MEMORY_WINDOWS_PATH_RE.finditer(text)]
+    urls = [_normalize_memory_url(match.group(0)) for match in _MEMORY_URL_RE.finditer(text)]
+    emails = [match.group(0).casefold() for match in _MEMORY_EMAIL_RE.finditer(text)]
+    domains = [_domain_from_url(url) for url in urls]
+    domains.extend(email.rsplit("@", 1)[-1] for email in emails if "@" in email)
+    return {
+        "paths": _unique_nonempty(paths),
+        "urls": _unique_nonempty(urls),
+        "emails": _unique_nonempty(emails),
+        "domains": _unique_nonempty(domains),
+    }
+
+
+def _memory_disk_reference_rows(db: Database, case_id: str, *, max_rows: int) -> list[dict[str, Any]]:
+    specs = [
+        ("mft_entries", "file", "id", "file_name", "coalesce(parent_path, '') || '/' || coalesce(file_name, '')", "NULL", "NULL"),
+        ("usn_journal_entries", "file", "id", "file_name", "full_path", "NULL", "NULL"),
+        ("windows_search_files", "windows_search", "id", "file_name", "item_path", "item_url", "NULL"),
+        ("windows_search_gather_logs", "windows_search", "id", "source_name", "item_path", "item_url", "NULL"),
+        ("windows_search_email_indicators", "email", "id", "context_title", "context_path", "NULL", "email"),
+        ("browser_history", "browser", "id", "title", "source_path", "url", "NULL"),
+        ("browser_downloads", "browser", "id", "browser", "target_path", "coalesce(tab_url, site_url, referrer)", "NULL"),
+        ("browser_artifacts", "browser", "id", "name", "coalesce(local_path, source_path)", "url", "NULL"),
+        ("webcache_file_accesses", "browser", "id", "file_name", "normalized_path", "url", "NULL"),
+        ("cloud_sync_artifacts", "cloud", "id", "coalesce(file_name, source_name)", "coalesce(local_path, cloud_path, server_path, source_path)", "url", "NULL"),
+        ("onedrive_items", "cloud", "id", "name", "path", "NULL", "account"),
+        ("mailbox_messages", "email", "id", "subject", "coalesce(message_path, source_path)", "NULL", "sender"),
+        ("mailbox_attachments", "email", "id", "attachment_name", "coalesce(message_path, source_path)", "NULL", "sender"),
+    ]
+    refs: list[dict[str, Any]] = []
+    per_table_limit = max(50, max_rows // max(len(specs), 1))
+    for table, family, row_id, label, path_expr, url_expr, email_expr in specs:
+        if not _table_exists(db, table) and not _duckdb_table_available(db, case_id, table):
+            continue
+        columns = _report_table_columns(db, case_id, table)
+        if not columns:
+            continue
+        safe_exprs = {
+            "source_row_id": _safe_report_expr(row_id, columns),
+            "label": _safe_report_expr(label, columns),
+            "path": _safe_report_expr(path_expr, columns),
+            "url": _safe_report_expr(url_expr, columns),
+            "email": _safe_report_expr(email_expr, columns),
+        }
+        rows = _query_report_rows(
+            db,
+            case_id,
+            table,
+            f"""
+            SELECT {safe_exprs['source_row_id']} AS source_row_id,
+                   {safe_exprs['label']} AS label,
+                   {safe_exprs['path']} AS path,
+                   {safe_exprs['url']} AS url,
+                   {safe_exprs['email']} AS email
+            FROM {_quote_identifier(table)}
+            WHERE case_id = ?
+            LIMIT ?
+            """,
+            (case_id, per_table_limit),
+        )
+        for row in rows:
+            refs.append(
+                {
+                    "source_table": table,
+                    "artifact_family": family,
+                    "source_row_id": row.get("source_row_id"),
+                    "label": row.get("label"),
+                    "path": row.get("path"),
+                    "url": row.get("url"),
+                    "email": row.get("email"),
+                    "normalized_path": _normalize_memory_path(row.get("path")),
+                    "normalized_url": _normalize_memory_url(row.get("url")),
+                    "normalized_email": str(row.get("email") or "").casefold(),
+                    "domain": _domain_from_url(row.get("url")) or _domain_from_email(row.get("email")),
+                }
+            )
+    return refs[:max_rows]
+
+
+def _safe_report_expr(expr: str, columns: set[str]) -> str:
+    if expr == "NULL":
+        return "NULL"
+    for column in re.findall(r"\b[A-Za-z_][A-Za-z0-9_]*\b", expr):
+        if column.lower() in {"coalesce", "concat", "null"}:
+            continue
+        if column not in columns:
+            return "NULL"
+    return expr
+
+
+def _memory_disk_match(indicators: dict[str, list[str]], ref: dict[str, Any]) -> dict[str, str] | None:
+    ref_path = str(ref.get("normalized_path") or "")
+    for path in indicators.get("paths") or []:
+        if path and ref_path and (path == ref_path or path.endswith("/" + _basename(ref_path) if _basename(ref_path) else "\x00") or ref_path.endswith("/" + _basename(path) if _basename(path) else "\x00")):
+            return {"match_type": "path", "match_value": path, "confidence": "high" if path == ref_path else "medium"}
+    ref_url = str(ref.get("normalized_url") or "")
+    for url in indicators.get("urls") or []:
+        if url and ref_url and (url == ref_url or url.rstrip("/") == ref_url.rstrip("/")):
+            return {"match_type": "url", "match_value": url, "confidence": "high"}
+    ref_email = str(ref.get("normalized_email") or "")
+    for email in indicators.get("emails") or []:
+        if email and ref_email and email == ref_email:
+            return {"match_type": "email", "match_value": email, "confidence": "high"}
+    ref_domain = str(ref.get("domain") or "")
+    for domain in indicators.get("domains") or []:
+        if domain and ref_domain and domain == ref_domain:
+            return {"match_type": "domain", "match_value": domain, "confidence": "medium"}
+    return None
+
+
+def _normalize_memory_path(value: Any) -> str:
+    text = str(value or "").strip().strip(".,;:)]}'\"")
+    if not text:
+        return ""
+    text = unquote(text).replace("\\", "/")
+    text = re.sub(r"^[A-Za-z]:", "", text)
+    text = re.sub(r"^/+", "/", text)
+    return text.casefold()
+
+
+def _normalize_memory_url(value: Any) -> str:
+    text = str(value or "").strip().strip(".,;:)]}'\"")
+    if not text:
+        return ""
+    return unquote(text).casefold()
+
+
+def _domain_from_url(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = urlparse(text if "://" in text else f"https://{text}")
+    except ValueError:
+        return ""
+    return (parsed.hostname or "").casefold()
+
+
+def _domain_from_email(value: Any) -> str:
+    text = str(value or "")
+    return text.rsplit("@", 1)[-1].casefold() if "@" in text else ""
+
+
+def _unique_nonempty(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    output: list[str] = []
+    for value in values:
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        output.append(value)
+    return output
+
+
+def _dedupe_memory_disk_correlations(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[tuple[str, str, str, str, str]] = set()
+    output: list[dict[str, Any]] = []
+    for row in rows:
+        key = (
+            str(row.get("disk_artifact_family") or ""),
+            str(row.get("disk_table") or ""),
+            str(row.get("match_type") or ""),
+            str(row.get("match_value") or ""),
+            str(row.get("disk_path") or row.get("disk_url") or row.get("disk_email") or row.get("disk_label") or ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(row)
+    confidence_order = {"high": 0, "medium": 1, "low": 2}
+    output.sort(key=lambda row: (confidence_order.get(str(row.get("confidence") or ""), 9), str(row.get("disk_artifact_family") or ""), str(row.get("match_type") or "")))
+    return output
+
+
 def _memory_tool_availability() -> list[dict[str, str]]:
     tools = [
         ("memprocfs", ("memprocfs", "MemProcFS")),

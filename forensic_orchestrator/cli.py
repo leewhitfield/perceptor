@@ -122,6 +122,10 @@ from .reports import (
     memory_analysis_report,
     memory_artifacts_markdown,
     memory_artifacts_report,
+    memory_credentials_markdown,
+    memory_credentials_report,
+    memory_disk_correlations_markdown,
+    memory_disk_correlations_report,
     memory_string_hits_report,
     windows_search_combined_markdown,
     windows_search_combined_report,
@@ -1739,6 +1743,17 @@ def build_parser() -> argparse.ArgumentParser:
     report_memory_analysis.add_argument("--limit", type=int, default=100)
     report_memory_analysis.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
     report_memory_analysis.add_argument("--output")
+    report_memory_credentials = report_sub.add_parser("memory-credentials")
+    report_memory_credentials.add_argument("--case", required=True, dest="case_id")
+    report_memory_credentials.add_argument("--limit", type=int, default=100)
+    report_memory_credentials.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
+    report_memory_credentials.add_argument("--output")
+    report_memory_credentials.add_argument("--reveal", action="store_true", help="Include unredacted memory strings in the report output")
+    report_memory_disk = report_sub.add_parser("memory-disk-correlations")
+    report_memory_disk.add_argument("--case", required=True, dest="case_id")
+    report_memory_disk.add_argument("--limit", type=int, default=100)
+    report_memory_disk.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
+    report_memory_disk.add_argument("--output")
     report_cloud_server = report_sub.add_parser("cloud-server-events")
     report_cloud_server.add_argument("--case", required=True, dest="case_id")
     report_cloud_server.add_argument("--limit", type=int, default=100)
@@ -3312,6 +3327,36 @@ def run(args: argparse.Namespace) -> int:
                     args.output,
                     title=f"Memory processing and analysis for case {args.case_id}",
                     columns=["severity", "category", "title", "summary"],
+                )
+            return 0
+
+        if args.resource == "report" and args.action == "memory-credentials":
+            report = memory_credentials_report(db, args.case_id, limit=args.limit, reveal=args.reveal)
+            if args.format == "md":
+                write_text_output(memory_credentials_markdown(report), args.output)
+            else:
+                write_report_output(
+                    report,
+                    report["credentials"],
+                    args.format,
+                    args.output,
+                    title=f"Memory credential review for case {args.case_id}",
+                    columns=["credential_status", "matched_term", "display_value", "source_artifact_type", "offset", "credential_reason"],
+                )
+            return 0
+
+        if args.resource == "report" and args.action == "memory-disk-correlations":
+            report = memory_disk_correlations_report(db, args.case_id, limit=args.limit)
+            if args.format == "md":
+                write_text_output(memory_disk_correlations_markdown(report), args.output)
+            else:
+                write_report_output(
+                    report,
+                    report["correlations"],
+                    args.format,
+                    args.output,
+                    title=f"Memory and disk correlations for case {args.case_id}",
+                    columns=["disk_artifact_family", "match_type", "match_value", "confidence", "source_artifact_type", "disk_table", "disk_path", "disk_url", "disk_email"],
                 )
             return 0
 

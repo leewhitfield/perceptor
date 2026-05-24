@@ -66,6 +66,10 @@ from forensic_orchestrator.reports import (
     memory_analysis_report,
     memory_artifacts_markdown,
     memory_artifacts_report,
+    memory_credentials_markdown,
+    memory_credentials_report,
+    memory_disk_correlations_markdown,
+    memory_disk_correlations_report,
     messaging_artifacts_report,
     mft_report,
     office_trust_report,
@@ -416,6 +420,166 @@ def test_memory_analysis_report_combines_workflow_hits_and_search_limitation(tmp
     assert any(row["category"] == "windows_search" for row in report["findings"])
     assert "Memory Processing and Analysis" in markdown
     assert "collect RAM while the user is logged in" in markdown
+
+
+def test_memory_credentials_report_classifies_and_redacts_usable_secrets(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    db.insert_tool_output(
+        {
+            "id": "memory-output-1",
+            "case_id": case.id,
+            "computer_id": "computer-1",
+            "image_id": "image-1",
+            "job_id": None,
+            "tool_name": "MemoryStringScanner",
+            "output_type": "csv",
+            "path": tmp_path / "MemoryStringScanner.csv",
+            "row_count": 2,
+        }
+    )
+    db.insert_memory_string_hits(
+        [
+            {
+                "id": "mem-hit-1",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "memory-output-1",
+                "tool_name": "MemoryStringScanner",
+                "source_csv": str(tmp_path / "MemoryStringScanner.csv"),
+                "row_number": 1,
+                "source_artifact_type": "pagefile",
+                "source_path": "/pagefile.sys",
+                "scanned_path": "/pagefile.sys",
+                "scanner": "strings",
+                "encoding": "utf-8",
+                "hit_category": "credentials",
+                "matched_term": "token",
+                "string_value": "refresh_token=abc1234567890",
+                "string_sha256": "sha1",
+                "string_length": 26,
+                "offset": "10",
+                "context_hint": "",
+            },
+            {
+                "id": "mem-hit-2",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "memory-output-1",
+                "tool_name": "MemoryStringScanner",
+                "source_csv": str(tmp_path / "MemoryStringScanner.csv"),
+                "row_number": 2,
+                "source_artifact_type": "swapfile",
+                "source_path": "/swapfile.sys",
+                "scanned_path": "/swapfile.sys",
+                "scanner": "strings",
+                "encoding": "utf-8",
+                "hit_category": "credentials",
+                "matched_term": "token",
+                "string_value": "PublicKeyToken=b77a5c561934e089",
+                "string_sha256": "sha2",
+                "string_length": 31,
+                "offset": "20",
+                "context_hint": "",
+            },
+        ]
+    )
+
+    report = memory_credentials_report(db, case.id, limit=10)
+    markdown = memory_credentials_markdown(report)
+
+    assert report["summary"]["likely_usable_count"] == 1
+    assert report["summary"]["false_positive_or_label_count"] == 1
+    assert "abc1234567890" not in markdown
+    assert "Memory Credential Review" in markdown
+
+
+def test_memory_disk_correlations_report_dedupes_memory_path_matches(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    db.insert_tool_output(
+        {
+            "id": "memory-output-1",
+            "case_id": case.id,
+            "computer_id": "computer-1",
+            "image_id": "image-1",
+            "job_id": None,
+            "tool_name": "MemoryStringScanner",
+            "output_type": "csv",
+            "path": tmp_path / "MemoryStringScanner.csv",
+            "row_count": 1,
+        }
+    )
+    db.insert_tool_output(
+        {
+            "id": "mft-output-1",
+            "case_id": case.id,
+            "computer_id": "computer-1",
+            "image_id": "image-1",
+            "job_id": None,
+            "tool_name": "MFTECmd",
+            "output_type": "csv",
+            "path": tmp_path / "MFT.csv",
+            "row_count": 1,
+        }
+    )
+    db.insert_memory_string_hits(
+        [
+            {
+                "id": "mem-hit-1",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "memory-output-1",
+                "tool_name": "MemoryStringScanner",
+                "source_csv": str(tmp_path / "MemoryStringScanner.csv"),
+                "row_number": 1,
+                "source_artifact_type": "pagefile",
+                "source_path": "/pagefile.sys",
+                "scanned_path": "/pagefile.sys",
+                "scanner": "strings",
+                "encoding": "utf-8",
+                "hit_category": "paths",
+                "matched_term": "c:\\users\\",
+                "string_value": r"C:\Users\Maya\Documents\report.docx",
+                "string_sha256": "sha1",
+                "string_length": 34,
+                "offset": "10",
+                "context_hint": "",
+            }
+        ]
+    )
+    db.insert_mft_entries(
+        [
+            {
+                "id": "mft-1",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "mft-output-1",
+                "tool_name": "MFTECmd",
+                "source_csv": str(tmp_path / "MFT.csv"),
+                "row_number": 1,
+                "parent_path": "/Users/Maya/Documents",
+                "file_name": "report.docx",
+                "file_size": "1024",
+            }
+        ]
+    )
+
+    report = memory_disk_correlations_report(db, case.id, limit=10)
+    markdown = memory_disk_correlations_markdown(report)
+
+    assert report["summary"]["correlation_count"] == 1
+    assert report["correlations"][0]["match_type"] == "path"
+    assert report["correlations"][0]["disk_table"] == "mft_entries"
+    assert "Memory and Disk Correlations" in markdown
 
 
 def test_storage_policy_report_counts_content_heavy_tables_and_output_files(tmp_path):
