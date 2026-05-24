@@ -18,10 +18,10 @@ class StoragePolicyItem:
         return value
 
 
-SQLITE_POLICY = StoragePolicyItem(
+DUCKDB_POLICY = StoragePolicyItem(
     name="normalized_facts",
-    storage="sqlite",
-    purpose="Auditable case system of record for structured artifact facts, provenance, dedupe keys, and report-ready relationships.",
+    storage="duckdb",
+    purpose="Auditable analytics store for structured artifact facts, provenance, dedupe keys, and report-ready relationships.",
     examples=(
         "mft_entries",
         "usn_journal_entries",
@@ -30,7 +30,23 @@ SQLITE_POLICY = StoragePolicyItem(
         "cloud_sync_artifacts",
         "file_correlations",
     ),
-    rule="Use explicit columns for fields that are queried, joined, filtered, sorted, or shown in reports.",
+    rule="Use explicit columns for fields that are queried, joined, filtered, sorted, or shown in reports. Do not stage parsed rows through SQLite.",
+)
+
+SQLITE_POLICY = StoragePolicyItem(
+    name="orchestration_metadata",
+    storage="sqlite",
+    purpose="Small case-control database for cases, images, mounts, jobs, tool outputs, timings, activity logs, and run state.",
+    examples=(
+        "cases",
+        "images",
+        "mounts",
+        "jobs",
+        "tool_outputs",
+        "process_timings",
+        "activity_log",
+    ),
+    rule="Keep SQLite limited to orchestration and bounded provenance. Parsed artifact facts belong in DuckDB.",
 )
 
 ARTIFACT_FILE_POLICY = StoragePolicyItem(
@@ -77,6 +93,7 @@ SQLITE_DETAILS_POLICY = StoragePolicyItem(
 
 
 STORAGE_POLICY = (
+    DUCKDB_POLICY,
     SQLITE_POLICY,
     ARTIFACT_FILE_POLICY,
     OPENSEARCH_POLICY,

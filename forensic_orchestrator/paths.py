@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 
 DEFAULT_ROOT = Path("/var/lib/forensic-orchestrator")
+DEFAULT_LIVE_MOUNT_ROOT = Path("/tmp/forensic-orchestrator-mounts")
 
 
 class WorkspacePaths:
-    def __init__(self, root: Path | str = DEFAULT_ROOT) -> None:
+    def __init__(self, root: Path | str = DEFAULT_ROOT, live_mount_root: Path | str | None = None) -> None:
         self.root = Path(root)
+        configured_mount_root = live_mount_root or os.environ.get("FORENSIC_MOUNT_ROOT")
+        self.live_mount_root = Path(configured_mount_root) if configured_mount_root else DEFAULT_LIVE_MOUNT_ROOT
 
     def case_dir(self, case_id: str) -> Path:
         return self.root / "cases" / case_id
@@ -43,6 +47,9 @@ class WorkspacePaths:
     def mounts_dir(self, case_id: str) -> Path:
         return self.case_dir(case_id) / "mounts"
 
+    def live_mounts_dir(self, case_id: str) -> Path:
+        return self.live_mount_root / "cases" / case_id
+
     def vsc_work_dir(self, case_id: str) -> Path:
         return self.case_dir(case_id) / "vsc-work"
 
@@ -65,13 +72,13 @@ class WorkspacePaths:
         return self.vsc_work_dir(case_id) / "reports"
 
     def ewf_mount_dir(self, case_id: str) -> Path:
-        return self.mounts_dir(case_id) / "ewf"
+        return self.live_mounts_dir(case_id) / "ewf"
 
     def ewf_raw_path(self, case_id: str) -> Path:
         return self.ewf_mount_dir(case_id) / "ewf1"
 
     def volume_mount_dir(self, case_id: str, partition_id: str) -> Path:
-        return self.mounts_dir(case_id) / "volumes" / partition_id
+        return self.live_mounts_dir(case_id) / "volumes" / partition_id
 
     def ensure_case_tree(self, case_id: str) -> None:
         for path in (
@@ -83,8 +90,9 @@ class WorkspacePaths:
             self.artifacts_dir(case_id),
             self.analytics_dir(case_id),
             self.parquet_dir(case_id),
+            self.mounts_dir(case_id),
             self.ewf_mount_dir(case_id),
-            self.mounts_dir(case_id) / "volumes",
+            self.live_mounts_dir(case_id) / "volumes",
             self.vsc_work_dir(case_id),
             self.vsc_parsed_dir(case_id),
             self.vsc_reports_dir(case_id),

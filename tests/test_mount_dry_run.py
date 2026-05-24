@@ -11,7 +11,7 @@ from forensic_orchestrator.safety import EncryptedImageError, PartitionError
 
 
 def test_dry_run_mount_records_jobs_without_dependencies(tmp_path):
-    paths = WorkspacePaths(tmp_path)
+    paths = WorkspacePaths(tmp_path, live_mount_root=tmp_path / "live-mounts")
     db = Database(paths.db_path())
     case_id = "case-1"
     image_id = "image-1"
@@ -36,7 +36,7 @@ def test_dry_run_mount_records_jobs_without_dependencies(tmp_path):
 
 
 def test_mount_falls_back_to_ewfmount_when_direct_mmls_fails(tmp_path):
-    paths = WorkspacePaths(tmp_path)
+    paths = WorkspacePaths(tmp_path, live_mount_root=tmp_path / "live-mounts")
     db = Database(paths.db_path())
     case_id = "case-1"
     image_id = "image-1"
@@ -83,7 +83,7 @@ Units are in 512-byte sectors
 
 
 def test_direct_mount_records_e01_source_when_mmls_succeeds(tmp_path):
-    paths = WorkspacePaths(tmp_path)
+    paths = WorkspacePaths(tmp_path, live_mount_root=tmp_path / "live-mounts")
     db = Database(paths.db_path())
     case_id = "case-1"
     image_id = "image-1"
@@ -124,7 +124,7 @@ Units are in 512-byte sectors
 
 
 def test_raw_mount_does_not_try_ewfmount_when_mmls_fails(tmp_path):
-    paths = WorkspacePaths(tmp_path)
+    paths = WorkspacePaths(tmp_path, live_mount_root=tmp_path / "live-mounts")
     db = Database(paths.db_path())
     case_id = "case-1"
     image_id = "image-1"
@@ -151,7 +151,7 @@ def test_raw_mount_does_not_try_ewfmount_when_mmls_fails(tmp_path):
 
 
 def test_fsstat_ntfs_volume_records_offset_zero(tmp_path):
-    paths = WorkspacePaths(tmp_path)
+    paths = WorkspacePaths(tmp_path, live_mount_root=tmp_path / "live-mounts")
     db = Database(paths.db_path())
     case_id = "case-1"
     image_id = "image-1"
@@ -183,7 +183,7 @@ def test_fsstat_ntfs_volume_records_offset_zero(tmp_path):
 
 
 def test_mount_stops_when_direct_volume_fsstat_detects_encryption(tmp_path):
-    paths = WorkspacePaths(tmp_path)
+    paths = WorkspacePaths(tmp_path, live_mount_root=tmp_path / "live-mounts")
     db = Database(paths.db_path())
     case_id = "case-1"
     image_id = "image-1"
@@ -215,7 +215,7 @@ def test_mount_stops_when_direct_volume_fsstat_detects_encryption(tmp_path):
 
 
 def test_mount_stops_when_fsstat_detects_sophos_safeguard(tmp_path):
-    paths = WorkspacePaths(tmp_path)
+    paths = WorkspacePaths(tmp_path, live_mount_root=tmp_path / "live-mounts")
     db = Database(paths.db_path())
     case_id = "case-1"
     image_id = "image-1"
@@ -245,7 +245,7 @@ def test_mount_stops_when_fsstat_detects_sophos_safeguard(tmp_path):
 
 
 def test_mount_stops_when_selected_partition_fsstat_detects_encryption(tmp_path):
-    paths = WorkspacePaths(tmp_path)
+    paths = WorkspacePaths(tmp_path, live_mount_root=tmp_path / "live-mounts")
     db = Database(paths.db_path())
     case_id = "case-1"
     image_id = "image-1"
@@ -285,7 +285,7 @@ Units are in 512-byte sectors
 
 
 def test_unmount_records_sudo_command_in_dry_run(tmp_path):
-    paths = WorkspacePaths(tmp_path)
+    paths = WorkspacePaths(tmp_path, live_mount_root=tmp_path / "live-mounts")
     db = Database(paths.db_path())
     case_id = "case-1"
     image_id = "image-1"

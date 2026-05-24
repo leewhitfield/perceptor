@@ -282,6 +282,16 @@ def _run_profile_impl(
     offset_sectors: int | None = None
     mounted_volume_path = Path(mount_row["volume_mount_path"]) if mount_row and mount_row["volume_mount_path"] else None
     mounted_volume_active = bool(mounted_volume_path and mounted_volume_path.exists() and mounted_volume_path.is_mount())
+    if mount_row and mounted_volume_path and not mounted_volume_active and not dry_run:
+        db.log_activity(
+            case_id=case_id,
+            computer_id=image.computer_id,
+            image_id=image_id,
+            level="warning",
+            event="mount.stale",
+            message="Recorded NTFS mount path is not currently mounted; remount before running profiles that require filesystem access",
+            details={"mount_path": str(mounted_volume_path), "profile": profile},
+        )
     if mount_row and mounted_volume_active:
         mount = Path(mount_row["volume_mount_path"])
         source_image = Path(mount_row["raw_path"])
@@ -370,7 +380,7 @@ def _run_profile_impl(
         )
         _progress(
             f"profile purge completed {profile}{':windows-old' if windows_old_mode else ''} "
-            f"elapsed={_format_elapsed(purge_started)} outputs={len(purged)} folders={len(removed_output_folders)}"
+            f"elapsed={_format_elapsed(purge_started)} outputs={purged} folders={len(removed_output_folders)}"
         )
     artifact_definitions = {
         artifact.name: artifact

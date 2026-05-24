@@ -174,6 +174,45 @@ def test_srum_parser_collects_direct_and_nested_ras_phonebooks():
     )
 
 
+def test_browser_cache_parser_collects_only_browser_cache_paths():
+    registry = ToolRegistry.from_files([default_plugin_path()])
+    tool = registry.get_tool("BrowserCacheParser")
+    artifact = {artifact.name: artifact for artifact in tool.artifacts}["browser_cache_profiles"]
+
+    assert artifact.source == "Users"
+    assert artifact.destination == "browser/Cache"
+    assert artifact.recursive is True
+    assert artifact.include_path_patterns
+    assert all("cache" in pattern.lower() for pattern in artifact.include_path_patterns)
+
+
+def test_package_cache_parser_collects_only_package_cache_storage_paths():
+    registry = ToolRegistry.from_files([default_plugin_path()])
+    tool = registry.get_tool("PackageCacheParser")
+    artifact = {artifact.name: artifact for artifact in tool.artifacts}["package_cache_profiles"]
+
+    assert artifact.source == "Users"
+    assert artifact.destination == "packages/CacheStorage"
+    assert artifact.recursive is True
+    assert artifact.include_path_patterns
+    assert all("/packages/" in pattern.lower() and "cachestorage" in pattern.lower() for pattern in artifact.include_path_patterns)
+
+
+def test_package_artifacts_parser_is_limited_to_high_value_paths_and_files():
+    registry = ToolRegistry.from_files([default_plugin_path()])
+    tool = registry.get_tool("PackageArtifactsParser")
+    artifact = {artifact.name: artifact for artifact in tool.artifacts}["package_artifact_profiles"]
+
+    assert artifact.source == ""
+    assert artifact.recursive is True
+    assert artifact.patterns
+    assert artifact.include_path_patterns
+    include_patterns = " ".join(artifact.include_path_patterns).lower()
+    assert "/packages/" in include_patterns
+    assert "content.outlook" in include_patterns
+    assert "appcompat/programs" in include_patterns
+
+
 def test_windows_full_includes_complete_current_artifact_set():
     registry = ToolRegistry.from_files([default_plugin_path()])
     assert registry.profiles["windows-full"].get("include_windows_old") is True

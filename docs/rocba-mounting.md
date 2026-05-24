@@ -1,40 +1,46 @@
-# ROCBA Mounting
+# Mounting
 
-Durable case data lives under:
+Durable case data lives under the configured workspace root, for example:
 
 ```text
 /mnt/forensic-ssd/forensic-orchestrator-rocba-case
 ```
 
-Do not store evidence, databases, artifacts, or parser output under `/tmp`.
+Do not store evidence, databases, artifacts, reports, logs, or parser output
+under `/tmp`.
 
-The current sudoers NOPASSWD mount rule is hardcoded to old `/tmp` command paths. Use `/tmp` only as a symlink compatibility path:
+Live EWF and NTFS mount points are intentionally temporary. By default they live
+under:
 
-```bash
-ln -s /mnt/forensic-ssd/forensic-orchestrator-rocba-case /tmp/forensic-orchestrator-rocba-case
+```text
+/tmp/forensic-orchestrator-mounts/cases/<case_id>/ewf/ewf1
+/tmp/forensic-orchestrator-mounts/cases/<case_id>/volumes/<partition_id>
 ```
 
-Mount the EWF layer as the normal user:
+This keeps the sudoers rule stable across cases. If `/tmp` is cleared or the
+system reboots, no case data is lost; remount the image before running profiles
+that require filesystem access.
 
-```bash
-ewfmount -X allow_other \
-  /mnt/forensic-ssd/evidence/rocba/rocba-cdrive.e01 \
-  /mnt/forensic-ssd/forensic-orchestrator-rocba-case/cases/292bcc9d-e60b-4260-9cae-3078df55889b/mounts/ewf
+Default sudoers shape:
+
+```text
+lee ALL=(root) NOPASSWD: /usr/bin/ntfs-3g -o ro\,show_sys_files\,streams_interface\=windows\,norecover\,offset\=* /tmp/forensic-orchestrator-mounts/cases/*/ewf/ewf1 /tmp/forensic-orchestrator-mounts/cases/*/volumes/*, /usr/bin/umount /tmp/forensic-orchestrator-mounts/cases/*/volumes/*
 ```
 
-Mount the NTFS layer through the old sudoers path:
+Mount with the normal workflow:
 
 ```bash
-sudo -n /usr/bin/ntfs-3g -o ro,show_sys_files,streams_interface=windows,norecover,offset=0 \
-  /tmp/forensic-orchestrator-rocba-case/cases/292bcc9d-e60b-4260-9cae-3078df55889b/mounts/ewf/ewf1 \
-  /tmp/forensic-orchestrator-rocba-case/cases/292bcc9d-e60b-4260-9cae-3078df55889b/mounts/volumes/volume-ntfs
+uv run forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator-rocba-case \
+  image mount --case CASE_ID --image IMAGE_ID --filesystem --sudo
 ```
 
 Verify:
 
 ```bash
-findmnt /mnt/forensic-ssd/forensic-orchestrator-rocba-case/cases/292bcc9d-e60b-4260-9cae-3078df55889b/mounts/volumes/volume-ntfs
-ls /mnt/forensic-ssd/forensic-orchestrator-rocba-case/cases/292bcc9d-e60b-4260-9cae-3078df55889b/mounts/volumes/volume-ntfs/Windows
+findmnt /tmp/forensic-orchestrator-mounts/cases/CASE_ID/volumes/PARTITION_ID
+ls /tmp/forensic-orchestrator-mounts/cases/CASE_ID/volumes/PARTITION_ID/Windows
 ```
 
-The parser should run against the mounted NTFS path. The broad recursive TSK fallback is intentionally disabled unless `FORENSIC_ALLOW_RECURSIVE_TSK_INVENTORY=1` is set.
+Full profiles should run against a mounted NTFS path. The broad recursive TSK
+fallback is intentionally disabled unless
+`FORENSIC_ALLOW_RECURSIVE_TSK_INVENTORY=1` is set.

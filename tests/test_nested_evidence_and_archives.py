@@ -281,6 +281,39 @@ def test_nested_evidence_inventory_groups_multipart_ewf(tmp_path):
     assert "all parts present" in items[0]["recommendation"]
 
 
+def test_nested_evidence_inventory_rebuilds_in_duckdb_mode(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORENSIC_ANALYTICS_MODE", "duckdb")
+    db, case, image = _base_db(tmp_path)
+    db.insert_mft_entries(
+        [
+            {
+                "id": "mft-vhdx-1",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": image.id,
+                "tool_output_id": "mft-output-1",
+                "tool_name": "MFTECmd",
+                "source_csv": tmp_path / "mft.csv",
+                "row_number": 1,
+                "entry_number": "100",
+                "sequence_number": "1",
+                "in_use": "True",
+                "parent_path": "Users/lee/VMs",
+                "file_name": "lab.vhdx",
+                "extension": ".vhdx",
+                "is_directory": "False",
+            },
+        ]
+    )
+
+    count = rebuild_nested_evidence_inventory(db, case_id=case.id, image_id=image.id)
+
+    assert count == 1
+    conn = db.analytics._connect(case.id)
+    rows = conn.execute("SELECT original_path, detected_format FROM nested_evidence_items").fetchall()
+    assert rows == [("/Users/lee/VMs/lab.vhdx", "vhdx")]
+
+
 def test_archive_inventory_tool_runs_through_registry_and_ingest(tmp_path):
     db, case, image = _base_db(tmp_path)
     paths = WorkspacePaths(tmp_path / "workspace")

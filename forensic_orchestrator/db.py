@@ -210,6 +210,7 @@ SQLITE_ONLY_PURGE_TABLES = {
 
 ANALYTICS_TABLES = (set(DEFAULT_PURGE_TABLES) - SQLITE_ONLY_PURGE_TABLES) | {
     "copied_file_indicators",
+    "filesystem_review",
     "firefox_cookies",
     "firefox_history",
     "recycle_children",
@@ -305,6 +306,7 @@ class Database:
         if self.analytics_mode not in {"sqlite", "duckdb", "mirror"}:
             raise ValueError("FORENSIC_ANALYTICS_MODE must be one of: sqlite, duckdb, mirror")
         self.analytics = AnalyticsStore(self.conn) if self.analytics_mode in {"duckdb", "mirror"} else None
+        self._sqlite_table_columns: dict[str, list[str]] = {}
         self.migrate()
 
     def close(self) -> None:
@@ -335,7 +337,7 @@ class Database:
             return False
         if table not in ANALYTICS_TABLES:
             return False
-        allowed_columns = [str(row["name"]) for row in self.conn.execute(f"PRAGMA table_info({table})").fetchall()]
+        allowed_columns = self._table_columns(table)
         analytics_columns = list(allowed_columns)
         analytics_rows = [
             {column: row.get(column) for column in analytics_columns}
@@ -353,6 +355,8 @@ class Database:
         return self.analytics_mode == "duckdb"
 
     def migrate(self) -> None:
+        if self.analytics_mode == "duckdb":
+            self._drop_sqlite_analytics_views()
         self.conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS cases (
@@ -4820,12 +4824,85 @@ class Database:
             self._add_column_if_missing("evtx_events", column, "TEXT")
         self._add_column_if_missing("jobs", "source_scope", "TEXT NOT NULL DEFAULT 'live'")
         self._add_column_if_missing("process_timings", "source_scope", "TEXT NOT NULL DEFAULT 'live'")
+        self._refresh_sqlite_table_column_cache()
+        self.conn.commit()
+        if self.analytics_mode == "duckdb":
+            self.cleanup_empty_sqlite_analytics_tables()
+
+    def _drop_sqlite_analytics_views(self) -> None:
+        for table in sorted(ANALYTICS_TABLES):
+            exists = self.conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'view' AND name = ?",
+                (table,),
+            ).fetchone()
+            if exists:
+                self.conn.execute(f"DROP VIEW {self._quote_identifier(table)}")
         self.conn.commit()
 
     def _add_column_if_missing(self, table: str, column: str, definition: str) -> None:
         columns = {row["name"] for row in self.conn.execute(f"PRAGMA table_info({table})")}
         if column not in columns:
             self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    def _refresh_sqlite_table_column_cache(self) -> None:
+        tables = self.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type IN ('table', 'view')"
+        ).fetchall()
+        self._sqlite_table_columns = {
+            str(row["name"]): [
+                str(column["name"])
+                for column in self.conn.execute(f"PRAGMA table_info({row['name']})").fetchall()
+            ]
+            for row in tables
+        }
+
+    def cleanup_empty_sqlite_analytics_tables(self, *, vacuum: bool = False) -> dict[str, Any]:
+        """Drop empty analytics-owned SQLite tables in DuckDB mode.
+
+        Normal operation writes parsed artifact rows directly to DuckDB. Older
+        schema migrations still materialized empty SQLite artifact tables so
+        inserts could discover column names. The column cache above removes that
+        dependency; this method removes empty leftover tables without touching
+        orchestration/control tables or non-empty tables.
+        """
+        if self.analytics_mode != "duckdb":
+            return {"dropped_tables": [], "skipped_non_empty": [], "vacuumed": False}
+        dropped: list[str] = []
+        skipped_non_empty: list[dict[str, Any]] = []
+        for table in sorted(ANALYTICS_TABLES):
+            exists = self.conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+                (table,),
+            ).fetchone()
+            if not exists:
+                continue
+            try:
+                count = int(self.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+            except sqlite3.Error:
+                continue
+            if count:
+                skipped_non_empty.append({"table": table, "row_count": count})
+                continue
+            self.conn.execute(f"DROP TABLE {table}")
+            self._create_empty_analytics_view(table)
+            dropped.append(table)
+        self.conn.commit()
+        vacuumed = False
+        if vacuum and dropped:
+            self.conn.execute("VACUUM")
+            vacuumed = True
+        return {"dropped_tables": dropped, "skipped_non_empty": skipped_non_empty, "vacuumed": vacuumed}
+
+    def _create_empty_analytics_view(self, table: str) -> None:
+        columns = self._sqlite_table_columns.get(table)
+        if not columns:
+            return
+        select_list = ", ".join(f"NULL AS {self._quote_identifier(column)}" for column in columns)
+        self.conn.execute(f"CREATE VIEW IF NOT EXISTS {self._quote_identifier(table)} AS SELECT {select_list} WHERE 0")
+
+    @staticmethod
+    def _quote_identifier(value: str) -> str:
+        return '"' + value.replace('"', '""') + '"'
 
     def create_case(self, case_id: str, root: Path) -> Case:
         created_at = utc_now()
@@ -5232,10 +5309,16 @@ class Database:
             self.insert_normalized_artifact_rows(table, rows)
 
     def _table_columns(self, table: str) -> list[str]:
+        if table in self._sqlite_table_columns:
+            return list(self._sqlite_table_columns[table])
+        if table in ANALYTICS_TABLE_COLUMNS:
+            return list(ANALYTICS_TABLE_COLUMNS[table])
         rows = self.conn.execute(f"PRAGMA table_info({table})").fetchall()
         if not rows:
             raise ValueError(f"Unknown normalized artifact table: {table}")
-        return [row["name"] for row in rows]
+        columns = [row["name"] for row in rows]
+        self._sqlite_table_columns[table] = columns
+        return columns
 
     def insert_shortcut_items(self, rows: list[dict[str, Any]]) -> None:
         self._insert_rows(
@@ -6103,15 +6186,14 @@ class Database:
             if not rows:
                 continue
             columns = allowed[table]
-            placeholders = ", ".join("?" for _ in columns)
-            column_sql = ", ".join(columns)
-            self.conn.executemany(
-                f"INSERT INTO {table} ({column_sql}) VALUES ({placeholders})",
-                [
-                    tuple(created_at if column == "created_at" else row.get(column) for column in columns)
-                    for row in rows
-                ],
-            )
+            normalized_rows = [
+                {
+                    column: created_at if column == "created_at" else row.get(column)
+                    for column in columns
+                }
+                for row in rows
+            ]
+            self._insert_rows(table, columns, normalized_rows)
         self._commit()
 
     def insert_amcache_entries(self, rows: list[dict[str, Any]]) -> None:
@@ -6193,7 +6275,7 @@ class Database:
         if image_id is not None:
             where += " AND image_id = ?"
             params.append(image_id)
-        self.conn.execute(f"DELETE FROM usb_storage_devices WHERE {where}", params)
+        self._delete_sqlite_if_exists("usb_storage_devices", where, params)
         if self.analytics is not None:
             self.analytics.delete_case_image("usb_storage_devices", case_id=case_id, image_id=image_id)
         self._commit()
@@ -6220,7 +6302,7 @@ class Database:
         if image_id is not None:
             where += " AND image_id = ?"
             params.append(image_id)
-        self.conn.execute(f"DELETE FROM usb_connection_events WHERE {where}", params)
+        self._delete_sqlite_if_exists("usb_connection_events", where, params)
         if "usb_connection_events" in ANALYTICS_TABLES and self.analytics is not None:
             self.analytics.delete_case_image("usb_connection_events", case_id=case_id, image_id=image_id)
         self._commit()
@@ -6244,8 +6326,8 @@ class Database:
         if image_id is not None:
             where += " AND image_id = ?"
             params.append(image_id)
-        self.conn.execute(f"DELETE FROM usb_file_correlations WHERE {where}", params)
-        if "usb_file_correlations" in ANALYTICS_TABLES:
+        self._delete_sqlite_if_exists("usb_file_correlations", where, params)
+        if "usb_file_correlations" in ANALYTICS_TABLES and self.analytics is not None:
             self.analytics.delete_case_image("usb_file_correlations", case_id=case_id, image_id=image_id)
         self._commit()
 
@@ -6544,7 +6626,10 @@ class Database:
         if image_id is not None:
             where.append("image_id = ?")
             params.append(image_id)
-        self.conn.execute(f"DELETE FROM filesystem_review WHERE {' AND '.join(where)}", params)
+        if self.analytics is not None:
+            self.analytics.delete_case_image("filesystem_review", case_id=case_id, image_id=image_id)
+        elif self._sqlite_table_exists("filesystem_review"):
+            self.conn.execute(f"DELETE FROM filesystem_review WHERE {' AND '.join(where)}", params)
         self._insert_rows(
             "filesystem_review",
             [
@@ -7320,7 +7405,7 @@ class Database:
                 case_id=case_id,
                 image_id=image_id,
             )
-        self.conn.execute(f"DELETE FROM copied_file_indicators WHERE {' AND '.join(where)}", params)
+        self._delete_sqlite_if_exists("copied_file_indicators", " AND ".join(where), params)
         self._insert_rows(
             "copied_file_indicators",
             [
@@ -7393,7 +7478,8 @@ class Database:
             )
             if not clause:
                 continue
-            self.conn.execute(f"DELETE FROM {table} WHERE {clause}", params)
+            if self._sqlite_table_exists(table):
+                self.conn.execute(f"DELETE FROM {table} WHERE {clause}", params)
             if self.analytics is not None and table not in SQLITE_ONLY_PURGE_TABLES:
                 self.analytics.delete_case_image(
                     table,
@@ -7411,10 +7497,7 @@ class Database:
             placeholders = ", ".join("?" for _ in tool_names)
             content_ref_where.append(f"source_tool IN ({placeholders})")
             content_ref_params.extend(tool_names)
-        self.conn.execute(
-            f"DELETE FROM content_references WHERE {' AND '.join(content_ref_where)}",
-            content_ref_params,
-        )
+        self._delete_sqlite_if_exists("content_references", " AND ".join(content_ref_where), content_ref_params)
         if self.analytics is not None:
             self.analytics.delete_case_image(
                 "content_references",
@@ -7432,10 +7515,7 @@ class Database:
             placeholders = ", ".join("?" for _ in tool_names)
             user_ref_where.append(f"source_tool IN ({placeholders})")
             user_ref_params.extend(tool_names)
-        self.conn.execute(
-            f"DELETE FROM user_controlled_file_references WHERE {' AND '.join(user_ref_where)}",
-            user_ref_params,
-        )
+        self._delete_sqlite_if_exists("user_controlled_file_references", " AND ".join(user_ref_where), user_ref_params)
         if not tool_names or any(name in {"MFTECmd", "LECmd", "JLECmd", "SBECmd", "RECmd"} for name in tool_names):
             copied_where = ["case_id = ?"]
             copied_params: list[Any] = [case_id]
@@ -7448,30 +7528,21 @@ class Database:
                     case_id=case_id,
                     image_id=image_id,
                 )
-            self.conn.execute(
-                f"DELETE FROM copied_file_indicators WHERE {' AND '.join(copied_where)}",
-                copied_params,
-            )
+            self._delete_sqlite_if_exists("copied_file_indicators", " AND ".join(copied_where), copied_params)
         if not tool_names or "RegistryArtifactParser" in tool_names:
             common_dialog_where = ["case_id = ?"]
             common_dialog_params: list[Any] = [case_id]
             if image_id is not None:
                 common_dialog_where.append("image_id = ?")
                 common_dialog_params.append(image_id)
-            self.conn.execute(
-                f"DELETE FROM registry_common_dialog_items WHERE {' AND '.join(common_dialog_where)}",
-                common_dialog_params,
-            )
+            self._delete_sqlite_if_exists("registry_common_dialog_items", " AND ".join(common_dialog_where), common_dialog_params)
         if not tool_names or "MFTECmdI30" in tool_names:
             reconciliation_where = ["case_id = ?"]
             reconciliation_params: list[Any] = [case_id]
             if image_id is not None:
                 reconciliation_where.append("image_id = ?")
                 reconciliation_params.append(image_id)
-            self.conn.execute(
-                f"DELETE FROM ntfs_namespace_reconciliation WHERE {' AND '.join(reconciliation_where)}",
-                reconciliation_params,
-            )
+            self._delete_sqlite_if_exists("ntfs_namespace_reconciliation", " AND ".join(reconciliation_where), reconciliation_params)
         if not tool_names or any(
             name in {"MFTECmd", "MFTECmdUSN", "MFTECmdLogFile", "NTFSParseLogFile", "MFTECmdI30", "WindowsSearchGatherParser"}
             for name in tool_names
@@ -7485,17 +7556,16 @@ class Database:
                 placeholders = ", ".join("?" for _ in tool_names)
                 filesystem_where.append(f"source_tool IN ({placeholders})")
                 filesystem_params.extend(tool_names)
-            self.conn.execute(
-                f"DELETE FROM filesystem_review WHERE {' AND '.join(filesystem_where)}",
-                filesystem_params,
-            )
+            self._delete_sqlite_if_exists("filesystem_review", " AND ".join(filesystem_where), filesystem_params)
+            if self.analytics is not None:
+                self.analytics.delete_case_image("filesystem_review", case_id=case_id, image_id=image_id)
         if not tool_names or any(name in {"RegistryArtifactParser", "EvtxECmd", "EvtxECmdTriage"} for name in tool_names):
             usb_where = ["case_id = ?"]
             usb_params: list[Any] = [case_id]
             if image_id is not None:
                 usb_where.append("image_id = ?")
                 usb_params.append(image_id)
-            self.conn.execute(f"DELETE FROM usb_storage_devices WHERE {' AND '.join(usb_where)}", usb_params)
+            self._delete_sqlite_if_exists("usb_storage_devices", " AND ".join(usb_where), usb_params)
             if self.analytics is not None:
                 self.analytics.delete_case_image("usb_storage_devices", case_id=case_id, image_id=image_id)
         if not tool_names or any(
@@ -7507,10 +7577,7 @@ class Database:
             if image_id is not None:
                 correlation_where.append("image_id = ?")
                 correlation_params.append(image_id)
-            self.conn.execute(
-                f"DELETE FROM usb_file_correlations WHERE {' AND '.join(correlation_where)}",
-                correlation_params,
-            )
+            self._delete_sqlite_if_exists("usb_file_correlations", " AND ".join(correlation_where), correlation_params)
         if not tool_names or "RecycleParser" in tool_names:
             recycle_where = ["case_id = ?"]
             recycle_params: list[Any] = [case_id]
@@ -7518,10 +7585,7 @@ class Database:
                 recycle_where.append("image_id = ?")
                 recycle_params.append(image_id)
             for table in ("recycle_items", "recycle_children"):
-                self.conn.execute(
-                    f"DELETE FROM {table} WHERE {' AND '.join(recycle_where)}",
-                    recycle_params,
-                )
+                self._delete_sqlite_if_exists(table, " AND ".join(recycle_where), recycle_params)
                 if self.analytics is not None:
                     self.analytics.delete_case_image(table, case_id=case_id, image_id=image_id)
         if not tool_names or "FirefoxParser" in tool_names:
@@ -7531,10 +7595,7 @@ class Database:
                 firefox_where.append("image_id = ?")
                 firefox_params.append(image_id)
             for table in ("firefox_history", "firefox_cookies"):
-                self.conn.execute(
-                    f"DELETE FROM {table} WHERE {' AND '.join(firefox_where)}",
-                    firefox_params,
-                )
+                self._delete_sqlite_if_exists(table, " AND ".join(firefox_where), firefox_params)
                 if self.analytics is not None:
                     self.analytics.delete_case_image(table, case_id=case_id, image_id=image_id)
         timeline_where = ["case_id = ?"]
@@ -7546,16 +7607,10 @@ class Database:
             placeholders = ", ".join("?" for _ in tool_names)
             timeline_where.append(f"source_tool IN ({placeholders})")
             timeline_params.extend(tool_names)
-        self.conn.execute(
-            f"DELETE FROM timeline_events WHERE {' AND '.join(timeline_where)}",
-            timeline_params,
-        )
+        self._delete_sqlite_if_exists("timeline_events", " AND ".join(timeline_where), timeline_params)
         if self.analytics is not None:
             self.analytics.delete_case_image("timeline_events", case_id=case_id, image_id=image_id)
-        self.conn.execute(
-            f"DELETE FROM file_correlations WHERE {' AND '.join(timeline_where)}",
-            timeline_params,
-        )
+        self._delete_sqlite_if_exists("file_correlations", " AND ".join(timeline_where), timeline_params)
         artifact_correlation_where = ["case_id = ?"]
         artifact_correlation_params: list[Any] = [case_id]
         if image_id is not None:
@@ -7568,10 +7623,7 @@ class Database:
             )
             artifact_correlation_params.extend(tool_names)
             artifact_correlation_params.extend(tool_names)
-        self.conn.execute(
-            f"DELETE FROM artifact_correlations WHERE {' AND '.join(artifact_correlation_where)}",
-            artifact_correlation_params,
-        )
+        self._delete_sqlite_if_exists("artifact_correlations", " AND ".join(artifact_correlation_where), artifact_correlation_params)
         if not tool_names or any(
             name in {"RegistryArtifactParser", "TelemetryParser", "OneDriveOdlParser", "OneDriveExplorer"}
             for name in tool_names
@@ -7581,12 +7633,13 @@ class Database:
             if image_id is not None:
                 inventory_where.append("image_id = ?")
                 inventory_params.append(image_id)
-            self.conn.execute(
-                f"DELETE FROM computer_inventory WHERE {' AND '.join(inventory_where)}",
-                inventory_params,
-            )
+            self._delete_sqlite_if_exists("computer_inventory", " AND ".join(inventory_where), inventory_params)
         self.conn.commit()
         return int(output_count)
+
+    def _delete_sqlite_if_exists(self, table: str, where: str, params: list[Any]) -> None:
+        if self._sqlite_table_exists(table):
+            self.conn.execute(f"DELETE FROM {table} WHERE {where}", params)
 
     def _purge_where_for_table(
         self,
@@ -7596,7 +7649,9 @@ class Database:
         image_id: str | None,
         tool_names: list[str] | None,
     ) -> tuple[str, list[Any]]:
-        columns = {str(row["name"]) for row in self.conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        columns = set(self._table_columns(table)) if table in self._sqlite_table_columns else {
+            str(row["name"]) for row in self.conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
         if not columns:
             return "", []
         where: list[str] = []
@@ -7634,6 +7689,12 @@ class Database:
         if not where:
             return "", []
         return " AND ".join(where), params
+
+    def _sqlite_table_exists(self, table: str) -> bool:
+        return self.conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (table,),
+        ).fetchone() is not None
 
     def log_activity(
         self,

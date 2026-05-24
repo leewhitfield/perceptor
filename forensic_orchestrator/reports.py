@@ -17183,6 +17183,8 @@ def _assess_memory_credential_hit(value: Any, matched_term: Any) -> dict[str, st
         "credential provider",
         "credentialprovider",
         "credential manager",
+        "decrypted password isransom:",
+        "ransom:win32",
     )
     if any(term in lowered for term in false_positive_terms):
         return {"credential_status": "label_or_false_positive", "credential_reason": "Known token/password label or API type, not a secret value."}
@@ -17191,7 +17193,10 @@ def _assess_memory_credential_hit(value: Any, matched_term: Any) -> dict[str, st
         secret = assignment.group("secret")
         if _memory_secret_is_placeholder(secret):
             return {"credential_status": "label_or_false_positive", "credential_reason": "Credential assignment value is a common placeholder or field name."}
-        if len(secret) >= 12 or str(matched_term or "").lower() in {"password", "passwd", "pwd=", "refresh_token", "bearer "}:
+        term = str(matched_term or "").lower()
+        if term in {"password", "passwd", "pwd="} and len(secret) < 8:
+            return {"credential_status": "possible_secret", "credential_reason": "Password-like assignment has a short value and needs manual validation."}
+        if len(secret) >= 12 or term in {"refresh_token", "bearer "}:
             return {"credential_status": "likely_usable_secret", "credential_reason": "Credential keyword is paired with an assigned value or bearer token."}
         return {"credential_status": "possible_secret", "credential_reason": "Credential keyword has an assigned value but the value is short."}
     if re.search(r"(?i)\b(token|password|passwd|credential)\b", text):
@@ -17228,6 +17233,7 @@ def _memory_secret_is_placeholder(value: Any) -> bool:
         "null",
         "none",
         "undefined",
+        "the",
         "true",
         "false",
     }

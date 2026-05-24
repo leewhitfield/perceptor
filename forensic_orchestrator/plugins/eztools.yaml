@@ -1387,6 +1387,15 @@ tools:
         recursive: true
         process_in_place: true
         optional: true
+        include_path_patterns:
+          - "*/AppData/Local/*/User Data/*/Cache/*"
+          - "*/AppData/Local/*/User Data/*/Code Cache/*"
+          - "*/AppData/Local/*/User Data/*/GPUCache/*"
+          - "*/AppData/Local/*/User Data/*/Media Cache/*"
+          - "*/AppData/Local/*/User Data/*/Service Worker/CacheStorage/*"
+          - "*/AppData/Local/Mozilla/Firefox/Profiles/*/cache2/entries/*"
+          - "*/AppData/Local/Mozilla/Firefox/Profiles/*/cache2/index"
+          - "*/AppData/Local/Mozilla/Firefox/Profiles/*/startupCache/*"
     command:
       - internal-browser-cache-parser
       - "{artifact:browser_cache_profiles}"
@@ -1407,6 +1416,9 @@ tools:
         recursive: true
         process_in_place: true
         optional: true
+        include_path_patterns:
+          - "*/AppData/Local/Packages/*/AC/*/CacheStorage/*"
+          - "*/AppData/Local/Packages/*/LocalCache/*/CacheStorage/*"
     command:
       - internal-package-cache-parser
       - "{artifact:package_cache_profiles}"
@@ -1427,6 +1439,54 @@ tools:
         recursive: true
         process_in_place: true
         optional: true
+        patterns:
+          - ".bash_history"
+          - ".fish_history"
+          - ".mysql_history"
+          - ".node_repl_history"
+          - ".psql_history"
+          - ".python_history"
+          - ".rediscli_history"
+          - ".sqlite_history"
+          - ".viminfo"
+          - ".wget-hsts"
+          - ".zsh_history"
+          - "typedurls.json"
+          - "notifications.json"
+          - "hxstore.hxd"
+          - "browser.log"
+          - "webapp-console.log"
+          - "mediadb.v1.sqlite"
+          - "client.db"
+          - "iclouddrive.db"
+          - "ckcachedatabase.db"
+          - "recentfilecache.bcf"
+          - "*.db"
+          - "*.sqlite"
+          - "*.edb"
+          - "*.hxd"
+          - "*.json"
+          - "*.log"
+          - "*.ldb"
+          - "*.mov"
+          - "*.jpeg"
+          - "*.jpg"
+          - "*.png"
+          - "*.eml"
+          - "*.pdf"
+          - "*.xls"
+          - "*.xlsx"
+          - "*.doc"
+          - "*.docx"
+          - "*.ppt"
+          - "*.pptx"
+          - "*.csv"
+          - "*.txt"
+          - "*.zip"
+        include_path_patterns:
+          - "*/AppData/Local/Packages/*"
+          - "*/AppData/Local/Microsoft/Windows/INetCache/Content.Outlook/*"
+          - "*/Windows/AppCompat/Programs/*"
     command:
       - internal-package-artifacts-parser
       - "{artifact:package_artifact_profiles}"

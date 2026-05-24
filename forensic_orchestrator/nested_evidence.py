@@ -34,14 +34,16 @@ def rebuild_nested_evidence_inventory(db: Database, *, case_id: str, image_id: s
 
 
 def _delete_existing(db: Database, *, case_id: str, image_id: str | None) -> None:
+    if getattr(db, "analytics", None) is not None:
+        db.analytics.delete_case_image("nested_evidence_items", case_id=case_id, image_id=image_id)
+    if getattr(db, "analytics_only", False):
+        return
     where = ["case_id = ?"]
     params: list[Any] = [case_id]
     if image_id:
         where.append("image_id = ?")
         params.append(image_id)
     db.conn.execute(f"DELETE FROM nested_evidence_items WHERE {' AND '.join(where)}", params)
-    if getattr(db, "analytics", None) is not None:
-        db.analytics.delete_case_image("nested_evidence_items", case_id=case_id, image_id=image_id)
     db.conn.commit()
 
 

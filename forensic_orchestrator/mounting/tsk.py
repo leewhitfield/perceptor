@@ -59,7 +59,7 @@ def parse_fls_output(output: str) -> list[FlsEntry]:
             FlsEntry(
                 inode=inode,
                 path=path,
-                is_directory=match.group("kind").startswith("d/"),
+                is_directory=match.group("kind").startswith("d/") or match.group("kind").endswith("/d"),
                 kind=match.group("kind"),
             )
         )
@@ -185,6 +185,8 @@ def _run_icat_to_file(
 
     output_folder.mkdir(parents=True, exist_ok=True)
     destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists() and destination.is_dir():
+        raise ToolError(f"refusing to extract inode {inode} over existing directory: {destination}")
     job_id = str(uuid.uuid4())
     stdout_path = output_folder / "stdout.txt"
     stderr_path = output_folder / "stderr.txt"

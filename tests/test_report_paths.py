@@ -26,6 +26,12 @@ def test_display_evidence_path_strips_case_artifact_prefixes():
     )
     assert (
         display_evidence_path(
+            "/tmp/forensic-orchestrator-mounts/cases/292bcc9d-e60b-4260-9cae-3078df55889b/volumes/p2/Users/Jane/Documents/report.docx"
+        )
+        == "/Users/Jane/Documents/report.docx"
+    )
+    assert (
+        display_evidence_path(
             "/mnt/forensic-ssd/cases/case-1/artifacts/image-1/ProgramData/Microsoft/Search/Data/Applications/Windows/Windows.db"
         )
         == "/ProgramData/Microsoft/Search/Data/Applications/Windows/Windows.db"

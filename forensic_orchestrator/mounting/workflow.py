@@ -693,26 +693,49 @@ def unmount_image(
         raise MountError(f"No mounted filesystem recorded for case={case_id} image={image.id}")
 
     mount_path = Path(mount_row["volume_mount_path"])
-    command = build_umount_command(mount_path, use_sudo=use_sudo_mount)
-    JobRunner(db).run(
-        case_id=case_id,
-        image_id=image.id,
-        computer_id=image.computer_id,
-        tool_name="umount",
-        command=command,
-        output_folder=paths.jobs_dir(case_id) / "mount" / "umount",
-        dry_run=dry_run,
-    )
-    db.log_activity(
-        case_id=case_id,
-        image_id=image.id,
-        computer_id=image.computer_id,
-        event="volume.unmounted" if not dry_run else "volume.unmount_dry_run",
-        message="Unmounted NTFS volume" if not dry_run else "Dry-run recorded NTFS volume unmount",
-        details={"mount_path": str(mount_path), "use_sudo": use_sudo_mount},
-    )
+    ntfs_mounted = mount_path.exists() and mount_path.is_mount()
+    if not dry_run and not ntfs_mounted:
+        db.log_activity(
+            case_id=case_id,
+            image_id=image.id,
+            computer_id=image.computer_id,
+            level="warning",
+            event="volume.unmount_skipped_stale",
+            message="Recorded NTFS mount path is not currently mounted; skipping NTFS unmount",
+            details={"mount_path": str(mount_path), "use_sudo": use_sudo_mount},
+        )
+    if ntfs_mounted or dry_run:
+        command = build_umount_command(mount_path, use_sudo=use_sudo_mount)
+        JobRunner(db).run(
+            case_id=case_id,
+            image_id=image.id,
+            computer_id=image.computer_id,
+            tool_name="umount",
+            command=command,
+            output_folder=paths.jobs_dir(case_id) / "mount" / "umount",
+            dry_run=dry_run,
+        )
+        db.log_activity(
+            case_id=case_id,
+            image_id=image.id,
+            computer_id=image.computer_id,
+            event="volume.unmounted" if not dry_run else "volume.unmount_dry_run",
+            message="Unmounted NTFS volume" if not dry_run else "Dry-run recorded NTFS volume unmount",
+            details={"mount_path": str(mount_path), "use_sudo": use_sudo_mount},
+        )
     if mount_row["source_type"] in {"ewfmount", "ewfmount-volume"}:
         ewf_mount_path = Path(mount_row["ewf_mount_path"])
+        if not dry_run and not (ewf_mount_path.exists() and ewf_mount_path.is_mount()):
+            db.log_activity(
+                case_id=case_id,
+                image_id=image.id,
+                computer_id=image.computer_id,
+                level="warning",
+                event="ewfmount.unmount_skipped_stale",
+                message="Recorded EWF mount path is not currently mounted; skipping EWF unmount",
+                details={"mount_path": str(ewf_mount_path), "use_sudo": False},
+            )
+            return mount_path
         ewf_command = build_umount_command(ewf_mount_path, use_sudo=False)
         for attempt in range(1, 4):
             try:

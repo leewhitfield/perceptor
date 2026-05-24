@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from forensic_orchestrator.analytics_query import query_rows
 from forensic_orchestrator.db import Database, utc_now
 from forensic_orchestrator.reports import _parse_report_timestamp, _rdp_client_sessions
 
@@ -107,7 +108,9 @@ def _vpn_session_rows(db: Database, case_id: str, image_id: str | None) -> list[
                 "app": row["app_name"] or row["app_path"],
             },
         )
-        for row in db.conn.execute(
+        for row in query_rows(
+            db,
+            "srum_records",
             f"""
             SELECT id, timestamp, user_name, app_name, app_path, interface_type,
                    connected_time, vpn_profile_name, vpn_server, vpn_protocol,
@@ -118,11 +121,13 @@ def _vpn_session_rows(db: Database, case_id: str, image_id: str | None) -> list[
             LIMIT 20000
             """,
             tuple(params),
-        ).fetchall()
+        )
     )
     rows.extend(
         _vpn_event_row(row)
-        for row in db.conn.execute(
+        for row in query_rows(
+            db,
+            "evtx_events",
             f"""
             SELECT id, time_created, event_id, user_name, payload_data1,
                    payload_data2, payload_data3, map_description, provider,
@@ -137,7 +142,7 @@ def _vpn_session_rows(db: Database, case_id: str, image_id: str | None) -> list[
             LIMIT 20000
             """,
             tuple(params),
-        ).fetchall()
+        )
     )
     return rows
 
@@ -265,18 +270,20 @@ def _logon_sessions(db: Database, *, case_id: str, image_id: str | None) -> tupl
         params.append(image_id)
     rows = [
         dict(row)
-        for row in db.conn.execute(
+        for row in query_rows(
+            db,
+            "evtx_events",
             f"""
             SELECT id, case_id, computer_id, image_id, time_created, event_id, provider,
                    channel, computer, user_name, user_id, remote_host, payload_data1,
                    payload_data2, payload_data3, map_description, source_file
-            FROM evtx_events INDEXED BY idx_evtx_events_case_event_time
+            FROM evtx_events
             WHERE case_id = ? {image_filter}
               AND event_id IN ('4624', '4634', '4647', '4778', '4779')
             ORDER BY time_created
             """,
             tuple(params),
-        ).fetchall()
+        )
     ]
     open_by_key: dict[tuple[str, str], dict[str, Any]] = {}
     sessions: list[dict[str, Any]] = []

@@ -70,6 +70,22 @@ r/r 35-128-4:	$Extend/$UsnJrnl:$J
     assert entries[0].path == "$Extend/$UsnJrnl:$J"
 
 
+def test_parse_fls_output_marks_deleted_directories_as_directories():
+    output = """
+d/d 3961-144-1:	Users/Stack/AppData/Local/Microsoft/Windows/INetCache/IE/QFDYUT01
+d/- * 0:	ProgramData/Microsoft/Windows/WER/ReportArchive/NonCritical
+-/d * 5896-144-1:	Users/Stack/AppData/Local/Microsoft/Windows/INetCache/IE/QFDYUT01
+-/r * 5897-128-5:	Users/Stack/AppData/Local/Microsoft/Windows/INetCache/IE/QFDYUT01/SDelete[1].zip
+"""
+    entries = parse_fls_output(output)
+
+    assert entries[0].is_directory is True
+    assert entries[1].is_directory is True
+    assert entries[2].is_directory is True
+    assert entries[2].active_name is False
+    assert entries[3].is_directory is False
+
+
 def test_lnk_paths_are_parsed_from_fls_output():
     output = """
 r/r 200-128-1:	Documents and Settings/Jean/Desktop/Report.lnk

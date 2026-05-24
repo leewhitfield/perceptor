@@ -15,11 +15,11 @@ def rebuild_filesystem_review(db: Database, *, case_id: str, image_id: str | Non
     if image_id is not None:
         where.append("image_id = ?")
         params.append(image_id)
-    db.conn.execute(f"DELETE FROM filesystem_review WHERE {' AND '.join(where)}", params)
     if db.analytics_only:
         rows = _duckdb_filesystem_review_rows(db, case_id=case_id, image_id=image_id)
         db.replace_filesystem_review(case_id=case_id, image_id=image_id, rows=rows)
         return len(rows)
+    db.conn.execute(f"DELETE FROM filesystem_review WHERE {' AND '.join(where)}", params)
     _insert_mft_rows(db, case_id=case_id, image_id=image_id)
     _insert_usn_rows(db, case_id=case_id, image_id=image_id)
     _insert_logfile_rows(db, case_id=case_id, image_id=image_id)
