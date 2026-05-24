@@ -81,10 +81,9 @@ def scan_memory_strings_to_csv(
 def decompress_hiberfil_candidate(source: Path, target: Path) -> dict[str, str]:
     target.parent.mkdir(parents=True, exist_ok=True)
     commands = []
-    for name in ("hibr2bin", "Hibr2Bin", "HIBR2BIN", "Hibr2Bin.exe"):
-        executable = shutil.which(name)
-        if executable:
-            commands.append([executable, "/PLATFORM", "X64", "/MAJOR", "10", "/MINOR", "0", "/INPUT", str(source), "/OUTPUT", str(target)])
+    hibr2bin = _hibr2bin_command()
+    if hibr2bin:
+        commands.append([*hibr2bin, "/PLATFORM", "X64", "/MAJOR", "10", "/MINOR", "0", "/INPUT", str(source), "/OUTPUT", str(target)])
     if shutil.which("HibernationRecon"):
         commands.append(["HibernationRecon", "-f", str(source), "-o", str(target.parent)])
     if shutil.which("HibernationRecon.exe"):
@@ -104,6 +103,41 @@ def decompress_hiberfil_candidate(source: Path, target: Path) -> dict[str, str]:
                     return {"status": "decompressed", "path": str(candidate), "command": " ".join(command)}
         last_error = (completed.stderr or completed.stdout or "").strip()
     return {"status": "decompressor_unavailable_or_failed", "error": locals().get("last_error", "no supported hiberfil decompressor found")}
+
+
+def _hibr2bin_command() -> list[str] | None:
+    explicit = os.environ.get("HIBR2BIN_BIN")
+    candidates = [explicit] if explicit else []
+    for name in ("hibr2bin", "Hibr2Bin", "HIBR2BIN", "Hibr2Bin.exe"):
+        found = shutil.which(name)
+        if found:
+            candidates.append(found)
+    for candidate in (
+        "/home/lee/tools/Hibr2Bin-build/Hibr2Bin.exe",
+        "/home/lee/tools/Hibr2Bin/Hibr2Bin.exe",
+    ):
+        if Path(candidate).exists():
+            candidates.append(candidate)
+    wine = shutil.which("wine64") or shutil.which("wine")
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = Path(candidate)
+        if path.suffix.lower() == ".exe" and not _is_linux_executable(path):
+            if wine:
+                return [wine, str(path)]
+            continue
+        if path.exists() or shutil.which(candidate):
+            return [str(path)]
+    return None
+
+
+def _is_linux_executable(path: Path) -> bool:
+    try:
+        with path.open("rb") as handle:
+            return handle.read(4) == b"\x7fELF"
+    except OSError:
+        return False
 
 
 def iter_string_hits(
