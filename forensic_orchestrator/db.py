@@ -300,11 +300,15 @@ TOOL_PURGE_TABLES = {
 
 
 class Database:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, migrate: bool = True) -> None:
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(self.path)
+        self.conn = sqlite3.connect(self.path, timeout=60)
         self.conn.row_factory = sqlite3.Row
+        self.conn.execute("PRAGMA busy_timeout=60000")
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA synchronous=NORMAL")
+        self.conn.execute("PRAGMA temp_store=MEMORY")
         self.conn.create_function("host_from_url", 1, _host_from_url)
         self._defer_commit_depth = 0
         self.analytics_mode = os.environ.get("FORENSIC_ANALYTICS_MODE", "duckdb").lower()
@@ -312,8 +316,9 @@ class Database:
             raise ValueError("FORENSIC_ANALYTICS_MODE must be one of: sqlite, duckdb, mirror")
         self.analytics = AnalyticsStore(self.conn) if self.analytics_mode in {"duckdb", "mirror"} else None
         self._sqlite_table_columns: dict[str, list[str]] = {}
-        with self._migration_lock():
-            self.migrate()
+        if migrate:
+            with self._migration_lock():
+                self.migrate()
 
     def close(self) -> None:
         if self.analytics is not None:

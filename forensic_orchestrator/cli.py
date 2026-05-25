@@ -2191,7 +2191,7 @@ def run(args: argparse.Namespace) -> int:
                 "dry_run": args.dry_run,
                 "requested_workers": args.workers,
                 "effective_workers": max(1, args.workers),
-                "parallel_scope": "external_tools_only" if args.workers > 1 else "serial",
+                "parallel_scope": "artifact_extraction_and_external_tools" if args.workers > 1 else "serial",
                 "filesystem_mount_requested": args.filesystem,
                 "volume_mount_path": str(volume) if volume else None,
                 "unmounted_path": str(unmounted_path) if unmounted_path else None,
@@ -3041,7 +3041,7 @@ def run(args: argparse.Namespace) -> int:
                 "dry_run": args.dry_run,
                 "requested_workers": args.workers,
                 "effective_workers": max(1, args.workers),
-                "parallel_scope": "external_tools_only" if args.workers > 1 else "serial",
+                "parallel_scope": "artifact_extraction_and_external_tools" if args.workers > 1 else "serial",
             }
             if args.dry_run:
                 payload["commands"] = command_preview(db, args.case_id)

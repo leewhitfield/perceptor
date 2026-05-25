@@ -8,6 +8,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
 from forensic_orchestrator.artifact_dedupe import rebuild_artifact_windows_old_dedupe
 from forensic_orchestrator.correlation import rebuild_file_correlations
@@ -110,6 +111,14 @@ def _progress_detail(details: dict | None) -> str:
     if "path_stat_error" in details:
         parts.append("stat_error=yes")
     return f" ({', '.join(parts)})" if parts else ""
+
+
+def _extract_artifact_with_worker_db(*, db_path: Path, artifact_callback: Callable[[Database], object]) -> object:
+    worker_db = Database(db_path, migrate=False)
+    try:
+        return artifact_callback(worker_db)
+    finally:
+        worker_db.close()
 
 
 def _windows_old_tools(tools: list) -> list:
@@ -237,9 +246,10 @@ def run_profile(
             "accept_duplicate": accept_duplicate,
             "requested_workers": workers,
             "effective_workers": workers if workers > 1 else 1,
-            "parallel_scope": "external_tools_only" if workers > 1 else "serial",
+            "parallel_scope": "artifact_extraction_and_external_tools" if workers > 1 else "serial",
             "parallel_note": (
-                "External dotnet/binary tools generate outputs in parallel; DB ingest and internal parsers remain serialized."
+                "Mounted artifact extraction and external dotnet/binary tool generation can run in parallel; "
+                "TSK extraction, DB ingest, dependency barriers, and internal parsers remain serialized."
                 if workers > 1
                 else ""
             ),
@@ -252,8 +262,12 @@ def run_profile(
             image_id=image_id,
             level="info",
             event="profile.parallel_external_tools",
-            message="Profile workers enabled for external tool output generation; DB ingest and internal parsers remain serialized",
-            details={"profile": profile, "requested_workers": workers, "parallel_scope": "external_tools_only"},
+            message="Profile workers enabled for mounted artifact extraction and external tool output generation; dependency-sensitive work remains serialized",
+            details={
+                "profile": profile,
+                "requested_workers": workers,
+                "parallel_scope": "artifact_extraction_and_external_tools",
+            },
         )
     try:
         _run_profile_impl(
@@ -528,14 +542,15 @@ def _run_profile_impl(
                 computer_id=image.computer_id,
                 mount_path=Path(mount_row["volume_mount_path"]),
             )
-        def extract_profile_artifact(artifact):
+        def extract_profile_artifact(artifact, *, artifact_db: Database | None = None, record_path: bool = True):
             nonlocal fls_entries
+            active_db = artifact_db or db
             extraction_method = "mft" if artifact.name in mft_selected_artifacts else (
                 "mount" if use_mounted_extraction and not artifact.use_tsk else "tsk"
             )
             artifact_started = time.monotonic()
             _progress(f"artifact start {artifact.name} method={extraction_method}")
-            artifact_timing_id = db.start_process_timing(
+            artifact_timing_id = active_db.start_process_timing(
                 case_id=case_id,
                 computer_id=image.computer_id,
                 image_id=image_id,
@@ -557,7 +572,7 @@ def _run_profile_impl(
             try:
                 if artifact.name in mft_selected_artifacts:
                     extracted = extract_artifact_from_mft(
-                        db=db,
+                        db=active_db,
                         case_id=case_id,
                         image_id=image_id,
                         computer_id=image.computer_id,
@@ -574,7 +589,7 @@ def _run_profile_impl(
                     )
                 elif use_mounted_extraction and not artifact.use_tsk:
                     extracted = extract_artifact_from_mount(
-                        db=db,
+                        db=active_db,
                         case_id=case_id,
                         image_id=image_id,
                         computer_id=image.computer_id,
@@ -591,10 +606,13 @@ def _run_profile_impl(
                         fls_entries_provider=fls_entries_provider,
                     )
                 else:
-                    if use_mounted_extraction and artifact.use_tsk and fls_entries is None:
-                        fls_entries = fls_entries_provider()
+                    current_fls_entries = fls_entries
+                    if use_mounted_extraction and artifact.use_tsk and current_fls_entries is None:
+                        current_fls_entries = fls_entries_provider()
+                        if artifact_db is None:
+                            fls_entries = current_fls_entries
                     extracted = extract_artifact(
-                        db=db,
+                        db=active_db,
                         case_id=case_id,
                         image_id=image_id,
                         computer_id=image.computer_id,
@@ -603,12 +621,12 @@ def _run_profile_impl(
                         artifact=artifact,
                         artifacts_root=artifacts_root,
                         dry_run=dry_run,
-                        fls_entries=fls_entries,
+                        fls_entries=current_fls_entries,
                         ignore_exclude_patterns=artifact.name == "lnk_files" and include_start_menu_lnk,
                     )
             except Exception as exc:
                 if windows_old_mode and _is_missing_source_error(exc):
-                    db.finish_process_timing(
+                    active_db.finish_process_timing(
                         artifact_timing_id,
                         status="source_not_present",
                         details={"error": str(exc)},
@@ -617,7 +635,7 @@ def _run_profile_impl(
                         f"artifact source_not_present {artifact.name} method={extraction_method} "
                         f"elapsed={_format_elapsed(artifact_started)} error={exc}"
                     )
-                    db.log_activity(
+                    active_db.log_activity(
                         case_id=case_id,
                         computer_id=image.computer_id,
                         image_id=image_id,
@@ -627,7 +645,7 @@ def _run_profile_impl(
                         details={"artifact": artifact.name, "error": str(exc)},
                     )
                     return None
-                db.finish_process_timing(artifact_timing_id, status="failed", details={"error": str(exc)})
+                active_db.finish_process_timing(artifact_timing_id, status="failed", details={"error": str(exc)})
                 _progress(
                     f"artifact failed {artifact.name} method={extraction_method} "
                     f"elapsed={_format_elapsed(artifact_started)} error={exc}"
@@ -638,7 +656,7 @@ def _run_profile_impl(
                 getattr(extracted, "metadata", None),
                 include_path_stats=not artifact.process_in_place,
             )
-            db.finish_process_timing(
+            active_db.finish_process_timing(
                 artifact_timing_id,
                 details=artifact_details,
             )
@@ -646,10 +664,11 @@ def _run_profile_impl(
                 f"artifact completed {artifact.name} method={extraction_method} "
                 f"elapsed={_format_elapsed(artifact_started)}{_progress_detail(artifact_details)}"
             )
-            artifact_paths[artifact.name] = extracted.path
+            if record_path:
+                artifact_paths[artifact.name] = extracted.path
             if artifact.name == "prefetch_files" and not dry_run:
                 inventory = inventory_prefetch_directory(extracted.path)
-                db.log_activity(
+                active_db.log_activity(
                     case_id=case_id,
                     computer_id=image.computer_id,
                     image_id=image_id,
@@ -664,10 +683,38 @@ def _run_profile_impl(
                 )
             return extracted
 
-        for artifact in artifact_definitions.values():
-            if artifact.name in mft_selected_artifacts:
-                continue
-            extract_profile_artifact(artifact)
+        initial_artifacts = [
+            artifact for artifact in artifact_definitions.values() if artifact.name not in mft_selected_artifacts
+        ]
+        if workers > 1 and not dry_run and len(initial_artifacts) > 1:
+            parallel_artifacts = [artifact for artifact in initial_artifacts if not artifact.use_tsk]
+            serial_artifacts = [artifact for artifact in initial_artifacts if artifact.use_tsk]
+            artifact_tasks: list[ProcessingTask] = []
+            for artifact in parallel_artifacts:
+                artifact_tasks.append(
+                    ProcessingTask(
+                        name=f"profile-artifact:{artifact.name}",
+                        payload={"artifact_name": artifact.name},
+                        worker=lambda artifact=artifact: _extract_artifact_with_worker_db(
+                            db_path=paths.db_path(),
+                            artifact_callback=lambda worker_db, artifact=artifact: extract_profile_artifact(
+                                artifact,
+                                artifact_db=worker_db,
+                                record_path=False,
+                            ),
+                        ),
+                    )
+                )
+            for result in run_processing_tasks(artifact_tasks, workers=workers):
+                if result.status == "failed":
+                    raise ToolError(f"{result.name} failed during parallel artifact extraction: {result.error}")
+                if result.value is not None:
+                    artifact_paths[result.value.name] = result.value.path
+            for artifact in serial_artifacts:
+                extract_profile_artifact(artifact)
+        else:
+            for artifact in initial_artifacts:
+                extract_profile_artifact(artifact)
 
     parallel_tool_tasks: list[ProcessingTask] = []
     parallel_tool_contexts: dict[str, dict[str, object]] = {}
