@@ -22,6 +22,7 @@ def test_internal_ual_parser_exports_structured_rows(monkeypatch, tmp_path):
         )
         return type("Result", (), {"returncode": 0, "stderr": ""})()
 
+    monkeypatch.setattr("forensic_orchestrator.tools.ual.shutil.which", lambda name: None)
     monkeypatch.setattr("forensic_orchestrator.tools.ual.subprocess.run", fake_run)
 
     csv_path = parse_ual_artifacts_to_csv(sum_dir, tmp_path / "out")
@@ -36,6 +37,81 @@ def test_internal_ual_parser_exports_structured_rows(monkeypatch, tmp_path):
     assert rows[0]["client_ip"] == "10.0.0.5"
     assert rows[0]["first_seen"] == "2020-10-20T17:06:59.231231Z"
     assert rows[0]["access_count"] == "42"
+
+
+def test_ual_parser_prefers_external_ual_timeliner(monkeypatch, tmp_path):
+    sum_dir = tmp_path / "Windows" / "System32" / "LogFiles" / "SUM"
+    sum_dir.mkdir(parents=True)
+    (sum_dir / "Current.mdb").write_bytes(b"dummy")
+
+    def fake_which(name):
+        return "ual-timeliner" if name == "ual-timeliner" else None
+
+    def fake_run(command, stdout, stderr, text, check):
+        output_path = Path(command[command.index("-o") + 1])
+        output_path.write_text(
+            "timestamp,timestamp_desc,source_table,authenticated_user,ip_address,host_name,user,"
+            "access_count,total_accesses,role_name,role_guid,tenant_id,client_name,source_file\n"
+            "2020-10-20T17:06:59Z,InsertDate,CLIENTS,LAB\\\\fredr,10.0.0.5,WORKSTATION01,fredr,"
+            "1,42,File Server,{10A9226F-50EE-49D8-A393-9A501D47CE04},,WORKSTATION01,"
+            f"{sum_dir / 'Current.mdb'}\n"
+            "2020-10-21T00:00:00Z,Day295,CLIENTS,LAB\\\\fredr,10.0.0.5,WORKSTATION01,fredr,"
+            "3,42,File Server,{10A9226F-50EE-49D8-A393-9A501D47CE04},,WORKSTATION01,"
+            f"{sum_dir / 'Current.mdb'}\n",
+            encoding="utf-8",
+        )
+        return type("Result", (), {"returncode": 0, "stderr": ""})()
+
+    monkeypatch.setattr("forensic_orchestrator.tools.ual.shutil.which", fake_which)
+    monkeypatch.setattr("forensic_orchestrator.tools.ual.subprocess.run", fake_run)
+
+    csv_path = parse_ual_artifacts_to_csv(sum_dir, tmp_path / "out")
+
+    with csv_path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert len(rows) == 2
+    assert rows[0]["database_file"] == "Current.mdb"
+    assert rows[0]["insert_date"] == "2020-10-20T17:06:59Z"
+    assert rows[0]["role_name"] == "File Server"
+    assert rows[0]["client_ip"] == "10.0.0.5"
+    assert rows[1]["raw_time_bucket"] == "Day295"
+    assert rows[1]["insert_date"] == "2020-10-21T00:00:00Z"
+    assert rows[1]["day_count"] == "3"
+
+
+def test_ual_parser_falls_back_when_external_ual_timeliner_fails(monkeypatch, tmp_path):
+    sum_dir = tmp_path / "Windows" / "System32" / "LogFiles" / "SUM"
+    sum_dir.mkdir(parents=True)
+    (sum_dir / "Current.mdb").write_bytes(b"dummy")
+    calls = []
+
+    def fake_which(name):
+        return "ual-timeliner" if name == "ual-timeliner" else None
+
+    def fake_run(command, stdout, stderr, text, check):
+        calls.append(command)
+        if "ual-timeliner" in command[0]:
+            return type("Result", (), {"returncode": 2, "stderr": "bad db"})()
+        export_dir = tmp_path / "out" / "_esedbexport" / "Current.mdb.export"
+        export_dir.mkdir(parents=True)
+        (export_dir / "CLIENTS.4").write_text(
+            "AutoIncId\tRoleName\tUserName\tClientIp\tInsertDate\n"
+            "1\tFile Server\tfredr\t10.0.0.5\t2020-10-20T17:06:59Z\n",
+            encoding="utf-8",
+        )
+        return type("Result", (), {"returncode": 0, "stderr": ""})()
+
+    monkeypatch.setattr("forensic_orchestrator.tools.ual.shutil.which", fake_which)
+    monkeypatch.setattr("forensic_orchestrator.tools.ual.subprocess.run", fake_run)
+
+    csv_path = parse_ual_artifacts_to_csv(sum_dir, tmp_path / "out")
+
+    with csv_path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert len(rows) == 1
+    assert rows[0]["role_name"] == "File Server"
+    assert any("ual-timeliner" in call[0] for call in calls)
+    assert any("esedbexport" in call[0] for call in calls)
 
 
 def test_ual_parser_rows_are_ingested(tmp_path):

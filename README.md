@@ -980,6 +980,10 @@ The report commands are intentionally thin JSON views over SQLite:
   data so later memory work is visible in the case record. Hiberfil assessment
   is best-effort and fails gracefully when the file is inactive, compressed,
   unsupported, or unreadable.
+- UAL/SUM parsing uses the internal Linux parser by default and will prefer
+  `ual-timeliner` when it is on `PATH` or `UAL_TIMELINER_BIN` is set. The
+  external output is normalized back into `ual_records`; the internal parser
+  remains the fallback if the external parser is unavailable or fails.
 - `report memory-analysis`: investigator-facing memory processing workflow and
   findings report. It combines memory artifact inventory, imported targeted
   string hits, tool availability, MemProcFS/Volatility/bstrings next steps, and

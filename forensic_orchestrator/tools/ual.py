@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import os
 import re
 import shutil
 import subprocess
@@ -38,6 +39,12 @@ FILETIME_EPOCH = datetime(1601, 1, 1, tzinfo=timezone.utc)
 def parse_ual_artifacts_to_csv(source: Path, output: Path) -> Path:
     output.mkdir(parents=True, exist_ok=True)
     csv_path = output / "UalRecords.csv"
+    external = _ual_timeliner_command()
+    if external:
+        external_rows = _records_from_ual_timeliner(source, output, external)
+        if external_rows is not None:
+            _write_csv(csv_path, external_rows)
+            return csv_path
     databases = _ual_databases(source)
     if not databases:
         _write_csv(csv_path, [])
@@ -52,6 +59,92 @@ def parse_ual_artifacts_to_csv(source: Path, output: Path) -> Path:
         rows.extend(_records_from_database(database, export_root))
     _write_csv(csv_path, rows)
     return csv_path
+
+
+def _ual_timeliner_command() -> list[str] | None:
+    explicit = os.environ.get("UAL_TIMELINER_BIN")
+    candidates = [explicit] if explicit else []
+    found = shutil.which("ual-timeliner")
+    if found:
+        candidates.append(found)
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = Path(candidate)
+        if path.exists() or shutil.which(candidate):
+            return [str(path)]
+    return None
+
+
+def _records_from_ual_timeliner(source: Path, output: Path, command: list[str]) -> list[dict[str, object]] | None:
+    timeline_csv = output / "ual-timeliner.csv"
+    run_command = [
+        *command,
+        str(source),
+        "--full-output",
+        "-f",
+        "csv",
+        "-o",
+        str(timeline_csv),
+    ]
+    if source.is_dir():
+        run_command.insert(len(command) + 1, "-r")
+    result = subprocess.run(
+        run_command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    (output / "ual-timeliner.stderr.txt").write_text(result.stderr or "", encoding="utf-8")
+    if result.returncode != 0 or not timeline_csv.exists():
+        return None
+    try:
+        with timeline_csv.open("r", encoding="utf-8-sig", errors="replace", newline="") as handle:
+            rows = [_normalize_ual_timeliner_row(row) for row in csv.DictReader(handle)]
+    except (OSError, csv.Error):
+        return None
+    return [row for row in rows if _has_ual_value(row)]
+
+
+def _normalize_ual_timeliner_row(row: dict[str, str]) -> dict[str, object]:
+    timestamp = _first(row, "timestamp", "datetime")
+    timestamp_desc = _first(row, "timestamp_desc", "description")
+    normalized = {
+        "database_file": Path(_first(row, "source_file", "database_file", "DatabaseFile")).name,
+        "source_table": _first(row, "source_table", "SourceTable"),
+        "record_id": _first(row, "record_id", "RecordId", "Id", "ID"),
+        "role_guid": _guid(_first(row, "role_guid", "RoleGuid")),
+        "role_name": _first(row, "role_name", "RoleName"),
+        "product_name": _first(row, "product_name", "ProductName"),
+        "tenant_id": _first(row, "tenant_id", "TenantId", "TenantID"),
+        "user_sid": _sid_or_text(_first(row, "user_sid", "UserSid", "SID", "Sid")),
+        "user_name": _first(row, "user", "user_name", "authenticated_user", "UserName", "User"),
+        "client_name": _first(row, "host_name", "client_name", "ClientName", "Client"),
+        "client_ip": _first(row, "ip_address", "client_ip", "ClientIp", "IPAddress"),
+        "client_id": _first(row, "client_id", "ClientId", "DeviceId"),
+        "first_seen": "",
+        "last_seen": "",
+        "insert_date": "",
+        "last_access": "",
+        "access_count": _first(row, "access_count", "AccessCount"),
+        "activity_count": _first(row, "total_accesses", "activity_count", "TotalAccesses"),
+        "day_count": "",
+        "raw_time_bucket": timestamp_desc,
+    }
+    desc = timestamp_desc.casefold()
+    if desc == "firstseen":
+        normalized["first_seen"] = timestamp
+    elif desc == "lastseen":
+        normalized["last_seen"] = timestamp
+    elif desc == "insertdate":
+        normalized["insert_date"] = timestamp
+    elif desc == "lastaccess":
+        normalized["last_access"] = timestamp
+    elif re.fullmatch(r"day\d+", desc):
+        normalized["insert_date"] = timestamp
+        normalized["day_count"] = _first(row, "access_count", "AccessCount")
+    return normalized
 
 
 def _ual_databases(source: Path) -> list[Path]:
