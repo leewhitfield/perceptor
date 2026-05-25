@@ -1,12 +1,20 @@
 from __future__ import annotations
 
+import os
 import json
 import sqlite3
+import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 import duckdb
 import pandas as pd
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows fallback
+    fcntl = None
 
 
 ANALYTICS_TABLE_COLUMNS: dict[str, list[str]] = {
@@ -135,6 +143,7 @@ class AnalyticsStore:
     def __init__(self, sqlite_conn: sqlite3.Connection) -> None:
         self.sqlite_conn = sqlite_conn
         self._connections: dict[str, duckdb.DuckDBPyConnection] = {}
+        self.write_lock_timeout_seconds = float(os.environ.get("FORENSIC_DUCKDB_WRITE_LOCK_TIMEOUT", "600"))
 
     def close(self) -> None:
         for conn in self._connections.values():
@@ -145,30 +154,30 @@ class AnalyticsStore:
         if not rows:
             return
         for case_id, case_rows in self._group_by_case(rows).items():
-            conn = self._connect(case_id)
-            self._ensure_table(conn, table, columns)
-            column_sql = ", ".join(_quote_identifier(column) for column in columns)
-            frame = pd.DataFrame.from_records(
-                [
-                    {column: _normalize_value(row.get(column)) for column in columns}
-                    for row in case_rows
-                ],
-                columns=columns,
-            )
-            view_name = f"_analytics_insert_{id(frame)}"
-            conn.register(view_name, frame)
-            try:
-                if "id" in columns:
-                    conn.execute(
-                        f"DELETE FROM {_quote_identifier(table)} "
-                        f"WHERE id IN (SELECT id FROM {_quote_identifier(view_name)} WHERE id IS NOT NULL)"
-                    )
-                conn.execute(
-                    f"INSERT INTO {_quote_identifier(table)} ({column_sql}) "
-                    f"SELECT {column_sql} FROM {_quote_identifier(view_name)}"
+            with self._write_connection(case_id) as conn:
+                self._ensure_table(conn, table, columns)
+                column_sql = ", ".join(_quote_identifier(column) for column in columns)
+                frame = pd.DataFrame.from_records(
+                    [
+                        {column: _normalize_value(row.get(column)) for column in columns}
+                        for row in case_rows
+                    ],
+                    columns=columns,
                 )
-            finally:
-                conn.unregister(view_name)
+                view_name = f"_analytics_insert_{id(frame)}"
+                conn.register(view_name, frame)
+                try:
+                    if "id" in columns:
+                        conn.execute(
+                            f"DELETE FROM {_quote_identifier(table)} "
+                            f"WHERE id IN (SELECT id FROM {_quote_identifier(view_name)} WHERE id IS NOT NULL)"
+                        )
+                    conn.execute(
+                        f"INSERT INTO {_quote_identifier(table)} ({column_sql}) "
+                        f"SELECT {column_sql} FROM {_quote_identifier(view_name)}"
+                    )
+                finally:
+                    conn.unregister(view_name)
 
     def delete_case_image(
         self,
@@ -178,28 +187,30 @@ class AnalyticsStore:
         image_id: str | None = None,
         tool_names: list[str] | None = None,
     ) -> None:
-        conn = self._connect(case_id)
-        if not self._table_exists(conn, table):
-            return
-        where = ["case_id = ?"]
-        params: list[object] = [case_id]
-        if image_id is not None:
-            where.append("image_id = ?")
-            params.append(image_id)
-        if tool_names:
-            tool_column = self._tool_column(conn, table)
-            if tool_column is None:
+        with self._write_connection(case_id) as conn:
+            if not self._table_exists(conn, table):
                 return
-            placeholders = ", ".join("?" for _ in tool_names)
-            where.append(f"{_quote_identifier(tool_column)} IN ({placeholders})")
-            params.extend(tool_names)
-        conn.execute(f"DELETE FROM {_quote_identifier(table)} WHERE {' AND '.join(where)}", params)
+            where = ["case_id = ?"]
+            params: list[object] = [case_id]
+            if image_id is not None:
+                where.append("image_id = ?")
+                params.append(image_id)
+            if tool_names:
+                tool_column = self._tool_column(conn, table)
+                if tool_column is None:
+                    return
+                placeholders = ", ".join("?" for _ in tool_names)
+                where.append(f"{_quote_identifier(tool_column)} IN ({placeholders})")
+                params.extend(tool_names)
+            conn.execute(f"DELETE FROM {_quote_identifier(table)} WHERE {' AND '.join(where)}", params)
 
     def delete_where(self, table: str, where: str, params: list[object] | tuple[object, ...]) -> None:
-        conn = self._connect(str(params[0])) if params else None
-        if conn is None or not self._table_exists(conn, table):
+        if not params:
             return
-        conn.execute(f"DELETE FROM {_quote_identifier(table)} WHERE {where}", list(params))
+        with self._write_connection(str(params[0])) as conn:
+            if not self._table_exists(conn, table):
+                return
+            conn.execute(f"DELETE FROM {_quote_identifier(table)} WHERE {where}", list(params))
 
     def _group_by_case(self, rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
         grouped: dict[str, list[dict[str, Any]]] = {}
@@ -221,6 +232,41 @@ class AnalyticsStore:
         if row is None:
             raise ValueError(f"Unknown case_id for analytics storage: {case_id}")
         return Path(row["root"]) / "analytics" / "events.duckdb"
+
+    @contextmanager
+    def _write_connection(self, case_id: str):
+        db_path = self._analytics_db_path(case_id)
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        with self._case_write_lock(db_path):
+            conn = duckdb.connect(str(db_path))
+            try:
+                yield conn
+            finally:
+                conn.close()
+
+    @contextmanager
+    def _case_write_lock(self, db_path: Path):
+        if fcntl is None:  # pragma: no cover - Windows fallback
+            yield
+            return
+        lock_path = db_path.with_suffix(db_path.suffix + ".write.lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        deadline = time.monotonic() + self.write_lock_timeout_seconds
+        with lock_path.open("w") as handle:
+            while True:
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError(
+                            f"Timed out waiting for DuckDB analytics write lock: {lock_path}"
+                        )
+                    time.sleep(0.25)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
     def _ensure_table(self, conn: duckdb.DuckDBPyConnection, table: str, columns: list[str]) -> None:
         column_defs = ", ".join(f"{_quote_identifier(column)} {_duckdb_type(column)}" for column in columns)

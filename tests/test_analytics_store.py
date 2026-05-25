@@ -1,9 +1,39 @@
+import fcntl
+import multiprocessing
+import time
+from pathlib import Path
+
 import duckdb
 
 from forensic_orchestrator.db import Database
 from forensic_orchestrator.filesystem_review import rebuild_filesystem_review
 from forensic_orchestrator.reports import image_analysis_report, rdp_cache_report, rdp_visual_observations_report
 from forensic_orchestrator.tools.ingest import ingest_csv_output
+
+
+def _insert_mft_row_worker(db_path: str, case_id: str, image_id: str, queue: multiprocessing.Queue) -> None:
+    try:
+        db = Database(Path(db_path), migrate=False)
+        db.insert_normalized_artifact_rows(
+            "mft_entries",
+            [
+                {
+                    "id": "mft-worker",
+                    "case_id": case_id,
+                    "computer_id": "computer-1",
+                    "image_id": image_id,
+                    "tool_output_id": "output-1",
+                    "tool_name": "MFTECmd",
+                    "source_csv": "mft.csv",
+                    "row_number": 1,
+                    "file_name": "$MFT",
+                }
+            ],
+        )
+        db.close()
+        queue.put("ok")
+    except Exception as exc:  # pragma: no cover - reported through parent assertion
+        queue.put(f"error: {exc}")
 
 
 def sqlite_table_exists(db: Database, table: str) -> bool:
@@ -53,6 +83,44 @@ def test_default_duckdb_routes_generic_normalized_rows(tmp_path, monkeypatch):
     sqlite_db = Database(tmp_path / "orchestrator.sqlite3")
     assert not sqlite_table_exists(sqlite_db, "mft_entries")
     sqlite_db.close()
+
+
+def test_duckdb_analytics_writes_wait_for_case_lock(tmp_path, monkeypatch):
+    monkeypatch.delenv("FORENSIC_ANALYTICS_MODE", raising=False)
+    db_path = tmp_path / "orchestrator.sqlite3"
+    db = Database(db_path)
+    case_id = "case-1"
+    image_id = "image-1"
+    db.create_case(case_id, tmp_path / "cases" / case_id)
+    db.create_computer(computer_id="computer-1", case_id=case_id, label="ROCBA")
+    db.add_image(image_id, case_id, tmp_path / "image.e01", computer_id="computer-1")
+    db.close()
+
+    duckdb_path = tmp_path / "cases" / case_id / "analytics" / "events.duckdb"
+    lock_path = duckdb_path.with_suffix(duckdb_path.suffix + ".write.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    context = multiprocessing.get_context("spawn")
+    queue: multiprocessing.Queue = context.Queue()
+    with lock_path.open("w") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        worker = context.Process(
+            target=_insert_mft_row_worker,
+            args=(str(db_path), case_id, image_id, queue),
+        )
+        worker.start()
+        time.sleep(0.5)
+        assert queue.empty()
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+    worker.join(10)
+    assert worker.exitcode == 0
+    assert queue.get(timeout=1) == "ok"
+
+    duck = duckdb.connect(str(duckdb_path), read_only=True)
+    try:
+        assert duck.execute("SELECT file_name FROM mft_entries").fetchone() == ("$MFT",)
+    finally:
+        duck.close()
 
 
 def test_default_duckdb_can_drop_empty_sqlite_analytics_tables(tmp_path, monkeypatch):
