@@ -206,6 +206,7 @@ DEFAULT_PURGE_TABLES = (
     "content_references",
     "cloud_server_events",
     "memory_string_hits",
+    "carve_scan_ranges",
     "staged_carves",
 )
 
@@ -291,7 +292,7 @@ TOOL_PURGE_TABLES = {
     },
     "CloudServerLogImporter": {"cloud_server_events", "content_references", "tool_outputs"},
     "MemoryStringScanner": {"memory_string_hits", "tool_outputs"},
-    "CarveStageRunner": {"staged_carves", "tool_outputs"},
+    "CarveStageRunner": {"carve_scan_ranges", "staged_carves", "tool_outputs"},
     "WindowsSearchMemoryCarveParser": {
         "windows_search_memory_carves",
         "windows_search_memory_objects",
@@ -521,6 +522,33 @@ class Database:
               row_count INTEGER,
               created_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS carve_scan_ranges (
+              id TEXT PRIMARY KEY,
+              case_id TEXT NOT NULL REFERENCES cases(id),
+              computer_id TEXT NOT NULL REFERENCES computers(id),
+              image_id TEXT NOT NULL REFERENCES images(id),
+              tool_output_id TEXT NOT NULL REFERENCES tool_outputs(id),
+              tool_name TEXT NOT NULL,
+              source_csv TEXT NOT NULL,
+              row_number INTEGER NOT NULL,
+              profile TEXT,
+              carve_type TEXT,
+              source_path TEXT NOT NULL,
+              source_size TEXT,
+              range_start TEXT,
+              range_end TEXT,
+              scanned_bytes TEXT,
+              hits_found TEXT,
+              limited TEXT,
+              limit_reason TEXT,
+              status TEXT,
+              notes TEXT,
+              created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_carve_scan_ranges_case
+              ON carve_scan_ranges(case_id, carve_type, source_path);
 
             CREATE TABLE IF NOT EXISTS staged_carves (
               id TEXT PRIMARY KEY,
@@ -4384,6 +4412,20 @@ class Database:
                 "normalized_name": "TEXT",
                 "timestamp": "TEXT",
             },
+            "carve_scan_ranges": {
+                "profile": "TEXT",
+                "carve_type": "TEXT",
+                "source_path": "TEXT NOT NULL DEFAULT ''",
+                "source_size": "TEXT",
+                "range_start": "TEXT",
+                "range_end": "TEXT",
+                "scanned_bytes": "TEXT",
+                "hits_found": "TEXT",
+                "limited": "TEXT",
+                "limit_reason": "TEXT",
+                "status": "TEXT",
+                "notes": "TEXT",
+            },
             "staged_carves": {
                 "profile": "TEXT",
                 "source_path": "TEXT NOT NULL DEFAULT ''",
@@ -6960,6 +7002,19 @@ class Database:
                 "staged_size", "staged_sha256", "carve_type", "detected_format",
                 "parser_status", "parser_error", "table_count", "object_count",
                 "extractable_row_count", "import_status", "notes", "created_at",
+            ],
+            rows,
+        )
+
+    def insert_carve_scan_ranges(self, rows: list[dict[str, Any]]) -> None:
+        self._insert_rows(
+            "carve_scan_ranges",
+            [
+                "id", "case_id", "computer_id", "image_id", "tool_output_id",
+                "tool_name", "source_csv", "row_number", "profile", "carve_type",
+                "source_path", "source_size", "range_start", "range_end",
+                "scanned_bytes", "hits_found", "limited", "limit_reason",
+                "status", "notes", "created_at",
             ],
             rows,
         )

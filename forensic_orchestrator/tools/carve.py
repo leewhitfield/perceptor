@@ -21,9 +21,12 @@ def stage_sqlite_carves(
     max_carves: int = 1000,
     max_bytes: int = 2 * 1024 * 1024 * 1024,
     max_carve_size: int = 256 * 1024 * 1024,
+    start_offset: int = 0,
+    chunk_size: int | None = None,
 ) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
     rows: list[dict[str, Any]] = []
+    ranges: list[dict[str, Any]] = []
     scanned_bytes = 0
     limit_reason = ""
     for candidate in _iter_candidates(source):
@@ -34,27 +37,36 @@ def stage_sqlite_carves(
             size = candidate.stat().st_size
         except OSError:
             continue
-        remaining = max_bytes - scanned_bytes
-        if remaining <= 0:
+        available = _bounded_available(size, start_offset, max_bytes - scanned_bytes)
+        if available <= 0:
             limit_reason = "max_bytes"
             break
-        scanned_bytes += min(size, remaining)
-        if _is_sqlite(candidate) or _is_aesgcm(candidate):
+        if start_offset == 0 and (_is_sqlite(candidate) or _is_aesgcm(candidate)):
             rows.append(_stage_existing_file(candidate, output_dir))
+            ranges.append(_scan_range(candidate, start_offset=0, scanned_bytes=min(size, available), hits_found=1))
+            scanned_bytes += min(size, available)
             continue
-        for offset in _sqlite_offsets(candidate, max_bytes=remaining):
-            if len(rows) >= max_carves:
-                limit_reason = "max_carves"
+        for range_start, range_size in _scan_windows(start_offset, available, chunk_size):
+            range_hits = 0
+            for offset in _sqlite_offsets(candidate, start_offset=range_start, max_bytes=range_size):
+                if len(rows) >= max_carves:
+                    limit_reason = "max_carves"
+                    break
+                staged = _carve_sqlite_at_offset(candidate, output_dir, offset, max_carve_size=max_carve_size)
+                if staged:
+                    rows.append(staged)
+                    range_hits += 1
+            ranges.append(_scan_range(candidate, start_offset=range_start, scanned_bytes=range_size, hits_found=range_hits))
+            scanned_bytes += range_size
+            if limit_reason:
                 break
-            staged = _carve_sqlite_at_offset(candidate, output_dir, offset, max_carve_size=max_carve_size)
-            if staged:
-                rows.append(staged)
         if limit_reason:
             break
     return {
         "source": str(source),
         "output_dir": str(output_dir),
         "carves": rows,
+        "scan_ranges": ranges,
         "scanned_bytes": scanned_bytes,
         "carve_count": len(rows),
         "limited": bool(limit_reason),
@@ -69,9 +81,12 @@ def stage_ese_carves(
     max_carves: int = 1000,
     max_bytes: int = 2 * 1024 * 1024 * 1024,
     max_carve_size: int = 512 * 1024 * 1024,
+    start_offset: int = 0,
+    chunk_size: int | None = None,
 ) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
     rows: list[dict[str, Any]] = []
+    ranges: list[dict[str, Any]] = []
     scanned_bytes = 0
     limit_reason = ""
     for candidate in _iter_candidates(source):
@@ -82,27 +97,36 @@ def stage_ese_carves(
             size = candidate.stat().st_size
         except OSError:
             continue
-        remaining = max_bytes - scanned_bytes
-        if remaining <= 0:
+        available = _bounded_available(size, start_offset, max_bytes - scanned_bytes)
+        if available <= 0:
             limit_reason = "max_bytes"
             break
-        scanned_bytes += min(size, remaining)
-        if _is_ese(candidate):
+        if start_offset == 0 and _is_ese(candidate):
             rows.append(_stage_existing_file(candidate, output_dir, default_suffix=".edb"))
+            ranges.append(_scan_range(candidate, start_offset=0, scanned_bytes=min(size, available), hits_found=1))
+            scanned_bytes += min(size, available)
             continue
-        for offset in _ese_offsets(candidate, max_bytes=remaining):
-            if len(rows) >= max_carves:
-                limit_reason = "max_carves"
+        for range_start, range_size in _scan_windows(start_offset, available, chunk_size):
+            range_hits = 0
+            for offset in _ese_offsets(candidate, start_offset=range_start, max_bytes=range_size):
+                if len(rows) >= max_carves:
+                    limit_reason = "max_carves"
+                    break
+                staged = _carve_bytes_at_offset(candidate, output_dir, offset, max_carve_size=max_carve_size, suffix=".edb")
+                if staged:
+                    rows.append(staged)
+                    range_hits += 1
+            ranges.append(_scan_range(candidate, start_offset=range_start, scanned_bytes=range_size, hits_found=range_hits))
+            scanned_bytes += range_size
+            if limit_reason:
                 break
-            staged = _carve_bytes_at_offset(candidate, output_dir, offset, max_carve_size=max_carve_size, suffix=".edb")
-            if staged:
-                rows.append(staged)
         if limit_reason:
             break
     return {
         "source": str(source),
         "output_dir": str(output_dir),
         "carves": rows,
+        "scan_ranges": ranges,
         "scanned_bytes": scanned_bytes,
         "carve_count": len(rows),
         "limited": bool(limit_reason),
@@ -244,10 +268,86 @@ def staged_carve_row(
     }
 
 
+def scan_range_row(
+    *,
+    case_id: str,
+    computer_id: str,
+    image_id: str,
+    tool_output_id: str,
+    source_csv: Path,
+    row_number: int,
+    profile: str,
+    carve_type: str,
+    range_info: dict[str, Any],
+    limited: bool,
+    limit_reason: str,
+) -> dict[str, Any]:
+    source_path = str(range_info.get("source_path") or "")
+    range_start = int(range_info.get("range_start") or 0)
+    range_end = int(range_info.get("range_end") or range_start)
+    return {
+        "id": _stable_id(case_id, "carve-scan-range", carve_type, source_path, range_start, range_end),
+        "case_id": case_id,
+        "computer_id": computer_id,
+        "image_id": image_id,
+        "tool_output_id": tool_output_id,
+        "tool_name": "CarveStageRunner",
+        "source_csv": source_csv,
+        "row_number": row_number,
+        "profile": profile,
+        "carve_type": carve_type,
+        "source_path": source_path,
+        "source_size": str(range_info.get("source_size") or ""),
+        "range_start": str(range_start),
+        "range_end": str(range_end),
+        "scanned_bytes": str(range_info.get("scanned_bytes") or 0),
+        "hits_found": str(range_info.get("hits_found") or 0),
+        "limited": "1" if limited else "0",
+        "limit_reason": limit_reason or "",
+        "status": "hit" if int(range_info.get("hits_found") or 0) else "scanned",
+        "notes": "",
+    }
+
+
 def _iter_candidates(source: Path) -> list[Path]:
     if source.is_file():
         return [source]
     return sorted(path for path in source.rglob("*") if path.is_file())
+
+
+def _bounded_available(size: int, start_offset: int, max_bytes: int) -> int:
+    if max_bytes <= 0 or start_offset >= size:
+        return 0
+    return max(0, min(size - start_offset, max_bytes))
+
+
+def _scan_windows(start_offset: int, available: int, chunk_size: int | None) -> list[tuple[int, int]]:
+    if available <= 0:
+        return []
+    if not chunk_size or chunk_size <= 0:
+        return [(start_offset, available)]
+    windows = []
+    consumed = 0
+    while consumed < available:
+        size = min(chunk_size, available - consumed)
+        windows.append((start_offset + consumed, size))
+        consumed += size
+    return windows
+
+
+def _scan_range(path: Path, *, start_offset: int, scanned_bytes: int, hits_found: int) -> dict[str, Any]:
+    try:
+        source_size = path.stat().st_size
+    except OSError:
+        source_size = 0
+    return {
+        "source_path": str(path),
+        "source_size": source_size,
+        "range_start": start_offset,
+        "range_end": start_offset + scanned_bytes,
+        "scanned_bytes": scanned_bytes,
+        "hits_found": hits_found,
+    }
 
 
 def _is_sqlite(path: Path) -> bool:
@@ -275,31 +375,33 @@ def _is_ese(path: Path) -> bool:
         return False
 
 
-def _sqlite_offsets(path: Path, *, max_bytes: int | None = None) -> list[int]:
-    return _find_offsets(path, SQLITE_HEADER, max_bytes=max_bytes)
+def _sqlite_offsets(path: Path, *, start_offset: int = 0, max_bytes: int | None = None) -> list[int]:
+    return _find_offsets(path, SQLITE_HEADER, start_offset=start_offset, max_bytes=max_bytes)
 
 
-def _ese_offsets(path: Path, *, max_bytes: int | None = None) -> list[int]:
+def _ese_offsets(path: Path, *, start_offset: int = 0, max_bytes: int | None = None) -> list[int]:
     offsets = []
-    for offset in _find_offsets(path, ESE_MAGIC, max_bytes=max_bytes):
+    for offset in _find_offsets(path, ESE_MAGIC, start_offset=start_offset, max_bytes=max_bytes):
         candidate = offset - 4
         if candidate >= 0:
             offsets.append(candidate)
     return offsets
 
 
-def _find_offsets(path: Path, needle: bytes, *, max_bytes: int | None = None) -> list[int]:
+def _find_offsets(path: Path, needle: bytes, *, start_offset: int = 0, max_bytes: int | None = None) -> list[int]:
     offsets = []
     overlap = len(needle) - 1
     absolute = 0
     tail = b""
     with path.open("rb") as handle:
+        handle.seek(start_offset)
+        absolute = start_offset
         while True:
-            if max_bytes is not None and absolute >= max_bytes:
+            if max_bytes is not None and absolute >= start_offset + max_bytes:
                 break
             read_size = 1024 * 1024
             if max_bytes is not None:
-                read_size = min(read_size, max_bytes - absolute)
+                read_size = min(read_size, start_offset + max_bytes - absolute)
             chunk = handle.read(read_size)
             if not chunk:
                 break

@@ -190,6 +190,8 @@ from .reports import (
     suspicious_executions_report,
     suspicious_timeline_windows_markdown,
     suspicious_timeline_windows_report,
+    sqlite_inventory_markdown,
+    sqlite_inventory_report,
     sdelete_report,
     srum_app_network_usage_report,
     srum_context_report,
@@ -264,7 +266,14 @@ from .tools.profiles import profile_extraction_preview, run_profile
 from .tools.registry import ToolRegistry
 from .tools.cloud_server_import import import_cloud_server_logs_to_csv
 from .tools.ingest import ingest_csv_output
-from .tools.carve import stage_ese_carves, stage_sqlite_carves, staged_carve_row, summarize_ese_carve, summarize_sqlite_carve
+from .tools.carve import (
+    scan_range_row,
+    stage_ese_carves,
+    stage_sqlite_carves,
+    staged_carve_row,
+    summarize_ese_carve,
+    summarize_sqlite_carve,
+)
 from .tools.chromium import parse_chromium_artifacts_to_csv
 from .tools.firefox import parse_firefox_artifacts_to_csv
 from .tools.activities import parse_windows_activities_to_csv
@@ -490,6 +499,25 @@ def import_recognized_sqlite_carves(
     return imported
 
 
+def _write_scan_ranges_csv(path: Path, rows: list[dict[str, object]]) -> None:
+    fieldnames = ["source_path", "source_size", "range_start", "range_end", "scanned_bytes", "hits_found"]
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({field: row.get(field, "") for field in fieldnames})
+
+
+def _looks_like_windows_search_sqlite_source(source: Path) -> bool:
+    text = str(source).casefold()
+    return (
+        "windows.search" in text
+        or "searchindexer" in text
+        or "windows-search" in text
+        or source.name.casefold() in {"windows-search.db", "windows.db", "search.db"}
+    )
+
+
 def _sqlite_artifact_route(name: str):
     lower = name.casefold()
     if lower in {"places.sqlite", "cookies.sqlite", "formhistory.sqlite", "permissions.sqlite"}:
@@ -517,6 +545,7 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
         ("memory-artifacts", "md", "Memory artifact inventory", memory_artifacts_markdown(memory_artifacts_report(db, case_id, limit=limit))),
         ("recovery-coverage", "json", "Recovery coverage", recovery_coverage_report(db, case_id, limit=max(limit, 250))),
         ("carve-coverage", "md", "Carve coverage", carve_coverage_markdown(carve_coverage_report(db, case_id, limit=max(limit, 250)))),
+        ("sqlite-inventory", "md", "SQLite carve inventory", sqlite_inventory_markdown(sqlite_inventory_report(db, case_id, limit=limit))),
         ("artifact-processing-status", "json", "Artifact processing status", artifact_processing_status_report(db, case_id, limit=limit)),
         ("processing-decisions", "md", "Processing decisions", processing_decision_markdown(processing_decision_report(db, case_id, limit=limit))),
         ("browser-activity", "json", "Browser activity", browser_activity_report(db, case_id, limit=limit, memory_disk_report=memory_disk)),
@@ -835,6 +864,8 @@ def build_parser() -> argparse.ArgumentParser:
     carve_sqlite.add_argument("--max-carves", type=int, default=1000)
     carve_sqlite.add_argument("--max-bytes", type=int, default=2 * 1024 * 1024 * 1024)
     carve_sqlite.add_argument("--max-carve-size", type=int, default=256 * 1024 * 1024)
+    carve_sqlite.add_argument("--start-offset", type=int, default=0)
+    carve_sqlite.add_argument("--chunk-size", type=int, default=64 * 1024 * 1024)
     carve_sqlite.add_argument("--max-rows-per-table", type=int, default=25)
     carve_sqlite.add_argument(
         "--import-artifacts",
@@ -855,6 +886,8 @@ def build_parser() -> argparse.ArgumentParser:
     carve_ese.add_argument("--max-carves", type=int, default=1000)
     carve_ese.add_argument("--max-bytes", type=int, default=2 * 1024 * 1024 * 1024)
     carve_ese.add_argument("--max-carve-size", type=int, default=512 * 1024 * 1024)
+    carve_ese.add_argument("--start-offset", type=int, default=0)
+    carve_ese.add_argument("--chunk-size", type=int, default=64 * 1024 * 1024)
 
     computer = subparsers.add_parser("computer")
     computer_sub = computer.add_subparsers(dest="action", required=True)
@@ -1392,6 +1425,12 @@ def build_parser() -> argparse.ArgumentParser:
     report_carve_coverage.add_argument("--limit", type=int, default=500)
     report_carve_coverage.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
     report_carve_coverage.add_argument("--output")
+    report_sqlite_inventory = report_sub.add_parser("sqlite-inventory")
+    report_sqlite_inventory.add_argument("--case", required=True, dest="case_id")
+    report_sqlite_inventory.add_argument("--limit", type=int, default=100)
+    report_sqlite_inventory.add_argument("--sample-rows", type=int, default=0)
+    report_sqlite_inventory.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
+    report_sqlite_inventory.add_argument("--output")
     report_telemetry = report_sub.add_parser("telemetry-artifacts")
     report_telemetry.add_argument("--case", required=True, dest="case_id")
     report_telemetry.add_argument("--artifact-group")
@@ -2560,8 +2599,11 @@ def run(args: argparse.Namespace) -> int:
                 max_carves=args.max_carves,
                 max_bytes=args.max_bytes,
                 max_carve_size=args.max_carve_size,
+                start_offset=args.start_offset,
+                chunk_size=args.chunk_size,
             )
             manifest_path = output_dir / "staged-carves.csv"
+            ranges_path = output_dir / "scan-ranges.csv"
             manifest_rows: list[dict[str, object]] = []
             staged_rows: list[dict[str, object]] = []
             for row_number, staged in enumerate(manifest["carves"], start=1):
@@ -2586,6 +2628,7 @@ def run(args: argparse.Namespace) -> int:
                     writer.writerows(manifest_rows)
             else:
                 manifest_path.write_text("row_number,profile,source_path,source_offset,staged_path\n", encoding="utf-8")
+            _write_scan_ranges_csv(ranges_path, manifest.get("scan_ranges") or [])
             output_id = str(uuid.uuid4())
             db.insert_tool_output(
                 {
@@ -2616,6 +2659,23 @@ def run(args: argparse.Namespace) -> int:
                 staged_row["created_at"] = datetime.now(timezone.utc).isoformat()
                 staged_rows.append(staged_row)
             db.insert_staged_carves(staged_rows)
+            scan_rows = [
+                scan_range_row(
+                    case_id=args.case_id,
+                    computer_id=computer_id,
+                    image_id=image_id,
+                    tool_output_id=output_id,
+                    source_csv=ranges_path,
+                    row_number=index,
+                    profile=args.profile,
+                    carve_type="sqlite",
+                    range_info=range_info,
+                    limited=bool(manifest.get("limited")),
+                    limit_reason=str(manifest.get("limit_reason") or ""),
+                )
+                for index, range_info in enumerate(manifest.get("scan_ranges") or [], start=1)
+            ]
+            db.insert_carve_scan_ranges(scan_rows)
             db.insert_timeline_events(timeline_events_from_rows(staged_rows))
             artifact_imported = {"tools": {}, "csv_files": 0, "rows": 0, "skipped": len(staged_rows)}
             if args.import_artifacts and staged_rows:
@@ -2629,7 +2689,12 @@ def run(args: argparse.Namespace) -> int:
                     output_dir=output_dir,
                 )
             windows_search_imported = {"carves": 0, "objects": 0, "rows": 0}
-            if args.import_windows_search_memory and staged_rows:
+            should_import_search = (
+                args.import_windows_search_memory
+                or args.profile == "windows-search-carve"
+                or _looks_like_windows_search_sqlite_source(source)
+            )
+            if should_import_search and staged_rows:
                 parsed = parse_windows_search_memory_carves(
                     output_dir,
                     case_id=args.case_id,
@@ -2673,6 +2738,12 @@ def run(args: argparse.Namespace) -> int:
                     "source": str(source),
                     "output_dir": str(output_dir),
                     "manifest_path": str(manifest_path),
+                    "scan_ranges_path": str(ranges_path),
+                    "start_offset": args.start_offset,
+                    "chunk_size": args.chunk_size,
+                    "scan_ranges": len(scan_rows),
+                    "scanned_bytes": manifest.get("scanned_bytes"),
+                    "next_start_offset": args.start_offset + int(manifest.get("scanned_bytes") or 0),
                     "staged_carves": len(staged_rows),
                     "limited": manifest.get("limited"),
                     "limit_reason": manifest.get("limit_reason"),
@@ -2700,8 +2771,11 @@ def run(args: argparse.Namespace) -> int:
                 max_carves=args.max_carves,
                 max_bytes=args.max_bytes,
                 max_carve_size=args.max_carve_size,
+                start_offset=args.start_offset,
+                chunk_size=args.chunk_size,
             )
             manifest_path = output_dir / "staged-carves.csv"
+            ranges_path = output_dir / "scan-ranges.csv"
             manifest_rows: list[dict[str, object]] = []
             for row_number, staged in enumerate(manifest["carves"], start=1):
                 staged_path = Path(str(staged["path"]))
@@ -2726,6 +2800,7 @@ def run(args: argparse.Namespace) -> int:
                     writer.writerows(manifest_rows)
             else:
                 manifest_path.write_text("row_number,profile,source_path,source_offset,staged_path\n", encoding="utf-8")
+            _write_scan_ranges_csv(ranges_path, manifest.get("scan_ranges") or [])
             output_id = str(uuid.uuid4())
             db.insert_tool_output(
                 {
@@ -2759,6 +2834,23 @@ def run(args: argparse.Namespace) -> int:
                 staged_row["created_at"] = datetime.now(timezone.utc).isoformat()
                 staged_rows.append(staged_row)
             db.insert_staged_carves(staged_rows)
+            scan_rows = [
+                scan_range_row(
+                    case_id=args.case_id,
+                    computer_id=computer_id,
+                    image_id=image_id,
+                    tool_output_id=output_id,
+                    source_csv=ranges_path,
+                    row_number=index,
+                    profile=args.profile,
+                    carve_type="ese",
+                    range_info=range_info,
+                    limited=bool(manifest.get("limited")),
+                    limit_reason=str(manifest.get("limit_reason") or ""),
+                )
+                for index, range_info in enumerate(manifest.get("scan_ranges") or [], start=1)
+            ]
+            db.insert_carve_scan_ranges(scan_rows)
             db.insert_timeline_events(timeline_events_from_rows(staged_rows))
             db.log_activity(
                 case_id=args.case_id,
@@ -2784,6 +2876,12 @@ def run(args: argparse.Namespace) -> int:
                     "source": str(source),
                     "output_dir": str(output_dir),
                     "manifest_path": str(manifest_path),
+                    "scan_ranges_path": str(ranges_path),
+                    "start_offset": args.start_offset,
+                    "chunk_size": args.chunk_size,
+                    "scan_ranges": len(scan_rows),
+                    "scanned_bytes": manifest.get("scanned_bytes"),
+                    "next_start_offset": args.start_offset + int(manifest.get("scanned_bytes") or 0),
                     "staged_carves": len(staged_rows),
                     "limited": manifest.get("limited"),
                     "limit_reason": manifest.get("limit_reason"),
@@ -4292,6 +4390,33 @@ def run(args: argparse.Namespace) -> int:
                         "staged_size",
                         "staged_path",
                     ],
+                )
+            return 0
+
+        if args.resource == "report" and args.action == "sqlite-inventory":
+            report = sqlite_inventory_report(db, args.case_id, limit=args.limit, sample_rows=args.sample_rows)
+            if args.format == "md":
+                write_text_output(sqlite_inventory_markdown(report), args.output)
+            else:
+                rows = []
+                for inventory in report["inventories"]:
+                    rows.append(
+                        {
+                            "status": inventory.get("status"),
+                            "staged_path": inventory.get("staged_path"),
+                            "source_path": inventory.get("source_path"),
+                            "source_offset": inventory.get("source_offset"),
+                            "table_count": len(inventory.get("tables") or []),
+                            "error": inventory.get("error"),
+                        }
+                    )
+                write_report_output(
+                    report,
+                    rows,
+                    args.format,
+                    args.output,
+                    title=f"SQLite carve inventory for case {args.case_id}",
+                    columns=["status", "table_count", "source_offset", "staged_path", "error"],
                 )
             return 0
 

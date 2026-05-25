@@ -9,6 +9,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -17222,10 +17223,42 @@ def carve_coverage_report(db: Database, case_id: str, *, limit: int = 500) -> di
         """,
         (case_id, limit),
     )
+    scan_ranges = _query_report_rows(
+        db,
+        case_id,
+        "carve_scan_ranges",
+        """
+        SELECT *
+        FROM carve_scan_ranges
+        WHERE case_id = ?
+        ORDER BY created_at DESC, row_number ASC
+        LIMIT ?
+        """,
+        (case_id, limit),
+    )
+    scanned_bytes = sum(int(row.get("scanned_bytes") or 0) for row in scan_ranges)
+    source_sizes = {
+        str(row.get("source_path") or ""): int(row.get("source_size") or 0)
+        for row in scan_ranges
+        if row.get("source_path")
+    }
+    source_coverage = _carve_source_coverage(scan_ranges)
+    total_source_bytes = sum(source_sizes.values())
     summary = {
         "carve_count": len(rows),
+        "scan_range_count": len(scan_ranges),
+        "scanned_bytes": scanned_bytes,
+        "unique_source_count": len(source_sizes),
+        "total_source_bytes": total_source_bytes,
+        "scan_coverage_percent": round((scanned_bytes / total_source_bytes) * 100, 3) if total_source_bytes else 0,
         "profile_counts": _count_by_key(rows, "profile"),
         "type_counts": _count_by_key(rows, "carve_type"),
+        "range_type_counts": _count_by_key(scan_ranges, "carve_type"),
+        "source_coverage": source_coverage,
+        "next_scan_recommendations": [
+            item for item in source_coverage
+            if int(item.get("remaining_bytes") or 0) > 0
+        ][:20],
         "format_counts": _count_by_key(rows, "detected_format"),
         "parser_status_counts": _count_by_key(rows, "parser_status"),
         "import_status_counts": _count_by_key(rows, "import_status"),
@@ -17236,6 +17269,7 @@ def carve_coverage_report(db: Database, case_id: str, *, limit: int = 500) -> di
         "case_id": case_id,
         "summary": summary,
         "carves": rows,
+        "scan_ranges": scan_ranges,
         "notes": [
             "Carve coverage tracks staged outputs from explicit carve workflows.",
             "A parsed or schema-only SQLite carve can still be partial; corroborate rows with source offsets and independent artifacts.",
@@ -17243,6 +17277,45 @@ def carve_coverage_report(db: Database, case_id: str, *, limit: int = 500) -> di
         ],
         "total_returned": len(rows),
     }
+
+
+def _carve_source_coverage(scan_ranges: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in scan_ranges:
+        key = (str(row.get("source_path") or ""), str(row.get("carve_type") or ""))
+        current = groups.setdefault(
+            key,
+            {
+                "source_path": key[0],
+                "carve_type": key[1],
+                "source_size": int(row.get("source_size") or 0),
+                "range_count": 0,
+                "scanned_bytes": 0,
+                "hits_found": 0,
+                "max_range_end": 0,
+            },
+        )
+        current["source_size"] = max(int(current.get("source_size") or 0), int(row.get("source_size") or 0))
+        current["range_count"] += 1
+        current["scanned_bytes"] += int(row.get("scanned_bytes") or 0)
+        current["hits_found"] += int(row.get("hits_found") or 0)
+        current["max_range_end"] = max(int(current.get("max_range_end") or 0), int(row.get("range_end") or 0))
+    output = []
+    for item in groups.values():
+        source_size = int(item.get("source_size") or 0)
+        scanned = int(item.get("scanned_bytes") or 0)
+        max_end = int(item.get("max_range_end") or 0)
+        remaining = max(0, source_size - max_end) if source_size else 0
+        output.append(
+            {
+                **item,
+                "remaining_bytes": remaining,
+                "next_start_offset": max_end if remaining else "",
+                "coverage_percent": round((scanned / source_size) * 100, 3) if source_size else 0,
+            }
+        )
+    output.sort(key=lambda item: (str(item.get("source_path") or ""), str(item.get("carve_type") or "")))
+    return output
 
 
 def carve_coverage_markdown(report: dict[str, Any]) -> str:
@@ -17255,6 +17328,8 @@ def carve_coverage_markdown(report: dict[str, Any]) -> str:
         "## Summary",
         "",
         f"- Carves: `{summary.get('carve_count', 0)}`",
+        f"- Scan ranges: `{summary.get('scan_range_count', 0)}`",
+        f"- Scanned bytes: `{summary.get('scanned_bytes', 0)}` of `{summary.get('total_source_bytes', 0)}` (`{summary.get('scan_coverage_percent', 0)}%`)",
         f"- Parsed SQLite carves: `{summary.get('parsed_sqlite_count', 0)}`",
         f"- Total staged bytes: `{summary.get('total_staged_bytes', 0)}`",
         f"- Parser statuses: `{summary.get('parser_status_counts', {})}`",
@@ -17273,10 +17348,148 @@ def carve_coverage_markdown(report: dict[str, Any]) -> str:
         )
         if row.get("parser_error"):
             lines.append(f"  - parser error: {row.get('parser_error')}")
+    lines.extend(["", "## Scan Ranges", ""])
+    scan_ranges = report.get("scan_ranges") if isinstance(report.get("scan_ranges"), list) else []
+    if not scan_ranges:
+        lines.append("- No carve scan ranges were recorded.")
+    for row in scan_ranges[:25]:
+        lines.append(
+            f"- `{row.get('carve_type') or ''}` `{row.get('source_path') or ''}` "
+            f"bytes `{row.get('range_start') or 0}`-`{row.get('range_end') or 0}` "
+            f"scanned `{row.get('scanned_bytes') or 0}` hits `{row.get('hits_found') or 0}`"
+        )
+    lines.extend(["", "## Source Coverage", ""])
+    coverage = summary.get("source_coverage") if isinstance(summary.get("source_coverage"), list) else []
+    if not coverage:
+        lines.append("- No source coverage records were available.")
+    for item in coverage:
+        next_offset = item.get("next_start_offset")
+        next_text = f", next offset `{next_offset}`" if next_offset not in ("", None) else ""
+        lines.append(
+            f"- `{item.get('carve_type') or ''}` `{item.get('source_path') or ''}` "
+            f"scanned `{item.get('scanned_bytes') or 0}` of `{item.get('source_size') or 0}` "
+            f"(`{item.get('coverage_percent') or 0}%`), hits `{item.get('hits_found') or 0}`{next_text}"
+        )
     lines.extend(["", "## Notes", ""])
     for note in report.get("notes") or []:
         lines.append(f"- {note}")
     return "\n".join(lines).rstrip() + "\n"
+
+
+def sqlite_inventory_report(db: Database, case_id: str, *, limit: int = 100, sample_rows: int = 0) -> dict[str, Any]:
+    db.get_case(case_id)
+    carves = _query_report_rows(
+        db,
+        case_id,
+        "staged_carves",
+        """
+        SELECT *
+        FROM staged_carves
+        WHERE case_id = ?
+          AND detected_format = 'sqlite'
+        ORDER BY created_at DESC, row_number ASC
+        LIMIT ?
+        """,
+        (case_id, limit),
+    )
+    inventories = [_sqlite_inventory_for_carve(row, sample_rows=sample_rows) for row in carves]
+    return {
+        "case_id": case_id,
+        "summary": {
+            "sqlite_carves": len(inventories),
+            "readable": sum(1 for item in inventories if item.get("status") == "parsed"),
+            "schema_only": sum(1 for item in inventories if item.get("status") == "schema_only"),
+            "failed": sum(1 for item in inventories if item.get("status") == "failed"),
+            "table_count": sum(len(item.get("tables") or []) for item in inventories),
+        },
+        "inventories": inventories,
+        "total_returned": len(inventories),
+    }
+
+
+def sqlite_inventory_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    lines = [
+        "# SQLite Carve Inventory",
+        "",
+        f"Case: `{report.get('case_id') or ''}`",
+        "",
+        "## Summary",
+        "",
+        f"- SQLite carves: `{summary.get('sqlite_carves', 0)}`",
+        f"- Readable: `{summary.get('readable', 0)}`",
+        f"- Schema-only: `{summary.get('schema_only', 0)}`",
+        f"- Failed: `{summary.get('failed', 0)}`",
+        f"- Tables: `{summary.get('table_count', 0)}`",
+        "",
+        "## Databases",
+        "",
+    ]
+    inventories = report.get("inventories") if isinstance(report.get("inventories"), list) else []
+    if not inventories:
+        lines.append("- No staged SQLite carve databases were found.")
+    for inventory in inventories:
+        lines.append(
+            f"- `{inventory.get('status') or ''}` `{inventory.get('staged_path') or ''}` "
+            f"tables `{len(inventory.get('tables') or [])}`"
+        )
+        if inventory.get("error"):
+            lines.append(f"  - error: {inventory.get('error')}")
+        for table in inventory.get("tables") or []:
+            columns = ", ".join(column.get("name") or "" for column in table.get("columns") or [])
+            lines.append(f"  - table `{table.get('name')}` rows `{table.get('row_count')}` columns `{columns}`")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _sqlite_inventory_for_carve(row: dict[str, Any], *, sample_rows: int) -> dict[str, Any]:
+    path = Path(str(row.get("staged_path") or ""))
+    inventory = {
+        "id": row.get("id"),
+        "profile": row.get("profile"),
+        "staged_path": str(path),
+        "source_path": row.get("source_path"),
+        "source_offset": row.get("source_offset"),
+        "staged_sha256": row.get("staged_sha256"),
+        "status": "failed",
+        "error": "",
+        "tables": [],
+    }
+    if not path.exists():
+        inventory["error"] = "staged path is missing"
+        return inventory
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA query_only=ON")
+        tables = [
+            row["name"]
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").fetchall()
+        ]
+        table_infos = []
+        for table in tables:
+            columns = [
+                {"name": col["name"], "type": col["type"], "notnull": col["notnull"], "pk": col["pk"]}
+                for col in conn.execute(f'PRAGMA table_info("{table}")').fetchall()
+            ]
+            try:
+                row_count = int(conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0])
+            except sqlite3.Error:
+                row_count = None
+            samples = []
+            if sample_rows > 0:
+                try:
+                    cursor = conn.execute(f'SELECT * FROM "{table}" LIMIT ?', (sample_rows,))
+                    names = [description[0] for description in cursor.description or []]
+                    samples = [dict(zip(names, values, strict=False)) for values in cursor.fetchall()]
+                except sqlite3.Error:
+                    samples = []
+            table_infos.append({"name": table, "columns": columns, "row_count": row_count, "sample_rows": samples})
+        conn.close()
+        inventory["tables"] = table_infos
+        inventory["status"] = "parsed" if any((table.get("row_count") or 0) > 0 for table in table_infos) else "schema_only"
+    except Exception as exc:
+        inventory["error"] = str(exc)
+    return inventory
 
 
 def _recovery_scope_label(recovery: dict[str, Any]) -> str:

@@ -375,6 +375,7 @@ Firefox, Chromium, or Windows Activities parsers:
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator carve sqlite --case CASE_ID --image IMAGE_ID --path /path/to/source.bin --profile windows-database-carve --import-artifacts
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator carve ese --case CASE_ID --image IMAGE_ID --path /path/to/source.bin --profile windows-database-carve
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report carve-coverage --case CASE_ID --format md
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report sqlite-inventory --case CASE_ID --format md
 ```
 
 For SearchIndexer memory SQLite carves, add
@@ -382,6 +383,10 @@ For SearchIndexer memory SQLite carves, add
 tables in the same pass. ESE carving currently stages and fingerprints
 candidates for Windows Search, SRUM, or WebCache follow-up; parsing requires a
 structurally complete ESE database and matching downstream parser support.
+Large pagefile, swapfile, hiberfil, or raw unallocated sources can be scanned
+in resumable windows using `--start-offset`, `--max-bytes`, and `--chunk-size`.
+`report carve-coverage` records every scanned range, including negative ranges
+with zero hits, and shows the next recommended start offset by source/type.
 
 After a recovery run, summarize runtime and extraction counts with:
 

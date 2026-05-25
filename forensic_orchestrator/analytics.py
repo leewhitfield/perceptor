@@ -90,6 +90,13 @@ ANALYTICS_TABLE_COLUMNS: dict[str, list[str]] = {
         "string_sha256", "string_length", "offset", "context_hint",
         "created_at",
     ],
+    "carve_scan_ranges": [
+        "id", "case_id", "computer_id", "image_id", "tool_output_id",
+        "tool_name", "source_csv", "row_number", "profile", "carve_type",
+        "source_path", "source_size", "range_start", "range_end",
+        "scanned_bytes", "hits_found", "limited", "limit_reason", "status",
+        "notes", "created_at",
+    ],
     "staged_carves": [
         "id", "case_id", "computer_id", "image_id", "tool_output_id",
         "tool_name", "source_csv", "row_number", "profile", "source_path",
