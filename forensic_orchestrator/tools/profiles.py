@@ -131,6 +131,27 @@ def _windows_old_tools(tools: list) -> list:
     return scoped
 
 
+def _apply_profile_artifact_overrides(tools: list, profile_config: dict | None) -> list:
+    if not profile_config:
+        return tools
+    force_tsk_artifacts = set(str(item) for item in profile_config.get("force_tsk_artifacts", []))
+    if not force_tsk_artifacts:
+        return tools
+    scoped = []
+    for tool in tools:
+        artifacts = []
+        changed = False
+        for artifact in tool.artifacts:
+            artifact_keys = {artifact.name, f"{tool.name}:{artifact.name}"}
+            if force_tsk_artifacts.intersection(artifact_keys):
+                artifacts.append(replace(artifact, use_tsk=True))
+                changed = True
+            else:
+                artifacts.append(artifact)
+        scoped.append(replace(tool, artifacts=artifacts) if changed else tool)
+    return scoped
+
+
 def _windows_old_artifact(artifact):
     source = _windows_old_source(artifact.source)
     destination = f"{WINDOWS_OLD_ROOT}/{artifact.destination}".strip("/")
@@ -359,7 +380,7 @@ def _run_profile_impl(
     profile_config = registry.profiles.get(profile) or {}
     auto_include_windows_old = bool(profile_config.get("include_windows_old")) and not include_windows_old
     windows_old_mode = include_windows_old or bool(profile_config.get("windows_old"))
-    tools = registry.profile_tools(profile)
+    tools = _apply_profile_artifact_overrides(registry.profile_tools(profile), profile_config)
     if windows_old_mode:
         if mounted_volume_path and not (mounted_volume_path / WINDOWS_OLD_ROOT).exists():
             db.log_activity(

@@ -1,3 +1,4 @@
+import csv
 from pathlib import Path
 
 from forensic_orchestrator.db import Database
@@ -111,3 +112,53 @@ def test_split_external_tool_generate_then_serial_ingest(tmp_path):
     assert [tuple(row) for row in outputs] == [("LECmd", 1)]
     jobs = db.conn.execute("SELECT tool_name, exit_code FROM jobs WHERE case_id = ?", (case.id,)).fetchall()
     assert [tuple(row) for row in jobs] == [("LECmd", 0)]
+
+
+def test_split_generate_and_ingest_supports_internal_etl(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    paths = WorkspacePaths(tmp_path)
+    source = tmp_path / "artifacts" / "Windows" / "System32" / "LogFiles" / "WMI"
+    source.mkdir(parents=True)
+    (source / "DiagTrack.etl").write_bytes(b"not an etl C:\\Users\\fredr\\Downloads\\SDelete\\sdelete.exe")
+    tool = ToolDefinition(
+        name="EtlParser",
+        enabled=True,
+        type="internal_etl",
+        executable=None,
+        command=["internal-etl-parser", "{artifact:etl_files}", "--csv", "{output}"],
+        required_paths=[],
+        outputs=["csv"],
+        artifacts=[],
+    )
+
+    generated = runner.generate_external_tool_outputs(
+        paths=paths,
+        case_id=case.id,
+        image_id="image-1",
+        tool=tool,
+        mount=Path("/unused"),
+        artifacts={"etl_files": source},
+        dry_run=False,
+    )
+    runner.ingest_generated_tool_outputs(
+        db=db,
+        case_id=case.id,
+        image_id="image-1",
+        computer_id="computer-1",
+        tool=tool,
+        generated=generated,
+        rebuild_correlations=False,
+    )
+
+    assert generated.tool_version == "internal_etl-v1"
+    assert (generated.output_folder / "EtlEvents.csv").exists()
+    output = db.conn.execute(
+        "SELECT tool_name, row_count FROM tool_outputs WHERE case_id = ?",
+        (case.id,),
+    ).fetchone()
+    rows = list(csv.DictReader((generated.output_folder / "EtlEvents.csv").open(newline="", encoding="utf-8")))
+    assert tuple(output) == ("EtlParser", 3)
+    assert {row["parser_status"] for row in rows} == {"inventory", "error", "strings"}

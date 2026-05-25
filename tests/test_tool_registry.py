@@ -613,6 +613,17 @@ def test_internal_firefox_parser_extracts_profile_sqlite_files():
     assert "*.jsonlz4" in tool.artifacts[0].patterns
 
 
+def test_firefox_deep_recovery_profile_forces_tsk_extraction():
+    registry = ToolRegistry.from_files([default_plugin_path()])
+    profile_config = registry.profiles["windows-firefox-deep-recovery"]
+    tools = profiles._apply_profile_artifact_overrides(registry.profile_tools("windows-firefox-deep-recovery"), profile_config)
+
+    assert [tool.name for tool in tools] == ["FirefoxParser"]
+    assert tools[0].artifacts[0].name == "firefox_profiles"
+    assert tools[0].artifacts[0].use_tsk is True
+    assert registry.get_tool("FirefoxParser").artifacts[0].use_tsk is False
+
+
 def test_internal_chromium_parser_extracts_profile_sqlite_files():
     registry = ToolRegistry.from_files([default_plugin_path()])
     tool = registry.get_tool("ChromiumParser")

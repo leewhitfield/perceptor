@@ -76,7 +76,7 @@ class GeneratedToolOutput:
 
 
 def supports_parallel_generate(tool: ToolDefinition) -> bool:
-    return tool.type in {"dotnet", "binary"}
+    return tool.type in {"dotnet", "binary", "internal_etl"}
 
 
 def read_command_output_snippets(result_path: Path, *, limit: int = 2000) -> str:
@@ -259,15 +259,30 @@ def generate_external_tool_outputs(
         prepared_registry_logs = prepare_registry_transaction_logs(artifact_paths)
     command = build_tool_command(tool, mount=mount, output=output, artifacts=artifact_paths)
     validate_tool(tool, command, mount=mount, output=output, artifacts=artifact_paths, dry_run=dry_run)
-    tool_version = detect_tool_version(tool, command, dry_run)
+    if tool.type == "internal_etl":
+        tool_version = "internal_etl-v1"
+    else:
+        tool_version = detect_tool_version(tool, command, dry_run)
     job_dir = output / "_job"
     job_dir.mkdir(parents=True, exist_ok=True)
     stdout_path = job_dir / "stdout.txt"
     stderr_path = job_dir / "stderr.txt"
     if dry_run:
-        stdout_path.write_text("DRY RUN: command not executed\n" + repr(command) + "\n")
+        description = "internal ETL parser" if tool.type == "internal_etl" else "command"
+        stdout_path.write_text(f"DRY RUN: {description} not executed\n" + repr(command) + "\n")
         stderr_path.write_text("")
         exit_code = 0
+    elif tool.type == "internal_etl":
+        source = artifact_paths.get("etl_files", output / "_missing_artifact")
+        try:
+            csv_path = parse_etl_artifacts_to_csv(source, output)
+            stdout_path.write_text(f"Wrote {csv_path}\n")
+            stderr_path.write_text("")
+            exit_code = 0
+        except Exception as exc:
+            stdout_path.write_text("")
+            stderr_path.write_text(str(exc) + "\n")
+            exit_code = 1
     else:
         with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
             completed = subprocess.run(command, stdout=stdout, stderr=stderr, check=False)

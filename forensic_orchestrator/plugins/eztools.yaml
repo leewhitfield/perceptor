@@ -2030,6 +2030,13 @@ profiles:
     tools:
       - ChromiumParser
 
+  windows-firefox-deep-recovery:
+    description: Firefox browser artifacts using TSK extraction to include deleted or orphaned profile databases
+    force_tsk_artifacts:
+      - FirefoxParser:firefox_profiles
+    tools:
+      - FirefoxParser
+
   windows-fast-triage:
     description: Fast Windows triage without full event log or mailbox processing
     tools:
