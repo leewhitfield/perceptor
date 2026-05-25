@@ -133,7 +133,7 @@ def test_registry_loads_eztools_profile():
     assert registry.get_tool("RegistryArtifactParser").enabled is True
     assert registry.get_tool("UserDictionaryParser").enabled is True
     assert registry.get_tool("ZoneIdentifierParser").enabled is True
-    assert registry.get_tool("ZoneIdentifierParser").artifacts[0].use_tsk is True
+    assert registry.get_tool("ZoneIdentifierParser").artifacts[0].use_tsk is False
     assert registry.get_tool("ThumbcacheParser").enabled is True
     assert registry.get_tool("RdpCacheParser").enabled is True
     assert registry.get_tool("RdpVisionReview").enabled is True
@@ -606,7 +606,7 @@ def test_internal_firefox_parser_extracts_profile_sqlite_files():
     assert tool.type == "internal_firefox"
     assert tool.artifacts[0].name == "firefox_profiles"
     assert tool.artifacts[0].source == "Users"
-    assert tool.artifacts[0].use_tsk is True
+    assert tool.artifacts[0].use_tsk is False
     assert "places.sqlite" in tool.artifacts[0].patterns
     assert "cookies.sqlite" in tool.artifacts[0].patterns
     assert "formhistory.sqlite" in tool.artifacts[0].patterns

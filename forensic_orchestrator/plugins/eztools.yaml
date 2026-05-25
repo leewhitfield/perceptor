@@ -1120,7 +1120,6 @@ tools:
         source: "Users"
         destination: "browser/Firefox"
         recursive: true
-        use_tsk: true
         patterns:
           - "places.sqlite"
           - "cookies.sqlite"
@@ -1275,7 +1274,6 @@ tools:
         source: "Users"
         destination: "ZoneIdentifierADS"
         recursive: true
-        use_tsk: true
         optional: true
         patterns:
           - "*:Zone.Identifier"
