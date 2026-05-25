@@ -206,6 +206,7 @@ DEFAULT_PURGE_TABLES = (
     "content_references",
     "cloud_server_events",
     "memory_string_hits",
+    "staged_carves",
 )
 
 SQLITE_ONLY_PURGE_TABLES = {
@@ -290,6 +291,7 @@ TOOL_PURGE_TABLES = {
     },
     "CloudServerLogImporter": {"cloud_server_events", "content_references", "tool_outputs"},
     "MemoryStringScanner": {"memory_string_hits", "tool_outputs"},
+    "CarveStageRunner": {"staged_carves", "tool_outputs"},
     "WindowsSearchMemoryCarveParser": {
         "windows_search_memory_carves",
         "windows_search_memory_objects",
@@ -519,6 +521,37 @@ class Database:
               row_count INTEGER,
               created_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS staged_carves (
+              id TEXT PRIMARY KEY,
+              case_id TEXT NOT NULL REFERENCES cases(id),
+              computer_id TEXT NOT NULL REFERENCES computers(id),
+              image_id TEXT NOT NULL REFERENCES images(id),
+              tool_output_id TEXT NOT NULL REFERENCES tool_outputs(id),
+              tool_name TEXT NOT NULL,
+              source_csv TEXT NOT NULL,
+              row_number INTEGER NOT NULL,
+              profile TEXT,
+              source_path TEXT NOT NULL,
+              source_offset TEXT,
+              staged_path TEXT NOT NULL,
+              staged_name TEXT,
+              staged_size TEXT,
+              staged_sha256 TEXT,
+              carve_type TEXT,
+              detected_format TEXT,
+              parser_status TEXT,
+              parser_error TEXT,
+              table_count TEXT,
+              object_count TEXT,
+              extractable_row_count TEXT,
+              import_status TEXT,
+              notes TEXT,
+              created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_staged_carves_case
+              ON staged_carves(case_id, carve_type, parser_status);
 
             CREATE TABLE IF NOT EXISTS parsed_rows (
               id TEXT PRIMARY KEY,
@@ -4351,6 +4384,24 @@ class Database:
                 "normalized_name": "TEXT",
                 "timestamp": "TEXT",
             },
+            "staged_carves": {
+                "profile": "TEXT",
+                "source_path": "TEXT NOT NULL DEFAULT ''",
+                "source_offset": "TEXT",
+                "staged_path": "TEXT NOT NULL DEFAULT ''",
+                "staged_name": "TEXT",
+                "staged_size": "TEXT",
+                "staged_sha256": "TEXT",
+                "carve_type": "TEXT",
+                "detected_format": "TEXT",
+                "parser_status": "TEXT",
+                "parser_error": "TEXT",
+                "table_count": "TEXT",
+                "object_count": "TEXT",
+                "extractable_row_count": "TEXT",
+                "import_status": "TEXT",
+                "notes": "TEXT",
+            },
             "windows_search_memory_carves": {
                 "carve_path": "TEXT NOT NULL DEFAULT ''",
                 "carve_name": "TEXT",
@@ -6895,6 +6946,20 @@ class Database:
                 "tool_name", "source_csv", "source_table", "source_record_id",
                 "row_number", "work_id", "item_path", "property_name",
                 "property_value", "normalized_name", "timestamp", "created_at",
+            ],
+            rows,
+        )
+
+    def insert_staged_carves(self, rows: list[dict[str, Any]]) -> None:
+        self._insert_rows(
+            "staged_carves",
+            [
+                "id", "case_id", "computer_id", "image_id", "tool_output_id",
+                "tool_name", "source_csv", "row_number", "profile",
+                "source_path", "source_offset", "staged_path", "staged_name",
+                "staged_size", "staged_sha256", "carve_type", "detected_format",
+                "parser_status", "parser_error", "table_count", "object_count",
+                "extractable_row_count", "import_status", "notes", "created_at",
             ],
             rows,
         )

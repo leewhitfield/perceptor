@@ -364,6 +364,20 @@ forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator tools profi
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator tools profile-preview --profile windows-search-carve
 ```
 
+The first built-in carve runner is SQLite-focused. It can stage existing SQLite
+files or scan a bounded raw source for SQLite headers, copy/carve candidates
+under the case `supplemental/carves` directory, fingerprint them, run a
+read-only schema/row-count validation pass, and record coverage in DuckDB:
+
+```bash
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator carve sqlite --case CASE_ID --image IMAGE_ID --path /path/to/source.bin --profile windows-database-carve
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report carve-coverage --case CASE_ID --format md
+```
+
+For SearchIndexer memory SQLite carves, add
+`--import-windows-search-memory` to populate the Windows Search memory carve
+tables in the same pass.
+
 After a recovery run, summarize runtime and extraction counts with:
 
 ```bash
@@ -938,7 +952,12 @@ The report commands are intentionally thin JSON views over SQLite:
   extraction. This refreshes common-dialog items, copied-file indicators,
   filesystem review, nested evidence inventory, Windows.old timeline/artifact
   dedupe, sessions, correlations, and user-controlled file references. Pass
-  `--image IMAGE_ID` to include image-scoped file correlations.
+  `--image IMAGE_ID` to include image-scoped file correlations. If a long run
+  fails after extraction/import but before reports or timeline dedupe finish,
+  run this command before deciding to rerun the profile.
+- `report carve-coverage`: staged-carve coverage for explicit carving
+  workflows, including source offset, staged path/hash/size, parser status,
+  detected format, and caveats for partial or unsupported fragments.
 - `report evidence-gaps`: consolidated evidence limitations from parser status,
   failed jobs, extraction caveats, skipped artifacts, partial EVTX recovery,
   OpenSearch write failures, and memory artifacts awaiting analysis.

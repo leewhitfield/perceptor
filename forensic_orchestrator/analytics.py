@@ -90,6 +90,14 @@ ANALYTICS_TABLE_COLUMNS: dict[str, list[str]] = {
         "string_sha256", "string_length", "offset", "context_hint",
         "created_at",
     ],
+    "staged_carves": [
+        "id", "case_id", "computer_id", "image_id", "tool_output_id",
+        "tool_name", "source_csv", "row_number", "profile", "source_path",
+        "source_offset", "staged_path", "staged_name", "staged_size",
+        "staged_sha256", "carve_type", "detected_format", "parser_status",
+        "parser_error", "table_count", "object_count", "extractable_row_count",
+        "import_status", "notes", "created_at",
+    ],
     "windows_search_memory_carves": [
         "id", "case_id", "computer_id", "image_id", "tool_output_id",
         "tool_name", "source_csv", "row_number", "carve_path",

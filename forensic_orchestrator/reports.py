@@ -17207,6 +17207,78 @@ def recovery_coverage_report(db: Database, case_id: str, *, limit: int = 500) ->
     }
 
 
+def carve_coverage_report(db: Database, case_id: str, *, limit: int = 500) -> dict[str, Any]:
+    db.get_case(case_id)
+    rows = _query_report_rows(
+        db,
+        case_id,
+        "staged_carves",
+        """
+        SELECT staged_carves.*, source_csv AS manifest_path
+        FROM staged_carves
+        WHERE staged_carves.case_id = ?
+        ORDER BY staged_carves.created_at DESC, staged_carves.row_number ASC
+        LIMIT ?
+        """,
+        (case_id, limit),
+    )
+    summary = {
+        "carve_count": len(rows),
+        "profile_counts": _count_by_key(rows, "profile"),
+        "type_counts": _count_by_key(rows, "carve_type"),
+        "format_counts": _count_by_key(rows, "detected_format"),
+        "parser_status_counts": _count_by_key(rows, "parser_status"),
+        "import_status_counts": _count_by_key(rows, "import_status"),
+        "total_staged_bytes": sum(int(row.get("staged_size") or 0) for row in rows),
+        "parsed_sqlite_count": sum(1 for row in rows if row.get("detected_format") == "sqlite" and row.get("parser_status") in {"parsed", "schema_only"}),
+    }
+    return {
+        "case_id": case_id,
+        "summary": summary,
+        "carves": rows,
+        "notes": [
+            "Carve coverage tracks staged outputs from explicit carve workflows.",
+            "A parsed or schema-only SQLite carve can still be partial; corroborate rows with source offsets and independent artifacts.",
+            "Encrypted or unsupported fragments are retained as staged evidence but are not parsed without a matching decoder.",
+        ],
+        "total_returned": len(rows),
+    }
+
+
+def carve_coverage_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    lines = [
+        "# Carve Coverage Report",
+        "",
+        f"Case: `{report.get('case_id') or ''}`",
+        "",
+        "## Summary",
+        "",
+        f"- Carves: `{summary.get('carve_count', 0)}`",
+        f"- Parsed SQLite carves: `{summary.get('parsed_sqlite_count', 0)}`",
+        f"- Total staged bytes: `{summary.get('total_staged_bytes', 0)}`",
+        f"- Parser statuses: `{summary.get('parser_status_counts', {})}`",
+        "",
+        "## Carves",
+        "",
+    ]
+    rows = report.get("carves") if isinstance(report.get("carves"), list) else []
+    if not rows:
+        lines.append("- No staged carve outputs were found.")
+    for row in rows:
+        lines.append(
+            f"- `{row.get('profile') or ''}` `{row.get('carve_type') or ''}` "
+            f"format `{row.get('detected_format') or ''}` status `{row.get('parser_status') or ''}` "
+            f"offset `{row.get('source_offset') or ''}` path `{row.get('staged_path') or ''}`"
+        )
+        if row.get("parser_error"):
+            lines.append(f"  - parser error: {row.get('parser_error')}")
+    lines.extend(["", "## Notes", ""])
+    for note in report.get("notes") or []:
+        lines.append(f"- {note}")
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def _recovery_scope_label(recovery: dict[str, Any]) -> str:
     deleted = bool(recovery.get("deleted_files"))
     orphaned = bool(recovery.get("orphaned_files"))

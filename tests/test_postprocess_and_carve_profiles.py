@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from pathlib import Path
 
 from forensic_orchestrator.cli import main as cli_main
@@ -59,3 +60,30 @@ def test_carve_profile_run_fails_with_staging_guidance(tmp_path, capsys):
 
     assert status == 1
     assert "Stage carved outputs separately" in capsys.readouterr().err
+
+
+def test_sqlite_carve_command_stages_and_reports_carves(tmp_path, capsys):
+    paths = WorkspacePaths(tmp_path / "workspace")
+    db = Database(paths.db_path())
+    case = db.create_case("case-1", paths.case_dir("case-1"))
+    db.close()
+    sqlite_path = tmp_path / "places.sqlite"
+    conn = sqlite3.connect(sqlite_path)
+    conn.execute("CREATE TABLE moz_places (url TEXT)")
+    conn.execute("INSERT INTO moz_places VALUES ('https://example.test/')")
+    conn.commit()
+    conn.close()
+
+    status = cli_main(["--root", str(paths.root), "carve", "sqlite", "--case", case.id, "--path", str(sqlite_path)])
+
+    assert status == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["staged_carves"] == 1
+
+    status = cli_main(["--root", str(paths.root), "report", "carve-coverage", "--case", case.id, "--format", "json"])
+
+    assert status == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["summary"]["carve_count"] == 1
+    assert report["carves"][0]["detected_format"] == "sqlite"
+    assert report["carves"][0]["parser_status"] in {"parsed", "schema_only"}

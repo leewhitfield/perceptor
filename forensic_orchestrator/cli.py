@@ -56,6 +56,8 @@ from .reports import (
     browser_hosts_report,
     browser_report,
     case_review_report,
+    carve_coverage_markdown,
+    carve_coverage_report,
     cd_burning_activity_markdown,
     cd_burning_activity_report,
     cloud_artifacts_report,
@@ -261,6 +263,7 @@ from .tools.profiles import profile_extraction_preview, run_profile
 from .tools.registry import ToolRegistry
 from .tools.cloud_server_import import import_cloud_server_logs_to_csv
 from .tools.ingest import ingest_csv_output
+from .tools.carve import stage_sqlite_carves, staged_carve_row, summarize_sqlite_carve
 from .tools.memory_strings import scan_memory_strings_to_csv
 from .tools.windows_search_memory import parse_windows_search_memory_carves
 
@@ -436,6 +439,7 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
         ("suspicious-executions", "md", "Suspicious executions", suspicious_executions_markdown(suspicious_executions_report(db, case_id, limit=limit))),
         ("memory-artifacts", "md", "Memory artifact inventory", memory_artifacts_markdown(memory_artifacts_report(db, case_id, limit=limit))),
         ("recovery-coverage", "json", "Recovery coverage", recovery_coverage_report(db, case_id, limit=max(limit, 250))),
+        ("carve-coverage", "md", "Carve coverage", carve_coverage_markdown(carve_coverage_report(db, case_id, limit=max(limit, 250)))),
         ("artifact-processing-status", "json", "Artifact processing status", artifact_processing_status_report(db, case_id, limit=limit)),
         ("processing-decisions", "md", "Processing decisions", processing_decision_markdown(processing_decision_report(db, case_id, limit=limit))),
         ("browser-activity", "json", "Browser activity", browser_activity_report(db, case_id, limit=limit, memory_disk_report=memory_disk)),
@@ -742,6 +746,24 @@ def build_parser() -> argparse.ArgumentParser:
     project_rebuild_postprocess.add_argument("case_id")
     project_rebuild_postprocess.add_argument("--image", dest="image_id")
     project_rebuild_postprocess.add_argument("--max-windows-old-output-rows", type=int, default=100_000)
+
+    carve = subparsers.add_parser("carve")
+    carve_sub = carve.add_subparsers(dest="action", required=True)
+    carve_sqlite = carve_sub.add_parser("sqlite")
+    carve_sqlite.add_argument("--case", required=True, dest="case_id")
+    carve_sqlite.add_argument("--path", required=True, help="Raw source file, staged carve directory, or candidate SQLite file")
+    carve_sqlite.add_argument("--computer", dest="computer_id")
+    carve_sqlite.add_argument("--image", dest="image_id")
+    carve_sqlite.add_argument("--profile", default="windows-database-carve")
+    carve_sqlite.add_argument("--max-carves", type=int, default=1000)
+    carve_sqlite.add_argument("--max-bytes", type=int, default=2 * 1024 * 1024 * 1024)
+    carve_sqlite.add_argument("--max-carve-size", type=int, default=256 * 1024 * 1024)
+    carve_sqlite.add_argument("--max-rows-per-table", type=int, default=25)
+    carve_sqlite.add_argument(
+        "--import-windows-search-memory",
+        action="store_true",
+        help="Also parse staged SQLite carves into the Windows Search memory carve tables",
+    )
 
     computer = subparsers.add_parser("computer")
     computer_sub = computer.add_subparsers(dest="action", required=True)
@@ -1274,6 +1296,11 @@ def build_parser() -> argparse.ArgumentParser:
     report_recovery_coverage.add_argument("--limit", type=int, default=500)
     report_recovery_coverage.add_argument("--format", choices=["json", "table", "csv"], default="json")
     report_recovery_coverage.add_argument("--output")
+    report_carve_coverage = report_sub.add_parser("carve-coverage")
+    report_carve_coverage.add_argument("--case", required=True, dest="case_id")
+    report_carve_coverage.add_argument("--limit", type=int, default=500)
+    report_carve_coverage.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
+    report_carve_coverage.add_argument("--output")
     report_telemetry = report_sub.add_parser("telemetry-artifacts")
     report_telemetry.add_argument("--case", required=True, dest="case_id")
     report_telemetry.add_argument("--artifact-group")
@@ -2422,6 +2449,132 @@ def run(args: argparse.Namespace) -> int:
                 max_windows_old_output_rows=args.max_windows_old_output_rows,
             )
             print_json(stats)
+            return 0
+
+        if args.resource == "carve" and args.action == "sqlite":
+            source = Path(args.path)
+            if not source.exists():
+                raise OrchestratorError(f"Carve source does not exist: {source}")
+            computer_id, image_id = _cloud_or_memory_evidence_ids(
+                db,
+                case_id=args.case_id,
+                evidence_path=source,
+                computer_id=args.computer_id,
+                image_id=args.image_id,
+            )
+            output_dir = paths.case_dir(args.case_id) / "supplemental" / "carves" / str(uuid.uuid4())
+            manifest = stage_sqlite_carves(
+                source,
+                output_dir,
+                max_carves=args.max_carves,
+                max_bytes=args.max_bytes,
+                max_carve_size=args.max_carve_size,
+            )
+            manifest_path = output_dir / "staged-carves.csv"
+            manifest_rows: list[dict[str, object]] = []
+            staged_rows: list[dict[str, object]] = []
+            for row_number, staged in enumerate(manifest["carves"], start=1):
+                staged_path = Path(str(staged["path"]))
+                summary = summarize_sqlite_carve(staged_path, max_rows_per_table=args.max_rows_per_table)
+                manifest_row = {
+                    "row_number": row_number,
+                    "profile": args.profile,
+                    "source_path": str(source),
+                    "source_offset": staged.get("source_offset"),
+                    "staged_path": str(staged_path),
+                    "staged_name": staged_path.name,
+                    "staged_size": staged.get("size"),
+                    "staged_sha256": staged.get("sha256"),
+                    **summary,
+                }
+                manifest_rows.append(manifest_row)
+            if manifest_rows:
+                with manifest_path.open("w", newline="", encoding="utf-8") as handle:
+                    writer = csv.DictWriter(handle, fieldnames=list(manifest_rows[0].keys()))
+                    writer.writeheader()
+                    writer.writerows(manifest_rows)
+            else:
+                manifest_path.write_text("row_number,profile,source_path,source_offset,staged_path\n", encoding="utf-8")
+            output_id = str(uuid.uuid4())
+            db.insert_tool_output(
+                {
+                    "id": output_id,
+                    "case_id": args.case_id,
+                    "computer_id": computer_id,
+                    "image_id": image_id,
+                    "job_id": None,
+                    "tool_name": "CarveStageRunner",
+                    "output_type": "csv",
+                    "path": manifest_path,
+                    "row_count": len(manifest_rows),
+                }
+            )
+            for manifest_row, staged in zip(manifest_rows, manifest["carves"]):
+                staged_rows.append(
+                    staged_carve_row(
+                        case_id=args.case_id,
+                        computer_id=computer_id,
+                        image_id=image_id,
+                        tool_output_id=output_id,
+                        source_csv=manifest_path,
+                        row_number=int(manifest_row["row_number"]),
+                        profile=args.profile,
+                        source_path=str(source),
+                        staged=staged,
+                        summary=manifest_row,
+                    )
+                )
+            db.insert_staged_carves(staged_rows)
+            windows_search_imported = {"carves": 0, "objects": 0, "rows": 0}
+            if args.import_windows_search_memory and staged_rows:
+                parsed = parse_windows_search_memory_carves(
+                    output_dir,
+                    case_id=args.case_id,
+                    computer_id=computer_id,
+                    image_id=image_id,
+                    tool_output_id=output_id,
+                    source_csv=manifest_path,
+                    max_rows_per_table=args.max_rows_per_table,
+                )
+                db.insert_windows_search_memory_carves(parsed["carves"])
+                db.insert_windows_search_memory_objects(parsed["objects"])
+                db.insert_windows_search_memory_rows(parsed["rows"])
+                windows_search_imported = {
+                    "carves": len(parsed["carves"]),
+                    "objects": len(parsed["objects"]),
+                    "rows": len(parsed["rows"]),
+                }
+            db.log_activity(
+                case_id=args.case_id,
+                computer_id=computer_id,
+                image_id=image_id,
+                event="carve.sqlite_staged",
+                message="Staged SQLite carve outputs",
+                details={
+                    "profile": args.profile,
+                    "source": str(source),
+                    "output_dir": str(output_dir),
+                    "carve_count": len(staged_rows),
+                    "limited": manifest.get("limited"),
+                    "limit_reason": manifest.get("limit_reason"),
+                    "windows_search_imported": windows_search_imported,
+                },
+            )
+            print_json(
+                {
+                    "case_id": args.case_id,
+                    "computer_id": computer_id,
+                    "image_id": image_id,
+                    "profile": args.profile,
+                    "source": str(source),
+                    "output_dir": str(output_dir),
+                    "manifest_path": str(manifest_path),
+                    "staged_carves": len(staged_rows),
+                    "limited": manifest.get("limited"),
+                    "limit_reason": manifest.get("limit_reason"),
+                    "windows_search_imported": windows_search_imported,
+                }
+            )
             return 0
 
         if args.resource == "cloud" and args.action == "import-logs":
@@ -3902,6 +4055,30 @@ def run(args: argparse.Namespace) -> int:
                     "start_time",
                 ],
             )
+            return 0
+
+        if args.resource == "report" and args.action == "carve-coverage":
+            report = carve_coverage_report(db, args.case_id, limit=args.limit)
+            if args.format == "md":
+                write_text_output(carve_coverage_markdown(report), args.output)
+            else:
+                write_report_output(
+                    report,
+                    report["carves"],
+                    args.format,
+                    args.output,
+                    title=f"Carve coverage for case {args.case_id}",
+                    columns=[
+                        "profile",
+                        "carve_type",
+                        "detected_format",
+                        "parser_status",
+                        "import_status",
+                        "source_offset",
+                        "staged_size",
+                        "staged_path",
+                    ],
+                )
             return 0
 
         if args.resource == "report" and args.action == "case-review":
