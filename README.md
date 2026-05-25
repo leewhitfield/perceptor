@@ -334,14 +334,18 @@ parsed rows are promoted into the main case DuckDB. See `docs/vsc-sidecar.md`.
 `windows-srum`, `windows-search`, and `windows-webcache` are useful for testing those larger
 artifacts independently. `windows-deep` includes the full EVTX profile plus SRUM,
 Windows Search, and WebCache.
-Recovery profiles set `extraction_policy`. Normal profiles use mounted
+Recovery profiles set `extraction_policy` and are intentionally separate from
+`windows-full`. `windows-full` is comprehensive live-namespace parsing; it does
+not imply deleted/orphaned metadata recovery. Normal profiles use mounted
 filesystem extraction for speed. `balanced` is the recommended recovery path for
 routine work: it switches only low/medium-cost, low-noise recoverable artifacts
-to Sleuth Kit extraction. `deep` is analyst-selected exhaustive recovery. It
+to Sleuth Kit extraction. `deep` is analyst-selected metadata recovery. It
 switches all artifacts that declare `recovery.deleted_files` or
-`recovery.orphaned_files` to Sleuth Kit extraction so deleted or orphaned
-directory entries can be recovered, but broad artifacts can produce very large
-partial extractions. Deep profiles therefore apply per-artifact guardrails
+`recovery.orphaned_files` to Sleuth Kit extraction so deleted or orphaned NTFS
+directory/MFT entries can be recovered, but broad artifacts can produce very
+large partial extractions. Deep recovery is not raw unallocated-space carving;
+artifact-specific carving should be implemented as an explicit carve stage.
+Deep profiles therefore apply per-artifact guardrails
 (`recovery_limits`) for maximum files, bytes, and runtime. When a guardrail is
 hit the artifact is reported as `partial_limited`; the profile continues and
 `report recovery-coverage` shows the limit reason. Current recovery candidates

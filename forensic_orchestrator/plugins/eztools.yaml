@@ -2186,7 +2186,7 @@ profiles:
       - ChromiumParser
 
   windows-firefox-deep-recovery:
-    description: Firefox browser artifacts using TSK extraction to include deleted or orphaned profile databases
+    description: Explicit Firefox metadata recovery using TSK extraction to include deleted or orphaned profile databases; not unallocated carving
     extraction_policy: deep
     recovery_tier: analyst_selected
     recommendation: Use only when deleted or orphaned Firefox profile databases are specifically in scope.
@@ -2198,7 +2198,7 @@ profiles:
       - FirefoxParser
 
   windows-browser-deep-recovery:
-    description: Browser artifacts using TSK extraction for deleted or orphaned profile databases, cache, LNK, and Jump List evidence
+    description: Explicit browser metadata recovery using TSK extraction for deleted or orphaned profile databases, cache, LNK, and Jump List evidence; not unallocated carving
     extraction_policy: deep
     recovery_tier: analyst_selected
     recommendation: Use when exhaustive browser-adjacent deleted or orphaned recovery is worth the additional runtime and output volume.
@@ -2303,7 +2303,7 @@ profiles:
       - MessagingParser
 
   windows-cloud-email-deep-recovery:
-    description: Cloud sync, browser, search, mailbox, Windows Mail, and messaging artifacts with deleted or orphaned recovery enabled
+    description: Explicit cloud/email/browser metadata recovery with deleted or orphaned recovery enabled; not unallocated carving
     extraction_policy: deep
     recovery_tier: analyst_selected
     recommendation: Use when exhaustive cloud/email/browser deleted or orphaned recovery is required and high output volume is acceptable.
@@ -2403,7 +2403,7 @@ profiles:
       - LECmd
 
   windows-basic-evtx-deep-recovery:
-    description: Windows forensic triage with selected high-value event logs and deleted or orphaned recovery for high-value artifacts
+    description: Explicit Windows forensic triage metadata recovery with selected high-value event logs and deleted or orphaned recovery for high-value artifacts; not unallocated carving
     extraction_policy: deep
     recovery_tier: analyst_selected
     recommendation: Use only for exhaustive recovery. Broad artifacts can produce very large partial extractions.

@@ -86,3 +86,19 @@ def test_timeline_windows_old_dedupe_updates_duckdb_timeline_events(tmp_path: Pa
     ]
     sources = db.conn.execute("SELECT source_scope FROM timeline_event_sources ORDER BY source_scope").fetchall()
     assert [row["source_scope"] for row in sources] == ["current", "windows_old"]
+
+
+def test_timeline_windows_old_dedupe_skips_missing_duckdb_timeline_table(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("FORENSIC_ANALYTICS_MODE", "duckdb")
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    image = db.add_image("image-1", case.id, tmp_path / "disk.E01", computer_id="computer-1")
+    db.analytics._connect(case.id)
+
+    stats = rebuild_timeline_windows_old_dedupe(db, case_id=case.id, image_id=image.id)
+
+    assert stats["timeline_rows"] == 0
+    assert stats["duplicate_rows"] == 0
+    row = db.conn.execute("SELECT event FROM activity_log WHERE case_id = ? ORDER BY created_at DESC LIMIT 1", (case.id,)).fetchone()
+    assert row["event"] == "timeline.windows_old_dedupe_skipped"

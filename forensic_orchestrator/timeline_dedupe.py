@@ -272,6 +272,25 @@ def _rebuild_timeline_windows_old_dedupe_duckdb(
     max_windows_old_output_rows: int,
 ) -> dict[str, int]:
     conn = db.analytics._connect(case_id)
+    if not _duckdb_table_exists(conn, "timeline_events"):
+        stats = {
+            "timeline_rows": 0,
+            "windows_old_rows": 0,
+            "eligible_windows_old_rows": 0,
+            "skipped_windows_old_rows": 0,
+            "max_windows_old_output_rows": max_windows_old_output_rows,
+            "duplicate_groups": 0,
+            "duplicate_rows": 0,
+        }
+        db.log_activity(
+            case_id=case_id,
+            image_id=image_id,
+            event="timeline.windows_old_dedupe_skipped",
+            message="Skipped Windows.old timeline dedupe because no timeline events table exists",
+            details=stats,
+        )
+        db.conn.commit()
+        return stats
     if image_id:
         db.conn.execute(
             "DELETE FROM timeline_event_sources WHERE case_id = ? AND image_id = ?",
@@ -491,3 +510,15 @@ def _rebuild_timeline_windows_old_dedupe_duckdb(
         "duplicate_groups": duplicate_groups,
         "duplicate_rows": duplicate_count,
     }
+
+
+def _duckdb_table_exists(conn: Any, table: str) -> bool:
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS count
+        FROM information_schema.tables
+        WHERE table_name = ?
+        """,
+        (table,),
+    ).fetchone()
+    return bool(row and row[0])

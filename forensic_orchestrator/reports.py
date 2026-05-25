@@ -26477,7 +26477,7 @@ def _memory_artifact_note(artifact_type: str | None, hiberfil_status: str | None
 
 def _processed_memory_sources(db: Database, case_id: str) -> set[str]:
     output: set[str] = set()
-    if _table_exists(db, "memory_string_hits"):
+    if _report_table_columns(db, case_id, "memory_string_hits"):
         rows = _query_report_rows(
             db,
             case_id,
