@@ -109,10 +109,6 @@ def _progress_detail(details: dict | None) -> str:
 
 def _windows_old_tools(tools: list) -> list:
     scoped = []
-    parallel_tool_tasks: list[ProcessingTask] = []
-    parallel_tool_contexts: dict[str, dict[str, object]] = {}
-    parallel_enabled = workers > 1
-
     for tool in tools:
         if tool.name in WINDOWS_OLD_EXCLUDED_TOOLS or not tool.artifacts:
             continue
@@ -667,6 +663,10 @@ def _run_profile_impl(
             if artifact.name in mft_selected_artifacts:
                 continue
             extract_profile_artifact(artifact)
+
+    parallel_tool_tasks: list[ProcessingTask] = []
+    parallel_tool_contexts: dict[str, dict[str, object]] = {}
+    parallel_enabled = workers > 1
 
     for tool in tools:
         for artifact in tool.artifacts:
