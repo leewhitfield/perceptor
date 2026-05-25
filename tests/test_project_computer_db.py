@@ -122,7 +122,60 @@ def test_recovery_coverage_report_summarizes_tsk_recovery_artifacts(tmp_path):
     assert report["summary"]["matched_count"] == 3
     assert report["summary"]["extracted_count"] == 2
     assert report["summary"]["failed_count"] == 1
+    assert report["summary"]["limited_count"] == 0
     assert report["by_artifact"][0]["artifact_name"] == "lnk_files"
+
+
+def test_recovery_coverage_report_surfaces_limited_recovery(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    timing_id = db.start_process_timing(
+        case_id=case.id,
+        computer_id="computer-1",
+        image_id="image-1",
+        scope="artifact",
+        phase="extract",
+        name="office_backstage",
+        tool_name="OfficeBackstageParser",
+        artifact_name="office_backstage",
+        details={
+            "profile": "windows-basic-evtx-deep-recovery",
+            "method": "tsk",
+            "source": "Users",
+            "destination": "office",
+            "recovery": {
+                "deleted_files": True,
+                "orphaned_files": True,
+                "cost": "medium",
+                "noise": "medium",
+                "max_files": 5000,
+            },
+        },
+    )
+    db.finish_process_timing(
+        timing_id,
+        status="partial_limited",
+        details={
+            "count": 6000,
+            "extracted_count": 5000,
+            "failed_count": 0,
+            "recovery_limited": True,
+            "limit_reason": "max_files",
+            "limit_max_files": 5000,
+        },
+    )
+
+    report = recovery_coverage_report(db, case.id)
+
+    assert report["summary"]["limited_count"] == 1
+    status_counts = {row["value"]: row["count"] for row in report["summary"]["status_counts"]}
+    limit_reason_counts = {row["value"]: row["count"] for row in report["summary"]["limit_reason_counts"]}
+    assert status_counts["partial_limited"] == 1
+    assert limit_reason_counts["max_files"] == 1
+    assert report["by_artifact"][0]["limited_count"] == 1
+    assert report["by_artifact"][0]["limit_reasons"]["max_files"] == 1
 
 
 def test_tool_outputs_are_recorded_per_computer(tmp_path):

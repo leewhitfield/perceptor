@@ -6,6 +6,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 import subprocess
+import time
 
 from forensic_orchestrator.db import Database, utc_now
 from forensic_orchestrator.jobs import JobRunner
@@ -289,6 +290,43 @@ def parse_istat_metadata(output: str) -> dict[str, str]:
     return metadata
 
 
+def _positive_int(value: object) -> int | None:
+    try:
+        number = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def _recovery_limits(recovery: dict[str, object] | None) -> dict[str, int]:
+    recovery = recovery or {}
+    limits: dict[str, int] = {}
+    for key in ("max_files", "max_bytes", "max_seconds"):
+        number = _positive_int(recovery.get(key))
+        if number is not None:
+            limits[key] = number
+    return limits
+
+
+def _recovery_limit_reason(
+    limits: dict[str, int],
+    *,
+    extracted_files: int,
+    extracted_bytes: int,
+    started: float,
+) -> str:
+    max_files = limits.get("max_files")
+    if max_files is not None and extracted_files >= max_files:
+        return "max_files"
+    max_bytes = limits.get("max_bytes")
+    if max_bytes is not None and extracted_bytes >= max_bytes:
+        return "max_bytes"
+    max_seconds = limits.get("max_seconds")
+    if max_seconds is not None and time.monotonic() - started >= max_seconds:
+        return "max_seconds"
+    return ""
+
+
 def write_extraction_manifest(path: Path, rows: list[dict[str, str]]) -> None:
     if not rows:
         return
@@ -315,6 +353,8 @@ def write_extraction_manifest(path: Path, rows: list[dict[str, str]]) -> None:
         "path_unresolved",
         "deleted_mft_entry",
         "live_orphan",
+        "recovery_limited",
+        "limit_reason",
     ]
     with manifest_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
@@ -439,7 +479,19 @@ def extract_artifact(
         ]
         manifest_rows: list[dict[str, str]] = []
         failed_count = 0
+        extracted_bytes = 0
+        started = time.monotonic()
+        limit_reason = ""
+        limits = _recovery_limits(artifact.recovery)
         for entry in matched:
+            limit_reason = _recovery_limit_reason(
+                limits,
+                extracted_files=len(manifest_rows),
+                extracted_bytes=extracted_bytes,
+                started=started,
+            )
+            if limit_reason:
+                break
             relative = Path(entry.path[len(source_prefix) :].lstrip("/")) if source_prefix else Path(entry.path)
             extracted_path = destination / _safe_relative_path(str(relative))
             try:
@@ -476,6 +528,10 @@ def extract_artifact(
                 )
                 continue
             try:
+                extracted_bytes += extracted_path.stat().st_size
+            except OSError:
+                pass
+            try:
                 metadata = read_file_metadata(
                     raw_image=raw_image,
                     offset_sectors=offset_sectors,
@@ -504,9 +560,12 @@ def extract_artifact(
                     "artifact_path": str(extracted_path),
                     "original_path": entry.path,
                     "inode": entry.inode,
+                    "recovery_limited": "true" if limit_reason else "false",
+                    "limit_reason": limit_reason,
                     **metadata,
                 }
             )
+        limited = bool(limit_reason)
         write_extraction_manifest(destination, manifest_rows)
         db.insert_artifact(
             {
@@ -521,6 +580,11 @@ def extract_artifact(
                     "count": len(matched),
                     "extracted_count": len(manifest_rows),
                     "failed_count": failed_count,
+                    "recovery_limited": limited,
+                    "limit_reason": limit_reason,
+                    "limit_max_files": limits.get("max_files"),
+                    "limit_max_bytes": limits.get("max_bytes"),
+                    "limit_max_seconds": limits.get("max_seconds"),
                     "pattern": artifact.pattern,
                     "patterns": list(artifact.patterns),
                     "include_path_patterns": list(artifact.include_path_patterns),
@@ -528,7 +592,7 @@ def extract_artifact(
                 },
             }
         )
-        level = "warning" if len(matched) == 0 or failed_count else "info"
+        level = "warning" if len(matched) == 0 or failed_count or limited else "info"
         db.log_activity(
             case_id=case_id,
             computer_id=computer_id,
@@ -538,6 +602,8 @@ def extract_artifact(
             message=(
                 f"No files found for artifact {artifact.name}"
                 if len(matched) == 0
+                else f"Stopped recovery for artifact {artifact.name} after {len(manifest_rows)} of {len(matched)} files: {limit_reason}"
+                if limited
                 else f"Extracted {len(manifest_rows)} of {len(matched)} files for artifact {artifact.name}"
             ),
             details={
@@ -546,6 +612,11 @@ def extract_artifact(
                 "count": len(matched),
                 "extracted_count": len(manifest_rows),
                 "failed_count": failed_count,
+                "recovery_limited": limited,
+                "limit_reason": limit_reason,
+                "limit_max_files": limits.get("max_files"),
+                "limit_max_bytes": limits.get("max_bytes"),
+                "limit_max_seconds": limits.get("max_seconds"),
                 "pattern": artifact.pattern,
                 "patterns": list(artifact.patterns),
                 "include_path_patterns": list(artifact.include_path_patterns),
@@ -557,7 +628,16 @@ def extract_artifact(
             destination,
             artifact.source,
             "directory",
-            {"count": len(matched), "extracted_count": len(manifest_rows), "failed_count": failed_count},
+            {
+                "count": len(matched),
+                "extracted_count": len(manifest_rows),
+                "failed_count": failed_count,
+                "recovery_limited": limited,
+                "limit_reason": limit_reason,
+                "limit_max_files": limits.get("max_files"),
+                "limit_max_bytes": limits.get("max_bytes"),
+                "limit_max_seconds": limits.get("max_seconds"),
+            },
         )
 
     matches = [

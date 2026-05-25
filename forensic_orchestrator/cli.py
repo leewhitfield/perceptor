@@ -486,6 +486,21 @@ def run_memory_processing_profile(
             path=csv_path,
         )
         total_imported += imported
+        db.log_activity(
+            case_id=case_id,
+            computer_id=local_computer_id,
+            image_id=local_image_id,
+            event="memory.profile_artifact_scanned",
+            message="Scanned memory-profile artifact for targeted strings",
+            details={
+                "artifact_path": artifact.get("path"),
+                "artifact_type": artifact_type,
+                "source_path": str(source),
+                "output": str(csv_path),
+                "imported_rows": imported,
+                **metadata,
+            },
+        )
         scans.append(
             {
                 "artifact_path": artifact.get("path"),
@@ -2394,7 +2409,7 @@ def run(args: argparse.Namespace) -> int:
                 image_id=image_id,
                 event="memory.strings_scanned",
                 message="Scanned memory-adjacent artifact for targeted strings",
-                details=metadata,
+                details={"source_path": str(source), **metadata},
             )
             print_json({"case_id": args.case_id, "computer_id": computer_id, "image_id": image_id, "output": csv_path, "imported_rows": imported, **metadata})
             return 0
@@ -2506,6 +2521,22 @@ def run(args: argparse.Namespace) -> int:
                     path=csv_path,
                 )
                 total_imported += imported
+                db.log_activity(
+                    case_id=args.case_id,
+                    computer_id=computer_id,
+                    image_id=image_id,
+                    event="memory.crash_dump_scanned",
+                    message="Scanned crash dump for targeted strings",
+                    details={
+                        "artifact_path": artifact.get("path"),
+                        "artifact_type": artifact.get("artifact_type"),
+                        "source_path": str(scan_source),
+                        "original_source_path": str(source),
+                        "output": str(csv_path),
+                        "imported_rows": imported,
+                        **metadata,
+                    },
+                )
                 scans.append(
                     {
                         "artifact_path": artifact.get("path"),
@@ -3752,6 +3783,8 @@ def run(args: argparse.Namespace) -> int:
                     "matched_count",
                     "extracted_count",
                     "failed_count",
+                    "recovery_limited",
+                    "limit_reason",
                     "cost",
                     "noise",
                     "start_time",

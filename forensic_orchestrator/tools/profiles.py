@@ -108,6 +108,8 @@ def _progress_detail(details: dict | None) -> str:
         parts.append(f"bytes={details['byte_count']}")
     if "count" in details:
         parts.append(f"count={details['count']}")
+    if details.get("recovery_limited"):
+        parts.append(f"limited={details.get('limit_reason') or 'yes'}")
     if "path_stat_error" in details:
         parts.append("stat_error=yes")
     return f" ({', '.join(parts)})" if parts else ""
@@ -135,6 +137,7 @@ def _apply_profile_artifact_overrides(tools: list, profile_config: dict | None) 
     if not profile_config:
         return tools
     force_tsk_artifacts = set(str(item) for item in profile_config.get("force_tsk_artifacts", []))
+    recovery_limits = dict(profile_config.get("recovery_limits") or {})
     extraction_policy = str(
         profile_config.get("extraction_policy") or profile_config.get("recovery_policy") or "fast"
     ).lower()
@@ -150,11 +153,28 @@ def _apply_profile_artifact_overrides(tools: list, profile_config: dict | None) 
             recovery = artifact.recovery or {}
             policy_force_tsk = _recovery_policy_forces_tsk(extraction_policy, recovery)
             if force_tsk_artifacts.intersection(artifact_keys) or policy_force_tsk:
-                artifacts.append(replace(artifact, use_tsk=True))
+                scoped_recovery = _recovery_with_profile_limits(recovery, recovery_limits)
+                artifacts.append(replace(artifact, use_tsk=True, recovery=scoped_recovery))
                 changed = True
             else:
                 artifacts.append(artifact)
         scoped.append(replace(tool, artifacts=artifacts) if changed else tool)
+    return scoped
+
+
+def _recovery_with_profile_limits(recovery: dict | None, recovery_limits: dict | None) -> dict:
+    scoped = dict(recovery or {})
+    limits = dict(recovery_limits or {})
+    for profile_key, recovery_key in (
+        ("max_files", "max_files"),
+        ("max_files_per_artifact", "max_files"),
+        ("max_bytes", "max_bytes"),
+        ("max_bytes_per_artifact", "max_bytes"),
+        ("max_seconds", "max_seconds"),
+        ("max_seconds_per_artifact", "max_seconds"),
+    ):
+        if profile_key in limits and recovery_key not in scoped:
+            scoped[recovery_key] = limits[profile_key]
     return scoped
 
 
@@ -211,6 +231,9 @@ def profile_extraction_preview(registry: ToolRegistry, profile: str) -> dict:
         "profile": profile,
         "description": profile_config.get("description", ""),
         "extraction_policy": extraction_policy,
+        "recommendation": profile_config.get("recommendation", ""),
+        "recovery_tier": profile_config.get("recovery_tier", ""),
+        "recovery_limits": profile_config.get("recovery_limits") or {},
         "tool_count": len(effective_tools),
         "artifact_count": len(artifacts),
         "policy_tsk_artifact_count": forced_count,
@@ -748,10 +771,11 @@ def _run_profile_impl(
             )
             active_db.finish_process_timing(
                 artifact_timing_id,
+                status="partial_limited" if artifact_details.get("recovery_limited") else "completed",
                 details=artifact_details,
             )
             _progress(
-                f"artifact completed {artifact.name} method={extraction_method} "
+                f"artifact {'partial_limited' if artifact_details.get('recovery_limited') else 'completed'} {artifact.name} method={extraction_method} "
                 f"elapsed={_format_elapsed(artifact_started)}{_progress_detail(artifact_details)}"
             )
             if record_path:

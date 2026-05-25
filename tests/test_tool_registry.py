@@ -638,6 +638,8 @@ def test_deep_recovery_policy_applies_to_recoverable_artifacts_only():
     assert artifacts["ChromiumParser:chromium_profiles"].use_tsk is True
     assert artifacts["WebCacheParser:webcache"].use_tsk is True
     assert artifacts["LECmd:lnk_files"].use_tsk is True
+    assert artifacts["ChromiumParser:chromium_profiles"].recovery["max_files"] == 5000
+    assert artifacts["ChromiumParser:chromium_profiles"].recovery["max_seconds"] == 1800
     assert registry.get_tool("ChromiumParser").artifacts[0].use_tsk is False
 
 
@@ -647,11 +649,21 @@ def test_balanced_recovery_policy_skips_high_cost_artifacts():
     artifacts = {f"{item['tool_name']}:{item['artifact_name']}": item for item in preview["artifacts"]}
 
     assert preview["extraction_policy"] == "balanced"
+    assert preview["recovery_tier"] == "practical_default"
     assert artifacts["LECmd:lnk_files"]["effective_method"] == "tsk"
     assert artifacts["JLECmd:jumplists"]["effective_method"] == "tsk"
     assert artifacts["WebCacheParser:webcache"]["effective_method"] == "tsk"
     assert artifacts["FirefoxParser:firefox_profiles"]["effective_method"] == "mount"
     assert artifacts["BrowserCacheParser:browser_cache_profiles"]["effective_method"] == "mount"
+
+
+def test_deep_recovery_preview_includes_guardrail_metadata():
+    registry = ToolRegistry.from_files([default_plugin_path()])
+    preview = profiles.profile_extraction_preview(registry, "windows-basic-evtx-deep-recovery")
+
+    assert preview["recovery_tier"] == "analyst_selected"
+    assert preview["recovery_limits"]["max_files_per_artifact"] == 5000
+    assert preview["recovery_limits"]["max_seconds_per_artifact"] == 1800
 
 
 def test_internal_chromium_parser_extracts_profile_sqlite_files():

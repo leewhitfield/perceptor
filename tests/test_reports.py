@@ -277,12 +277,25 @@ def test_memory_artifacts_report_inventories_mounted_files(tmp_path):
     (volume / "swapfile.sys").write_bytes(b"s" * 30)
     (volume / "Windows" / "Minidump").mkdir(parents=True)
     (volume / "Windows" / "Minidump" / "050124-12345-01.dmp").write_bytes(b"d" * 40)
+    db.log_activity(
+        case_id=case.id,
+        computer_id="computer-1",
+        image_id="image-1",
+        event="memory.profile_artifact_scanned",
+        message="Scanned memory-profile artifact for targeted strings",
+        details={"source_path": str(volume / "pagefile.sys")},
+    )
 
     report = memory_artifacts_report(db, case.id)
 
     assert report["summary"]["artifact_count"] == 4
     assert report["summary"]["total_bytes"] == 100
+    assert report["summary"]["processed_count"] == 1
     assert {row["artifact_type"] for row in report["artifacts"]} == {"hiberfil", "pagefile", "swapfile", "crash_dump"}
+    hiberfil = next(row for row in report["artifacts"] if row["artifact_type"] == "hiberfil")
+    assert hiberfil["hiberfil_status"] == "unknown_or_compressed"
+    pagefile = next(row for row in report["artifacts"] if row["artifact_type"] == "pagefile")
+    assert pagefile["processed_status"] == "processed"
     assert "Memory Artifact Inventory" in memory_artifacts_markdown(report)
 
 

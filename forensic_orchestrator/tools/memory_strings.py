@@ -93,6 +93,8 @@ def scan_memory_strings_to_csv(
                 )
                 writer.writerow(row)
     return output, {
+        "source_path": str(source),
+        "source_artifact_type": memory_artifact_type(source),
         "scanner": scanner,
         "decompress_status": decompress_status,
         "decompress_error": decompress_error,

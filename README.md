@@ -335,15 +335,20 @@ parsed rows are promoted into the main case DuckDB. See `docs/vsc-sidecar.md`.
 artifacts independently. `windows-deep` includes the full EVTX profile plus SRUM,
 Windows Search, and WebCache.
 Recovery profiles set `extraction_policy`. Normal profiles use mounted
-filesystem extraction for speed. `balanced` switches only low/medium-cost,
-low-noise recoverable artifacts to Sleuth Kit extraction. `deep` switches
-all artifacts that declare `recovery.deleted_files` or
+filesystem extraction for speed. `balanced` is the recommended recovery path for
+routine work: it switches only low/medium-cost, low-noise recoverable artifacts
+to Sleuth Kit extraction. `deep` is analyst-selected exhaustive recovery. It
+switches all artifacts that declare `recovery.deleted_files` or
 `recovery.orphaned_files` to Sleuth Kit extraction so deleted or orphaned
-directory entries can be recovered. Current recovery candidates include browser
-databases and caches, LNK and Jump List execution artifacts, Prefetch, Recycle
-Bin, Windows Search, SRUM, WebCache, ActivitiesCache, user registry hives, cloud
-sync artifacts, mail, messaging, and selected application databases. Preview
-policy effects before a run with:
+directory entries can be recovered, but broad artifacts can produce very large
+partial extractions. Deep profiles therefore apply per-artifact guardrails
+(`recovery_limits`) for maximum files, bytes, and runtime. When a guardrail is
+hit the artifact is reported as `partial_limited`; the profile continues and
+`report recovery-coverage` shows the limit reason. Current recovery candidates
+include browser databases and caches, LNK and Jump List execution artifacts,
+Prefetch, Recycle Bin, Windows Search, SRUM, WebCache, ActivitiesCache, user
+registry hives, cloud sync artifacts, mail, messaging, and selected application
+databases. Preview policy effects before a run with:
 
 ```bash
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator tools profile-preview --profile windows-basic-evtx-balanced-recovery
@@ -913,20 +918,24 @@ The report commands are intentionally thin JSON views over SQLite:
   devices. Storage-specific movement analysis remains in the USB dossier and
   USB file-correlation reports.
 - `report case-review`: case-level review summary for copied files, copied USB
-  files, USB devices, parser warnings/errors, EVTX recovery, and tool status.
+  files, USB devices, parser warnings/errors, EVTX recovery, recovery coverage,
+  memory artifacts, and tool status.
 - `report evidence-gaps`: consolidated evidence limitations from parser status,
   failed jobs, extraction caveats, skipped artifacts, partial EVTX recovery,
   OpenSearch write failures, and memory artifacts awaiting analysis.
-- `report memory-artifacts`: inventory of hibernation, pagefile, and swapfile
-  artifacts found in mounted volumes or MFT data so later memory work is visible
-  in the case record.
+- `report memory-artifacts`: inventory of hibernation, pagefile, swapfile,
+  full-memory dump, and crash dump artifacts found in mounted volumes or MFT
+  data so later memory work is visible in the case record. Hiberfil assessment
+  is best-effort and fails gracefully when the file is inactive, compressed,
+  unsupported, or unreadable.
 - `report memory-analysis`: investigator-facing memory processing workflow and
   findings report. It combines memory artifact inventory, imported targeted
   string hits, tool availability, MemProcFS/Volatility/bstrings next steps, and
   the Windows Search encrypted SQLite assessment.
-- `memory strings`: scans hibernation/page/swap or memory files for targeted
-  strings using `bstrings` when available, falling back to `strings`. It tries
-  supported hiberfil decompression first and stores hits in `memory_string_hits`.
+- `memory strings`: scans hibernation/page/swap, full-memory, or crash dump
+  files for targeted strings using `bstrings` when available, falling back to
+  `strings`. It tries supported hiberfil decompression first and stores hits in
+  `memory_string_hits`.
   Set `BSTRINGS_BIN` when `bstrings` is installed outside `PATH`; the default
   local EZ-tools location `/home/lee/tools/bstrings/bstrings.dll` is also
   checked. For hibernation decompression, the scanner checks `HIBR2BIN_BIN`,

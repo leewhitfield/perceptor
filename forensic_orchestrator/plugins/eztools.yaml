@@ -2188,12 +2188,24 @@ profiles:
   windows-firefox-deep-recovery:
     description: Firefox browser artifacts using TSK extraction to include deleted or orphaned profile databases
     extraction_policy: deep
+    recovery_tier: analyst_selected
+    recommendation: Use only when deleted or orphaned Firefox profile databases are specifically in scope.
+    recovery_limits:
+      max_files_per_artifact: 5000
+      max_bytes_per_artifact: 10737418240
+      max_seconds_per_artifact: 1800
     tools:
       - FirefoxParser
 
   windows-browser-deep-recovery:
     description: Browser artifacts using TSK extraction for deleted or orphaned profile databases, cache, LNK, and Jump List evidence
     extraction_policy: deep
+    recovery_tier: analyst_selected
+    recommendation: Use when exhaustive browser-adjacent deleted or orphaned recovery is worth the additional runtime and output volume.
+    recovery_limits:
+      max_files_per_artifact: 5000
+      max_bytes_per_artifact: 10737418240
+      max_seconds_per_artifact: 1800
     tools:
       - FirefoxParser
       - ChromiumParser
@@ -2206,6 +2218,8 @@ profiles:
   windows-browser-balanced-recovery:
     description: Browser-adjacent low-noise recovery for WebCache, LNK, and Jump List evidence
     extraction_policy: balanced
+    recovery_tier: practical_default
+    recommendation: Recommended recovery profile for routine browser-adjacent deleted or orphaned evidence.
     tools:
       - FirefoxParser
       - ChromiumParser
@@ -2291,6 +2305,12 @@ profiles:
   windows-cloud-email-deep-recovery:
     description: Cloud sync, browser, search, mailbox, Windows Mail, and messaging artifacts with deleted or orphaned recovery enabled
     extraction_policy: deep
+    recovery_tier: analyst_selected
+    recommendation: Use when exhaustive cloud/email/browser deleted or orphaned recovery is required and high output volume is acceptable.
+    recovery_limits:
+      max_files_per_artifact: 5000
+      max_bytes_per_artifact: 10737418240
+      max_seconds_per_artifact: 1800
     tools:
       - SIDR
       - WindowsSearchESEParser
@@ -2385,6 +2405,12 @@ profiles:
   windows-basic-evtx-deep-recovery:
     description: Windows forensic triage with selected high-value event logs and deleted or orphaned recovery for high-value artifacts
     extraction_policy: deep
+    recovery_tier: analyst_selected
+    recommendation: Use only for exhaustive recovery. Broad artifacts can produce very large partial extractions.
+    recovery_limits:
+      max_files_per_artifact: 5000
+      max_bytes_per_artifact: 10737418240
+      max_seconds_per_artifact: 1800
     tools:
       - MFTECmd
       - MFTECmdUSN
@@ -2423,6 +2449,8 @@ profiles:
   windows-basic-evtx-balanced-recovery:
     description: Windows forensic triage with selected high-value event logs and low/medium-cost deleted or orphaned recovery
     extraction_policy: balanced
+    recovery_tier: practical_default
+    recommendation: Recommended recovery profile for routine deleted or orphaned evidence because it limits automatic TSK recovery to low-noise artifacts.
     tools:
       - MFTECmd
       - MFTECmdUSN

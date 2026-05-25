@@ -27,6 +27,7 @@ from .interesting_executables import load_interesting_executable_rules
 from .report_paths import display_evidence_path
 from .storage_policy import CONTENT_HEAVY_TABLES, storage_policy_items
 from .timestamps import parse_timestamp
+from .tools.memory_strings import assess_hiberfil_source
 from .tools.usb_partition import usb_rows_from_partition_diagnostic_event
 from .usn_rules import load_usn_rules, match_usn_rules
 
@@ -17042,6 +17043,11 @@ def recovery_coverage_report(db: Database, case_id: str, *, limit: int = 500) ->
             "matched_count": details.get("count"),
             "extracted_count": details.get("extracted_count"),
             "failed_count": details.get("failed_count"),
+            "recovery_limited": bool(details.get("recovery_limited")),
+            "limit_reason": details.get("limit_reason"),
+            "limit_max_files": details.get("limit_max_files"),
+            "limit_max_bytes": details.get("limit_max_bytes"),
+            "limit_max_seconds": details.get("limit_max_seconds"),
             "file_count": details.get("file_count"),
             "byte_count": details.get("byte_count"),
             "deleted_files": bool(recovery.get("deleted_files")),
@@ -17064,6 +17070,12 @@ def recovery_coverage_report(db: Database, case_id: str, *, limit: int = 500) ->
         "matched_count": sum(int(item.get("matched_count") or 0) for item in forced),
         "extracted_count": sum(int(item.get("extracted_count") or 0) for item in forced),
         "failed_count": sum(int(item.get("failed_count") or 0) for item in forced),
+        "limited_count": sum(1 for item in forced if item.get("recovery_limited")),
+        "status_counts": _count_by_key(forced, "status"),
+        "limit_reason_counts": _count_by_key(
+            [item for item in forced if item.get("limit_reason")],
+            "limit_reason",
+        ),
     }
     by_artifact = {}
     for item in forced:
@@ -17078,6 +17090,8 @@ def recovery_coverage_report(db: Database, case_id: str, *, limit: int = 500) ->
                 "matched_count": 0,
                 "extracted_count": 0,
                 "failed_count": 0,
+                "limited_count": 0,
+                "limit_reasons": {},
                 "cost": item.get("cost"),
                 "noise": item.get("noise"),
             },
@@ -17087,6 +17101,10 @@ def recovery_coverage_report(db: Database, case_id: str, *, limit: int = 500) ->
         current["matched_count"] += int(item.get("matched_count") or 0)
         current["extracted_count"] += int(item.get("extracted_count") or 0)
         current["failed_count"] += int(item.get("failed_count") or 0)
+        if item.get("recovery_limited"):
+            current["limited_count"] += 1
+            reason = str(item.get("limit_reason") or "unspecified")
+            current["limit_reasons"][reason] = int(current["limit_reasons"].get(reason, 0)) + 1
     return {
         "case_id": case_id,
         "summary": summary,
@@ -17107,6 +17125,7 @@ def case_review_report(db: Database, case_id: str, *, limit: int = 25) -> dict[s
     usb = usb_report(db, case_id, limit=limit)
     issues = issues_report(db, case_id, limit=limit)
     evtx = evtx_recovery_report(db, case_id, limit=limit)
+    recovery = recovery_coverage_report(db, case_id, limit=max(limit, 100))
     tool_runs = tool_run_summary_report(db, case_id, limit=limit)
     activity = activity_summary_report(db, case_id, limit=limit)
     return {
@@ -17125,10 +17144,14 @@ def case_review_report(db: Database, case_id: str, *, limit: int = 25) -> dict[s
             "tools_without_output": completeness["summary"]["tools_without_output"],
             "evidence_gap_count": gaps["summary"]["gap_count"],
             "memory_artifact_count": memory["summary"]["artifact_count"],
+            "recovery_tsk_artifacts": recovery["summary"]["tsk_recovery_artifacts"],
+            "recovery_limited_count": recovery["summary"]["limited_count"],
         },
         "evidence_gaps_summary": gaps["summary"],
         "top_evidence_gaps": gaps["gaps"][:limit],
         "memory_artifacts_summary": memory["summary"],
+        "recovery_coverage_summary": recovery["summary"],
+        "recovery_coverage_by_artifact": recovery["by_artifact"][:limit],
         "memory_artifacts": memory["artifacts"][:limit],
         "evidence_strength_guide": evidence_strength_guide(),
         "artifact_completeness_summary": completeness["summary"],
@@ -17356,6 +17379,16 @@ def memory_artifacts_report(db: Database, case_id: str, *, limit: int = 100) -> 
     mounted = _mounted_memory_artifacts(db, case_id)
     mft = _mft_memory_artifacts(db, case_id, limit=limit)
     rows = _dedupe_memory_artifacts([*mounted, *mft])
+    processed_sources = _processed_memory_sources(db, case_id)
+    for row in rows:
+        source_keys = {
+            str(row.get("actual_path") or ""),
+            str(row.get("path") or ""),
+        }
+        normalized_keys = {_normalize_memory_source_key(value) for value in source_keys if value}
+        if normalized_keys.intersection(processed_sources):
+            row["processed_status"] = "processed"
+            row["notes"] = "Memory strings have been scanned for this artifact."
     rows.sort(key=lambda row: (row.get("artifact_type") or "", row.get("path") or ""))
     total_bytes = sum(int(row.get("size_bytes") or 0) for row in rows)
     return {
@@ -17373,7 +17406,8 @@ def memory_artifacts_report(db: Database, case_id: str, *, limit: int = 100) -> 
         "artifacts": rows[:limit],
         "notes": [
             "This report inventories on-disk memory-adjacent artifacts. It does not parse memory contents.",
-            "Use these paths as candidates for later memory analysis alongside any separate RAM image.",
+            "Use memory profile or crash-dumps processing to scan hiberfil, pagefile, swapfile, crash dumps, and full memory dumps.",
+            "Hiberfil assessment is best-effort. Unsupported or compressed hiberfil data is reported as a caveat rather than failing the report.",
         ],
         "total_returned": min(len(rows), limit),
     }
@@ -17395,6 +17429,7 @@ def memory_artifacts_markdown(report: dict[str, Any]) -> str:
         f"- Swapfile present: `{summary.get('swapfile_present', False)}`",
         f"- Crash dump present: `{summary.get('crash_dump_present', False)}`",
         f"- Process dump present: `{summary.get('process_dump_present', False)}`",
+        f"- Processed artifacts: `{summary.get('processed_count', 0)}`",
         "",
         "## Artifacts",
         "",
@@ -17408,6 +17443,8 @@ def memory_artifacts_markdown(report: dict[str, Any]) -> str:
             f"size `{row.get('size_bytes') or ''}` source `{row.get('source') or ''}` "
             f"status `{row.get('processed_status') or ''}`"
         )
+        if row.get("hiberfil_status"):
+            lines.append(f"  - hiberfil status: `{row.get('hiberfil_status')}` {row.get('hiberfil_note') or ''}")
     lines.extend(["", "## Notes", ""])
     for note in report.get("notes") or []:
         lines.append(f"- {note}")
@@ -25995,6 +26032,14 @@ def _mounted_memory_artifacts(db: Database, case_id: str) -> list[dict[str, Any]
             size = path.stat().st_size
         except OSError:
             size = None
+        hiberfil_status = None
+        hiberfil_note = None
+        if artifact_type == "hiberfil":
+            try:
+                hiberfil_status, hiberfil_note = assess_hiberfil_source(path)
+            except Exception as exc:
+                hiberfil_status = "assessment_failed"
+                hiberfil_note = str(exc)
         rows.append(
             {
                 "artifact_type": artifact_type,
@@ -26003,7 +26048,9 @@ def _mounted_memory_artifacts(db: Database, case_id: str) -> list[dict[str, Any]
                 "size_bytes": size,
                 "source": "mounted_filesystem",
                 "processed_status": "not_processed",
-                "notes": "Candidate for later memory analysis.",
+                "hiberfil_status": hiberfil_status,
+                "hiberfil_note": hiberfil_note,
+                "notes": _memory_artifact_note(artifact_type, hiberfil_status),
             }
         )
     return rows
@@ -26141,6 +26188,61 @@ def _dedupe_memory_artifacts(rows: list[dict[str, Any]]) -> list[dict[str, Any]]
         seen.add(key)
         output.append(row)
     return output
+
+
+def _memory_artifact_note(artifact_type: str | None, hiberfil_status: str | None = None) -> str:
+    if artifact_type == "hiberfil" and hiberfil_status:
+        if hiberfil_status in {"unknown_or_compressed", "active_hibernation_header"}:
+            return "Candidate for hiberfil decompression and memory string analysis."
+        if hiberfil_status == "zeroed_or_inactive":
+            return "Hiberfil appears zeroed or inactive in sampled regions."
+        if hiberfil_status in {"empty", "unreadable", "assessment_failed"}:
+            return "Hiberfil assessment produced a caveat; review status before analysis."
+    if artifact_type in {"crash_dump", "process_dump", "full_memory_dump"}:
+        return "Candidate for crash/full-memory string analysis and WER/process correlation."
+    return "Candidate for later memory analysis."
+
+
+def _processed_memory_sources(db: Database, case_id: str) -> set[str]:
+    output: set[str] = set()
+    if _table_exists(db, "memory_string_hits"):
+        rows = _query_report_rows(
+            db,
+            case_id,
+            "memory_string_hits",
+            """
+            SELECT DISTINCT source_path, scanned_path, decompressed_path
+            FROM memory_string_hits
+            WHERE case_id = ?
+            """,
+            (case_id,),
+        )
+        for row in rows:
+            for key in ("source_path", "scanned_path", "decompressed_path"):
+                normalized = _normalize_memory_source_key(row.get(key))
+                if normalized:
+                    output.add(normalized)
+    for row in db.conn.execute(
+        """
+        SELECT details_json
+        FROM activity_log
+        WHERE case_id = ?
+          AND event IN ('memory.strings_scanned', 'memory.profile_artifact_scanned', 'memory.crash_dump_scanned')
+        """,
+        (case_id,),
+    ).fetchall():
+        details = _json_details(row["details_json"])
+        for key in ("source_path", "original_source_path", "scanned_path", "decompressed_path"):
+            normalized = _normalize_memory_source_key(details.get(key))
+            if normalized:
+                output.add(normalized)
+    return output
+
+
+def _normalize_memory_source_key(value: Any) -> str:
+    text = str(value or "").replace("\\", "/").strip().casefold()
+    text = re.sub(r"^\./", "", text)
+    return text.rstrip("/")
 
 
 def _opensearch_gap_rows(db: Database, case_id: str) -> list[dict[str, Any]]:
