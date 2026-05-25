@@ -28,7 +28,7 @@ from .interesting_executables import load_interesting_executable_rules
 from .report_paths import display_evidence_path
 from .storage_policy import CONTENT_HEAVY_TABLES, storage_policy_items
 from .timestamps import parse_timestamp
-from .tools.memory_strings import assess_hiberfil_source
+from .tools.memory_strings import assess_hiberfil_source, memory_artifact_type as _classify_memory_artifact_type
 from .tools.usb_partition import usb_rows_from_partition_diagnostic_event
 from .usn_rules import load_usn_rules, match_usn_rules
 
@@ -17910,6 +17910,114 @@ def processing_decision_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def processing_readiness_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str, Any]:
+    case = db.get_case(case_id)
+    timings = process_timing_report(db, case_id, limit=max(limit * 5, 500))
+    memory = memory_artifacts_report(db, case_id, limit=max(limit * 5, 500))
+    recovery = recovery_coverage_report(db, case_id, limit=max(limit * 5, 500))
+    carve = carve_coverage_report(db, case_id, limit=max(limit * 5, 500))
+    decisions = processing_decision_report(db, case_id, limit=max(limit, 100))
+    items: list[dict[str, Any]] = []
+
+    mount_rows = [
+        dict(row)
+        for row in db.conn.execute(
+            """
+            SELECT image_id, partition_id, volume_mount_path, raw_path, offset_bytes, created_at
+            FROM mounts
+            WHERE case_id = ?
+            ORDER BY created_at DESC
+            """,
+            (case_id,),
+        ).fetchall()
+    ]
+    active_mounts = [
+        row for row in mount_rows
+        if row.get("volume_mount_path") and Path(str(row["volume_mount_path"])).exists()
+    ]
+    profile_rows = [row for row in timings.get("timings") or [] if row.get("scope") == "profile"]
+    artifact_rows = [row for row in timings.get("timings") or [] if row.get("scope") == "artifact"]
+    tool_rows = [row for row in timings.get("timings") or [] if row.get("scope") == "tool"]
+    postprocess_rows = [row for row in timings.get("timings") or [] if row.get("scope") == "postprocess"]
+    worker_rows = timings.get("worker_requests") or []
+    memory_summary = memory.get("summary") or {}
+    recovery_summary = recovery.get("summary") or {}
+    carve_summary = carve.get("summary") or {}
+    decision_summary = decisions.get("summary") or {}
+
+    def add(key: str, title: str, complete: bool, details: dict[str, Any], next_step: str) -> None:
+        items.append(
+            {
+                "key": key,
+                "title": title,
+                "status": "complete" if complete else "needs_action",
+                "details": details,
+                "next_step": "" if complete else next_step,
+            }
+        )
+
+    add("case_exists", "Case is registered", True, {"case_root": str(case.root)}, "")
+    add("mount_recorded", "At least one image mount is recorded", bool(mount_rows), {"mount_count": len(mount_rows)}, "Run image mount before broad profile processing.")
+    add("mounted_volume_accessible", "Mounted-volume-first processing can access a filesystem", bool(active_mounts), {"active_mount_count": len(active_mounts)}, "Remount the target volume; mounted extraction avoids broad TSK fallback.")
+    add("profile_run_recorded", "A processing profile has run", bool(profile_rows), {"profile_count": len(profile_rows)}, "Run an appropriate Windows profile.")
+    add("parallel_workers_used", "Parallel workers have been exercised", any((row.get("requested_workers") or 1) > 1 for row in worker_rows), {"worker_requests": worker_rows[:10]}, "Run a profile or memory scan with --workers > 1.")
+    add("artifact_extraction_timed", "Artifact extraction timings are present", bool(artifact_rows), {"artifact_timing_count": len(artifact_rows)}, "Run a profile with artifact extraction.")
+    add("tool_parse_timed", "Tool parse timings are present", bool(tool_rows), {"tool_timing_count": len(tool_rows)}, "Run parser tools through a profile.")
+    add("postprocess_timed", "Postprocess rebuild timings are present", bool(postprocess_rows), {"postprocess_count": len(postprocess_rows)}, "Run a profile that triggers postprocess rebuilds.")
+    add("memory_inventory", "Memory-support artifacts are inventoried", bool(memory_summary.get("artifact_count")), memory_summary, "Run report memory-artifacts after mounting or parsing MFT.")
+    add("pagefile_inventory", "Pagefile is represented when present", bool(memory_summary.get("pagefile_present")), memory_summary, "Confirm pagefile.sys exists or document absence.")
+    add("swapfile_inventory", "Swapfile is represented when present", bool(memory_summary.get("swapfile_present")), memory_summary, "Confirm swapfile.sys exists or document absence.")
+    add("hiberfil_inventory", "Hiberfil status is assessed when present", not memory_summary.get("hiberfil_present") or any(row.get("hiberfil_status") for row in memory.get("artifacts") or [] if row.get("artifact_type") == "hiberfil"), memory_summary, "Run memory-artifacts against an accessible hiberfil.sys.")
+    add("crash_dump_inventory", "Crash/process dumps are inventoried", bool(memory_summary.get("crash_dump_present") or memory_summary.get("process_dump_present")), memory_summary, "Run memory crash-dumps when dumps exist or document absence.")
+    add("memory_processed", "Memory artifacts have been processed", bool(memory_summary.get("processed_count")), memory_summary, "Run memory profile or memory crash-dumps.")
+    add("memory_timeline", "Memory string hits can feed the timeline", _report_table_count(db, case_id, "memory_string_hits") == 0 or _report_table_count(db, case_id, "timeline_events") > 0, {"memory_string_hits": _report_table_count(db, case_id, "memory_string_hits"), "timeline_events": _report_table_count(db, case_id, "timeline_events")}, "Re-run memory processing or timeline rebuild.")
+    add("carve_coverage", "Carve scan ranges or staged carves are tracked", bool(carve_summary.get("scan_range_count") or carve_summary.get("carve_count")), carve_summary, "Run explicit carve sqlite/ese commands for in-scope sources.")
+    add("carve_empty_ranges", "Zero-hit carve ranges are recorded", bool(carve_summary.get("scan_range_count")), carve_summary, "Use chunked carve scanning so empty coverage is documented.")
+    add("sqlite_inventory", "SQLite staged carve inventory is available when carves exist", not carve_summary.get("parsed_sqlite_count") or bool(sqlite_inventory_report(db, case_id, limit=1).get("summary", {}).get("sqlite_carves")), {"parsed_sqlite_count": carve_summary.get("parsed_sqlite_count")}, "Run report sqlite-inventory.")
+    add("recovery_coverage", "Recovery coverage is reportable", bool(recovery_summary.get("artifact_count")), recovery_summary, "Run a profile with artifact extraction.")
+    add("deep_recovery_separated", "Deep recovery is represented separately from windows-full", True, {"profiles": ["windows-basic-evtx-deep-recovery", "windows-browser-deep-recovery", "windows-full-deep-recovery"]}, "")
+    add("windows_old_scoped", "Windows.old is tracked as a separate source scope", any(row.get("source_scope") == "Windows.old" for row in timings.get("timings") or []), {"windows_old_timings": sum(1 for row in timings.get("timings") or [] if row.get("source_scope") == "Windows.old")}, "Run windows-old or a profile that includes Windows.old when present.")
+    add("combined_reports", "Combined disk/memory reports are available", True, {"reports": ["combined-artifacts", "memory-disk-correlations", "windows-search-combined"]}, "")
+    add("processing_decisions", "Processing decisions report has evaluated follow-ups", True, decision_summary, "")
+    add("duckdb_write_serialized", "Same-case DuckDB writes are serialized", True, {"lock_file": "events.duckdb.write.lock"}, "")
+    backlog_path = Path(__file__).resolve().parents[1] / "docs" / "OUTSTANDING_ITEMS.md"
+    add("outstanding_backlog_documented", "Outstanding engineering backlog is documented", backlog_path.exists(), {"path": str(backlog_path)}, "Create or update docs/OUTSTANDING_ITEMS.md.")
+
+    return {
+        "case_id": case_id,
+        "summary": {
+            "item_count": len(items),
+            "complete_count": sum(1 for row in items if row["status"] == "complete"),
+            "needs_action_count": sum(1 for row in items if row["status"] != "complete"),
+        },
+        "items": items[:limit],
+        "total_returned": min(len(items), limit),
+    }
+
+
+def processing_readiness_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") or {}
+    lines = [
+        "# Processing Readiness Report",
+        "",
+        f"Case: `{report.get('case_id') or ''}`",
+        "",
+        "## Summary",
+        "",
+        f"- Items: `{summary.get('item_count', 0)}`",
+        f"- Complete: `{summary.get('complete_count', 0)}`",
+        f"- Needs action: `{summary.get('needs_action_count', 0)}`",
+        "",
+        "## Items",
+        "",
+    ]
+    for row in report.get("items") or []:
+        lines.append(f"- `{row.get('status')}` `{row.get('key')}` {row.get('title')}")
+        if row.get("next_step"):
+            lines.append(f"  - next: {row.get('next_step')}")
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def _processing_decision_summary(row: dict[str, Any], details: dict[str, Any]) -> str:
     status = row.get("status")
     name = row.get("artifact_name") or row.get("tool_name") or row.get("name")
@@ -26610,7 +26718,7 @@ def _mounted_memory_artifacts(db: Database, case_id: str) -> list[dict[str, Any]
             continue
         if not is_file:
             continue
-        artifact_type = _memory_artifact_type(path.name)
+        artifact_type = _memory_artifact_type(path)
         if not artifact_type:
             continue
         try:
@@ -26700,7 +26808,11 @@ def _mft_memory_artifacts(db: Database, case_id: str, *, limit: int) -> list[dic
 
 
 def _memory_artifact_type(name: Any) -> str | None:
-    lowered = str(name or "").lower()
+    source = Path(str(name or ""))
+    classified = _classify_memory_artifact_type(source)
+    if classified in {"hiberfil", "pagefile", "swapfile", "crash_dump", "process_dump", "full_memory_dump"}:
+        return classified
+    lowered = source.name.lower()
     if lowered == "hiberfil.sys":
         return "hiberfil"
     if lowered == "pagefile.sys":
@@ -26720,13 +26832,16 @@ def _mounted_memory_candidate_paths(mounts: Path) -> list[Path]:
         for name in ("hiberfil.sys", "pagefile.sys", "swapfile.sys", "MEMORY.DMP", "memory.dmp"):
             paths.append(volume / name)
         patterns = (
-            "Windows/Minidump/*.dmp",
-            "Windows/LiveKernelReports/**/*.dmp",
-            "ProgramData/Microsoft/Windows/WER/**/*.dmp",
-            "Users/*/AppData/Local/CrashDumps/*.dmp",
+            "Windows/Minidump/*",
+            "Windows/LiveKernelReports/**/*",
+            "ProgramData/Microsoft/Windows/WER/**/*",
+            "Users/*/AppData/Local/CrashDumps/*",
+            "Users/*/AppData/Local/Temp/*.dmp",
+            "Users/*/AppData/Local/Temp/*.mdmp",
+            "Users/*/AppData/Local/Temp/*.dump",
         )
         for pattern in patterns:
-            paths.extend(volume.glob(pattern))
+            paths.extend(path for path in volume.glob(pattern) if path.suffix.lower() in {".dmp", ".mdmp", ".dump"})
     return sorted({path for path in paths if path.exists()})
 
 

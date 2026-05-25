@@ -957,6 +957,10 @@ The report commands are intentionally thin JSON views over SQLite:
 - `report processing-decisions`: handoff-oriented processing summary for
   profiles, failed/limited/skipped artifacts, unprocessed memory support files,
   credential leads, crash dumps, and follow-up recommendations.
+- `report processing-readiness`: case-level checklist for mounted-volume-first
+  processing, parallel worker use, memory support files, crash/process dumps,
+  carve coverage, deep-recovery separation, Windows.old source scopes, and
+  combined report availability. The same report is included in report bundles.
 - `case rebuild-postprocess` / `project rebuild-postprocess`: rebuild derived
   outputs after a long run or imported report bundle without repeating
   extraction. This refreshes common-dialog items, copied-file indicators,
@@ -1343,6 +1347,10 @@ test clusters with self-signed TLS, pass `--insecure`.
   serialized. The same split-generate/serial-ingest model is also used for
   external tools and internal ETL parsing in parallel extraction profiles,
   followed by serialized database ingest and downstream rebuilds.
+- Deep recovery is intentionally separate from default full processing. Use
+  `windows-full-deep-recovery` only when deleted/orphaned recovery is explicitly
+  in scope; it keeps the `windows-full` runtime path practical while preserving
+  an analyst-selected exhaustive profile.
 
 ## Passwordless Sudo for Mounts
 

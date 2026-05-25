@@ -666,6 +666,19 @@ def test_deep_recovery_preview_includes_guardrail_metadata():
     assert preview["recovery_limits"]["max_seconds_per_artifact"] == 1800
 
 
+def test_full_deep_recovery_is_separate_from_windows_full():
+    registry = ToolRegistry.from_files([default_plugin_path()])
+
+    assert registry.profiles["windows-full"].get("extraction_policy") is None
+    deep = registry.profiles["windows-full-deep-recovery"]
+    assert deep["extraction_policy"] == "deep"
+    assert deep["recovery_tier"] == "analyst_selected"
+    assert deep["include_windows_old"] is True
+    assert [tool.name for tool in registry.profile_tools("windows-full-deep-recovery")] == [
+        tool.name for tool in registry.profile_tools("windows-full")
+    ]
+
+
 def test_internal_chromium_parser_extracts_profile_sqlite_files():
     registry = ToolRegistry.from_files([default_plugin_path()])
     tool = registry.get_tool("ChromiumParser")

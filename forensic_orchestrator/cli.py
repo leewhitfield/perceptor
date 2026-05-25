@@ -168,6 +168,8 @@ from .reports import (
     process_timing_report,
     processing_decision_markdown,
     processing_decision_report,
+    processing_readiness_markdown,
+    processing_readiness_report,
     program_provenance_markdown,
     program_provenance_report,
     recycle_report,
@@ -548,6 +550,7 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
         ("sqlite-inventory", "md", "SQLite carve inventory", sqlite_inventory_markdown(sqlite_inventory_report(db, case_id, limit=limit))),
         ("artifact-processing-status", "json", "Artifact processing status", artifact_processing_status_report(db, case_id, limit=limit)),
         ("processing-decisions", "md", "Processing decisions", processing_decision_markdown(processing_decision_report(db, case_id, limit=limit))),
+        ("processing-readiness", "md", "Processing readiness", processing_readiness_markdown(processing_readiness_report(db, case_id, limit=limit))),
         ("browser-activity", "json", "Browser activity", browser_activity_report(db, case_id, limit=limit, memory_disk_report=memory_disk)),
         ("cloud-artifacts", "json", "Cloud artifacts", cloud_artifacts_report(db, case_id, limit=limit, memory_disk_report=memory_disk)),
         ("email-artifacts", "json", "Email artifacts", email_artifacts_report(db, case_id, limit=limit, memory_disk_report=memory_disk)),
@@ -587,6 +590,26 @@ def run_memory_processing_profile(
     include_crash_dumps: bool = True,
     workers: int = 1,
 ) -> dict[str, object]:
+    timing_id = db.start_process_timing(
+        case_id=case_id,
+        computer_id=computer_id,
+        image_id=image_id,
+        scope="profile",
+        phase="memory",
+        name="memory-profile",
+        details={
+            "profile": "memory-profile",
+            "include_crash_dumps": include_crash_dumps,
+            "requested_workers": workers,
+            "effective_workers": max(1, workers),
+            "parallel_scope": "memory_artifact_string_scans" if workers > 1 else "serial",
+            "parallel_note": (
+                "Memory artifact string scans can run in parallel; database ingest remains serialized."
+                if workers > 1
+                else ""
+            ),
+        },
+    )
     artifacts = memory_artifacts_report(db, case_id, limit=5000).get("artifacts") or []
     scans: list[dict[str, object]] = []
     output_base = paths.case_dir(case_id) / "supplemental" / "memory-profile" / str(uuid.uuid4())
@@ -613,100 +636,107 @@ def run_memory_processing_profile(
             )
         )
 
-    for result in run_processing_tasks(scan_tasks, workers=workers):
-        artifact = result.payload["artifact"]
-        artifact_type = str(result.payload["artifact_type"])
-        source = Path(result.payload["source"])
-        local_computer_id, local_image_id = _cloud_or_memory_evidence_ids(
-            db,
-            case_id=case_id,
-            evidence_path=source,
-            computer_id=computer_id,
-            image_id=image_id,
-        )
-        if result.status == "failed":
+    try:
+        for result in run_processing_tasks(scan_tasks, workers=workers):
+            artifact = result.payload["artifact"]
+            artifact_type = str(result.payload["artifact_type"])
+            source = Path(result.payload["source"])
+            local_computer_id, local_image_id = _cloud_or_memory_evidence_ids(
+                db,
+                case_id=case_id,
+                evidence_path=source,
+                computer_id=computer_id,
+                image_id=image_id,
+            )
+            if result.status == "failed":
+                db.log_activity(
+                    case_id=case_id,
+                    computer_id=local_computer_id,
+                    image_id=local_image_id,
+                    event="memory.profile_scan_failed",
+                    level="warning",
+                    message=f"Memory profile scan failed for {source}",
+                    details={"path": str(source), "error": result.error, "duration_seconds": result.duration_seconds},
+                )
+                scans.append(
+                    {
+                        "artifact_path": artifact.get("path"),
+                        "artifact_type": artifact_type,
+                        "status": "failed",
+                        "error": result.error,
+                        "duration_seconds": result.duration_seconds,
+                    }
+                )
+                continue
+            csv_path, metadata = result.value
+            output_id = str(uuid.uuid4())
+            db.insert_tool_output(
+                {
+                    "id": output_id,
+                    "case_id": case_id,
+                    "computer_id": local_computer_id,
+                    "image_id": local_image_id,
+                    "job_id": None,
+                    "tool_name": "MemoryStringScanner",
+                    "output_type": "csv",
+                    "path": csv_path,
+                    "row_count": _count_csv_rows(csv_path),
+                }
+            )
+            imported = ingest_csv_output(
+                db=db,
+                case_id=case_id,
+                computer_id=local_computer_id,
+                image_id=local_image_id,
+                tool_output_id=output_id,
+                tool_name="MemoryStringScanner",
+                path=csv_path,
+            )
+            total_imported += imported
             db.log_activity(
                 case_id=case_id,
                 computer_id=local_computer_id,
                 image_id=local_image_id,
-                event="memory.profile_scan_failed",
-                level="warning",
-                message=f"Memory profile scan failed for {source}",
-                details={"path": str(source), "error": result.error, "duration_seconds": result.duration_seconds},
+                event="memory.profile_artifact_scanned",
+                message="Scanned memory-profile artifact for targeted strings",
+                details={
+                    "artifact_path": artifact.get("path"),
+                    "artifact_type": artifact_type,
+                    "source_path": str(source),
+                    "output": str(csv_path),
+                    "imported_rows": imported,
+                    **metadata,
+                },
             )
             scans.append(
                 {
                     "artifact_path": artifact.get("path"),
                     "artifact_type": artifact_type,
-                    "status": "failed",
-                    "error": result.error,
+                    "status": "scanned",
+                    "output": str(csv_path),
+                    "imported_rows": imported,
                     "duration_seconds": result.duration_seconds,
+                    **metadata,
                 }
             )
-            continue
-        csv_path, metadata = result.value
-        output_id = str(uuid.uuid4())
-        db.insert_tool_output(
-            {
-                "id": output_id,
-                "case_id": case_id,
-                "computer_id": local_computer_id,
-                "image_id": local_image_id,
-                "job_id": None,
-                "tool_name": "MemoryStringScanner",
-                "output_type": "csv",
-                "path": csv_path,
-                "row_count": _count_csv_rows(csv_path),
-            }
-        )
-        imported = ingest_csv_output(
-            db=db,
-            case_id=case_id,
-            computer_id=local_computer_id,
-            image_id=local_image_id,
-            tool_output_id=output_id,
-            tool_name="MemoryStringScanner",
-            path=csv_path,
-        )
-        total_imported += imported
-        db.log_activity(
-            case_id=case_id,
-            computer_id=local_computer_id,
-            image_id=local_image_id,
-            event="memory.profile_artifact_scanned",
-            message="Scanned memory-profile artifact for targeted strings",
-            details={
-                "artifact_path": artifact.get("path"),
-                "artifact_type": artifact_type,
-                "source_path": str(source),
-                "output": str(csv_path),
-                "imported_rows": imported,
-                **metadata,
-            },
-        )
-        scans.append(
-            {
-                "artifact_path": artifact.get("path"),
-                "artifact_type": artifact_type,
-                "status": "scanned",
-                "output": str(csv_path),
-                "imported_rows": imported,
-                "duration_seconds": result.duration_seconds,
-                **metadata,
-            }
-        )
-    return {
-        "case_id": case_id,
-        "artifact_count": len(artifacts),
-        "worker_count": max(1, workers),
-        "scan_task_count": len(scan_tasks),
-        "scanned_count": sum(1 for row in scans if row.get("status") == "scanned"),
-        "skipped_count": sum(1 for row in scans if row.get("status") == "skipped"),
-        "failed_count": sum(1 for row in scans if row.get("status") == "failed"),
-        "imported_rows": total_imported,
-        "output_dir": str(output_base),
-        "scans": scans,
-    }
+        result_payload = {
+            "case_id": case_id,
+            "artifact_count": len(artifacts),
+            "worker_count": max(1, workers),
+            "scan_task_count": len(scan_tasks),
+            "scanned_count": sum(1 for row in scans if row.get("status") == "scanned"),
+            "skipped_count": sum(1 for row in scans if row.get("status") == "skipped"),
+            "failed_count": sum(1 for row in scans if row.get("status") == "failed"),
+            "imported_rows": total_imported,
+            "output_dir": str(output_base),
+            "scans": scans,
+        }
+        status = "completed" if result_payload["failed_count"] == 0 else "partial"
+        db.finish_process_timing(timing_id, status=status, details={key: value for key, value in result_payload.items() if key != "scans"})
+        return result_payload
+    except Exception as exc:
+        db.finish_process_timing(timing_id, status="failed", details={"error": str(exc)})
+        raise
 
 
 def usb_files_table(report: dict[str, object]) -> str:
@@ -2215,6 +2245,11 @@ def build_parser() -> argparse.ArgumentParser:
     report_processing_decisions.add_argument("--limit", type=int, default=100)
     report_processing_decisions.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
     report_processing_decisions.add_argument("--output")
+    report_processing_readiness = report_sub.add_parser("processing-readiness")
+    report_processing_readiness.add_argument("--case", required=True, dest="case_id")
+    report_processing_readiness.add_argument("--limit", type=int, default=100)
+    report_processing_readiness.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
+    report_processing_readiness.add_argument("--output")
     report_evidence_gaps = report_sub.add_parser("evidence-gaps")
     report_evidence_gaps.add_argument("--case", required=True, dest="case_id")
     report_evidence_gaps.add_argument("--limit", type=int, default=100)
@@ -3740,6 +3775,21 @@ def run(args: argparse.Namespace) -> int:
                     args.output,
                     title=f"Processing decisions for case {args.case_id}",
                     columns=["severity", "decision_type", "status", "item", "summary", "followup"],
+                )
+            return 0
+
+        if args.resource == "report" and args.action == "processing-readiness":
+            report = processing_readiness_report(db, args.case_id, limit=args.limit)
+            if args.format == "md":
+                write_text_output(processing_readiness_markdown(report), args.output)
+            else:
+                write_report_output(
+                    report,
+                    report["items"],
+                    args.format,
+                    args.output,
+                    title=f"Processing readiness for case {args.case_id}",
+                    columns=["key", "title", "status", "next_step"],
                 )
             return 0
 

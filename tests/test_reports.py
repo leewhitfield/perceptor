@@ -79,6 +79,8 @@ from forensic_orchestrator.reports import (
     memory_disk_correlations_report,
     processing_decision_markdown,
     processing_decision_report,
+    processing_readiness_markdown,
+    processing_readiness_report,
     messaging_artifacts_report,
     mft_report,
     office_trust_report,
@@ -280,6 +282,8 @@ def test_memory_artifacts_report_inventories_mounted_files(tmp_path):
     (volume / "swapfile.sys").write_bytes(b"s" * 30)
     (volume / "Windows" / "Minidump").mkdir(parents=True)
     (volume / "Windows" / "Minidump" / "050124-12345-01.dmp").write_bytes(b"d" * 40)
+    (volume / "Users" / "Jane" / "AppData" / "Local" / "Temp").mkdir(parents=True)
+    (volume / "Users" / "Jane" / "AppData" / "Local" / "Temp" / "lsass.dmp").write_bytes(b"x" * 50)
     db.log_activity(
         case_id=case.id,
         computer_id="computer-1",
@@ -291,15 +295,29 @@ def test_memory_artifacts_report_inventories_mounted_files(tmp_path):
 
     report = memory_artifacts_report(db, case.id)
 
-    assert report["summary"]["artifact_count"] == 4
-    assert report["summary"]["total_bytes"] == 100
+    assert report["summary"]["artifact_count"] == 5
+    assert report["summary"]["total_bytes"] == 150
     assert report["summary"]["processed_count"] == 1
-    assert {row["artifact_type"] for row in report["artifacts"]} == {"hiberfil", "pagefile", "swapfile", "crash_dump"}
+    assert {row["artifact_type"] for row in report["artifacts"]} == {"hiberfil", "pagefile", "swapfile", "crash_dump", "process_dump"}
     hiberfil = next(row for row in report["artifacts"] if row["artifact_type"] == "hiberfil")
     assert hiberfil["hiberfil_status"] == "unknown_or_compressed"
     pagefile = next(row for row in report["artifacts"] if row["artifact_type"] == "pagefile")
     assert pagefile["processed_status"] == "processed"
     assert "Memory Artifact Inventory" in memory_artifacts_markdown(report)
+
+
+def test_processing_readiness_report_lists_project_workflow_items(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+
+    report = processing_readiness_report(db, case.id)
+
+    keys = {row["key"] for row in report["items"]}
+    assert report["summary"]["item_count"] >= 25
+    assert {"duckdb_write_serialized", "deep_recovery_separated", "memory_inventory", "carve_coverage"} <= keys
+    assert "Processing Readiness Report" in processing_readiness_markdown(report)
 
 
 def test_timeline_report_adds_memory_source_labels(tmp_path):

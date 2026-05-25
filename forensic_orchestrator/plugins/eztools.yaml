@@ -2739,6 +2739,68 @@ profiles:
       - LECmd
       - SBECmd
 
+  windows-full-deep-recovery:
+    description: Explicit full Windows metadata recovery with deleted or orphaned recovery enabled; not unallocated carving
+    extraction_policy: deep
+    recovery_tier: analyst_selected
+    include_windows_old: true
+    recommendation: Use only when exhaustive deleted/orphaned recovery is in scope. Keep this separate from windows-full because runtime and output volume can be much higher.
+    recovery_limits:
+      max_files_per_artifact: 5000
+      max_bytes_per_artifact: 10737418240
+      max_seconds_per_artifact: 1800
+    tools:
+      - MFTECmd
+      - USNRewind
+      - MFTECmdLogFile
+      - NTFSParseLogFile
+      - MFTECmdI30
+      - SrumParser
+      - UalParser
+      - SIDR
+      - WindowsSearchESEParser
+      - WindowsSearchGatherParser
+      - WindowsErrorReportingParser
+      - WindowsDefenderParser
+      - EvtxECmd
+      - SAMParser
+      - RegistryParser
+      - RECmd
+      - RegistryArtifactParser
+      - SetupApiParser
+      - AmcacheParser
+      - AppCompatCacheParser
+      - PECmd
+      - PrefetchParser
+      - RecycleParser
+      - FirefoxParser
+      - ChromiumParser
+      - OfficeBackstageParser
+      - UserDictionaryParser
+      - ZoneIdentifierParser
+      - ThumbcacheParser
+      - RdpCacheParser
+      - RdpVisionReview
+      - WebCacheParser
+      - BrowserCacheParser
+      - PackageCacheParser
+      - PackageArtifactsParser
+      - SpotifyParser
+      - TelemetryParser
+      - SQLECmd
+      - CloudSyncParser
+      - OneDriveExplorer
+      - OneDriveOdlParser
+      - WindowsActivitiesParser
+      - EtlParser
+      - MailboxParser
+      - WindowsMailParser
+      - MessagingParser
+      - ArchiveInventoryParser
+      - JLECmd
+      - LECmd
+      - SBECmd
+
   windows-old:
     description: Parse artifact stores under Windows.old using the existing Windows artifact parsers
     windows_old: true
