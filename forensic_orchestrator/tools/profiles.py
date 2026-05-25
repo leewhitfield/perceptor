@@ -234,6 +234,8 @@ def profile_extraction_preview(registry: ToolRegistry, profile: str) -> dict:
         "recommendation": profile_config.get("recommendation", ""),
         "recovery_tier": profile_config.get("recovery_tier", ""),
         "recovery_limits": profile_config.get("recovery_limits") or {},
+        "carve_stage": profile_config.get("carve_stage", ""),
+        "carve_targets": profile_config.get("carve_targets") or [],
         "tool_count": len(effective_tools),
         "artifact_count": len(artifacts),
         "policy_tsk_artifact_count": forced_count,
@@ -426,6 +428,14 @@ def _run_profile_impl(
     workers: int = 1,
 ) -> None:
     image = db.get_image(image_id, case_id)
+    profile_config = registry.profiles.get(profile) or {}
+    if str(profile_config.get("extraction_policy") or "").lower() == "carve":
+        targets = ", ".join(str(item) for item in (profile_config.get("carve_targets") or []))
+        raise ToolError(
+            f"Profile {profile} is an explicit carving workflow, not a mounted-image parser profile. "
+            "Stage carved outputs separately and import them with the matching parser or specialized import command"
+            + (f" (targets: {targets})." if targets else ".")
+        )
     if not dry_run:
         assert_image_not_previously_marked_encrypted(db, case_id=case_id, image_id=image_id)
     mount_row = db.latest_mount(case_id, image_id)
@@ -467,7 +477,6 @@ def _run_profile_impl(
     if not dry_run and offset_sectors is None:
         raise MountError(f"No partition offset recorded for case={case_id} image={image_id}")
 
-    profile_config = registry.profiles.get(profile) or {}
     auto_include_windows_old = bool(profile_config.get("include_windows_old")) and not include_windows_old
     windows_old_mode = include_windows_old or bool(profile_config.get("windows_old"))
     tools = _apply_profile_artifact_overrides(registry.profile_tools(profile), profile_config)

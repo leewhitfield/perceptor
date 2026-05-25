@@ -2197,6 +2197,24 @@ profiles:
     tools:
       - FirefoxParser
 
+  windows-firefox-carve:
+    description: Explicit Firefox artifact carving workflow for unallocated/slack/free-space outputs; import carved SQLite/profile files after an external carve stage
+    extraction_policy: carve
+    recovery_tier: analyst_selected
+    recommendation: Use only when raw carving is in scope. This profile documents carve intent; feed carved outputs back through FirefoxParser or dedicated import commands.
+    carve_stage: explicit_external
+    carve_targets:
+      - places.sqlite
+      - cookies.sqlite
+      - formhistory.sqlite
+      - favicons.sqlite
+    recovery_limits:
+      max_files_per_artifact: 1000
+      max_bytes_per_artifact: 2147483648
+      max_seconds_per_artifact: 1800
+    tools:
+      - FirefoxParser
+
   windows-browser-deep-recovery:
     description: Explicit browser metadata recovery using TSK extraction for deleted or orphaned profile databases, cache, LNK, and Jump List evidence; not unallocated carving
     extraction_policy: deep
@@ -2257,6 +2275,26 @@ profiles:
       - EtlParser
       - JLECmd
       - LECmd
+
+  windows-browser-carve:
+    description: Explicit browser artifact carving workflow for unallocated/slack/free-space outputs; import carved browser databases and cache files after an external carve stage
+    extraction_policy: carve
+    recovery_tier: analyst_selected
+    recommendation: Use only when raw carving is in scope. This profile is separate from balanced/deep metadata recovery and should be run against carved outputs.
+    carve_stage: explicit_external
+    carve_targets:
+      - Firefox SQLite databases
+      - Chromium History/Cookies/Login Data/Web Data databases
+      - browser cache fragments
+    recovery_limits:
+      max_files_per_artifact: 1000
+      max_bytes_per_artifact: 2147483648
+      max_seconds_per_artifact: 1800
+    tools:
+      - FirefoxParser
+      - ChromiumParser
+      - BrowserCacheParser
+      - WebCacheParser
 
   windows-network-activity:
     description: Network, VPN, Wi-Fi, browser, cloud, Defender, WER, SRUM, and ETL focused artifacts
@@ -2328,6 +2366,45 @@ profiles:
       - MailboxParser
       - WindowsMailParser
       - MessagingParser
+
+  windows-search-carve:
+    description: Explicit Windows Search carving workflow for unallocated/slack/free-space outputs and SearchIndexer memory SQLite carves
+    extraction_policy: carve
+    recovery_tier: analyst_selected
+    recommendation: Use for carved Windows Search SQLite/ESE fragments or SearchIndexer memory SQLite carves; import memory carves with `memory windows-search-carves`.
+    carve_stage: explicit_external
+    carve_targets:
+      - Windows.edb fragments
+      - SearchIndexer SQLite memory carves
+      - Windows Search gather log fragments
+    recovery_limits:
+      max_files_per_artifact: 1000
+      max_bytes_per_artifact: 2147483648
+      max_seconds_per_artifact: 1800
+    tools:
+      - SIDR
+      - WindowsSearchESEParser
+      - WindowsSearchGatherParser
+
+  windows-database-carve:
+    description: Explicit database carving workflow for unallocated/slack/free-space SQLite/ESE outputs; import carved files with the matching artifact parser
+    extraction_policy: carve
+    recovery_tier: analyst_selected
+    recommendation: Use only for carved database files or fragments that have been staged separately from the source image.
+    carve_stage: explicit_external
+    carve_targets:
+      - SQLite databases
+      - ESE databases
+      - application database fragments
+    recovery_limits:
+      max_files_per_artifact: 1000
+      max_bytes_per_artifact: 2147483648
+      max_seconds_per_artifact: 1800
+    tools:
+      - SQLECmd
+      - WebCacheParser
+      - WindowsSearchESEParser
+      - SrumParser
 
   windows-no-evtx:
     description: Windows forensic triage without event log parsing

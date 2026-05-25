@@ -29,6 +29,12 @@ from .mounting.vsc_profile import VSC_PROFILES, run_vsc_profile_scan
 from .paths import WorkspacePaths
 from .processing_scheduler import ProcessingTask, run_processing_tasks
 from .report_paths import sanitize_report_paths, sanitize_report_text
+from .common_dialog import rebuild_common_dialog_items
+from .copied_indicators import rebuild_copied_file_indicators
+from .correlation import rebuild_file_correlations
+from .filesystem_review import rebuild_filesystem_review
+from .nested_evidence import rebuild_nested_evidence_inventory
+from .user_file_references import rebuild_user_controlled_file_references
 from .reports import (
     accounts_report,
     account_compromise_markdown,
@@ -353,6 +359,68 @@ def write_report_output(report: dict[str, object], rows: list[dict[str, object]]
         write_text_output(json.dumps(report, indent=2, default=str), output)
 
 
+def rebuild_case_postprocess(
+    db: Database,
+    *,
+    case_id: str,
+    image_id: str | None = None,
+    max_windows_old_output_rows: int = 100_000,
+) -> dict[str, object]:
+    db.get_case(case_id)
+    if image_id:
+        db.get_image(image_id, case_id)
+    stats: dict[str, object] = {
+        "case_id": case_id,
+        "image_id": image_id,
+        "steps": {},
+        "skipped": [],
+    }
+
+    def run_step(name: str, callback):
+        result = callback()
+        stats["steps"][name] = result
+        return result
+
+    if image_id:
+        run_step("file_correlations", lambda: rebuild_file_correlations(db, case_id=case_id, image_id=image_id))
+    else:
+        stats["skipped"].append(
+            {
+                "step": "file_correlations",
+                "reason": "file correlations are image-scoped; pass --image to rebuild them",
+            }
+        )
+    run_step("common_dialog_items", lambda: rebuild_common_dialog_items(db, case_id=case_id, image_id=image_id))
+    run_step("copied_file_indicators", lambda: rebuild_copied_file_indicators(db, case_id=case_id, image_id=image_id))
+    run_step("filesystem_review", lambda: rebuild_filesystem_review(db, case_id=case_id, image_id=image_id))
+    run_step("nested_evidence_inventory", lambda: rebuild_nested_evidence_inventory(db, case_id=case_id, image_id=image_id))
+    run_step(
+        "timeline_windows_old_dedupe",
+        lambda: rebuild_timeline_windows_old_dedupe(
+            db,
+            case_id=case_id,
+            image_id=image_id,
+            max_windows_old_output_rows=max_windows_old_output_rows,
+        ),
+    )
+    run_step("artifact_windows_old_dedupe", lambda: rebuild_artifact_windows_old_dedupe(db, case_id=case_id, image_id=image_id))
+    run_step("derived_sessions", lambda: rebuild_sessions(db, case_id=case_id, image_id=image_id))
+    run_step("correlation_framework", lambda: rebuild_correlation_framework(db, case_id=case_id, image_id=image_id))
+    run_step("user_file_references", lambda: rebuild_user_controlled_file_references(db, case_id=case_id, image_id=image_id))
+    db.log_activity(
+        case_id=case_id,
+        image_id=image_id,
+        event="postprocess.rebuilt",
+        message="Rebuilt derived post-processing outputs",
+        details={
+            "image_id": image_id,
+            "steps": list((stats.get("steps") or {}).keys()),
+            "skipped": stats.get("skipped"),
+        },
+    )
+    return stats
+
+
 def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, limit: int = 100) -> dict[str, object]:
     output_dir.mkdir(parents=True, exist_ok=True)
     memory_disk = memory_disk_correlations_report(db, case_id, limit=max(limit * 10, 500))
@@ -366,6 +434,8 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
         ("combined-artifacts", "md", "Combined artifact families", combined_artifact_family_markdown(combined_artifact_family_report(db, case_id, limit=limit, memory_disk_report=memory_disk))),
         ("crash-dump-analysis", "md", "Crash dump analysis", crash_dump_analysis_markdown(crash_dump_analysis_report(db, case_id, limit=limit))),
         ("suspicious-executions", "md", "Suspicious executions", suspicious_executions_markdown(suspicious_executions_report(db, case_id, limit=limit))),
+        ("memory-artifacts", "md", "Memory artifact inventory", memory_artifacts_markdown(memory_artifacts_report(db, case_id, limit=limit))),
+        ("recovery-coverage", "json", "Recovery coverage", recovery_coverage_report(db, case_id, limit=max(limit, 250))),
         ("artifact-processing-status", "json", "Artifact processing status", artifact_processing_status_report(db, case_id, limit=limit)),
         ("processing-decisions", "md", "Processing decisions", processing_decision_markdown(processing_decision_report(db, case_id, limit=limit))),
         ("browser-activity", "json", "Browser activity", browser_activity_report(db, case_id, limit=limit, memory_disk_report=memory_disk)),
@@ -636,6 +706,10 @@ def build_parser() -> argparse.ArgumentParser:
     case_rebuild_sessions = case_sub.add_parser("rebuild-sessions")
     case_rebuild_sessions.add_argument("case_id")
     case_rebuild_sessions.add_argument("--image", dest="image_id")
+    case_rebuild_postprocess = case_sub.add_parser("rebuild-postprocess")
+    case_rebuild_postprocess.add_argument("case_id")
+    case_rebuild_postprocess.add_argument("--image", dest="image_id")
+    case_rebuild_postprocess.add_argument("--max-windows-old-output-rows", type=int, default=100_000)
 
     project = subparsers.add_parser("project")
     project_sub = project.add_subparsers(dest="action", required=True)
@@ -664,6 +738,10 @@ def build_parser() -> argparse.ArgumentParser:
     project_rebuild_sessions = project_sub.add_parser("rebuild-sessions")
     project_rebuild_sessions.add_argument("case_id")
     project_rebuild_sessions.add_argument("--image", dest="image_id")
+    project_rebuild_postprocess = project_sub.add_parser("rebuild-postprocess")
+    project_rebuild_postprocess.add_argument("case_id")
+    project_rebuild_postprocess.add_argument("--image", dest="image_id")
+    project_rebuild_postprocess.add_argument("--max-windows-old-output-rows", type=int, default=100_000)
 
     computer = subparsers.add_parser("computer")
     computer_sub = computer.add_subparsers(dest="action", required=True)
@@ -2336,6 +2414,16 @@ def run(args: argparse.Namespace) -> int:
             print_json(stats)
             return 0
 
+        if args.resource in {"case", "project"} and args.action == "rebuild-postprocess":
+            stats = rebuild_case_postprocess(
+                db,
+                case_id=args.case_id,
+                image_id=args.image_id,
+                max_windows_old_output_rows=args.max_windows_old_output_rows,
+            )
+            print_json(stats)
+            return 0
+
         if args.resource == "cloud" and args.action == "import-logs":
             source = Path(args.path)
             computer_id, image_id = _cloud_or_memory_evidence_ids(
@@ -3808,6 +3896,7 @@ def run(args: argparse.Namespace) -> int:
                     "failed_count",
                     "recovery_limited",
                     "limit_reason",
+                    "recovery_scope",
                     "cost",
                     "noise",
                     "start_time",

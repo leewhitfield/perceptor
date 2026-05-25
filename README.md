@@ -343,8 +343,13 @@ to Sleuth Kit extraction. `deep` is analyst-selected metadata recovery. It
 switches all artifacts that declare `recovery.deleted_files` or
 `recovery.orphaned_files` to Sleuth Kit extraction so deleted or orphaned NTFS
 directory/MFT entries can be recovered, but broad artifacts can produce very
-large partial extractions. Deep recovery is not raw unallocated-space carving;
-artifact-specific carving should be implemented as an explicit carve stage.
+large partial extractions. Deep recovery is not raw unallocated-space carving.
+Carving is an explicit analyst-selected workflow with separate profiles such as
+`windows-firefox-carve`, `windows-browser-carve`, `windows-search-carve`, and
+`windows-database-carve`. Those profiles document carve intent, limits, and
+target artifact families; carved outputs should be staged and imported with the
+matching parser or specialized import command such as
+`memory windows-search-carves`.
 Deep profiles therefore apply per-artifact guardrails
 (`recovery_limits`) for maximum files, bytes, and runtime. When a guardrail is
 hit the artifact is reported as `partial_limited`; the profile continues and
@@ -356,6 +361,7 @@ databases. Preview policy effects before a run with:
 
 ```bash
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator tools profile-preview --profile windows-basic-evtx-balanced-recovery
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator tools profile-preview --profile windows-search-carve
 ```
 
 After a recovery run, summarize runtime and extraction counts with:
@@ -927,6 +933,12 @@ The report commands are intentionally thin JSON views over SQLite:
 - `report processing-decisions`: handoff-oriented processing summary for
   profiles, failed/limited/skipped artifacts, unprocessed memory support files,
   credential leads, crash dumps, and follow-up recommendations.
+- `case rebuild-postprocess` / `project rebuild-postprocess`: rebuild derived
+  outputs after a long run or imported report bundle without repeating
+  extraction. This refreshes common-dialog items, copied-file indicators,
+  filesystem review, nested evidence inventory, Windows.old timeline/artifact
+  dedupe, sessions, correlations, and user-controlled file references. Pass
+  `--image IMAGE_ID` to include image-scoped file correlations.
 - `report evidence-gaps`: consolidated evidence limitations from parser status,
   failed jobs, extraction caveats, skipped artifacts, partial EVTX recovery,
   OpenSearch write failures, and memory artifacts awaiting analysis.

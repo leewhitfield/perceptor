@@ -17129,6 +17129,7 @@ def recovery_coverage_report(db: Database, case_id: str, *, limit: int = 500) ->
             "byte_count": details.get("byte_count"),
             "deleted_files": bool(recovery.get("deleted_files")),
             "orphaned_files": bool(recovery.get("orphaned_files")),
+            "recovery_scope": _recovery_scope_label(recovery),
             "cost": recovery.get("cost"),
             "noise": recovery.get("noise"),
             "path": details.get("path"),
@@ -17153,6 +17154,18 @@ def recovery_coverage_report(db: Database, case_id: str, *, limit: int = 500) ->
             [item for item in forced if item.get("limit_reason")],
             "limit_reason",
         ),
+        "recovery_scope_counts": _count_by_key(forced, "recovery_scope"),
+        "added_over_live": [
+            {
+                "artifact_name": item.get("artifact_name"),
+                "tool_name": item.get("tool_name"),
+                "scope": item.get("recovery_scope"),
+                "extracted_count": item.get("extracted_count"),
+                "status": item.get("status"),
+                "limit_reason": item.get("limit_reason"),
+            }
+            for item in forced[:20]
+        ],
     }
     by_artifact = {}
     for item in forced:
@@ -17169,6 +17182,7 @@ def recovery_coverage_report(db: Database, case_id: str, *, limit: int = 500) ->
                 "failed_count": 0,
                 "limited_count": 0,
                 "limit_reasons": {},
+                "recovery_scopes": {},
                 "cost": item.get("cost"),
                 "noise": item.get("noise"),
             },
@@ -17182,6 +17196,8 @@ def recovery_coverage_report(db: Database, case_id: str, *, limit: int = 500) ->
             current["limited_count"] += 1
             reason = str(item.get("limit_reason") or "unspecified")
             current["limit_reasons"][reason] = int(current["limit_reasons"].get(reason, 0)) + 1
+        scope = str(item.get("recovery_scope") or "unspecified")
+        current["recovery_scopes"][scope] = int(current["recovery_scopes"].get(scope, 0)) + 1
     return {
         "case_id": case_id,
         "summary": summary,
@@ -17189,6 +17205,18 @@ def recovery_coverage_report(db: Database, case_id: str, *, limit: int = 500) ->
         "artifacts": coverage,
         "total_returned": len(coverage),
     }
+
+
+def _recovery_scope_label(recovery: dict[str, Any]) -> str:
+    deleted = bool(recovery.get("deleted_files"))
+    orphaned = bool(recovery.get("orphaned_files"))
+    if deleted and orphaned:
+        return "deleted_and_orphaned"
+    if deleted:
+        return "deleted"
+    if orphaned:
+        return "orphaned"
+    return "live_only"
 
 
 def case_review_report(db: Database, case_id: str, *, limit: int = 25) -> dict[str, Any]:
