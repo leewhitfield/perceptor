@@ -10749,13 +10749,16 @@ def timeline_review_report(
             return
         events.append(row)
 
-    timeline_filters = ["case_id = ?", "dedupe_status != 'duplicate'"]
+    timeline_filters = ["case_id = ?", "(dedupe_status IS NULL OR dedupe_status != 'duplicate')"]
     timeline_params: list[Any] = [case_id]
     if contains:
         timeline_filters.append("(description LIKE ? OR details_json LIKE ?)")
         timeline_params.extend([f"%{contains}%", f"%{contains}%"])
     timeline_params.append(source_limit)
-    for row in db.conn.execute(
+    for row in _query_report_rows(
+        db,
+        case_id,
+        "timeline_events",
         f"""
         SELECT id, source_tool, source_table, source_row_id, timestamp_utc,
                event_type, description, details_json
@@ -10767,12 +10770,12 @@ def timeline_review_report(
         timeline_params,
     ):
         add_event(
-            timestamp=row["timestamp_utc"],
-            source_name=row["source_tool"] or "timeline",
-            source_table=row["source_table"],
-            source_id=row["source_row_id"],
-            event_type=row["event_type"],
-            summary=row["description"],
+            timestamp=row.get("timestamp_utc"),
+            source_name=row.get("source_tool") or "timeline",
+            source_table=row.get("source_table"),
+            source_id=row.get("source_row_id"),
+            event_type=row.get("event_type"),
+            summary=row.get("description"),
             basis="normalized timeline event",
         )
 

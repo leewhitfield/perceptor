@@ -1246,6 +1246,14 @@ test clusters with self-signed TLS, pass `--insecure`.
 - Optional filesystem mounts invoke `ntfs-3g` directly with read-only options.
 - Dry-run records jobs and writes command previews, but does not execute mounts or tools.
 
+## Roadmap
+
+- Parallel processing scheduler: run independent extraction and scanning work
+  with bounded worker slots, write each worker's output to isolated folders,
+  then serialize database ingest and run timeline/correlation rebuilds once at
+  the end. This should come after the current memory/reporting workflow work so
+  the scheduler can use the finalized profile and report-bundle commands.
+
 ## Passwordless Sudo for Mounts
 
 The CLI uses `sudo -n` only when `image mount --filesystem --sudo` or
