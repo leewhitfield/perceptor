@@ -7,7 +7,7 @@ import pytest
 from forensic_orchestrator.db import Database
 from forensic_orchestrator.evidence import add_image
 from forensic_orchestrator.paths import WorkspacePaths
-from forensic_orchestrator.reports import process_timing_report, usb_breakdown_report
+from forensic_orchestrator.reports import process_timing_report, recovery_coverage_report, usb_breakdown_report
 import forensic_orchestrator.tools.ingest as ingest_module
 from forensic_orchestrator.tools.ingest import ingest_csv_output
 
@@ -90,6 +90,39 @@ def test_process_timings_record_start_end_and_report(tmp_path):
     assert report["total_returned"] == 2
     assert report["timings"][0]["details"]["file_count"] == 2
     assert {row["scope"] for row in report["summary"]} == {"artifact", "profile"}
+
+
+def test_recovery_coverage_report_summarizes_tsk_recovery_artifacts(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    timing_id = db.start_process_timing(
+        case_id=case.id,
+        computer_id="computer-1",
+        image_id="image-1",
+        scope="artifact",
+        phase="extract",
+        name="lnk_files",
+        tool_name="LECmd",
+        artifact_name="lnk_files",
+        details={
+            "profile": "windows-basic-evtx-balanced-recovery",
+            "method": "tsk",
+            "source": "Users",
+            "destination": "lnk_files",
+            "recovery": {"deleted_files": True, "orphaned_files": True, "cost": "medium", "noise": "low"},
+        },
+    )
+    db.finish_process_timing(timing_id, details={"count": 3, "extracted_count": 2, "failed_count": 1})
+
+    report = recovery_coverage_report(db, case.id)
+
+    assert report["summary"]["tsk_recovery_artifacts"] == 1
+    assert report["summary"]["matched_count"] == 3
+    assert report["summary"]["extracted_count"] == 2
+    assert report["summary"]["failed_count"] == 1
+    assert report["by_artifact"][0]["artifact_name"] == "lnk_files"
 
 
 def test_tool_outputs_are_recorded_per_computer(tmp_path):

@@ -138,7 +138,7 @@ def _apply_profile_artifact_overrides(tools: list, profile_config: dict | None) 
     extraction_policy = str(
         profile_config.get("extraction_policy") or profile_config.get("recovery_policy") or "fast"
     ).lower()
-    policy_uses_deleted_recovery = extraction_policy in {"deep", "exhaustive", "deleted", "recovery"}
+    policy_uses_deleted_recovery = extraction_policy in {"balanced", "deep", "exhaustive", "deleted", "recovery"}
     if not force_tsk_artifacts and not policy_uses_deleted_recovery:
         return tools
     scoped = []
@@ -148,9 +148,7 @@ def _apply_profile_artifact_overrides(tools: list, profile_config: dict | None) 
         for artifact in tool.artifacts:
             artifact_keys = {artifact.name, f"{tool.name}:{artifact.name}"}
             recovery = artifact.recovery or {}
-            policy_force_tsk = policy_uses_deleted_recovery and (
-                bool(recovery.get("deleted_files")) or bool(recovery.get("orphaned_files"))
-            )
+            policy_force_tsk = _recovery_policy_forces_tsk(extraction_policy, recovery)
             if force_tsk_artifacts.intersection(artifact_keys) or policy_force_tsk:
                 artifacts.append(replace(artifact, use_tsk=True))
                 changed = True
@@ -158,6 +156,67 @@ def _apply_profile_artifact_overrides(tools: list, profile_config: dict | None) 
                 artifacts.append(artifact)
         scoped.append(replace(tool, artifacts=artifacts) if changed else tool)
     return scoped
+
+
+def _recovery_policy_forces_tsk(policy: str, recovery: dict | None) -> bool:
+    recovery = recovery or {}
+    if not (bool(recovery.get("deleted_files")) or bool(recovery.get("orphaned_files"))):
+        return False
+    policy = (policy or "fast").lower()
+    if policy in {"deep", "exhaustive", "deleted", "recovery"}:
+        return True
+    if policy != "balanced":
+        return False
+    cost = str(recovery.get("cost") or "").lower()
+    noise = str(recovery.get("noise") or "").lower()
+    return cost in {"low", "medium"} and noise in {"low", "medium"}
+
+
+def profile_extraction_preview(registry: ToolRegistry, profile: str) -> dict:
+    profile_config = registry.profiles.get(profile)
+    if profile_config is None:
+        raise ToolError(f"Profile not configured: {profile}")
+    extraction_policy = str(
+        profile_config.get("extraction_policy") or profile_config.get("recovery_policy") or "fast"
+    ).lower()
+    base_tools = registry.profile_tools(profile)
+    effective_tools = _apply_profile_artifact_overrides(base_tools, profile_config)
+    base_artifacts = {
+        f"{tool.name}:{artifact.name}": artifact
+        for tool in base_tools
+        for artifact in tool.artifacts
+    }
+    artifacts = []
+    forced_count = 0
+    for tool in effective_tools:
+        for artifact in tool.artifacts:
+            key = f"{tool.name}:{artifact.name}"
+            base_artifact = base_artifacts.get(key, artifact)
+            recovery = artifact.recovery or {}
+            forced_by_policy = artifact.use_tsk and not base_artifact.use_tsk
+            forced_count += 1 if forced_by_policy else 0
+            artifacts.append(
+                {
+                    "tool_name": tool.name,
+                    "artifact_name": artifact.name,
+                    "source": artifact.source,
+                    "destination": artifact.destination,
+                    "default_method": "tsk" if base_artifact.use_tsk else "mount",
+                    "effective_method": "tsk" if artifact.use_tsk else "mount",
+                    "forced_by_policy": forced_by_policy,
+                    "recovery": recovery,
+                }
+            )
+    return {
+        "profile": profile,
+        "description": profile_config.get("description", ""),
+        "extraction_policy": extraction_policy,
+        "tool_count": len(effective_tools),
+        "artifact_count": len(artifacts),
+        "policy_tsk_artifact_count": forced_count,
+        "tools": [tool.name for tool in effective_tools],
+        "artifacts": artifacts,
+    }
 
 
 def _windows_old_artifact(artifact):
@@ -595,6 +654,8 @@ def _run_profile_impl(
                     "source": artifact.source,
                     "destination": artifact.destination,
                     "method": extraction_method,
+                    "use_tsk": artifact.use_tsk,
+                    "recovery": artifact.recovery or {},
                     "windows_old": windows_old_mode,
                 },
             )

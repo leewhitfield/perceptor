@@ -641,6 +641,19 @@ def test_deep_recovery_policy_applies_to_recoverable_artifacts_only():
     assert registry.get_tool("ChromiumParser").artifacts[0].use_tsk is False
 
 
+def test_balanced_recovery_policy_skips_high_cost_artifacts():
+    registry = ToolRegistry.from_files([default_plugin_path()])
+    preview = profiles.profile_extraction_preview(registry, "windows-browser-balanced-recovery")
+    artifacts = {f"{item['tool_name']}:{item['artifact_name']}": item for item in preview["artifacts"]}
+
+    assert preview["extraction_policy"] == "balanced"
+    assert artifacts["LECmd:lnk_files"]["effective_method"] == "tsk"
+    assert artifacts["JLECmd:jumplists"]["effective_method"] == "tsk"
+    assert artifacts["WebCacheParser:webcache"]["effective_method"] == "tsk"
+    assert artifacts["FirefoxParser:firefox_profiles"]["effective_method"] == "mount"
+    assert artifacts["BrowserCacheParser:browser_cache_profiles"]["effective_method"] == "mount"
+
+
 def test_internal_chromium_parser_extracts_profile_sqlite_files():
     registry = ToolRegistry.from_files([default_plugin_path()])
     tool = registry.get_tool("ChromiumParser")

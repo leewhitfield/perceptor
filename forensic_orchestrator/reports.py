@@ -17000,6 +17000,102 @@ def process_timing_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def recovery_coverage_report(db: Database, case_id: str, *, limit: int = 500) -> dict[str, Any]:
+    db.get_case(case_id)
+    rows = [
+        dict(row)
+        for row in db.conn.execute(
+            """
+            SELECT process_timings.*, computers.label AS computer_label, images.path AS image_path
+            FROM process_timings
+            LEFT JOIN computers ON computers.id = process_timings.computer_id
+            LEFT JOIN images ON images.id = process_timings.image_id
+            WHERE process_timings.case_id = ?
+              AND process_timings.scope = 'artifact'
+              AND process_timings.phase = 'extract'
+            ORDER BY process_timings.start_time DESC
+            LIMIT ?
+            """,
+            (case_id, limit),
+        ).fetchall()
+    ]
+    coverage = []
+    for row in rows:
+        details = json.loads(row.pop("details_json") or "{}")
+        recovery = details.get("recovery") or {}
+        method = details.get("method") or ""
+        recovered = method == "tsk" and (recovery.get("deleted_files") or recovery.get("orphaned_files"))
+        if not recovered and not recovery:
+            continue
+        item = {
+            "case_id": row.get("case_id"),
+            "computer_id": row.get("computer_id"),
+            "computer_label": row.get("computer_label"),
+            "image_id": row.get("image_id"),
+            "image_path": row.get("image_path"),
+            "profile": details.get("profile"),
+            "artifact_name": row.get("artifact_name") or row.get("name"),
+            "tool_name": row.get("tool_name"),
+            "method": method,
+            "status": row.get("status"),
+            "duration_seconds": round((row.get("duration_ms") or 0) / 1000, 3),
+            "matched_count": details.get("count"),
+            "extracted_count": details.get("extracted_count"),
+            "failed_count": details.get("failed_count"),
+            "file_count": details.get("file_count"),
+            "byte_count": details.get("byte_count"),
+            "deleted_files": bool(recovery.get("deleted_files")),
+            "orphaned_files": bool(recovery.get("orphaned_files")),
+            "cost": recovery.get("cost"),
+            "noise": recovery.get("noise"),
+            "path": details.get("path"),
+            "source": details.get("source"),
+            "destination": details.get("destination"),
+            "start_time": row.get("start_time"),
+            "end_time": row.get("end_time"),
+        }
+        coverage.append(item)
+    forced = [item for item in coverage if item["method"] == "tsk" and (item["deleted_files"] or item["orphaned_files"])]
+    summary = {
+        "artifact_extracts_returned": len(coverage),
+        "tsk_recovery_artifacts": len(forced),
+        "total_duration_seconds": round(sum(item.get("duration_seconds") or 0 for item in coverage), 3),
+        "tsk_recovery_duration_seconds": round(sum(item.get("duration_seconds") or 0 for item in forced), 3),
+        "matched_count": sum(int(item.get("matched_count") or 0) for item in forced),
+        "extracted_count": sum(int(item.get("extracted_count") or 0) for item in forced),
+        "failed_count": sum(int(item.get("failed_count") or 0) for item in forced),
+    }
+    by_artifact = {}
+    for item in forced:
+        name = item.get("artifact_name") or ""
+        current = by_artifact.setdefault(
+            name,
+            {
+                "artifact_name": name,
+                "tool_name": item.get("tool_name"),
+                "runs": 0,
+                "duration_seconds": 0.0,
+                "matched_count": 0,
+                "extracted_count": 0,
+                "failed_count": 0,
+                "cost": item.get("cost"),
+                "noise": item.get("noise"),
+            },
+        )
+        current["runs"] += 1
+        current["duration_seconds"] = round(current["duration_seconds"] + (item.get("duration_seconds") or 0), 3)
+        current["matched_count"] += int(item.get("matched_count") or 0)
+        current["extracted_count"] += int(item.get("extracted_count") or 0)
+        current["failed_count"] += int(item.get("failed_count") or 0)
+    return {
+        "case_id": case_id,
+        "summary": summary,
+        "by_artifact": sorted(by_artifact.values(), key=lambda item: item["duration_seconds"], reverse=True),
+        "artifacts": coverage,
+        "total_returned": len(coverage),
+    }
+
+
 def case_review_report(db: Database, case_id: str, *, limit: int = 25) -> dict[str, Any]:
     db.get_case(case_id)
     completeness = artifact_completeness_report(db, case_id, limit=limit)

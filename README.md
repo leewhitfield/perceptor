@@ -302,7 +302,9 @@ Run one of the Windows profiles:
 ```bash
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator run --case CASE_ID --image IMAGE_ID --profile windows-no-evtx
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator run --case CASE_ID --image IMAGE_ID --profile windows-basic-evtx
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator run --case CASE_ID --image IMAGE_ID --profile windows-basic-evtx-balanced-recovery
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator run --case CASE_ID --image IMAGE_ID --profile windows-basic-evtx-deep-recovery
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator run --case CASE_ID --image IMAGE_ID --profile windows-browser-balanced-recovery
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator run --case CASE_ID --image IMAGE_ID --profile windows-browser-deep-recovery
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator run --case CASE_ID --image IMAGE_ID --profile windows-cloud-email-deep-recovery
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator run --case CASE_ID --image IMAGE_ID --profile windows-full-evtx
@@ -332,15 +334,26 @@ parsed rows are promoted into the main case DuckDB. See `docs/vsc-sidecar.md`.
 `windows-srum`, `windows-search`, and `windows-webcache` are useful for testing those larger
 artifacts independently. `windows-deep` includes the full EVTX profile plus SRUM,
 Windows Search, and WebCache.
-Deep recovery profiles set `extraction_policy: deep`. Normal profiles use mounted
-filesystem extraction for speed; deep recovery profiles switch artifacts that
-declare `recovery.deleted_files` or `recovery.orphaned_files` to Sleuth Kit
-extraction so deleted or orphaned directory entries can be recovered. Current
-deep recovery candidates include browser databases and caches, LNK and Jump List
-execution artifacts, Prefetch, Recycle Bin, Windows Search, SRUM, WebCache,
-ActivitiesCache, user registry hives, cloud sync artifacts, mail, messaging,
-and selected application databases. Expect these profiles to run slower and
-produce noisier artifact sets.
+Recovery profiles set `extraction_policy`. Normal profiles use mounted
+filesystem extraction for speed. `balanced` switches only low/medium-cost,
+low/medium-noise recoverable artifacts to Sleuth Kit extraction. `deep` switches
+all artifacts that declare `recovery.deleted_files` or
+`recovery.orphaned_files` to Sleuth Kit extraction so deleted or orphaned
+directory entries can be recovered. Current recovery candidates include browser
+databases and caches, LNK and Jump List execution artifacts, Prefetch, Recycle
+Bin, Windows Search, SRUM, WebCache, ActivitiesCache, user registry hives, cloud
+sync artifacts, mail, messaging, and selected application databases. Preview
+policy effects before a run with:
+
+```bash
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator tools profile-preview --profile windows-basic-evtx-balanced-recovery
+```
+
+After a recovery run, summarize runtime and extraction counts with:
+
+```bash
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report recovery-coverage --case CASE_ID --format table
+```
 `windows-full` also carries `coverage_categories` metadata in the tool profile.
 Those categories mirror the SANS FOR500 poster groupings for coverage review
 only; they do not remove tools or change the profile execution order.

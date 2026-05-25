@@ -161,6 +161,7 @@ from .reports import (
     program_provenance_report,
     recycle_report,
     rdp_cache_report,
+    recovery_coverage_report,
     remote_access_attribution_markdown,
     remote_access_attribution_report,
     rdp_remote_access_markdown,
@@ -248,7 +249,7 @@ from .artifact_dedupe import rebuild_artifact_windows_old_dedupe
 from .correlation_framework import rebuild_correlation_framework
 from .sessions import rebuild_sessions
 from .timeline_dedupe import rebuild_timeline_windows_old_dedupe
-from .tools.profiles import run_profile
+from .tools.profiles import profile_extraction_preview, run_profile
 from .tools.registry import ToolRegistry
 from .tools.cloud_server_import import import_cloud_server_logs_to_csv
 from .tools.ingest import ingest_csv_output
@@ -926,6 +927,8 @@ def build_parser() -> argparse.ArgumentParser:
     tools = subparsers.add_parser("tools")
     tools_sub = tools.add_subparsers(dest="action", required=True)
     tools_sub.add_parser("list")
+    tools_profile_preview = tools_sub.add_parser("profile-preview")
+    tools_profile_preview.add_argument("--profile", required=True)
 
     run = subparsers.add_parser("run")
     run.add_argument("--case", required=True, dest="case_id")
@@ -1170,6 +1173,11 @@ def build_parser() -> argparse.ArgumentParser:
     report_evtx_recovery = report_sub.add_parser("evtx-recovery")
     report_evtx_recovery.add_argument("--case", required=True, dest="case_id")
     report_evtx_recovery.add_argument("--limit", type=int, default=100)
+    report_recovery_coverage = report_sub.add_parser("recovery-coverage")
+    report_recovery_coverage.add_argument("--case", required=True, dest="case_id")
+    report_recovery_coverage.add_argument("--limit", type=int, default=500)
+    report_recovery_coverage.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    report_recovery_coverage.add_argument("--output")
     report_telemetry = report_sub.add_parser("telemetry-artifacts")
     report_telemetry.add_argument("--case", required=True, dest="case_id")
     report_telemetry.add_argument("--artifact-group")
@@ -2999,6 +3007,10 @@ def run(args: argparse.Namespace) -> int:
             return 0
 
         if args.resource == "tools" and args.action == "list":
+            profile_previews = {
+                name: profile_extraction_preview(registry, name)
+                for name in registry.profiles
+            }
             print_json(
                 {
                     "tools": [
@@ -3011,8 +3023,19 @@ def run(args: argparse.Namespace) -> int:
                         for tool in registry.tools.values()
                     ],
                     "profiles": registry.profiles,
+                    "profile_previews": {
+                        name: {
+                            "extraction_policy": preview["extraction_policy"],
+                            "policy_tsk_artifact_count": preview["policy_tsk_artifact_count"],
+                        }
+                        for name, preview in profile_previews.items()
+                    },
                 }
             )
+            return 0
+
+        if args.resource == "tools" and args.action == "profile-preview":
+            print_json(profile_extraction_preview(registry, args.profile))
             return 0
 
         if args.resource == "run":
@@ -3709,6 +3732,31 @@ def run(args: argparse.Namespace) -> int:
                         "artifact_name",
                     ],
                 )
+            return 0
+
+        if args.resource == "report" and args.action == "recovery-coverage":
+            report = recovery_coverage_report(db, args.case_id, limit=args.limit)
+            write_report_output(
+                report,
+                report["artifacts"],
+                args.format,
+                args.output,
+                title=f"Recovery coverage for case {args.case_id}",
+                columns=[
+                    "profile",
+                    "artifact_name",
+                    "tool_name",
+                    "method",
+                    "status",
+                    "duration_seconds",
+                    "matched_count",
+                    "extracted_count",
+                    "failed_count",
+                    "cost",
+                    "noise",
+                    "start_time",
+                ],
+            )
             return 0
 
         if args.resource == "report" and args.action == "case-review":
