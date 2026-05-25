@@ -7,6 +7,7 @@ import logging
 import shutil
 import sys
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .config import load_config
@@ -263,8 +264,12 @@ from .tools.profiles import profile_extraction_preview, run_profile
 from .tools.registry import ToolRegistry
 from .tools.cloud_server_import import import_cloud_server_logs_to_csv
 from .tools.ingest import ingest_csv_output
-from .tools.carve import stage_sqlite_carves, staged_carve_row, summarize_sqlite_carve
+from .tools.carve import stage_ese_carves, stage_sqlite_carves, staged_carve_row, summarize_ese_carve, summarize_sqlite_carve
+from .tools.chromium import parse_chromium_artifacts_to_csv
+from .tools.firefox import parse_firefox_artifacts_to_csv
+from .tools.activities import parse_windows_activities_to_csv
 from .tools.memory_strings import scan_memory_strings_to_csv
+from .timeline import timeline_events_from_rows
 from .tools.windows_search_memory import parse_windows_search_memory_carves
 
 logger = logging.getLogger(__name__)
@@ -422,6 +427,78 @@ def rebuild_case_postprocess(
         },
     )
     return stats
+
+
+def import_recognized_sqlite_carves(
+    db: Database,
+    *,
+    case_id: str,
+    computer_id: str,
+    image_id: str,
+    source: Path,
+    staged_rows: list[dict[str, object]],
+    output_dir: Path,
+) -> dict[str, object]:
+    imported: dict[str, object] = {"tools": {}, "csv_files": 0, "rows": 0, "skipped": 0}
+    if not source.is_file():
+        imported["skipped"] = len(staged_rows)
+        return imported
+    route = _sqlite_artifact_route(source.name)
+    if route is None:
+        imported["skipped"] = len(staged_rows)
+        return imported
+    tool_name, parser, staged_name = route
+    for index, row in enumerate(staged_rows, start=1):
+        staged_path = Path(str(row.get("staged_path") or ""))
+        if not staged_path.exists():
+            imported["skipped"] = int(imported["skipped"]) + 1
+            continue
+        parser_root = output_dir / "artifact-import" / str(index)
+        parser_root.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(staged_path, parser_root / staged_name)
+        csv_root = output_dir / "artifact-csv" / str(index)
+        csv_paths = parser(parser_root, csv_root)
+        for csv_path in csv_paths:
+            output_id = str(uuid.uuid4())
+            db.insert_tool_output(
+                {
+                    "id": output_id,
+                    "case_id": case_id,
+                    "computer_id": computer_id,
+                    "image_id": image_id,
+                    "job_id": None,
+                    "tool_name": tool_name,
+                    "output_type": "csv",
+                    "path": csv_path,
+                    "row_count": _count_csv_rows(csv_path),
+                }
+            )
+            count = ingest_csv_output(
+                db=db,
+                case_id=case_id,
+                computer_id=computer_id,
+                image_id=image_id,
+                tool_output_id=output_id,
+                tool_name=tool_name,
+                path=csv_path,
+            )
+            imported["csv_files"] = int(imported["csv_files"]) + 1
+            imported["rows"] = int(imported["rows"]) + count
+            tools = imported["tools"]
+            if isinstance(tools, dict):
+                tools[tool_name] = int(tools.get(tool_name, 0)) + count
+    return imported
+
+
+def _sqlite_artifact_route(name: str):
+    lower = name.casefold()
+    if lower in {"places.sqlite", "cookies.sqlite", "formhistory.sqlite", "permissions.sqlite"}:
+        return "FirefoxParser", parse_firefox_artifacts_to_csv, name
+    if lower in {"history", "cookies", "login data", "web data", "shortcuts", "top sites", "network action predictor"}:
+        return "ChromiumParser", parse_chromium_artifacts_to_csv, name
+    if lower == "activitiescache.db":
+        return "WindowsActivitiesParser", parse_windows_activities_to_csv, name
+    return None
 
 
 def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, limit: int = 100) -> dict[str, object]:
@@ -760,10 +837,24 @@ def build_parser() -> argparse.ArgumentParser:
     carve_sqlite.add_argument("--max-carve-size", type=int, default=256 * 1024 * 1024)
     carve_sqlite.add_argument("--max-rows-per-table", type=int, default=25)
     carve_sqlite.add_argument(
+        "--import-artifacts",
+        action="store_true",
+        help="Route recognized staged SQLite files through Firefox, Chromium, or Activities parsers",
+    )
+    carve_sqlite.add_argument(
         "--import-windows-search-memory",
         action="store_true",
         help="Also parse staged SQLite carves into the Windows Search memory carve tables",
     )
+    carve_ese = carve_sub.add_parser("ese")
+    carve_ese.add_argument("--case", required=True, dest="case_id")
+    carve_ese.add_argument("--path", required=True, help="Raw source file, staged carve directory, or candidate ESE file")
+    carve_ese.add_argument("--computer", dest="computer_id")
+    carve_ese.add_argument("--image", dest="image_id")
+    carve_ese.add_argument("--profile", default="windows-database-carve")
+    carve_ese.add_argument("--max-carves", type=int, default=1000)
+    carve_ese.add_argument("--max-bytes", type=int, default=2 * 1024 * 1024 * 1024)
+    carve_ese.add_argument("--max-carve-size", type=int, default=512 * 1024 * 1024)
 
     computer = subparsers.add_parser("computer")
     computer_sub = computer.add_subparsers(dest="action", required=True)
@@ -2510,21 +2601,33 @@ def run(args: argparse.Namespace) -> int:
                 }
             )
             for manifest_row, staged in zip(manifest_rows, manifest["carves"]):
-                staged_rows.append(
-                    staged_carve_row(
-                        case_id=args.case_id,
-                        computer_id=computer_id,
-                        image_id=image_id,
-                        tool_output_id=output_id,
-                        source_csv=manifest_path,
-                        row_number=int(manifest_row["row_number"]),
-                        profile=args.profile,
-                        source_path=str(source),
-                        staged=staged,
-                        summary=manifest_row,
-                    )
+                staged_row = staged_carve_row(
+                    case_id=args.case_id,
+                    computer_id=computer_id,
+                    image_id=image_id,
+                    tool_output_id=output_id,
+                    source_csv=manifest_path,
+                    row_number=int(manifest_row["row_number"]),
+                    profile=args.profile,
+                    source_path=str(source),
+                    staged=staged,
+                    summary=manifest_row,
                 )
+                staged_row["created_at"] = datetime.now(timezone.utc).isoformat()
+                staged_rows.append(staged_row)
             db.insert_staged_carves(staged_rows)
+            db.insert_timeline_events(timeline_events_from_rows(staged_rows))
+            artifact_imported = {"tools": {}, "csv_files": 0, "rows": 0, "skipped": len(staged_rows)}
+            if args.import_artifacts and staged_rows:
+                artifact_imported = import_recognized_sqlite_carves(
+                    db,
+                    case_id=args.case_id,
+                    computer_id=computer_id,
+                    image_id=image_id,
+                    source=source,
+                    staged_rows=staged_rows,
+                    output_dir=output_dir,
+                )
             windows_search_imported = {"carves": 0, "objects": 0, "rows": 0}
             if args.import_windows_search_memory and staged_rows:
                 parsed = parse_windows_search_memory_carves(
@@ -2557,6 +2660,7 @@ def run(args: argparse.Namespace) -> int:
                     "carve_count": len(staged_rows),
                     "limited": manifest.get("limited"),
                     "limit_reason": manifest.get("limit_reason"),
+                    "artifact_imported": artifact_imported,
                     "windows_search_imported": windows_search_imported,
                 },
             )
@@ -2572,7 +2676,117 @@ def run(args: argparse.Namespace) -> int:
                     "staged_carves": len(staged_rows),
                     "limited": manifest.get("limited"),
                     "limit_reason": manifest.get("limit_reason"),
+                    "artifact_imported": artifact_imported,
                     "windows_search_imported": windows_search_imported,
+                }
+            )
+            return 0
+
+        if args.resource == "carve" and args.action == "ese":
+            source = Path(args.path)
+            if not source.exists():
+                raise OrchestratorError(f"Carve source does not exist: {source}")
+            computer_id, image_id = _cloud_or_memory_evidence_ids(
+                db,
+                case_id=args.case_id,
+                evidence_path=source,
+                computer_id=args.computer_id,
+                image_id=args.image_id,
+            )
+            output_dir = paths.case_dir(args.case_id) / "supplemental" / "carves" / str(uuid.uuid4())
+            manifest = stage_ese_carves(
+                source,
+                output_dir,
+                max_carves=args.max_carves,
+                max_bytes=args.max_bytes,
+                max_carve_size=args.max_carve_size,
+            )
+            manifest_path = output_dir / "staged-carves.csv"
+            manifest_rows: list[dict[str, object]] = []
+            for row_number, staged in enumerate(manifest["carves"], start=1):
+                staged_path = Path(str(staged["path"]))
+                summary = summarize_ese_carve(staged_path)
+                manifest_rows.append(
+                    {
+                        "row_number": row_number,
+                        "profile": args.profile,
+                        "source_path": str(source),
+                        "source_offset": staged.get("source_offset"),
+                        "staged_path": str(staged_path),
+                        "staged_name": staged_path.name,
+                        "staged_size": staged.get("size"),
+                        "staged_sha256": staged.get("sha256"),
+                        **summary,
+                    }
+                )
+            if manifest_rows:
+                with manifest_path.open("w", newline="", encoding="utf-8") as handle:
+                    writer = csv.DictWriter(handle, fieldnames=list(manifest_rows[0].keys()))
+                    writer.writeheader()
+                    writer.writerows(manifest_rows)
+            else:
+                manifest_path.write_text("row_number,profile,source_path,source_offset,staged_path\n", encoding="utf-8")
+            output_id = str(uuid.uuid4())
+            db.insert_tool_output(
+                {
+                    "id": output_id,
+                    "case_id": args.case_id,
+                    "computer_id": computer_id,
+                    "image_id": image_id,
+                    "job_id": None,
+                    "tool_name": "CarveStageRunner",
+                    "output_type": "csv",
+                    "path": manifest_path,
+                    "row_count": len(manifest_rows),
+                }
+            )
+            staged_rows = []
+            for manifest_row, staged in zip(manifest_rows, manifest["carves"]):
+                staged_row = staged_carve_row(
+                    case_id=args.case_id,
+                    computer_id=computer_id,
+                    image_id=image_id,
+                    tool_output_id=output_id,
+                    source_csv=manifest_path,
+                    row_number=int(manifest_row["row_number"]),
+                    profile=args.profile,
+                    source_path=str(source),
+                    staged=staged,
+                    summary=manifest_row,
+                    carve_type="ese",
+                    notes="ESE carve staged; parse with Windows Search, SRUM, or WebCache tooling when structurally complete.",
+                )
+                staged_row["created_at"] = datetime.now(timezone.utc).isoformat()
+                staged_rows.append(staged_row)
+            db.insert_staged_carves(staged_rows)
+            db.insert_timeline_events(timeline_events_from_rows(staged_rows))
+            db.log_activity(
+                case_id=args.case_id,
+                computer_id=computer_id,
+                image_id=image_id,
+                event="carve.ese_staged",
+                message="Staged ESE carve outputs",
+                details={
+                    "profile": args.profile,
+                    "source": str(source),
+                    "output_dir": str(output_dir),
+                    "carve_count": len(staged_rows),
+                    "limited": manifest.get("limited"),
+                    "limit_reason": manifest.get("limit_reason"),
+                },
+            )
+            print_json(
+                {
+                    "case_id": args.case_id,
+                    "computer_id": computer_id,
+                    "image_id": image_id,
+                    "profile": args.profile,
+                    "source": str(source),
+                    "output_dir": str(output_dir),
+                    "manifest_path": str(manifest_path),
+                    "staged_carves": len(staged_rows),
+                    "limited": manifest.get("limited"),
+                    "limit_reason": manifest.get("limit_reason"),
                 }
             )
             return 0

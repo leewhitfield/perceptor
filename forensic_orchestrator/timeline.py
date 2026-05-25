@@ -45,6 +45,8 @@ def timeline_events_from_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]
             events.extend(_windows_defender_events(row))
         elif tool_name == "MemoryStringScanner":
             events.extend(_memory_string_events(row))
+        elif tool_name == "CarveStageRunner":
+            events.extend(_carve_stage_events(row))
         elif tool_name == "WebCacheParser" and row.get("local_path"):
             events.extend(_webcache_file_events(row))
         elif tool_name == "WebCacheParser":
@@ -86,6 +88,8 @@ def _source_scope(row: dict[str, Any]) -> str:
     if row.get("tool_name") == "MemoryStringScanner":
         artifact_type = str(row.get("source_artifact_type") or "memory").strip().lower()
         return artifact_type or "memory"
+    if row.get("tool_name") == "CarveStageRunner":
+        return "carve"
     value = str(row.get("source_scope") or "").strip()
     if value:
         return value
@@ -105,6 +109,8 @@ def _source_scope(row: dict[str, Any]) -> str:
 def _source_origin(row: dict[str, Any], source_scope: str) -> str:
     if row.get("tool_name") == "MemoryStringScanner":
         return "memory"
+    if row.get("tool_name") == "CarveStageRunner":
+        return "carve"
     lowered = str(source_scope or "").lower()
     if lowered in {"pagefile", "hiberfil", "swapfile", "crash_dump", "process_dump", "full_memory_dump", "memory"}:
         return "memory"
@@ -139,6 +145,8 @@ def _source_table(row: dict[str, Any]) -> str:
         return "windows_defender_events"
     if tool_name == "MemoryStringScanner":
         return "memory_string_hits"
+    if tool_name == "CarveStageRunner":
+        return "staged_carves"
     if tool_name == "WebCacheParser":
         if row.get("local_path"):
             return "webcache_file_accesses"
@@ -156,6 +164,35 @@ def _source_table(row: dict[str, Any]) -> str:
         "RecycleParser": "recycle_items",
         "FirefoxParser": "firefox_history",
     }.get(tool_name, "parsed_rows")
+
+
+def _carve_stage_events(row: dict[str, Any]) -> list[dict[str, Any]]:
+    timestamp = row.get("created_at")
+    if not timestamp:
+        return []
+    status = row.get("parser_status") or row.get("import_status") or "staged"
+    event_type = "database_carve_validated" if status in {"parsed", "schema_only", "staged"} else "carve_found"
+    description = row.get("staged_name") or row.get("staged_path") or row.get("source_path")
+    event = _base(
+        row,
+        event_type,
+        timestamp,
+        description,
+        {
+            "evidence_strength": "lead",
+            "profile": row.get("profile"),
+            "source_path": row.get("source_path"),
+            "source_offset": row.get("source_offset"),
+            "staged_path": row.get("staged_path"),
+            "staged_sha256": row.get("staged_sha256"),
+            "carve_type": row.get("carve_type"),
+            "detected_format": row.get("detected_format"),
+            "parser_status": row.get("parser_status"),
+            "import_status": row.get("import_status"),
+            "caveat": "Carve timeline timestamp is staging/import time, not file creation or user activity time.",
+        },
+    )
+    return [event] if event else []
 
 
 def _etl_events(row: dict[str, Any]) -> list[dict[str, Any]]:

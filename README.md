@@ -367,16 +367,21 @@ forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator tools profi
 The first built-in carve runner is SQLite-focused. It can stage existing SQLite
 files or scan a bounded raw source for SQLite headers, copy/carve candidates
 under the case `supplemental/carves` directory, fingerprint them, run a
-read-only schema/row-count validation pass, and record coverage in DuckDB:
+read-only schema/row-count validation pass, and record coverage in DuckDB. Use
+`--import-artifacts` to route recognized staged SQLite databases through the
+Firefox, Chromium, or Windows Activities parsers:
 
 ```bash
-forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator carve sqlite --case CASE_ID --image IMAGE_ID --path /path/to/source.bin --profile windows-database-carve
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator carve sqlite --case CASE_ID --image IMAGE_ID --path /path/to/source.bin --profile windows-database-carve --import-artifacts
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator carve ese --case CASE_ID --image IMAGE_ID --path /path/to/source.bin --profile windows-database-carve
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report carve-coverage --case CASE_ID --format md
 ```
 
 For SearchIndexer memory SQLite carves, add
 `--import-windows-search-memory` to populate the Windows Search memory carve
-tables in the same pass.
+tables in the same pass. ESE carving currently stages and fingerprints
+candidates for Windows Search, SRUM, or WebCache follow-up; parsing requires a
+structurally complete ESE database and matching downstream parser support.
 
 After a recovery run, summarize runtime and extraction counts with:
 
