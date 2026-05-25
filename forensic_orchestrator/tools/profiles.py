@@ -77,6 +77,11 @@ ARTIFACT_DEDUPE_TOOLS = {
     "WindowsActivitiesParser",
     "WindowsSearchESEParser",
 }
+MFT_DEPENDENT_TOOL_BARRIERS = {
+    # This internal wrapper builds targeted $I30 inputs from the imported MFT
+    # rows, so any queued MFTECmd generation must be ingested before it runs.
+    "MFTECmdI30",
+}
 
 
 def _progress(message: str) -> None:
@@ -668,9 +673,62 @@ def _run_profile_impl(
     parallel_tool_contexts: dict[str, dict[str, object]] = {}
     parallel_enabled = workers > 1
 
+    def flush_parallel_tool_tasks() -> None:
+        nonlocal parallel_tool_tasks
+        if not parallel_tool_tasks:
+            return
+        for result in run_processing_tasks(parallel_tool_tasks, workers=workers):
+            context = parallel_tool_contexts.pop(result.name)
+            tool = context["tool"]
+            tool_timing_id = str(context["tool_timing_id"])
+            tool_started = float(context["tool_started"])
+            if result.status == "failed":
+                db.finish_process_timing(
+                    tool_timing_id,
+                    status="failed",
+                    details={"error": result.error, "parallelized": True},
+                )
+                _progress(f"tool failed {tool.name} elapsed={_format_elapsed(tool_started)} error={result.error}")
+                raise ToolError(f"{tool.name} failed during parallel generation: {result.error}")
+            try:
+                ingest_generated_tool_outputs(
+                    db=db,
+                    case_id=case_id,
+                    image_id=image_id,
+                    computer_id=image.computer_id,
+                    tool=tool,
+                    generated=result.value,
+                    accept_duplicate=accept_duplicate or windows_old_mode,
+                    rebuild_correlations=False,
+                    raw_image=source_image or fallback_source_image or paths.ewf_raw_path(case_id),
+                    offset_sectors=offset_sectors or 0,
+                    mount=mount,
+                )
+            except Exception as exc:
+                db.finish_process_timing(
+                    tool_timing_id,
+                    status="failed",
+                    details={"error": str(exc), "parallelized": True},
+                )
+                _progress(f"tool failed {tool.name} elapsed={_format_elapsed(tool_started)} error={exc}")
+                raise
+            db.finish_process_timing(
+                tool_timing_id,
+                details={
+                    "parallelized": True,
+                    "generate_seconds": round(result.duration_seconds, 3),
+                    "requested_workers": workers,
+                },
+            )
+            _progress(f"tool completed {tool.name} elapsed={_format_elapsed(tool_started)} parallelized=yes")
+        parallel_tool_tasks = []
+
     for tool in tools:
+        if tool.name in MFT_DEPENDENT_TOOL_BARRIERS:
+            flush_parallel_tool_tasks()
         for artifact in tool.artifacts:
             if artifact.name in mft_selected_artifacts and artifact.name not in artifact_paths:
+                flush_parallel_tool_tasks()
                 extract_profile_artifact(artifact)
         missing_tool_artifacts = [artifact.name for artifact in tool.artifacts if artifact.name not in artifact_paths]
         tool_artifacts = {
@@ -790,42 +848,7 @@ def _run_profile_impl(
             db.finish_process_timing(tool_timing_id)
             _progress(f"tool completed {tool.name} elapsed={_format_elapsed(tool_started)}")
 
-    for result in run_processing_tasks(parallel_tool_tasks, workers=workers):
-        context = parallel_tool_contexts[result.name]
-        tool = context["tool"]
-        tool_timing_id = str(context["tool_timing_id"])
-        tool_started = float(context["tool_started"])
-        if result.status == "failed":
-            db.finish_process_timing(tool_timing_id, status="failed", details={"error": result.error, "parallelized": True})
-            _progress(f"tool failed {tool.name} elapsed={_format_elapsed(tool_started)} error={result.error}")
-            raise ToolError(f"{tool.name} failed during parallel generation: {result.error}")
-        try:
-            ingest_generated_tool_outputs(
-                db=db,
-                case_id=case_id,
-                image_id=image_id,
-                computer_id=image.computer_id,
-                tool=tool,
-                generated=result.value,
-                accept_duplicate=accept_duplicate or windows_old_mode,
-                rebuild_correlations=False,
-                raw_image=source_image or fallback_source_image or paths.ewf_raw_path(case_id),
-                offset_sectors=offset_sectors or 0,
-                mount=mount,
-            )
-        except Exception as exc:
-            db.finish_process_timing(tool_timing_id, status="failed", details={"error": str(exc), "parallelized": True})
-            _progress(f"tool failed {tool.name} elapsed={_format_elapsed(tool_started)} error={exc}")
-            raise
-        db.finish_process_timing(
-            tool_timing_id,
-            details={
-                "parallelized": True,
-                "generate_seconds": round(result.duration_seconds, 3),
-                "requested_workers": workers,
-            },
-        )
-        _progress(f"tool completed {tool.name} elapsed={_format_elapsed(tool_started)} parallelized=yes")
+    flush_parallel_tool_tasks()
 
     def timed_postprocess(name: str, callback):
         postprocess_started = time.monotonic()
