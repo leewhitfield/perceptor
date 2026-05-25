@@ -10820,6 +10820,25 @@ def timeline_review_report(
                 basis=f"MFT $STANDARD_INFORMATION {field}; in_use={row['in_use']}",
             )
 
+    for artifact in memory_artifacts_report(db, case_id, limit=source_limit).get("artifacts") or []:
+        path = str(artifact.get("path") or "")
+        for event_type, field in (
+            ("memory_artifact_created", "created_time"),
+            ("memory_artifact_modified", "modified_time"),
+            ("memory_artifact_accessed", "accessed_time"),
+        ):
+            add_event(
+                timestamp=artifact.get(field),
+                source_name="memory_artifacts",
+                source_table="memory_artifacts_report",
+                source_id=path,
+                event_type=event_type,
+                file_path=path,
+                artifact=str(artifact.get("artifact_type") or "memory"),
+                summary=f"{event_type}: {artifact.get('artifact_type') or 'memory'} {path}",
+                basis=f"Memory-adjacent artifact inventory {field}; source={artifact.get('source') or ''}",
+            )
+
     usn_filters = ["case_id = ?"]
     usn_params: list[Any] = [case_id]
     if user:
@@ -16914,9 +16933,20 @@ def process_timing_report(db: Database, case_id: str, *, limit: int = 500) -> di
     for row in summary:
         row["total_duration_seconds"] = round((row.get("total_duration_ms") or 0) / 1000, 3)
         row["avg_duration_seconds"] = round((row.get("avg_duration_ms") or 0) / 1000, 3)
+    worker_requests = [
+        {
+            "name": row.get("name"),
+            "requested_workers": (row.get("details") or {}).get("requested_workers"),
+            "effective_workers": (row.get("details") or {}).get("effective_workers"),
+            "parallel_note": (row.get("details") or {}).get("parallel_note"),
+        }
+        for row in rows
+        if (row.get("details") or {}).get("requested_workers")
+    ]
     return {
         "case_id": case_id,
         "summary": summary,
+        "worker_requests": worker_requests,
         "timings": rows,
         "total_returned": len(rows),
     }
@@ -16941,6 +16971,14 @@ def process_timing_markdown(report: dict[str, Any]) -> str:
                 last=row.get("last_end") or "",
             )
         )
+    worker_requests = report.get("worker_requests") or []
+    if worker_requests:
+        lines.extend(["", "## Worker Requests", ""])
+        for row in worker_requests[:25]:
+            lines.append(
+                f"- `{row.get('name') or ''}` requested `{row.get('requested_workers')}` "
+                f"effective `{row.get('effective_workers')}` {row.get('parallel_note') or ''}"
+            )
     lines.extend(["", "## Timings", ""])
     lines.append("| Start | End | Seconds | Source | Scope | Phase | Name | Status | Tool | Artifact |")
     lines.append("|---|---|---:|---|---|---|---|---|---|---|")
@@ -17074,6 +17112,7 @@ def combined_artifact_family_report(
                 "disk_reference_count": sum(1 for row in disk_refs if row.get("artifact_family") == name),
                 "memory_correlation_count": len(correlations),
                 "evidence_strength": _evidence_strength_for_category(name if correlations else "lead"),
+                "caveat": _combined_family_caveat(name),
                 "memory_corroboration": correlations,
             }
         )
@@ -17096,12 +17135,26 @@ def combined_artifact_family_markdown(report: dict[str, Any]) -> str:
             f"- `{row.get('family')}` strength `{row.get('evidence_strength')}` "
             f"disk refs `{row.get('disk_reference_count')}` memory correlations `{row.get('memory_correlation_count')}`"
         )
+        if row.get("caveat"):
+            lines.append(f"  - caveat: {row.get('caveat')}")
         for corr in row.get("memory_corroboration") or []:
             lines.append(
                 f"  - `{corr.get('match_type')}` `{corr.get('match_value')}` "
                 f"memory `{corr.get('source_artifact_type')}` disk `{corr.get('disk_table')}`"
             )
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _combined_family_caveat(family: str) -> str:
+    caveats = {
+        "browser": "Browser memory strings can reflect cached paths, URLs, or labels; corroborate with browser databases and timestamps.",
+        "cloud": "Cloud memory strings can identify services or URLs but do not prove sync, upload, or download without disk/server context.",
+        "email": "Email memory strings can reflect cached addresses or filenames; corroborate with mailbox/message artifacts.",
+        "remote_access": "Remote-access memory strings are leads unless paired with session, event log, or application artifacts.",
+        "windows_search": "Windows Search memory strings do not decrypt encrypted indexes by themselves; live collection may be required for keys/plaintext.",
+        "file": "File/path memory strings show a path existed in memory or support files, not necessarily file open or copy activity.",
+    }
+    return caveats.get(family, "Memory correlations are leads and require source-specific corroboration.")
 
 
 def artifact_processing_status_report(db: Database, case_id: str, *, limit: int = 250) -> dict[str, Any]:
@@ -17140,6 +17193,37 @@ def artifact_processing_status_report(db: Database, case_id: str, *, limit: int 
                 "row_count": output.get("row_count"),
                 "source": "tool_outputs",
                 "notes": output.get("output_type"),
+            }
+        )
+    for timing in _query_report_rows(
+        db,
+        case_id,
+        "process_timings",
+        """
+        SELECT scope, phase, name, status, tool_name, artifact_name, duration_ms, details_json, start_time, end_time
+        FROM process_timings
+        WHERE case_id = ?
+          AND scope IN ('profile', 'artifact', 'tool', 'postprocess')
+        ORDER BY COALESCE(start_time, '') DESC
+        LIMIT ?
+        """,
+        (case_id, limit),
+    ):
+        details = _json_details(timing.get("details_json"))
+        rows.append(
+            {
+                "artifact_family": "processing",
+                "artifact_type": timing.get("scope"),
+                "path": details.get("path") or details.get("output_path") or "",
+                "status": timing.get("status"),
+                "source": "process_timings",
+                "tool_name": timing.get("tool_name"),
+                "artifact_name": timing.get("artifact_name"),
+                "task_name": timing.get("name"),
+                "phase": timing.get("phase"),
+                "duration_seconds": round(float(timing.get("duration_ms") or 0) / 1000, 3),
+                "row_count": details.get("row_count") or details.get("count"),
+                "notes": details.get("parallel_note") or details.get("error") or "",
             }
         )
     return {
@@ -17247,6 +17331,10 @@ def memory_analysis_report(db: Database, case_id: str, *, limit: int = 100) -> d
         "case_id": case_id,
         "summary": {
             "memory_artifact_count": (artifacts.get("summary") or {}).get("artifact_count", 0),
+            "hiberfil_present": (artifacts.get("summary") or {}).get("hiberfil_present", False),
+            "pagefile_present": (artifacts.get("summary") or {}).get("pagefile_present", False),
+            "swapfile_present": (artifacts.get("summary") or {}).get("swapfile_present", False),
+            "crash_dump_present": (artifacts.get("summary") or {}).get("crash_dump_present", False),
             "memory_string_hit_count": (string_hits.get("summary") or {}).get("hit_count", 0),
             "useful_memory_hit_count": len(useful_hits),
             "windows_search_status": search_status.get("summary_status"),
@@ -17281,6 +17369,7 @@ def memory_analysis_markdown(report: dict[str, Any]) -> str:
         "## Summary",
         "",
         f"- Memory artifacts: `{summary.get('memory_artifact_count', 0)}`",
+        f"- Hiberfil/pagefile/swapfile/crash present: `{summary.get('hiberfil_present', False)}` / `{summary.get('pagefile_present', False)}` / `{summary.get('swapfile_present', False)}` / `{summary.get('crash_dump_present', False)}`",
         f"- Memory string hits: `{summary.get('memory_string_hit_count', 0)}`",
         f"- Useful memory hits: `{summary.get('useful_memory_hit_count', 0)}`",
         f"- Windows Search status: `{summary.get('windows_search_status') or ''}`",

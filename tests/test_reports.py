@@ -1702,17 +1702,30 @@ def test_operator_review_reports_cover_timeline_file_user_and_completeness(tmp_p
         message="Skipped test artifact",
         details={"tool_name": "MFTECmd"},
     )
+    timing_id = db.start_process_timing(
+        case_id=case.id,
+        computer_id="computer-1",
+        image_id="image-1",
+        scope="tool",
+        phase="parse",
+        name="MFTECmd",
+        tool_name="MFTECmd",
+        details={"row_count": 1},
+    )
+    db.finish_process_timing(timing_id)
 
     timeline = timeline_review_report(db, case.id, user="Jane", contains="plan", limit=10)
     dossier = file_dossier_report(db, case.id, name="plan.docx", limit=10)
     activity = user_activity_report(db, case.id, user="Jane", limit=10)
     completeness = artifact_completeness_report(db, case.id, limit=10)
+    processing = artifact_processing_status_report(db, case.id, limit=20)
 
     assert {event["event_type"] for event in timeline["events"]} >= {"file_created", "file_modified"}
     assert dossier["summary"]["evidence_rows"] >= 1
     assert activity["counts"]["communications"] == 0
     assert completeness["summary"]["tools_with_output"] == 1
     assert completeness["tools"][0]["warning_count"] == 1
+    assert any(row.get("source") == "process_timings" and row.get("task_name") == "MFTECmd" for row in processing["items"])
 
 
 def test_artifact_completeness_can_scope_to_latest_profile_run(tmp_path):

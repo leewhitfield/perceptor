@@ -961,6 +961,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Run the selected profile against Windows.old artifacts only, storing output under a Windows.old namespace",
     )
+    run.add_argument("--workers", type=int, default=1, help="Requested worker slots. Profile tool execution is serialized until parsers support split scan/ingest phases.")
 
     process = subparsers.add_parser("process")
     process.add_argument("--case", dest="case_id", help="Existing case/project ID; creates one when omitted")
@@ -1015,6 +1016,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Run the selected profile against Windows.old artifacts only, storing output under a Windows.old namespace",
     )
+    process.add_argument("--workers", type=int, default=1, help="Requested worker slots. Profile tool execution is serialized until parsers support split scan/ingest phases.")
 
     report_bundle = subparsers.add_parser("report-bundle")
     report_bundle_sub = report_bundle.add_subparsers(dest="action", required=True)
@@ -2147,6 +2149,7 @@ def run(args: argparse.Namespace) -> int:
                     replace_existing=args.replace_existing,
                     accept_duplicate=args.accept_duplicate,
                     include_windows_old=args.include_windows_old,
+                    workers=args.workers,
                 )
             except Exception as exc:  # pragma: no cover - exercised through CLI behavior
                 run_error = exc
@@ -2186,6 +2189,8 @@ def run(args: argparse.Namespace) -> int:
                 "image_path": str(image.path),
                 "profile": args.profile,
                 "dry_run": args.dry_run,
+                "requested_workers": args.workers,
+                "effective_workers": 1,
                 "filesystem_mount_requested": args.filesystem,
                 "volume_mount_path": str(volume) if volume else None,
                 "unmounted_path": str(unmounted_path) if unmounted_path else None,
@@ -3026,12 +3031,15 @@ def run(args: argparse.Namespace) -> int:
                 replace_existing=args.replace_existing,
                 accept_duplicate=args.accept_duplicate,
                 include_windows_old=args.include_windows_old,
+                workers=args.workers,
             )
             payload = {
                 "case_id": args.case_id,
                 "image_id": args.image_id,
                 "profile": args.profile,
                 "dry_run": args.dry_run,
+                "requested_workers": args.workers,
+                "effective_workers": 1,
             }
             if args.dry_run:
                 payload["commands"] = command_preview(db, args.case_id)

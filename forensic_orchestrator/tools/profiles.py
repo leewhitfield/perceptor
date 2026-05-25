@@ -208,6 +208,7 @@ def run_profile(
     accept_duplicate: bool = False,
     include_windows_old: bool = False,
     parent_timing_id: str | None = None,
+    workers: int = 1,
 ) -> None:
     image = db.get_image(image_id, case_id)
     profile_label = profile if not include_windows_old else f"{profile}:windows-old"
@@ -228,8 +229,25 @@ def run_profile(
             "include_windows_old": include_windows_old,
             "replace_existing": replace_existing,
             "accept_duplicate": accept_duplicate,
+            "requested_workers": workers,
+            "effective_workers": 1,
+            "parallel_note": (
+                "Profile tool execution remains serialized because parser/database writes are not yet split into isolated scan and ingest phases."
+                if workers > 1
+                else ""
+            ),
         },
     )
+    if workers > 1:
+        db.log_activity(
+            case_id=case_id,
+            computer_id=image.computer_id,
+            image_id=image_id,
+            level="info",
+            event="profile.parallel_requested_serialized",
+            message="Profile workers were requested; profile tool execution is serialized until DB-writing parsers are split into scan and ingest phases",
+            details={"profile": profile, "requested_workers": workers, "effective_workers": 1},
+        )
     try:
         _run_profile_impl(
             db=db,
@@ -246,6 +264,7 @@ def run_profile(
             accept_duplicate=accept_duplicate,
             include_windows_old=include_windows_old,
             profile_timing_id=timing_id,
+            workers=workers,
         )
     except Exception as exc:
         db.finish_process_timing(timing_id, status="failed", details={"error": str(exc)})
@@ -272,6 +291,7 @@ def _run_profile_impl(
     accept_duplicate: bool = False,
     include_windows_old: bool = False,
     profile_timing_id: str | None = None,
+    workers: int = 1,
 ) -> None:
     image = db.get_image(image_id, case_id)
     if not dry_run:
@@ -905,4 +925,5 @@ def _run_profile_impl(
             accept_duplicate=True,
             include_windows_old=True,
             parent_timing_id=profile_timing_id,
+            workers=workers,
         )
