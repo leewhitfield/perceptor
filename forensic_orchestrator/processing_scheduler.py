@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+import time
 from typing import Any
 
 
@@ -20,6 +21,7 @@ class ProcessingResult:
     payload: dict[str, Any]
     value: Any = None
     error: str = ""
+    duration_seconds: float = 0.0
 
 
 def run_processing_tasks(tasks: Sequence[ProcessingTask], *, workers: int = 1) -> list[ProcessingResult]:
@@ -40,7 +42,21 @@ def run_processing_tasks(tasks: Sequence[ProcessingTask], *, workers: int = 1) -
 
 
 def _run_task(task: ProcessingTask) -> ProcessingResult:
+    started = time.monotonic()
     try:
-        return ProcessingResult(name=task.name, status="completed", payload=task.payload, value=task.worker())
+        value = task.worker()
+        return ProcessingResult(
+            name=task.name,
+            status="completed",
+            payload=task.payload,
+            value=value,
+            duration_seconds=time.monotonic() - started,
+        )
     except Exception as exc:
-        return ProcessingResult(name=task.name, status="failed", payload=task.payload, error=str(exc))
+        return ProcessingResult(
+            name=task.name,
+            status="failed",
+            payload=task.payload,
+            error=str(exc),
+            duration_seconds=time.monotonic() - started,
+        )

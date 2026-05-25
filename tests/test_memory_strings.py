@@ -1,4 +1,6 @@
-from forensic_orchestrator.cli import run_memory_processing_profile
+import json
+
+from forensic_orchestrator.cli import main as cli_main, run_memory_processing_profile
 from forensic_orchestrator.db import Database
 from forensic_orchestrator.paths import WorkspacePaths
 from forensic_orchestrator.processing_scheduler import ProcessingTask, run_processing_tasks
@@ -115,6 +117,7 @@ def test_processing_scheduler_preserves_order_and_captures_failures():
     assert [result.name for result in results] == ["first", "failed", "third"]
     assert [result.status for result in results] == ["completed", "failed", "completed"]
     assert results[1].error == "boom"
+    assert all(result.duration_seconds >= 0 for result in results)
 
 
 def test_memory_profile_parallel_scans_then_serializes_ingest(tmp_path):
@@ -138,3 +141,23 @@ def test_memory_profile_parallel_scans_then_serializes_ingest(tmp_path):
     rows = db.analytics._connect(case.id).execute("SELECT source_artifact_type, matched_term FROM memory_string_hits").fetchall()
     assert ("pagefile", "token") in [tuple(row) for row in rows]
     assert ("swapfile", "sharepoint") in [tuple(row) for row in rows]
+
+
+def test_memory_crash_dump_command_scans_with_workers(tmp_path, capsys):
+    paths = WorkspacePaths(tmp_path / "workspace", live_mount_root=tmp_path / "live-mounts")
+    db = Database(paths.db_path())
+    case = db.create_case("case-1", paths.case_dir("case-1"))
+    paths.ensure_case_tree(case.id)
+    dump_dir = paths.mounts_dir(case.id) / "volumes" / "p1"
+    dump_dir.mkdir(parents=True)
+    dump = dump_dir / "MEMORY.DMP"
+    dump.write_bytes(b"rdp bearer abc1234567890")
+
+    status = cli_main(["--root", str(paths.root), "memory", "crash-dumps", "--case", case.id, "--workers", "2"])
+
+    assert status == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["worker_count"] == 2
+    assert payload["scan_task_count"] == 1
+    assert payload["scanned_count"] == 1
+    assert payload["failed_count"] == 0

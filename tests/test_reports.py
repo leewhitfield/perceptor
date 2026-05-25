@@ -605,8 +605,11 @@ def test_memory_credentials_report_classifies_and_redacts_usable_secrets(tmp_pat
     markdown = memory_credentials_markdown(report)
 
     assert report["summary"]["likely_usable_count"] == 1
+    assert report["summary"]["confirmed_usable_count"] == 0
     assert report["summary"]["false_positive_or_label_count"] == 1
+    assert report["credentials"][0]["credential_validation_status"] == "candidate_unverified"
     assert "abc1234567890" not in markdown
+    assert "Confirmed usable credentials" in markdown
     assert "Memory Credential Review" in markdown
 
 

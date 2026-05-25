@@ -448,9 +448,17 @@ def run_memory_processing_profile(
                 event="memory.profile_scan_failed",
                 level="warning",
                 message=f"Memory profile scan failed for {source}",
-                details={"path": str(source), "error": result.error},
+                details={"path": str(source), "error": result.error, "duration_seconds": result.duration_seconds},
             )
-            scans.append({"artifact_path": artifact.get("path"), "artifact_type": artifact_type, "status": "failed", "error": result.error})
+            scans.append(
+                {
+                    "artifact_path": artifact.get("path"),
+                    "artifact_type": artifact_type,
+                    "status": "failed",
+                    "error": result.error,
+                    "duration_seconds": result.duration_seconds,
+                }
+            )
             continue
         csv_path, metadata = result.value
         output_id = str(uuid.uuid4())
@@ -477,7 +485,17 @@ def run_memory_processing_profile(
             path=csv_path,
         )
         total_imported += imported
-        scans.append({"artifact_path": artifact.get("path"), "artifact_type": artifact_type, "status": "scanned", "output": str(csv_path), "imported_rows": imported, **metadata})
+        scans.append(
+            {
+                "artifact_path": artifact.get("path"),
+                "artifact_type": artifact_type,
+                "status": "scanned",
+                "output": str(csv_path),
+                "imported_rows": imported,
+                "duration_seconds": result.duration_seconds,
+                **metadata,
+            }
+        )
     return {
         "case_id": case_id,
         "artifact_count": len(artifacts),
@@ -691,6 +709,7 @@ def build_parser() -> argparse.ArgumentParser:
     memory_crash_dumps.add_argument("--computer", dest="computer_id")
     memory_crash_dumps.add_argument("--image", dest="image_id")
     memory_crash_dumps.add_argument("--min-length", type=int, default=6)
+    memory_crash_dumps.add_argument("--workers", type=int, default=1, help="Run dump string scanning with this many workers; database ingest remains serialized")
     memory_crash_dumps.add_argument("--copy", action="store_true", help="Copy accessible crash dumps into the case supplemental folder before scanning")
     memory_profile = memory_sub.add_parser("profile")
     memory_profile.add_argument("--case", required=True, dest="case_id")
@@ -2375,6 +2394,7 @@ def run(args: argparse.Namespace) -> int:
             base_output_dir = paths.case_dir(args.case_id) / "supplemental" / "crash-dump-strings" / str(uuid.uuid4())
             scans: list[dict[str, object]] = []
             total_imported = 0
+            scan_tasks: list[ProcessingTask] = []
             for index, artifact in enumerate(artifacts, 1):
                 source_value = artifact.get("actual_path") or artifact.get("path")
                 source = Path(str(source_value or ""))
@@ -2388,13 +2408,34 @@ def run(args: argparse.Namespace) -> int:
                         }
                     )
                     continue
-                scan_source = source
                 output_dir = base_output_dir / f"{index:04d}"
-                if args.copy:
-                    output_dir.mkdir(parents=True, exist_ok=True)
-                    copied = output_dir / source.name
-                    shutil.copy2(source, copied)
-                    scan_source = copied
+                def scan_dump(source: Path = source, output_dir: Path = output_dir) -> dict[str, object]:
+                    scan_source = source
+                    if args.copy:
+                        output_dir.mkdir(parents=True, exist_ok=True)
+                        copied = output_dir / source.name
+                        shutil.copy2(source, copied)
+                        scan_source = copied
+                    csv_path, metadata = scan_memory_strings_to_csv(
+                        scan_source,
+                        output_dir,
+                        min_length=args.min_length,
+                        decompress_hiberfil=False,
+                    )
+                    return {"csv_path": csv_path, "metadata": metadata, "scan_source": scan_source}
+
+                scan_tasks.append(
+                    ProcessingTask(
+                        name=f"crash-dump:{index}",
+                        payload={"artifact": artifact, "source": source},
+                        worker=scan_dump,
+                    )
+                )
+
+            for result in run_processing_tasks(scan_tasks, workers=args.workers):
+                artifact = result.payload["artifact"]
+                source = Path(result.payload["source"])
+                scan_source = source
                 computer_id, image_id = _cloud_or_memory_evidence_ids(
                     db,
                     case_id=args.case_id,
@@ -2402,49 +2443,7 @@ def run(args: argparse.Namespace) -> int:
                     computer_id=args.computer_id,
                     image_id=args.image_id,
                 )
-                try:
-                    csv_path, metadata = scan_memory_strings_to_csv(
-                        scan_source,
-                        output_dir,
-                        min_length=args.min_length,
-                        decompress_hiberfil=False,
-                    )
-                    output_id = str(uuid.uuid4())
-                    db.insert_tool_output(
-                        {
-                            "id": output_id,
-                            "case_id": args.case_id,
-                            "computer_id": computer_id,
-                            "image_id": image_id,
-                            "job_id": None,
-                            "tool_name": "MemoryStringScanner",
-                            "output_type": "csv",
-                            "path": csv_path,
-                            "row_count": _count_csv_rows(csv_path),
-                        }
-                    )
-                    imported = ingest_csv_output(
-                        db=db,
-                        case_id=args.case_id,
-                        computer_id=computer_id,
-                        image_id=image_id,
-                        tool_output_id=output_id,
-                        tool_name="MemoryStringScanner",
-                        path=csv_path,
-                    )
-                    total_imported += imported
-                    scans.append(
-                        {
-                            "artifact_path": artifact.get("path"),
-                            "artifact_type": artifact.get("artifact_type"),
-                            "source": str(scan_source),
-                            "output": str(csv_path),
-                            "imported_rows": imported,
-                            "status": "scanned",
-                            **metadata,
-                        }
-                    )
-                except Exception as exc:
+                if result.status == "failed":
                     db.log_activity(
                         case_id=args.case_id,
                         computer_id=computer_id,
@@ -2452,7 +2451,7 @@ def run(args: argparse.Namespace) -> int:
                         event="memory.crash_dump_scan_failed",
                         level="warning",
                         message=f"Crash dump string scan failed for {source}",
-                        details={"path": str(source), "error": str(exc)},
+                        details={"path": str(source), "error": result.error, "duration_seconds": result.duration_seconds},
                     )
                     scans.append(
                         {
@@ -2460,13 +2459,57 @@ def run(args: argparse.Namespace) -> int:
                             "artifact_type": artifact.get("artifact_type"),
                             "source": str(scan_source),
                             "status": "failed",
-                            "error": str(exc),
+                            "error": result.error,
+                            "duration_seconds": result.duration_seconds,
                         }
                     )
+                    continue
+                value = result.value
+                csv_path = Path(value["csv_path"])
+                metadata = value["metadata"]
+                scan_source = Path(value["scan_source"])
+                output_id = str(uuid.uuid4())
+                db.insert_tool_output(
+                    {
+                        "id": output_id,
+                        "case_id": args.case_id,
+                        "computer_id": computer_id,
+                        "image_id": image_id,
+                        "job_id": None,
+                        "tool_name": "MemoryStringScanner",
+                        "output_type": "csv",
+                        "path": csv_path,
+                        "row_count": _count_csv_rows(csv_path),
+                    }
+                )
+                imported = ingest_csv_output(
+                    db=db,
+                    case_id=args.case_id,
+                    computer_id=computer_id,
+                    image_id=image_id,
+                    tool_output_id=output_id,
+                    tool_name="MemoryStringScanner",
+                    path=csv_path,
+                )
+                total_imported += imported
+                scans.append(
+                    {
+                        "artifact_path": artifact.get("path"),
+                        "artifact_type": artifact.get("artifact_type"),
+                        "source": str(scan_source),
+                        "output": str(csv_path),
+                        "imported_rows": imported,
+                        "status": "scanned",
+                        "duration_seconds": result.duration_seconds,
+                        **metadata,
+                    }
+                )
             print_json(
                 {
                     "case_id": args.case_id,
                     "artifact_count": len(artifacts),
+                    "worker_count": max(1, args.workers),
+                    "scan_task_count": len(scan_tasks),
                     "scanned_count": sum(1 for row in scans if row.get("status") == "scanned"),
                     "skipped_count": sum(1 for row in scans if row.get("status") == "skipped"),
                     "failed_count": sum(1 for row in scans if row.get("status") == "failed"),

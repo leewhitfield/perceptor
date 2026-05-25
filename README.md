@@ -1249,10 +1249,11 @@ test clusters with self-signed TLS, pass `--insecure`.
 ## Roadmap
 
 - Parallel processing scheduler: the initial scheduler is wired into
-  `memory profile --workers N`. Memory support files are scanned concurrently
-  into isolated output folders, then tool-output registration and normalized
-  database ingest are serialized. Extend this same model to larger extraction
-  profiles next, followed by one timeline/correlation rebuild at the end.
+  `memory profile --workers N` and `memory crash-dumps --workers N`. Memory
+  support files and crash dumps are scanned concurrently into isolated output
+  folders, then tool-output registration and normalized database ingest are
+  serialized. Extend this same model to larger extraction profiles next,
+  followed by one timeline/correlation rebuild at the end.
 
 ## Passwordless Sudo for Mounts
 

@@ -17421,6 +17421,7 @@ def memory_credentials_report(db: Database, case_id: str, *, limit: int = 100, r
         "case_id": case_id,
         "summary": {
             "credential_hit_count": _report_table_count_where(db, case_id, "memory_string_hits", "hit_category = ?", ("credentials",)),
+            "confirmed_usable_count": sum(1 for row in reviewed if row.get("credential_validation_status") == "confirmed_usable"),
             "likely_usable_count": sum(1 for row in reviewed if row.get("credential_status") == "likely_usable_secret"),
             "possible_secret_count": sum(1 for row in reviewed if row.get("credential_status") == "possible_secret"),
             "false_positive_or_label_count": sum(1 for row in reviewed if row.get("credential_status") == "label_or_false_positive"),
@@ -17429,6 +17430,7 @@ def memory_credentials_report(db: Database, case_id: str, *, limit: int = 100, r
         "total_returned": len(reviewed),
         "caveats": [
             "Credential string hits are memory artifacts and must be validated before use or reporting as active credentials.",
+            "Likely usable and possible statuses are candidate classifications, not proof that the credential was active or usable.",
             "Values are redacted by default; use reveal only in controlled examiner output.",
             "PublicKeyToken, CancellationToken, UI labels, and configuration words are not usable credentials.",
         ],
@@ -17445,6 +17447,7 @@ def memory_credentials_markdown(report: dict[str, Any]) -> str:
         "## Summary",
         "",
         f"- Credential string hits: `{summary.get('credential_hit_count', 0)}`",
+        f"- Confirmed usable credentials: `{summary.get('confirmed_usable_count', 0)}`",
         f"- Likely usable secrets: `{summary.get('likely_usable_count', 0)}`",
         f"- Possible secrets: `{summary.get('possible_secret_count', 0)}`",
         f"- Labels/false positives: `{summary.get('false_positive_or_label_count', 0)}`",
@@ -17457,7 +17460,7 @@ def memory_credentials_markdown(report: dict[str, Any]) -> str:
         lines.append("- No memory credential hits were imported.")
     for row in rows:
         lines.append(
-            f"- `{row.get('credential_status') or ''}` `{row.get('matched_term') or ''}` "
+            f"- `{row.get('credential_validation_status') or ''}` `{row.get('credential_status') or ''}` `{row.get('matched_term') or ''}` "
             f"source `{row.get('source_artifact_type') or ''}` offset `{row.get('offset') or ''}` "
             f"value `{row.get('display_value') or ''}` reason: {row.get('credential_reason') or ''}"
         )
@@ -17756,7 +17759,11 @@ def _assess_memory_credential_hit(value: Any, matched_term: Any) -> dict[str, st
     text = str(value or "")
     lowered = text.lower()
     if not text.strip():
-        return {"credential_status": "label_or_false_positive", "credential_reason": "Empty memory string."}
+        return {
+            "credential_status": "label_or_false_positive",
+            "credential_validation_status": "not_usable",
+            "credential_reason": "Empty memory string.",
+        }
     false_positive_terms = (
         "publickeytoken",
         "cancellationtoken",
@@ -17771,21 +17778,49 @@ def _assess_memory_credential_hit(value: Any, matched_term: Any) -> dict[str, st
         "ransom:win32",
     )
     if any(term in lowered for term in false_positive_terms):
-        return {"credential_status": "label_or_false_positive", "credential_reason": "Known token/password label or API type, not a secret value."}
+        return {
+            "credential_status": "label_or_false_positive",
+            "credential_validation_status": "not_usable",
+            "credential_reason": "Known token/password label or API type, not a secret value.",
+        }
     assignment = _MEMORY_CREDENTIAL_ASSIGNMENT_RE.search(text) or _MEMORY_BEARER_RE.search(text)
     if assignment:
         secret = assignment.group("secret")
         if _memory_secret_is_placeholder(secret):
-            return {"credential_status": "label_or_false_positive", "credential_reason": "Credential assignment value is a common placeholder or field name."}
+            return {
+                "credential_status": "label_or_false_positive",
+                "credential_validation_status": "not_usable",
+                "credential_reason": "Credential assignment value is a common placeholder or field name.",
+            }
         term = str(matched_term or "").lower()
         if term in {"password", "passwd", "pwd="} and len(secret) < 8:
-            return {"credential_status": "possible_secret", "credential_reason": "Password-like assignment has a short value and needs manual validation."}
+            return {
+                "credential_status": "possible_secret",
+                "credential_validation_status": "candidate_unverified",
+                "credential_reason": "Password-like assignment has a short value and needs manual validation.",
+            }
         if len(secret) >= 12 or term in {"refresh_token", "bearer "}:
-            return {"credential_status": "likely_usable_secret", "credential_reason": "Credential keyword is paired with an assigned value or bearer token."}
-        return {"credential_status": "possible_secret", "credential_reason": "Credential keyword has an assigned value but the value is short."}
+            return {
+                "credential_status": "likely_usable_secret",
+                "credential_validation_status": "candidate_unverified",
+                "credential_reason": "Credential keyword is paired with an assigned value or bearer token.",
+            }
+        return {
+            "credential_status": "possible_secret",
+            "credential_validation_status": "candidate_unverified",
+            "credential_reason": "Credential keyword has an assigned value but the value is short.",
+        }
     if re.search(r"(?i)\b(token|password|passwd|credential)\b", text):
-        return {"credential_status": "possible_secret", "credential_reason": "Credential keyword present without a clear extractable value."}
-    return {"credential_status": "label_or_false_positive", "credential_reason": "No clear credential assignment pattern was found."}
+        return {
+            "credential_status": "possible_secret",
+            "credential_validation_status": "candidate_unverified",
+            "credential_reason": "Credential keyword present without a clear extractable value.",
+        }
+    return {
+        "credential_status": "label_or_false_positive",
+        "credential_validation_status": "not_usable",
+        "credential_reason": "No clear credential assignment pattern was found.",
+    }
 
 
 def _redact_memory_credential(value: Any) -> str:
