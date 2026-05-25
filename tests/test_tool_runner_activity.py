@@ -62,3 +62,52 @@ def test_no_csv_records_platform_unsupported_activity(monkeypatch, tmp_path):
     assert activity[0]["event"] == "tool.platform_unsupported"
     assert "parser reported platform unsupported" in activity[0]["message"]
     assert "Non-Windows platforms not supported" in activity[0]["details_json"]
+
+
+def test_split_external_tool_generate_then_serial_ingest(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    paths = WorkspacePaths(tmp_path)
+    script = tmp_path / "write_csv.sh"
+    script.write_text(
+        "#!/bin/sh\n"
+        "mkdir -p \"$1\"\n"
+        "printf 'SourceFile,SourceCreated,SourceModified,SourceAccessed,FileName,FileSize\\n' > \"$1/LECmd_Output.csv\"\n"
+        "printf '/tmp/a.lnk,2020-01-01T00:00:00Z,2020-01-01T00:00:00Z,2020-01-01T00:00:00Z,a.txt,1\\n' >> \"$1/LECmd_Output.csv\"\n"
+    )
+    script.chmod(0o755)
+    tool = ToolDefinition(
+        name="LECmd",
+        enabled=True,
+        type="binary",
+        executable=str(script),
+        command=["{executable}", "{output}"],
+        required_paths=[],
+        outputs=["csv"],
+        artifacts=[],
+    )
+
+    generated = runner.generate_external_tool_outputs(
+        paths=paths,
+        case_id=case.id,
+        image_id="image-1",
+        tool=tool,
+        mount=Path("/unused"),
+        dry_run=False,
+    )
+    runner.ingest_generated_tool_outputs(
+        db=db,
+        case_id=case.id,
+        image_id="image-1",
+        computer_id="computer-1",
+        tool=tool,
+        generated=generated,
+        rebuild_correlations=False,
+    )
+
+    outputs = db.conn.execute("SELECT tool_name, row_count FROM tool_outputs WHERE case_id = ?", (case.id,)).fetchall()
+    assert [tuple(row) for row in outputs] == [("LECmd", 1)]
+    jobs = db.conn.execute("SELECT tool_name, exit_code FROM jobs WHERE case_id = ?", (case.id,)).fetchall()
+    assert [tuple(row) for row in jobs] == [("LECmd", 0)]

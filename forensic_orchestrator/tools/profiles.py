@@ -22,12 +22,13 @@ from forensic_orchestrator.mounting.mft_extract import extract_artifact_from_mft
 from forensic_orchestrator.nested_evidence import rebuild_nested_evidence_inventory
 from forensic_orchestrator.mounting.tsk import extract_artifact, list_files, validate_tsk_available
 from forensic_orchestrator.paths import WorkspacePaths
-from forensic_orchestrator.safety import MountError
+from forensic_orchestrator.processing_scheduler import ProcessingTask, run_processing_tasks
+from forensic_orchestrator.safety import MountError, ToolError
 from forensic_orchestrator.timeline_dedupe import rebuild_timeline_windows_old_dedupe
 
 from .prefetch import inventory_prefetch_directory
 from .registry import ToolRegistry
-from .runner import run_tool
+from .runner import generate_external_tool_outputs, ingest_generated_tool_outputs, run_tool, supports_parallel_generate
 
 
 WINDOWS_OLD_ROOT = "Windows.old"
@@ -108,6 +109,10 @@ def _progress_detail(details: dict | None) -> str:
 
 def _windows_old_tools(tools: list) -> list:
     scoped = []
+    parallel_tool_tasks: list[ProcessingTask] = []
+    parallel_tool_contexts: dict[str, dict[str, object]] = {}
+    parallel_enabled = workers > 1
+
     for tool in tools:
         if tool.name in WINDOWS_OLD_EXCLUDED_TOOLS or not tool.artifacts:
             continue
@@ -230,9 +235,10 @@ def run_profile(
             "replace_existing": replace_existing,
             "accept_duplicate": accept_duplicate,
             "requested_workers": workers,
-            "effective_workers": 1,
+            "effective_workers": workers if workers > 1 else 1,
+            "parallel_scope": "external_tools_only" if workers > 1 else "serial",
             "parallel_note": (
-                "Profile tool execution remains serialized because parser/database writes are not yet split into isolated scan and ingest phases."
+                "External dotnet/binary tools generate outputs in parallel; DB ingest and internal parsers remain serialized."
                 if workers > 1
                 else ""
             ),
@@ -244,9 +250,9 @@ def run_profile(
             computer_id=image.computer_id,
             image_id=image_id,
             level="info",
-            event="profile.parallel_requested_serialized",
-            message="Profile workers were requested; profile tool execution is serialized until DB-writing parsers are split into scan and ingest phases",
-            details={"profile": profile, "requested_workers": workers, "effective_workers": 1},
+            event="profile.parallel_external_tools",
+            message="Profile workers enabled for external tool output generation; DB ingest and internal parsers remain serialized",
+            details={"profile": profile, "requested_workers": workers, "parallel_scope": "external_tools_only"},
         )
     try:
         _run_profile_impl(
@@ -712,6 +718,31 @@ def _run_profile_impl(
             )
             continue
         _progress(f"tool start {tool.name} artifacts={','.join(sorted(tool_artifacts)) or '-'}")
+        if parallel_enabled and supports_parallel_generate(tool):
+            task_name = f"profile-tool:{tool.name}"
+            parallel_tool_contexts[task_name] = {
+                "tool": tool,
+                "tool_timing_id": tool_timing_id,
+                "tool_started": tool_started,
+            }
+            parallel_tool_tasks.append(
+                ProcessingTask(
+                    name=task_name,
+                    payload={"tool_name": tool.name},
+                    worker=lambda tool=tool, tool_artifacts=tool_artifacts: generate_external_tool_outputs(
+                        paths=paths,
+                        case_id=case_id,
+                        image_id=image_id,
+                        tool=tool,
+                        mount=mount,
+                        artifacts=tool_artifacts,
+                        dry_run=dry_run,
+                        output_namespace=WINDOWS_OLD_OUTPUT_NAMESPACE if windows_old_mode else None,
+                    ),
+                )
+            )
+            _progress(f"tool queued_parallel {tool.name} workers={workers}")
+            continue
         try:
             run_tool(
                 db=db,
@@ -758,6 +789,43 @@ def _run_profile_impl(
         else:
             db.finish_process_timing(tool_timing_id)
             _progress(f"tool completed {tool.name} elapsed={_format_elapsed(tool_started)}")
+
+    for result in run_processing_tasks(parallel_tool_tasks, workers=workers):
+        context = parallel_tool_contexts[result.name]
+        tool = context["tool"]
+        tool_timing_id = str(context["tool_timing_id"])
+        tool_started = float(context["tool_started"])
+        if result.status == "failed":
+            db.finish_process_timing(tool_timing_id, status="failed", details={"error": result.error, "parallelized": True})
+            _progress(f"tool failed {tool.name} elapsed={_format_elapsed(tool_started)} error={result.error}")
+            raise ToolError(f"{tool.name} failed during parallel generation: {result.error}")
+        try:
+            ingest_generated_tool_outputs(
+                db=db,
+                case_id=case_id,
+                image_id=image_id,
+                computer_id=image.computer_id,
+                tool=tool,
+                generated=result.value,
+                accept_duplicate=accept_duplicate or windows_old_mode,
+                rebuild_correlations=False,
+                raw_image=source_image or fallback_source_image or paths.ewf_raw_path(case_id),
+                offset_sectors=offset_sectors or 0,
+                mount=mount,
+            )
+        except Exception as exc:
+            db.finish_process_timing(tool_timing_id, status="failed", details={"error": str(exc), "parallelized": True})
+            _progress(f"tool failed {tool.name} elapsed={_format_elapsed(tool_started)} error={exc}")
+            raise
+        db.finish_process_timing(
+            tool_timing_id,
+            details={
+                "parallelized": True,
+                "generate_seconds": round(result.duration_seconds, 3),
+                "requested_workers": workers,
+            },
+        )
+        _progress(f"tool completed {tool.name} elapsed={_format_elapsed(tool_started)} parallelized=yes")
 
     def timed_postprocess(name: str, callback):
         postprocess_started = time.monotonic()

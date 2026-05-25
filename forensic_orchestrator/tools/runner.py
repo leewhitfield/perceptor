@@ -5,6 +5,7 @@ import uuid
 import hashlib
 import re
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 from os.path import basename
 from types import SimpleNamespace
@@ -58,6 +59,24 @@ from .windows_search_gather import parse_windows_search_gather_logs_to_csv
 from .windows_mail import parse_windows_mail_artifacts_to_csv
 from .windows_defender import parse_windows_defender_artifacts_to_csv
 from .windows_error_reporting import parse_windows_error_reporting_to_csv
+
+
+@dataclass(frozen=True)
+class GeneratedToolOutput:
+    tool_name: str
+    tool_version: str | None
+    command: list[str]
+    output_folder: Path
+    stdout_path: Path
+    stderr_path: Path
+    exit_code: int | None
+    source_scope: str
+    dry_run: bool
+    prepared_registry_logs: tuple[str, ...] = ()
+
+
+def supports_parallel_generate(tool: ToolDefinition) -> bool:
+    return tool.type in {"dotnet", "binary"}
 
 
 def read_command_output_snippets(result_path: Path, *, limit: int = 2000) -> str:
@@ -213,6 +232,58 @@ def validate_tool(
         ]
         if missing:
             raise ToolError(f"Required input path missing for {tool.name}: {missing[0]}")
+
+
+def generate_external_tool_outputs(
+    *,
+    paths: WorkspacePaths,
+    case_id: str,
+    image_id: str,
+    tool: ToolDefinition,
+    mount: Path,
+    artifacts: dict[str, Path] | None = None,
+    dry_run: bool,
+    output_namespace: str | None = None,
+) -> GeneratedToolOutput:
+    if not supports_parallel_generate(tool):
+        raise ToolError(f"{tool.name} does not support split generate/ingest execution")
+    artifact_paths = artifacts or {}
+    output = paths.outputs_dir(case_id) / image_id
+    if output_namespace:
+        output = output / output_namespace
+    output = output / tool.name
+    source_scope = _source_scope_from_output(output)
+    output.mkdir(parents=True, exist_ok=True)
+    prepared_registry_logs: list[Path] = []
+    if not dry_run and tool.name in {"RECmd", "AmcacheParser", "AppCompatCacheParser", "SBECmd"}:
+        prepared_registry_logs = prepare_registry_transaction_logs(artifact_paths)
+    command = build_tool_command(tool, mount=mount, output=output, artifacts=artifact_paths)
+    validate_tool(tool, command, mount=mount, output=output, artifacts=artifact_paths, dry_run=dry_run)
+    tool_version = detect_tool_version(tool, command, dry_run)
+    job_dir = output / "_job"
+    job_dir.mkdir(parents=True, exist_ok=True)
+    stdout_path = job_dir / "stdout.txt"
+    stderr_path = job_dir / "stderr.txt"
+    if dry_run:
+        stdout_path.write_text("DRY RUN: command not executed\n" + repr(command) + "\n")
+        stderr_path.write_text("")
+        exit_code = 0
+    else:
+        with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
+            completed = subprocess.run(command, stdout=stdout, stderr=stderr, check=False)
+        exit_code = completed.returncode
+    return GeneratedToolOutput(
+        tool_name=tool.name,
+        tool_version=tool_version,
+        command=command,
+        output_folder=output,
+        stdout_path=stdout_path,
+        stderr_path=stderr_path,
+        exit_code=exit_code,
+        source_scope=source_scope,
+        dry_run=dry_run,
+        prepared_registry_logs=tuple(str(path) for path in prepared_registry_logs),
+    )
 
 
 def prepare_recmd_transaction_logs(artifacts: dict[str, Path]) -> list[Path]:
@@ -2453,3 +2524,254 @@ def run_tool(
             rebuild_common_dialog_items(db, case_id=case_id, image_id=image_id)
         if tool.name in {"MFTECmd", "LECmd", "JLECmd", "SBECmd", "RECmd", "RegistryArtifactParser"}:
             rebuild_copied_file_indicators(db, case_id=case_id, image_id=image_id)
+
+
+def ingest_generated_tool_outputs(
+    *,
+    db: Database,
+    case_id: str,
+    image_id: str,
+    computer_id: str | None,
+    tool: ToolDefinition,
+    generated: GeneratedToolOutput,
+    accept_duplicate: bool = False,
+    rebuild_correlations: bool = True,
+    raw_image: Path | None = None,
+    offset_sectors: int | None = None,
+    mount: Path | None = None,
+) -> None:
+    job_id = str(uuid.uuid4())
+    start_time = utc_now()
+    db.create_job(
+        {
+            "id": job_id,
+            "case_id": case_id,
+            "image_id": image_id,
+            "computer_id": computer_id,
+            "source_scope": generated.source_scope,
+            "tool_name": tool.name,
+            "tool_version": generated.tool_version,
+            "command": generated.command,
+            "start_time": start_time,
+            "end_time": utc_now(),
+            "exit_code": generated.exit_code,
+            "stdout_path": generated.stdout_path,
+            "stderr_path": generated.stderr_path,
+            "output_folder": generated.output_folder,
+            "dry_run": generated.dry_run,
+        }
+    )
+    if generated.prepared_registry_logs:
+        db.log_activity(
+            case_id=case_id,
+            computer_id=computer_id,
+            image_id=image_id,
+            job_id=job_id,
+            event="registry.transaction_logs_prepared",
+            message=f"Prepared registry transaction log filenames for {tool.name}",
+            details={"tool": tool.name, "paths": list(generated.prepared_registry_logs)},
+        )
+    db.log_activity(
+        case_id=case_id,
+        computer_id=computer_id,
+        image_id=image_id,
+        job_id=job_id,
+        level="error" if generated.exit_code not in {0, None} else "info",
+        event="job.finished",
+        message=f"Finished {tool.name} with exit code {generated.exit_code}",
+        details={
+            "exit_code": generated.exit_code,
+            "stdout_path": str(generated.stdout_path),
+            "stderr_path": str(generated.stderr_path),
+            "parallel_generate": True,
+        },
+    )
+    if generated.exit_code not in {0, None}:
+        raise ToolError(
+            f"{tool.name} failed with exit code {generated.exit_code}; "
+            f"stdout={generated.stdout_path} stderr={generated.stderr_path}"
+        )
+    if generated.dry_run or not computer_id:
+        return
+    _ingest_tool_csv_outputs(
+        db=db,
+        case_id=case_id,
+        image_id=image_id,
+        computer_id=computer_id,
+        tool=tool,
+        output=generated.output_folder,
+        job_id=job_id,
+        accept_duplicate=accept_duplicate,
+        rebuild_correlations=rebuild_correlations,
+        raw_image=raw_image,
+        offset_sectors=offset_sectors,
+        mount=mount,
+    )
+
+
+def _ingest_tool_csv_outputs(
+    *,
+    db: Database,
+    case_id: str,
+    image_id: str,
+    computer_id: str,
+    tool: ToolDefinition,
+    output: Path,
+    job_id: str,
+    accept_duplicate: bool,
+    rebuild_correlations: bool,
+    raw_image: Path | None,
+    offset_sectors: int | None,
+    mount: Path | None,
+) -> None:
+    csv_files = sorted(output.glob("*.csv"))
+    stdout_path = output / "_job" / "stdout.txt"
+    stderr_path = output / "_job" / "stderr.txt"
+    if not csv_files:
+        stdout_snippet = read_command_output_snippets(stdout_path)
+        stderr_snippet = read_command_output_snippets(stderr_path)
+        unsupported_text = f"{stdout_snippet}\n{stderr_snippet}".lower()
+        platform_unsupported = "non-windows platforms not supported" in unsupported_text
+        unsupported_message = (
+            f"{tool.name} did not produce CSV files; parser reported platform unsupported"
+        )
+        if tool.name == "PrefetchParser":
+            unsupported_message += (
+                ". Windows 10/11 compressed Prefetch parsing requires a Windows-capable parser runtime."
+            )
+        elif tool.name == "SrumECmd":
+            unsupported_message += (
+                ". SrumECmd currently depends on Windows ESE libraries; parse SRUM on a Windows-capable runtime "
+                "or add a Linux ESE parser."
+            )
+        db.log_activity(
+            case_id=case_id,
+            computer_id=computer_id,
+            image_id=image_id,
+            job_id=job_id,
+            level="warning",
+            event="tool.platform_unsupported" if platform_unsupported else "tool.no_output",
+            message=unsupported_message if platform_unsupported else f"{tool.name} ran but produced no CSV files",
+            details={
+                "output_folder": str(output),
+                "stdout_path": str(stdout_path),
+                "stderr_path": str(stderr_path),
+                "stdout_snippet": stdout_snippet,
+                "stderr_snippet": stderr_snippet,
+            },
+        )
+    csv_files = sorted(output.rglob("*.csv")) if tool.name == "RECmd" else sorted(output.glob("*.csv"))
+    for output_file in csv_files:
+        output_id = str(uuid.uuid4())
+        content_sha256 = file_sha256(output_file)
+        duplicate = db.duplicate_tool_output(
+            case_id=case_id,
+            image_id=image_id,
+            tool_name=tool.name,
+            content_sha256=content_sha256,
+        )
+        if duplicate is not None and not accept_duplicate:
+            db.log_activity(
+                case_id=case_id,
+                computer_id=computer_id,
+                image_id=image_id,
+                job_id=job_id,
+                level="warning",
+                event="tool.duplicate_output_detected",
+                message=f"Duplicate {tool.name} output detected; import rejected",
+                details={
+                    "path": str(output_file),
+                    "content_sha256": content_sha256,
+                    "duplicate_output_id": duplicate["id"],
+                },
+            )
+            raise ToolError(
+                f"Duplicate output detected for {tool.name}: {output_file}. "
+                "Use --accept-duplicate to import it anyway or --replace-existing to replace prior rows."
+            )
+        if duplicate is not None and accept_duplicate:
+            db.log_activity(
+                case_id=case_id,
+                computer_id=computer_id,
+                image_id=image_id,
+                job_id=job_id,
+                level="warning",
+                event="tool.duplicate_output_accepted",
+                message=f"Duplicate {tool.name} output detected; import accepted",
+                details={
+                    "path": str(output_file),
+                    "content_sha256": content_sha256,
+                    "duplicate_output_id": duplicate["id"],
+                },
+            )
+        row_count = ingest_csv_output(
+            db=db,
+            case_id=case_id,
+            computer_id=computer_id,
+            image_id=image_id,
+            tool_output_id=output_id,
+            tool_name=tool.name,
+            path=output_file,
+            rebuild_correlations=rebuild_correlations,
+        )
+        db.insert_tool_output(
+            {
+                "id": output_id,
+                "case_id": case_id,
+                "computer_id": computer_id,
+                "image_id": image_id,
+                "job_id": job_id,
+                "tool_name": tool.name,
+                "output_type": "csv",
+                "path": output_file,
+                "content_sha256": content_sha256,
+                "row_count": row_count,
+            }
+        )
+        if tool.name == "EvtxECmd":
+            db.update_evtx_recovery_parser_counts(
+                case_id=case_id,
+                image_id=image_id,
+                tool_output_id=output_id,
+            )
+            parser_errors = parse_evtx_parser_errors(
+                read_command_output_snippets(stdout_path, limit=100000),
+                read_command_output_snippets(stderr_path, limit=100000),
+            )
+            db.update_evtx_recovery_parser_errors(
+                case_id=case_id,
+                image_id=image_id,
+                tool_output_id=output_id,
+                parser_errors=parser_errors,
+            )
+        db.log_activity(
+            case_id=case_id,
+            computer_id=computer_id,
+            image_id=image_id,
+            job_id=job_id,
+            level="warning" if row_count == 0 else "info",
+            event="tool.output_ingested",
+            message=(
+                f"{tool.name} output contained no rows"
+                if row_count == 0
+                else f"Imported {row_count} rows from {tool.name}"
+            ),
+            details={
+                "tool_output_id": output_id,
+                "path": str(output_file),
+                "row_count": row_count,
+            },
+        )
+    if tool.name == "MFTECmdI30" and raw_image is not None and offset_sectors is not None and mount is not None:
+        rebuild_ntfs_namespace_reconciliation(
+            db,
+            case_id=case_id,
+            image_id=image_id,
+            raw_image=raw_image,
+            offset_sectors=offset_sectors,
+            mount_path=mount,
+        )
+    if tool.name == "RegistryArtifactParser":
+        rebuild_common_dialog_items(db, case_id=case_id, image_id=image_id)
+    if tool.name in {"MFTECmd", "LECmd", "JLECmd", "SBECmd", "RECmd", "RegistryArtifactParser"}:
+        rebuild_copied_file_indicators(db, case_id=case_id, image_id=image_id)
