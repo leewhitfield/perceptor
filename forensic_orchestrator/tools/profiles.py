@@ -169,7 +169,7 @@ def _recovery_policy_forces_tsk(policy: str, recovery: dict | None) -> bool:
         return False
     cost = str(recovery.get("cost") or "").lower()
     noise = str(recovery.get("noise") or "").lower()
-    return cost in {"low", "medium"} and noise in {"low", "medium"}
+    return cost in {"low", "medium"} and noise == "low"
 
 
 def profile_extraction_preview(registry: ToolRegistry, profile: str) -> dict:

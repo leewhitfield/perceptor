@@ -336,7 +336,7 @@ artifacts independently. `windows-deep` includes the full EVTX profile plus SRUM
 Windows Search, and WebCache.
 Recovery profiles set `extraction_policy`. Normal profiles use mounted
 filesystem extraction for speed. `balanced` switches only low/medium-cost,
-low/medium-noise recoverable artifacts to Sleuth Kit extraction. `deep` switches
+low-noise recoverable artifacts to Sleuth Kit extraction. `deep` switches
 all artifacts that declare `recovery.deleted_files` or
 `recovery.orphaned_files` to Sleuth Kit extraction so deleted or orphaned
 directory entries can be recovered. Current recovery candidates include browser
