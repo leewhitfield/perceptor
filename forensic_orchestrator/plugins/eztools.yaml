@@ -149,6 +149,11 @@ tools:
         destination: "Windows/System32/sru"
         recursive: true
         optional: true
+        recovery:
+          deleted_files: true
+          orphaned_files: true
+          cost: medium
+          noise: low
       - name: registry_software
         source: "WINDOWS/system32/config/SOFTWARE"
         destination: "registry/SOFTWARE"
@@ -186,6 +191,11 @@ tools:
         destination: "vpn_phonebooks"
         recursive: true
         optional: true
+        recovery:
+          deleted_files: true
+          orphaned_files: true
+          cost: medium
+          noise: low
         patterns:
           - "rasphone.pbk"
         include_path_patterns:
@@ -230,6 +240,11 @@ tools:
         destination: "WindowsSearch/Applications/Windows"
         recursive: true
         optional: true
+        recovery:
+          deleted_files: true
+          orphaned_files: true
+          cost: medium
+          noise: low
     command:
       - "{executable}"
       - "-f"
@@ -252,6 +267,11 @@ tools:
         destination: "WindowsSearch/Applications/Windows"
         recursive: true
         optional: true
+        recovery:
+          deleted_files: true
+          orphaned_files: true
+          cost: medium
+          noise: low
     command:
       - internal-windows-search-ese-parser
       - "{artifact:windows_search_index}"
@@ -271,6 +291,11 @@ tools:
         destination: "WindowsSearch/Applications/Windows/GatherLogs/SystemIndex"
         recursive: true
         optional: true
+        recovery:
+          deleted_files: true
+          orphaned_files: true
+          cost: low
+          noise: low
     command:
       - internal-windows-search-gather-parser
       - "{artifact:windows_search_gather_logs}"
@@ -899,6 +924,11 @@ tools:
         recursive: true
         pattern: "*.pf"
         process_in_place: true
+        recovery:
+          deleted_files: true
+          orphaned_files: true
+          cost: low
+          noise: low
     command:
       - dotnet
       - "{executable}"
@@ -921,6 +951,11 @@ tools:
         destination: "Windows/Prefetch"
         recursive: true
         pattern: "*.pf"
+        recovery:
+          deleted_files: true
+          orphaned_files: true
+          cost: low
+          noise: low
     command:
       - internal-prefetch-parser
       - "{artifact:prefetch_files}"
@@ -977,6 +1012,11 @@ tools:
         patterns:
           - "NTUSER.DAT"
           - "UsrClass.dat"
+        recovery:
+          deleted_files: true
+          orphaned_files: true
+          cost: medium
+          noise: medium
     command:
       - internal-registry-parser
       - "{artifact:registry_system}"
@@ -1046,6 +1086,11 @@ tools:
         destination: "registry/users/ntuser"
         recursive: true
         pattern: "NTUSER.DAT"
+        recovery:
+          deleted_files: true
+          orphaned_files: true
+          cost: medium
+          noise: medium
       - name: registry_ntuser_logs
         source: "Users"
         destination: "registry/users/ntuser"
@@ -1060,6 +1105,11 @@ tools:
         destination: "registry/users/usrclass"
         recursive: true
         pattern: "UsrClass.dat"
+        recovery:
+          deleted_files: true
+          orphaned_files: true
+          cost: medium
+          noise: medium
       - name: registry_usrclass_logs
         source: "Users"
         destination: "registry/users/usrclass"
@@ -1092,6 +1142,11 @@ tools:
         source: "$Recycle.Bin"
         destination: "RecycleBin/$Recycle.Bin"
         recursive: true
+        recovery:
+          deleted_files: true
+          orphaned_files: true
+          cost: low
+          noise: low
       - name: recycle_xp
         source: "RECYCLER"
         destination: "RecycleBin/RECYCLER"
@@ -1120,6 +1175,11 @@ tools:
         source: "Users"
         destination: "browser/Firefox"
         recursive: true
+        recovery:
+          deleted_files: true
+          orphaned_files: true
+          cost: high
+          noise: low
         patterns:
           - "places.sqlite"
           - "cookies.sqlite"
@@ -1147,6 +1207,11 @@ tools:
         source: "Users"
         destination: "browser/Chromium"
         recursive: true
+        recovery:
+          deleted_files: true
+          orphaned_files: true
+          cost: high
+          noise: low
         patterns:
           - "History"
           - "Cookies"
@@ -1226,6 +1291,11 @@ tools:
         recursive: true
         process_in_place: true
         optional: true
+        recovery:
+          deleted_files: true
+          orphaned_files: true
+          cost: medium
+          noise: medium
         patterns:
           - "*"
         include_path_patterns:
@@ -1252,6 +1322,11 @@ tools:
         recursive: true
         process_in_place: true
         optional: true
+        recovery:
+          deleted_files: true
+          orphaned_files: true
+          cost: medium
+          noise: low
         patterns:
           - "RoamingCustom.dic"
         include_path_patterns:
@@ -1300,6 +1375,11 @@ tools:
         recursive: true
         process_in_place: true
         optional: true
+        recovery:
+          deleted_files: true
+          orphaned_files: true
+          cost: medium
+          noise: low
         patterns:
           - "thumbcache*.db"
           - "iconcache*.db"
@@ -1363,6 +1443,11 @@ tools:
         destination: "WebCache"
         recursive: true
         optional: true
+        recovery:
+          deleted_files: true
+          orphaned_files: true
+          cost: medium
+          noise: low
         patterns:
           - "WebCacheV*.dat"
     command:
@@ -1385,6 +1470,11 @@ tools:
         recursive: true
         process_in_place: true
         optional: true
+        recovery:
+          deleted_files: true
+          orphaned_files: true
+          cost: high
+          noise: high
         include_path_patterns:
           - "*/AppData/Local/*/User Data/*/Cache/*"
           - "*/AppData/Local/*/User Data/*/Code Cache/*"
@@ -1414,6 +1504,11 @@ tools:
         recursive: true
         process_in_place: true
         optional: true
+        recovery:
+          deleted_files: true
+          orphaned_files: true
+          cost: high
+          noise: high
         include_path_patterns:
           - "*/AppData/Local/Packages/*/AC/*/CacheStorage/*"
           - "*/AppData/Local/Packages/*/LocalCache/*/CacheStorage/*"
@@ -1437,6 +1532,11 @@ tools:
         recursive: true
         process_in_place: true
         optional: true
+        recovery:
+          deleted_files: true
+          orphaned_files: true
+          cost: high
+          noise: high
         patterns:
           - ".bash_history"
           - ".fish_history"
@@ -1529,6 +1629,11 @@ tools:
         recursive: true
         process_in_place: true
         optional: true
+        recovery:
+          deleted_files: true
+          orphaned_files: true
+          cost: high
+          noise: high
         patterns:
           - "OBJECTS.DATA"
           - "INDEX.BTR"
@@ -1568,6 +1673,11 @@ tools:
         destination: "CloudSQLite/Users"
         recursive: true
         optional: true
+        recovery:
+          deleted_files: true
+          orphaned_files: true
+          cost: high
+          noise: high
         patterns:
           - "*.db"
           - "*.sqlite"
@@ -1597,6 +1707,11 @@ tools:
         recursive: true
         process_in_place: true
         optional: true
+        recovery:
+          deleted_files: true
+          orphaned_files: true
+          cost: high
+          noise: medium
     command:
       - internal-cloud-sync-parser
       - "{artifact:cloud_sync_artifacts}"
@@ -1617,6 +1732,11 @@ tools:
         recursive: true
         process_in_place: true
         optional: true
+        recovery:
+          deleted_files: true
+          orphaned_files: true
+          cost: high
+          noise: medium
     command:
       - internal-onedrive-explorer
       - "{artifact:onedrive_profiles}"
@@ -1657,6 +1777,11 @@ tools:
         recursive: true
         process_in_place: true
         optional: true
+        recovery:
+          deleted_files: true
+          orphaned_files: true
+          cost: high
+          noise: medium
     command:
       - internal-onedrive-odl-parser
       - "{artifact:onedrive_logs}"
@@ -1676,6 +1801,11 @@ tools:
         destination: "WindowsActivities"
         recursive: true
         optional: true
+        recovery:
+          deleted_files: true
+          orphaned_files: true
+          cost: medium
+          noise: low
         patterns:
           - "ActivitiesCache.db"
           - "ActivitiesCache.db-wal"
@@ -1727,6 +1857,11 @@ tools:
         destination: "mail"
         recursive: true
         optional: true
+        recovery:
+          deleted_files: true
+          orphaned_files: true
+          cost: high
+          noise: medium
         patterns:
           - "*.pst"
           - "*.ost"
@@ -1756,6 +1891,11 @@ tools:
         recursive: true
         process_in_place: true
         optional: true
+        recovery:
+          deleted_files: true
+          orphaned_files: true
+          cost: high
+          noise: medium
         include_path_patterns:
           - "*/AppData/Local/Comms/UnistoreDB/store.vol"
           - "*/AppData/Local/Comms/Unistore/data/**/*.dat"
@@ -1779,6 +1919,11 @@ tools:
         destination: "messaging"
         recursive: true
         optional: true
+        recovery:
+          deleted_files: true
+          orphaned_files: true
+          cost: high
+          noise: high
         patterns:
           - "*.ldb"
           - "*.log"
@@ -1930,6 +2075,11 @@ tools:
         source: "Users"
         destination: "jumplists"
         recursive: true
+        recovery:
+          deleted_files: true
+          orphaned_files: true
+          cost: medium
+          noise: low
         patterns:
           - "*.automaticDestinations-ms"
           - "*.customDestinations-ms"
@@ -1955,6 +2105,11 @@ tools:
         destination: "lnk_files"
         recursive: true
         pattern: "*.lnk"
+        recovery:
+          deleted_files: true
+          orphaned_files: true
+          cost: medium
+          noise: low
         exclude_patterns:
           - "*/Start Menu/*"
     command:
@@ -2032,10 +2187,21 @@ profiles:
 
   windows-firefox-deep-recovery:
     description: Firefox browser artifacts using TSK extraction to include deleted or orphaned profile databases
-    force_tsk_artifacts:
-      - FirefoxParser:firefox_profiles
+    extraction_policy: deep
     tools:
       - FirefoxParser
+
+  windows-browser-deep-recovery:
+    description: Browser artifacts using TSK extraction for deleted or orphaned profile databases, cache, LNK, and Jump List evidence
+    extraction_policy: deep
+    tools:
+      - FirefoxParser
+      - ChromiumParser
+      - WebCacheParser
+      - BrowserCacheParser
+      - PackageCacheParser
+      - LECmd
+      - JLECmd
 
   windows-fast-triage:
     description: Fast Windows triage without full event log or mailbox processing
@@ -2110,6 +2276,27 @@ profiles:
       - WindowsMailParser
       - MessagingParser
 
+  windows-cloud-email-deep-recovery:
+    description: Cloud sync, browser, search, mailbox, Windows Mail, and messaging artifacts with deleted or orphaned recovery enabled
+    extraction_policy: deep
+    tools:
+      - SIDR
+      - WindowsSearchESEParser
+      - WindowsSearchGatherParser
+      - FirefoxParser
+      - ChromiumParser
+      - WebCacheParser
+      - BrowserCacheParser
+      - PackageCacheParser
+      - PackageArtifactsParser
+      - SQLECmd
+      - CloudSyncParser
+      - OneDriveExplorer
+      - OneDriveOdlParser
+      - MailboxParser
+      - WindowsMailParser
+      - MessagingParser
+
   windows-no-evtx:
     description: Windows forensic triage without event log parsing
     tools:
@@ -2148,6 +2335,44 @@ profiles:
 
   windows-basic-evtx:
     description: Windows forensic triage with selected high-value event logs
+    tools:
+      - MFTECmd
+      - MFTECmdUSN
+      - NTFSParseLogFile
+      - MFTECmdI30
+      - SAMParser
+      - RegistryParser
+      - RECmd
+      - RegistryArtifactParser
+      - SetupApiParser
+      - SrumParser
+      - UalParser
+      - AmcacheParser
+      - AppCompatCacheParser
+      - SBECmd
+      - EvtxECmdTriage
+      - PrefetchParser
+      - RecycleParser
+      - FirefoxParser
+      - ChromiumParser
+      - OfficeBackstageParser
+      - UserDictionaryParser
+      - ZoneIdentifierParser
+      - ThumbcacheParser
+      - WebCacheParser
+      - PackageCacheParser
+      - PackageArtifactsParser
+      - TelemetryParser
+      - MailboxParser
+      - WindowsMailParser
+      - MessagingParser
+      - EtlParser
+      - JLECmd
+      - LECmd
+
+  windows-basic-evtx-deep-recovery:
+    description: Windows forensic triage with selected high-value event logs and deleted or orphaned recovery for high-value artifacts
+    extraction_policy: deep
     tools:
       - MFTECmd
       - MFTECmdUSN

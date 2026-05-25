@@ -40,6 +40,7 @@ class ToolRegistry:
                         allow_partial=bool(artifact.get("allow_partial", False)),
                         use_tsk=bool(artifact.get("use_tsk", False)),
                         optional=bool(artifact.get("optional", False)),
+                        recovery=dict(artifact.get("recovery") or {}),
                     )
                     for artifact in raw.get("artifacts", [])
                 ]

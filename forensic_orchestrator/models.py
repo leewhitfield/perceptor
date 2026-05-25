@@ -66,6 +66,7 @@ class ArtifactDefinition:
     allow_partial: bool = False
     use_tsk: bool = False
     optional: bool = False
+    recovery: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)

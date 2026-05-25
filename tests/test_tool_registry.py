@@ -621,7 +621,24 @@ def test_firefox_deep_recovery_profile_forces_tsk_extraction():
     assert [tool.name for tool in tools] == ["FirefoxParser"]
     assert tools[0].artifacts[0].name == "firefox_profiles"
     assert tools[0].artifacts[0].use_tsk is True
+    assert tools[0].artifacts[0].recovery["deleted_files"] is True
     assert registry.get_tool("FirefoxParser").artifacts[0].use_tsk is False
+
+
+def test_deep_recovery_policy_applies_to_recoverable_artifacts_only():
+    registry = ToolRegistry.from_files([default_plugin_path()])
+    profile_config = registry.profiles["windows-browser-deep-recovery"]
+    tools = profiles._apply_profile_artifact_overrides(registry.profile_tools("windows-browser-deep-recovery"), profile_config)
+    artifacts = {
+        f"{tool.name}:{artifact.name}": artifact
+        for tool in tools
+        for artifact in tool.artifacts
+    }
+
+    assert artifacts["ChromiumParser:chromium_profiles"].use_tsk is True
+    assert artifacts["WebCacheParser:webcache"].use_tsk is True
+    assert artifacts["LECmd:lnk_files"].use_tsk is True
+    assert registry.get_tool("ChromiumParser").artifacts[0].use_tsk is False
 
 
 def test_internal_chromium_parser_extracts_profile_sqlite_files():

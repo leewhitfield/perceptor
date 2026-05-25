@@ -135,7 +135,11 @@ def _apply_profile_artifact_overrides(tools: list, profile_config: dict | None) 
     if not profile_config:
         return tools
     force_tsk_artifacts = set(str(item) for item in profile_config.get("force_tsk_artifacts", []))
-    if not force_tsk_artifacts:
+    extraction_policy = str(
+        profile_config.get("extraction_policy") or profile_config.get("recovery_policy") or "fast"
+    ).lower()
+    policy_uses_deleted_recovery = extraction_policy in {"deep", "exhaustive", "deleted", "recovery"}
+    if not force_tsk_artifacts and not policy_uses_deleted_recovery:
         return tools
     scoped = []
     for tool in tools:
@@ -143,7 +147,11 @@ def _apply_profile_artifact_overrides(tools: list, profile_config: dict | None) 
         changed = False
         for artifact in tool.artifacts:
             artifact_keys = {artifact.name, f"{tool.name}:{artifact.name}"}
-            if force_tsk_artifacts.intersection(artifact_keys):
+            recovery = artifact.recovery or {}
+            policy_force_tsk = policy_uses_deleted_recovery and (
+                bool(recovery.get("deleted_files")) or bool(recovery.get("orphaned_files"))
+            )
+            if force_tsk_artifacts.intersection(artifact_keys) or policy_force_tsk:
                 artifacts.append(replace(artifact, use_tsk=True))
                 changed = True
             else:

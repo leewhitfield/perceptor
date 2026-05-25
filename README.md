@@ -302,6 +302,9 @@ Run one of the Windows profiles:
 ```bash
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator run --case CASE_ID --image IMAGE_ID --profile windows-no-evtx
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator run --case CASE_ID --image IMAGE_ID --profile windows-basic-evtx
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator run --case CASE_ID --image IMAGE_ID --profile windows-basic-evtx-deep-recovery
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator run --case CASE_ID --image IMAGE_ID --profile windows-browser-deep-recovery
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator run --case CASE_ID --image IMAGE_ID --profile windows-cloud-email-deep-recovery
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator run --case CASE_ID --image IMAGE_ID --profile windows-full-evtx
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator run --case CASE_ID --image IMAGE_ID --profile windows-srum
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator run --case CASE_ID --image IMAGE_ID --profile windows-search
@@ -329,6 +332,15 @@ parsed rows are promoted into the main case DuckDB. See `docs/vsc-sidecar.md`.
 `windows-srum`, `windows-search`, and `windows-webcache` are useful for testing those larger
 artifacts independently. `windows-deep` includes the full EVTX profile plus SRUM,
 Windows Search, and WebCache.
+Deep recovery profiles set `extraction_policy: deep`. Normal profiles use mounted
+filesystem extraction for speed; deep recovery profiles switch artifacts that
+declare `recovery.deleted_files` or `recovery.orphaned_files` to Sleuth Kit
+extraction so deleted or orphaned directory entries can be recovered. Current
+deep recovery candidates include browser databases and caches, LNK and Jump List
+execution artifacts, Prefetch, Recycle Bin, Windows Search, SRUM, WebCache,
+ActivitiesCache, user registry hives, cloud sync artifacts, mail, messaging,
+and selected application databases. Expect these profiles to run slower and
+produce noisier artifact sets.
 `windows-full` also carries `coverage_categories` metadata in the tool profile.
 Those categories mirror the SANS FOR500 poster groupings for coverage review
 only; they do not remove tools or change the profile execution order.
@@ -1126,7 +1138,10 @@ files inside deleted folders in `recycle_children`.
 
 The built-in `FirefoxParser` extracts `places.sqlite` and `cookies.sqlite`
 from profiles anywhere in the image, then writes normalized history and cookie
-CSV outputs before importing high-value fields into SQLite.
+CSV outputs before importing high-value fields into SQLite. Default Firefox
+extraction uses the mounted filesystem. Use `windows-firefox-deep-recovery` or
+another deep recovery profile when deleted or orphaned Firefox profile databases
+are worth the additional Sleuth Kit inventory cost.
 
 ## Chromium Browsers
 
@@ -1252,8 +1267,9 @@ test clusters with self-signed TLS, pass `--insecure`.
   `memory profile --workers N` and `memory crash-dumps --workers N`. Memory
   support files and crash dumps are scanned concurrently into isolated output
   folders, then tool-output registration and normalized database ingest are
-  serialized. Extend this same model to larger extraction profiles next,
-  followed by one timeline/correlation rebuild at the end.
+  serialized. The same split-generate/serial-ingest model is also used for
+  external tools and internal ETL parsing in parallel extraction profiles,
+  followed by serialized database ingest and downstream rebuilds.
 
 ## Passwordless Sudo for Mounts
 
