@@ -10583,7 +10583,7 @@ def timeline_report(
     contains: str | None = None,
 ) -> dict[str, Any]:
     db.get_case(case_id)
-    where = ["timeline_events.case_id = ?", "timeline_events.dedupe_status != 'duplicate'"]
+    where = ["timeline_events.case_id = ?", "(timeline_events.dedupe_status IS NULL OR timeline_events.dedupe_status != 'duplicate')"]
     params: list[Any] = [case_id]
     if event_type:
         where.append("timeline_events.event_type = ?")
@@ -10595,7 +10595,9 @@ def timeline_report(
         where.append("(timeline_events.description LIKE ? OR timeline_events.details_json LIKE ?)")
         params.extend([f"%{contains}%", f"%{contains}%"])
     params.append(limit)
-    rows = db.conn.execute(
+    rows = [
+        dict(row)
+        for row in db.conn.execute(
         f"""
         SELECT timeline_events.*, computers.label AS computer_label, images.path AS image_path,
                (
@@ -10611,8 +10613,83 @@ def timeline_report(
         LIMIT ?
         """,
         params,
-    ).fetchall()
-    return {"case_id": case_id, "events": _rows_with_details(rows), "total_returned": len(rows)}
+        ).fetchall()
+    ]
+    if not rows and _duckdb_table_available(db, case_id, "timeline_events"):
+        duck_where = [clause.replace("timeline_events.", "") for clause in where]
+        rows = _query_report_rows(
+            db,
+            case_id,
+            "timeline_events",
+            f"""
+            SELECT *, 0 AS source_count
+            FROM timeline_events
+            WHERE {' AND '.join(duck_where)}
+            ORDER BY timestamp_utc
+            LIMIT ?
+            """,
+            params,
+        )
+    events = _rows_with_details(rows)
+    for event in events:
+        _annotate_timeline_source(event)
+    return {"case_id": case_id, "events": events, "total_returned": len(rows)}
+
+
+def _annotate_timeline_source(event: dict[str, Any]) -> None:
+    details = event.get("details") if isinstance(event.get("details"), dict) else {}
+    source_scope = str(details.get("source_scope") or "").strip()
+    source_origin = str(details.get("source_origin") or "").strip()
+    if not source_scope:
+        source_scope = _timeline_source_scope_from_event(event, details)
+        details["source_scope"] = source_scope
+    if not source_origin:
+        source_origin = _timeline_source_origin(source_scope)
+        details["source_origin"] = source_origin
+    label = _timeline_source_label(source_scope, source_origin)
+    details["source_label"] = label
+    event["details"] = details
+    event["source_scope"] = source_scope
+    event["source_origin"] = source_origin
+    event["source_label"] = label
+
+
+def _timeline_source_scope_from_event(event: dict[str, Any], details: dict[str, Any]) -> str:
+    table = str(event.get("source_table") or "")
+    if table == "memory_string_hits":
+        return str(details.get("source_artifact_type") or "memory")
+    text = " ".join(
+        str(details.get(key) or event.get(key) or "")
+        for key in ("source_path", "scanned_path", "decompressed_path", "source_file", "description")
+    ).lower()
+    if "pagefile.sys" in text:
+        return "pagefile"
+    if "hiberfil.sys" in text:
+        return "hiberfil"
+    if "swapfile.sys" in text:
+        return "swapfile"
+    if text.endswith((".dmp", ".mdmp", ".dump")) or "crashdumps" in text or "minidump" in text:
+        return "crash_dump"
+    return "live"
+
+
+def _timeline_source_origin(source_scope: str) -> str:
+    lowered = str(source_scope or "").lower()
+    if lowered in {"memory", "pagefile", "hiberfil", "swapfile", "crash_dump", "process_dump", "full_memory_dump"}:
+        return "memory"
+    if lowered in {"windows.old", "windows_old", "vsc"}:
+        return lowered
+    return "disk"
+
+
+def _timeline_source_label(source_scope: str, source_origin: str) -> str:
+    scope = str(source_scope or "live")
+    origin = str(source_origin or "disk")
+    if origin == "memory":
+        return scope if scope != "memory" else "memory"
+    if scope == "live":
+        return "live"
+    return f"{origin}:{scope}"
 
 
 def timeline_sources_report(
@@ -17126,6 +17203,8 @@ def case_review_report(db: Database, case_id: str, *, limit: int = 25) -> dict[s
     issues = issues_report(db, case_id, limit=limit)
     evtx = evtx_recovery_report(db, case_id, limit=limit)
     recovery = recovery_coverage_report(db, case_id, limit=max(limit, 100))
+    credentials = memory_credentials_report(db, case_id, limit=limit)
+    crash = crash_dump_analysis_report(db, case_id, limit=limit)
     tool_runs = tool_run_summary_report(db, case_id, limit=limit)
     activity = activity_summary_report(db, case_id, limit=limit)
     return {
@@ -17146,12 +17225,16 @@ def case_review_report(db: Database, case_id: str, *, limit: int = 25) -> dict[s
             "memory_artifact_count": memory["summary"]["artifact_count"],
             "recovery_tsk_artifacts": recovery["summary"]["tsk_recovery_artifacts"],
             "recovery_limited_count": recovery["summary"]["limited_count"],
+            "memory_credential_leads": credentials["summary"]["credential_hit_count"],
+            "crash_dump_count": crash["summary"]["dump_count"],
         },
         "evidence_gaps_summary": gaps["summary"],
         "top_evidence_gaps": gaps["gaps"][:limit],
         "memory_artifacts_summary": memory["summary"],
         "recovery_coverage_summary": recovery["summary"],
         "recovery_coverage_by_artifact": recovery["by_artifact"][:limit],
+        "memory_credentials_summary": credentials["summary"],
+        "crash_dump_analysis_summary": crash["summary"],
         "memory_artifacts": memory["artifacts"][:limit],
         "evidence_strength_guide": evidence_strength_guide(),
         "artifact_completeness_summary": completeness["summary"],
@@ -17355,6 +17438,195 @@ def artifact_processing_status_report(db: Database, case_id: str, *, limit: int 
         "items": rows[:limit],
         "total_returned": min(len(rows), limit),
     }
+
+
+def processing_decision_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str, Any]:
+    db.get_case(case_id)
+    timings = process_timing_report(db, case_id, limit=max(limit * 5, 500))
+    recovery = recovery_coverage_report(db, case_id, limit=max(limit * 5, 500))
+    memory = memory_artifacts_report(db, case_id, limit=max(limit * 5, 500))
+    credentials = memory_credentials_report(db, case_id, limit=limit)
+    crash = crash_dump_analysis_report(db, case_id, limit=limit)
+    issues = issues_report(db, case_id, limit=limit)
+    decisions: list[dict[str, Any]] = []
+    for row in timings.get("timings") or []:
+        status = str(row.get("status") or "")
+        details = row.get("details") if isinstance(row.get("details"), dict) else {}
+        if row.get("scope") == "profile":
+            decisions.append(
+                {
+                    "severity": "info" if status == "completed" else "high",
+                    "decision_type": "profile",
+                    "status": status,
+                    "item": row.get("name"),
+                    "summary": f"Profile {row.get('name')} {status}.",
+                    "followup": "Review failed or running profile state before relying on downstream reports." if status != "completed" else "",
+                    "details": {"duration_seconds": row.get("duration_seconds"), **details},
+                }
+            )
+        elif status in {"failed", "source_not_present", "partial_limited"}:
+            decisions.append(
+                {
+                    "severity": "high" if status == "failed" else "medium",
+                    "decision_type": "processing_status",
+                    "status": status,
+                    "item": row.get("artifact_name") or row.get("tool_name") or row.get("name"),
+                    "summary": _processing_decision_summary(row, details),
+                    "followup": _processing_decision_followup(status, details),
+                    "details": {"duration_seconds": row.get("duration_seconds"), **details},
+                }
+            )
+    for item in recovery.get("artifacts") or []:
+        if item.get("recovery_limited"):
+            decisions.append(
+                {
+                    "severity": "medium",
+                    "decision_type": "recovery_limit",
+                    "status": item.get("status"),
+                    "item": item.get("artifact_name"),
+                    "summary": f"Recovery for {item.get('artifact_name')} stopped at {item.get('limit_reason')}.",
+                    "followup": "Run a narrower deep profile or raise the guardrail only if this artifact is material.",
+                    "details": item,
+                }
+            )
+    unprocessed_memory = [
+        row for row in memory.get("artifacts") or []
+        if row.get("processed_status") != "processed"
+    ]
+    for row in unprocessed_memory[:limit]:
+        decisions.append(
+            {
+                "severity": "medium" if row.get("artifact_type") in {"pagefile", "hiberfil", "swapfile"} else "low",
+                "decision_type": "memory_followup",
+                "status": row.get("processed_status"),
+                "item": row.get("path"),
+                "summary": f"{row.get('artifact_type')} is available but not processed.",
+                "followup": "Run memory profile or crash-dumps processing when memory leads are in scope.",
+                "details": row,
+            }
+        )
+    if (credentials.get("summary") or {}).get("likely_usable_count") or (credentials.get("summary") or {}).get("possible_secret_count"):
+        decisions.append(
+            {
+                "severity": "high",
+                "decision_type": "credential_review",
+                "status": "needs_review",
+                "item": "memory_credentials",
+                "summary": "Memory credential-like strings require examiner review.",
+                "followup": "Run report memory-credentials with controlled reveal only if validation is authorized.",
+                "details": credentials.get("summary"),
+            }
+        )
+    if (crash.get("summary") or {}).get("dump_count"):
+        decisions.append(
+            {
+                "severity": "low",
+                "decision_type": "crash_dump_review",
+                "status": "available",
+                "item": "crash_dumps",
+                "summary": "Crash or process dumps are available for memory-style review.",
+                "followup": "Review crash-dump-analysis and correlate dump strings with WER/process context.",
+                "details": crash.get("summary"),
+            }
+        )
+    for issue in issues.get("issues") or []:
+        if issue.get("level") in {"warning", "error"}:
+            decisions.append(
+                {
+                    "severity": "high" if issue.get("level") == "error" else "medium",
+                    "decision_type": "issue",
+                    "status": issue.get("level"),
+                    "item": issue.get("event"),
+                    "summary": issue.get("message"),
+                    "followup": "Review activity log details and rerun or document as a limitation.",
+                    "details": issue,
+                }
+            )
+    decisions = _dedupe_processing_decisions(decisions)
+    decisions.sort(key=lambda row: (_severity_rank(row.get("severity")), str(row.get("decision_type") or ""), str(row.get("item") or "")))
+    return {
+        "case_id": case_id,
+        "summary": {
+            "decision_count": len(decisions),
+            "severity_counts": _count_by_key(decisions, "severity"),
+            "decision_type_counts": _count_by_key(decisions, "decision_type"),
+            "recovery_limited_count": (recovery.get("summary") or {}).get("limited_count", 0),
+            "unprocessed_memory_artifacts": len(unprocessed_memory),
+            "credential_lead_count": (credentials.get("summary") or {}).get("credential_hit_count", 0),
+            "crash_dump_count": (crash.get("summary") or {}).get("dump_count", 0),
+        },
+        "decisions": decisions[:limit],
+        "inputs": {
+            "recovery_coverage": recovery.get("summary"),
+            "memory_artifacts": memory.get("summary"),
+            "memory_credentials": credentials.get("summary"),
+            "crash_dump_analysis": crash.get("summary"),
+        },
+        "total_returned": min(len(decisions), limit),
+    }
+
+
+def processing_decision_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    lines = [
+        "# Processing Decision Report",
+        "",
+        f"Case: `{report.get('case_id') or ''}`",
+        "",
+        "## Summary",
+        "",
+        f"- Decisions: `{summary.get('decision_count', 0)}`",
+        f"- Recovery limited artifacts: `{summary.get('recovery_limited_count', 0)}`",
+        f"- Unprocessed memory artifacts: `{summary.get('unprocessed_memory_artifacts', 0)}`",
+        f"- Credential leads: `{summary.get('credential_lead_count', 0)}`",
+        f"- Crash dumps: `{summary.get('crash_dump_count', 0)}`",
+        "",
+        "## Decisions",
+        "",
+    ]
+    rows = report.get("decisions") if isinstance(report.get("decisions"), list) else []
+    if not rows:
+        lines.append("- No processing decisions or follow-ups were identified.")
+    for row in rows:
+        lines.append(
+            f"- `{row.get('severity')}` `{row.get('decision_type')}` `{row.get('status')}` "
+            f"{row.get('item') or ''}: {row.get('summary') or ''}"
+        )
+        if row.get("followup"):
+            lines.append(f"  - follow-up: {row.get('followup')}")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _processing_decision_summary(row: dict[str, Any], details: dict[str, Any]) -> str:
+    status = row.get("status")
+    name = row.get("artifact_name") or row.get("tool_name") or row.get("name")
+    if status == "partial_limited":
+        return f"{name} stopped at recovery limit {details.get('limit_reason') or 'unspecified'}."
+    if status == "source_not_present":
+        return f"{name} source was not present."
+    return f"{name} {status}: {details.get('error') or 'review process timing details'}."
+
+
+def _processing_decision_followup(status: str, details: dict[str, Any]) -> str:
+    if status == "partial_limited":
+        return "Accept as partial, narrow the artifact scope, or raise the limit with analyst approval."
+    if status == "source_not_present":
+        return "Document absence when expected; otherwise no action required."
+    if status == "failed":
+        return "Review stderr/details and rerun after fixing the parser or source issue."
+    return ""
+
+
+def _dedupe_processing_decisions(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[tuple[str, str, str]] = set()
+    output: list[dict[str, Any]] = []
+    for row in rows:
+        key = (str(row.get("decision_type") or ""), str(row.get("status") or ""), str(row.get("item") or ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(row)
+    return output
 
 
 def _tool_output_family(tool_name: Any) -> str:

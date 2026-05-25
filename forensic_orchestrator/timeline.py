@@ -60,6 +60,11 @@ def _base(row: dict[str, Any], event_type: str, raw_timestamp: str | None, descr
     timestamp_utc = normalize_timestamp(raw_timestamp)
     if timestamp_utc is None:
         return None
+    details = dict(details or {})
+    source_scope = _source_scope(row)
+    source_origin = _source_origin(row, source_scope)
+    details.setdefault("source_scope", source_scope)
+    details.setdefault("source_origin", source_origin)
     return {
         "id": str(uuid.uuid4()),
         "case_id": row["case_id"],
@@ -75,6 +80,37 @@ def _base(row: dict[str, Any], event_type: str, raw_timestamp: str | None, descr
         "description": description,
         "details": details,
     }
+
+
+def _source_scope(row: dict[str, Any]) -> str:
+    if row.get("tool_name") == "MemoryStringScanner":
+        artifact_type = str(row.get("source_artifact_type") or "memory").strip().lower()
+        return artifact_type or "memory"
+    value = str(row.get("source_scope") or "").strip()
+    if value:
+        return value
+    source_path = " ".join(str(row.get(key) or "") for key in ("source_path", "source_file", "original_path"))
+    lowered = source_path.lower()
+    if "pagefile.sys" in lowered:
+        return "pagefile"
+    if "hiberfil.sys" in lowered:
+        return "hiberfil"
+    if "swapfile.sys" in lowered:
+        return "swapfile"
+    if lowered.endswith((".dmp", ".mdmp", ".dump")) or "crashdumps" in lowered or "minidump" in lowered:
+        return "crash_dump"
+    return "live"
+
+
+def _source_origin(row: dict[str, Any], source_scope: str) -> str:
+    if row.get("tool_name") == "MemoryStringScanner":
+        return "memory"
+    lowered = str(source_scope or "").lower()
+    if lowered in {"pagefile", "hiberfil", "swapfile", "crash_dump", "process_dump", "full_memory_dump", "memory"}:
+        return "memory"
+    if lowered in {"windows.old", "windows_old", "vsc"}:
+        return lowered
+    return "disk"
 
 
 def _source_table(row: dict[str, Any]) -> str:

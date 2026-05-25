@@ -77,6 +77,8 @@ from forensic_orchestrator.reports import (
     memory_credentials_report,
     memory_disk_correlations_markdown,
     memory_disk_correlations_report,
+    processing_decision_markdown,
+    processing_decision_report,
     messaging_artifacts_report,
     mft_report,
     office_trust_report,
@@ -126,6 +128,7 @@ from forensic_orchestrator.reports import (
     vpn_local_activity_report,
     vpn_session_evidence_report,
     tool_run_summary_report,
+    timeline_report,
     timeline_review_report,
     taskbar_feature_usage_report,
     taskbar_pins_report,
@@ -297,6 +300,114 @@ def test_memory_artifacts_report_inventories_mounted_files(tmp_path):
     pagefile = next(row for row in report["artifacts"] if row["artifact_type"] == "pagefile")
     assert pagefile["processed_status"] == "processed"
     assert "Memory Artifact Inventory" in memory_artifacts_markdown(report)
+
+
+def test_timeline_report_adds_memory_source_labels(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    db.insert_timeline_events(
+        [
+            {
+                "id": "event-1",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "output-1",
+                "source_tool": "MemoryStringScanner",
+                "source_table": "memory_string_hits",
+                "source_row_id": "mem-1",
+                "event_type": "memory_string_hit",
+                "raw_timestamp": "2026-05-24T00:00:00Z",
+                "timestamp_utc": "2026-05-24T00:00:00+00:00",
+                "description": "Memory pagefile string hit",
+                "details": {"source_artifact_type": "pagefile", "source_path": "/pagefile.sys"},
+            }
+        ]
+    )
+
+    report = timeline_report(db, case.id)
+
+    assert report["events"][0]["source_scope"] == "pagefile"
+    assert report["events"][0]["source_origin"] == "memory"
+    assert report["events"][0]["source_label"] == "pagefile"
+
+
+def test_processing_decision_report_rolls_up_limits_memory_and_credentials(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    timing_id = db.start_process_timing(
+        case_id=case.id,
+        computer_id="computer-1",
+        image_id="image-1",
+        scope="artifact",
+        phase="extract",
+        name="office_backstage",
+        artifact_name="office_backstage",
+        details={
+            "method": "tsk",
+            "recovery": {"deleted_files": True, "orphaned_files": True},
+        },
+    )
+    db.finish_process_timing(
+        timing_id,
+        status="partial_limited",
+        details={"count": 6000, "extracted_count": 5000, "recovery_limited": True, "limit_reason": "max_files"},
+    )
+    volume = case.root / "mounts" / "volumes" / "part-001"
+    volume.mkdir(parents=True)
+    (volume / "pagefile.sys").write_bytes(b"token=abcdef123456")
+    db.insert_tool_output(
+        {
+            "id": "memory-output",
+            "case_id": case.id,
+            "computer_id": "computer-1",
+            "image_id": "image-1",
+            "job_id": None,
+            "tool_name": "MemoryStringScanner",
+            "output_type": "csv",
+            "path": tmp_path / "MemoryStringScanner.csv",
+            "row_count": 1,
+        }
+    )
+    db.insert_memory_string_hits(
+        [
+            {
+                "id": "mem-1",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "memory-output",
+                "tool_name": "MemoryStringScanner",
+                "source_csv": str(tmp_path / "MemoryStringScanner.csv"),
+                "row_number": 1,
+                "source_artifact_type": "pagefile",
+                "source_path": str(volume / "pagefile.sys"),
+                "scanned_path": str(volume / "pagefile.sys"),
+                "scanner": "strings",
+                "encoding": "utf-8",
+                "hit_category": "credentials",
+                "matched_term": "token",
+                "string_value": "token=abcdef123456",
+                "string_sha256": "sha1",
+                "string_length": 12,
+                "offset": "1",
+                "context_hint": "",
+            }
+        ]
+    )
+
+    report = processing_decision_report(db, case.id)
+    markdown = processing_decision_markdown(report)
+
+    assert report["summary"]["recovery_limited_count"] == 1
+    assert report["summary"]["credential_lead_count"] == 1
+    assert any(row["decision_type"] == "recovery_limit" for row in report["decisions"])
+    assert any(row["decision_type"] == "credential_review" for row in report["decisions"])
+    assert "Processing Decision Report" in markdown
 
 
 def test_crash_dump_analysis_report_combines_dump_inventory_wer_and_strings(tmp_path):

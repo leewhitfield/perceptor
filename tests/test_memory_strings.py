@@ -101,6 +101,8 @@ def test_memory_string_hits_emit_lead_timeline_events():
     assert len(events) == 1
     assert events[0]["source_table"] == "memory_string_hits"
     assert events[0]["event_type"] == "memory_string_hit"
+    assert events[0]["details"]["source_scope"] == "pagefile"
+    assert events[0]["details"]["source_origin"] == "memory"
     assert events[0]["details"]["evidence_strength"] == "lead"
     assert events[0]["details"]["caveat"] == "Memory string timeline timestamp is import time, not occurrence time."
 

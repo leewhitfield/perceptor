@@ -920,6 +920,9 @@ The report commands are intentionally thin JSON views over SQLite:
 - `report case-review`: case-level review summary for copied files, copied USB
   files, USB devices, parser warnings/errors, EVTX recovery, recovery coverage,
   memory artifacts, and tool status.
+- `report processing-decisions`: handoff-oriented processing summary for
+  profiles, failed/limited/skipped artifacts, unprocessed memory support files,
+  credential leads, crash dumps, and follow-up recommendations.
 - `report evidence-gaps`: consolidated evidence limitations from parser status,
   failed jobs, extraction caveats, skipped artifacts, partial EVTX recovery,
   OpenSearch write failures, and memory artifacts awaiting analysis.
@@ -936,6 +939,9 @@ The report commands are intentionally thin JSON views over SQLite:
   files for targeted strings using `bstrings` when available, falling back to
   `strings`. It tries supported hiberfil decompression first and stores hits in
   `memory_string_hits`.
+- `report timeline`: unified timeline rows include `source_scope`,
+  `source_origin`, and `source_label` annotations so memory/pagefile/hiberfil/
+  swapfile/crash dump leads are visually distinct from live disk artifacts.
   Set `BSTRINGS_BIN` when `bstrings` is installed outside `PATH`; the default
   local EZ-tools location `/home/lee/tools/bstrings/bstrings.dll` is also
   checked. For hibernation decompression, the scanner checks `HIBR2BIN_BIN`,

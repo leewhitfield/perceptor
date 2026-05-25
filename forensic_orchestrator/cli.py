@@ -157,6 +157,8 @@ from .reports import (
     persistence_report,
     process_timing_markdown,
     process_timing_report,
+    processing_decision_markdown,
+    processing_decision_report,
     program_provenance_markdown,
     program_provenance_report,
     recycle_report,
@@ -365,6 +367,7 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
         ("crash-dump-analysis", "md", "Crash dump analysis", crash_dump_analysis_markdown(crash_dump_analysis_report(db, case_id, limit=limit))),
         ("suspicious-executions", "md", "Suspicious executions", suspicious_executions_markdown(suspicious_executions_report(db, case_id, limit=limit))),
         ("artifact-processing-status", "json", "Artifact processing status", artifact_processing_status_report(db, case_id, limit=limit)),
+        ("processing-decisions", "md", "Processing decisions", processing_decision_markdown(processing_decision_report(db, case_id, limit=limit))),
         ("browser-activity", "json", "Browser activity", browser_activity_report(db, case_id, limit=limit, memory_disk_report=memory_disk)),
         ("cloud-artifacts", "json", "Cloud artifacts", cloud_artifacts_report(db, case_id, limit=limit, memory_disk_report=memory_disk)),
         ("email-artifacts", "json", "Email artifacts", email_artifacts_report(db, case_id, limit=limit, memory_disk_report=memory_disk)),
@@ -1972,6 +1975,11 @@ def build_parser() -> argparse.ArgumentParser:
     report_artifact_processing.add_argument("--limit", type=int, default=250)
     report_artifact_processing.add_argument("--format", choices=["json", "table", "csv"], default="json")
     report_artifact_processing.add_argument("--output")
+    report_processing_decisions = report_sub.add_parser("processing-decisions")
+    report_processing_decisions.add_argument("--case", required=True, dest="case_id")
+    report_processing_decisions.add_argument("--limit", type=int, default=100)
+    report_processing_decisions.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
+    report_processing_decisions.add_argument("--output")
     report_evidence_gaps = report_sub.add_parser("evidence-gaps")
     report_evidence_gaps.add_argument("--case", required=True, dest="case_id")
     report_evidence_gaps.add_argument("--limit", type=int, default=100)
@@ -3167,6 +3175,21 @@ def run(args: argparse.Namespace) -> int:
             )
             return 0
 
+        if args.resource == "report" and args.action == "processing-decisions":
+            report = processing_decision_report(db, args.case_id, limit=args.limit)
+            if args.format == "md":
+                write_text_output(processing_decision_markdown(report), args.output)
+            else:
+                write_report_output(
+                    report,
+                    report["decisions"],
+                    args.format,
+                    args.output,
+                    title=f"Processing decisions for case {args.case_id}",
+                    columns=["severity", "decision_type", "status", "item", "summary", "followup"],
+                )
+            return 0
+
         if args.resource == "report" and args.action == "specs":
             specs = list_report_specs(plugin_paths=config.plugin_paths)
             rows = [
@@ -3852,7 +3875,7 @@ def run(args: argparse.Namespace) -> int:
                     args.format,
                     args.output,
                     title=f"Memory artifacts for case {args.case_id}",
-                    columns=["artifact_type", "path", "size_bytes", "source", "processed_status", "notes"],
+                    columns=["artifact_type", "path", "size_bytes", "source", "processed_status", "hiberfil_status", "notes"],
                 )
             return 0
 
