@@ -27,6 +27,7 @@ from .mounting.vsc_search import run_vsc_windows_search_scan
 from .mounting.vsc_file_history import build_vsc_file_history_report
 from .mounting.vsc_profile import VSC_PROFILES, run_vsc_profile_scan
 from .paths import WorkspacePaths
+from .processing_scheduler import ProcessingTask, run_processing_tasks
 from .report_paths import sanitize_report_paths, sanitize_report_text
 from .reports import (
     accounts_report,
@@ -400,11 +401,13 @@ def run_memory_processing_profile(
     image_id: str | None = None,
     min_length: int = 6,
     include_crash_dumps: bool = True,
+    workers: int = 1,
 ) -> dict[str, object]:
     artifacts = memory_artifacts_report(db, case_id, limit=5000).get("artifacts") or []
     scans: list[dict[str, object]] = []
     output_base = paths.case_dir(case_id) / "supplemental" / "memory-profile" / str(uuid.uuid4())
     total_imported = 0
+    scan_tasks: list[ProcessingTask] = []
     for index, artifact in enumerate(artifacts, 1):
         artifact_type = str(artifact.get("artifact_type") or "")
         if artifact_type in {"crash_dump", "process_dump", "full_memory_dump"} and not include_crash_dumps:
@@ -413,6 +416,23 @@ def run_memory_processing_profile(
         if not source.exists() or not source.is_file():
             scans.append({"artifact_path": artifact.get("path"), "artifact_type": artifact_type, "status": "skipped", "reason": "No accessible file path."})
             continue
+        task_output_dir = output_base / f"{index:04d}"
+        scan_tasks.append(
+            ProcessingTask(
+                name=f"memory-profile:{index}",
+                payload={"artifact": artifact, "artifact_type": artifact_type, "source": source},
+                worker=lambda source=source, task_output_dir=task_output_dir: scan_memory_strings_to_csv(
+                    source,
+                    task_output_dir,
+                    min_length=min_length,
+                ),
+            )
+        )
+
+    for result in run_processing_tasks(scan_tasks, workers=workers):
+        artifact = result.payload["artifact"]
+        artifact_type = str(result.payload["artifact_type"])
+        source = Path(result.payload["source"])
         local_computer_id, local_image_id = _cloud_or_memory_evidence_ids(
             db,
             case_id=case_id,
@@ -420,34 +440,7 @@ def run_memory_processing_profile(
             computer_id=computer_id,
             image_id=image_id,
         )
-        try:
-            csv_path, metadata = scan_memory_strings_to_csv(source, output_base / f"{index:04d}", min_length=min_length)
-            output_id = str(uuid.uuid4())
-            db.insert_tool_output(
-                {
-                    "id": output_id,
-                    "case_id": case_id,
-                    "computer_id": local_computer_id,
-                    "image_id": local_image_id,
-                    "job_id": None,
-                    "tool_name": "MemoryStringScanner",
-                    "output_type": "csv",
-                    "path": csv_path,
-                    "row_count": _count_csv_rows(csv_path),
-                }
-            )
-            imported = ingest_csv_output(
-                db=db,
-                case_id=case_id,
-                computer_id=local_computer_id,
-                image_id=local_image_id,
-                tool_output_id=output_id,
-                tool_name="MemoryStringScanner",
-                path=csv_path,
-            )
-            total_imported += imported
-            scans.append({"artifact_path": artifact.get("path"), "artifact_type": artifact_type, "status": "scanned", "output": str(csv_path), "imported_rows": imported, **metadata})
-        except Exception as exc:
+        if result.status == "failed":
             db.log_activity(
                 case_id=case_id,
                 computer_id=local_computer_id,
@@ -455,12 +448,41 @@ def run_memory_processing_profile(
                 event="memory.profile_scan_failed",
                 level="warning",
                 message=f"Memory profile scan failed for {source}",
-                details={"path": str(source), "error": str(exc)},
+                details={"path": str(source), "error": result.error},
             )
-            scans.append({"artifact_path": artifact.get("path"), "artifact_type": artifact_type, "status": "failed", "error": str(exc)})
+            scans.append({"artifact_path": artifact.get("path"), "artifact_type": artifact_type, "status": "failed", "error": result.error})
+            continue
+        csv_path, metadata = result.value
+        output_id = str(uuid.uuid4())
+        db.insert_tool_output(
+            {
+                "id": output_id,
+                "case_id": case_id,
+                "computer_id": local_computer_id,
+                "image_id": local_image_id,
+                "job_id": None,
+                "tool_name": "MemoryStringScanner",
+                "output_type": "csv",
+                "path": csv_path,
+                "row_count": _count_csv_rows(csv_path),
+            }
+        )
+        imported = ingest_csv_output(
+            db=db,
+            case_id=case_id,
+            computer_id=local_computer_id,
+            image_id=local_image_id,
+            tool_output_id=output_id,
+            tool_name="MemoryStringScanner",
+            path=csv_path,
+        )
+        total_imported += imported
+        scans.append({"artifact_path": artifact.get("path"), "artifact_type": artifact_type, "status": "scanned", "output": str(csv_path), "imported_rows": imported, **metadata})
     return {
         "case_id": case_id,
         "artifact_count": len(artifacts),
+        "worker_count": max(1, workers),
+        "scan_task_count": len(scan_tasks),
         "scanned_count": sum(1 for row in scans if row.get("status") == "scanned"),
         "skipped_count": sum(1 for row in scans if row.get("status") == "skipped"),
         "failed_count": sum(1 for row in scans if row.get("status") == "failed"),
@@ -675,6 +697,7 @@ def build_parser() -> argparse.ArgumentParser:
     memory_profile.add_argument("--computer", dest="computer_id")
     memory_profile.add_argument("--image", dest="image_id")
     memory_profile.add_argument("--min-length", type=int, default=6)
+    memory_profile.add_argument("--workers", type=int, default=1, help="Run file scanning with this many workers; database ingest remains serialized")
     memory_profile.add_argument("--no-crash-dumps", action="store_true")
     memory_search_carves = memory_sub.add_parser("windows-search-carves")
     memory_search_carves.add_argument("--case", required=True, dest="case_id")
@@ -2464,6 +2487,7 @@ def run(args: argparse.Namespace) -> int:
                     image_id=args.image_id,
                     min_length=args.min_length,
                     include_crash_dumps=not args.no_crash_dumps,
+                    workers=args.workers,
                 )
             )
             return 0

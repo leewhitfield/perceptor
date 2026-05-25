@@ -1,4 +1,7 @@
+from forensic_orchestrator.cli import run_memory_processing_profile
 from forensic_orchestrator.db import Database
+from forensic_orchestrator.paths import WorkspacePaths
+from forensic_orchestrator.processing_scheduler import ProcessingTask, run_processing_tasks
 from forensic_orchestrator.tools.ingest import ingest_csv_output
 from forensic_orchestrator.tools.memory_strings import assess_hiberfil_source, memory_artifact_type, scan_memory_strings_to_csv
 from forensic_orchestrator.timeline import timeline_events_from_rows
@@ -98,3 +101,40 @@ def test_memory_string_hits_emit_lead_timeline_events():
     assert events[0]["event_type"] == "memory_string_hit"
     assert events[0]["details"]["evidence_strength"] == "lead"
     assert events[0]["details"]["caveat"] == "Memory string timeline timestamp is import time, not occurrence time."
+
+
+def test_processing_scheduler_preserves_order_and_captures_failures():
+    tasks = [
+        ProcessingTask(name="first", worker=lambda: "one"),
+        ProcessingTask(name="failed", worker=lambda: (_ for _ in ()).throw(RuntimeError("boom"))),
+        ProcessingTask(name="third", worker=lambda: "three"),
+    ]
+
+    results = run_processing_tasks(tasks, workers=2)
+
+    assert [result.name for result in results] == ["first", "failed", "third"]
+    assert [result.status for result in results] == ["completed", "failed", "completed"]
+    assert results[1].error == "boom"
+
+
+def test_memory_profile_parallel_scans_then_serializes_ingest(tmp_path):
+    paths = WorkspacePaths(tmp_path / "workspace", live_mount_root=tmp_path / "live-mounts")
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", paths.case_dir("case-1"))
+    paths.ensure_case_tree(case.id)
+    volume = paths.mounts_dir(case.id) / "volumes" / "p1"
+    volume.mkdir(parents=True)
+    pagefile = volume / "pagefile.sys"
+    swapfile = volume / "swapfile.sys"
+    pagefile.write_bytes(b"noise token=alpha C:\\Users\\maya\\Desktop\\report.docx\x00")
+    swapfile.write_bytes(b"noise sharepoint https://contoso.sharepoint.com/sites/demo\x00")
+
+    report = run_memory_processing_profile(db, paths, case_id=case.id, min_length=6, workers=2)
+
+    assert report["worker_count"] == 2
+    assert report["scan_task_count"] == 2
+    assert report["scanned_count"] == 2
+    assert report["failed_count"] == 0
+    rows = db.analytics._connect(case.id).execute("SELECT source_artifact_type, matched_term FROM memory_string_hits").fetchall()
+    assert ("pagefile", "token") in [tuple(row) for row in rows]
+    assert ("swapfile", "sharepoint") in [tuple(row) for row in rows]

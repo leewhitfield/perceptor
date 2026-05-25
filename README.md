@@ -1248,11 +1248,11 @@ test clusters with self-signed TLS, pass `--insecure`.
 
 ## Roadmap
 
-- Parallel processing scheduler: run independent extraction and scanning work
-  with bounded worker slots, write each worker's output to isolated folders,
-  then serialize database ingest and run timeline/correlation rebuilds once at
-  the end. This should come after the current memory/reporting workflow work so
-  the scheduler can use the finalized profile and report-bundle commands.
+- Parallel processing scheduler: the initial scheduler is wired into
+  `memory profile --workers N`. Memory support files are scanned concurrently
+  into isolated output folders, then tool-output registration and normalized
+  database ingest are serialized. Extend this same model to larger extraction
+  profiles next, followed by one timeline/correlation rebuild at the end.
 
 ## Passwordless Sudo for Mounts
 
