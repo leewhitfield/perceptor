@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -97,11 +99,30 @@ def _duckdb_connection(
     db_path = Path(case.root) / "analytics" / "events.duckdb"
     if not db_path.exists():
         return None
-    conn = duckdb.connect(str(db_path), read_only=True)
+    conn = _connect_duckdb_read_only(db_path)
     if not _duckdb_table_exists(conn, table):
         conn.close()
         return None
     return conn
+
+
+def _connect_duckdb_read_only(db_path: Path) -> duckdb.DuckDBPyConnection:
+    timeout = float(os.environ.get("FORENSIC_DUCKDB_READ_LOCK_TIMEOUT", "60"))
+    deadline = time.monotonic() + timeout
+    last_error: Exception | None = None
+    while True:
+        try:
+            return duckdb.connect(str(db_path), read_only=True)
+        except duckdb.IOException as exc:
+            last_error = exc
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.25)
+        except duckdb.Error:
+            raise
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError(f"Unable to open DuckDB database: {db_path}")
 
 
 def _first_case_id(db: Database) -> str | None:

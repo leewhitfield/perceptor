@@ -5,6 +5,7 @@ from pathlib import Path
 
 import duckdb
 
+from forensic_orchestrator import analytics_query
 from forensic_orchestrator.db import Database
 from forensic_orchestrator.filesystem_review import rebuild_filesystem_review
 from forensic_orchestrator.reports import image_analysis_report, rdp_cache_report, rdp_visual_observations_report
@@ -121,6 +122,29 @@ def test_duckdb_analytics_writes_wait_for_case_lock(tmp_path, monkeypatch):
         assert duck.execute("SELECT file_name FROM mft_entries").fetchone() == ("$MFT",)
     finally:
         duck.close()
+
+
+def test_duckdb_read_only_connection_retries_transient_lock(tmp_path, monkeypatch):
+    db_path = tmp_path / "events.duckdb"
+    real_connect = duckdb.connect
+    real_connect(str(db_path)).close()
+    attempts = {"count": 0}
+
+    def flaky_connect(path, read_only=False):
+        if read_only:
+            attempts["count"] += 1
+            if attempts["count"] == 1:
+                raise duckdb.IOException("transient lock")
+        return real_connect(path, read_only=read_only)
+
+    monkeypatch.setenv("FORENSIC_DUCKDB_READ_LOCK_TIMEOUT", "2")
+    monkeypatch.setattr("forensic_orchestrator.analytics_query.duckdb.connect", flaky_connect)
+
+    conn = analytics_query._connect_duckdb_read_only(db_path)
+    try:
+        assert attempts["count"] == 2
+    finally:
+        conn.close()
 
 
 def test_default_duckdb_can_drop_empty_sqlite_analytics_tables(tmp_path, monkeypatch):

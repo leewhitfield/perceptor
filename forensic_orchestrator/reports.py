@@ -26842,7 +26842,14 @@ def _mounted_memory_candidate_paths(mounts: Path) -> list[Path]:
         )
         for pattern in patterns:
             paths.extend(path for path in volume.glob(pattern) if path.suffix.lower() in {".dmp", ".mdmp", ".dump"})
-    return sorted({path for path in paths if path.exists()})
+    existing = []
+    for path in paths:
+        try:
+            if path.exists():
+                existing.append(path)
+        except OSError:
+            continue
+    return sorted(set(existing))
 
 
 def _correlate_crash_dumps_to_wer(artifacts: list[dict[str, Any]], wer_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
