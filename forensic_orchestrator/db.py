@@ -16,6 +16,11 @@ from urllib.parse import urlparse
 from .analytics import ANALYTICS_TABLE_COLUMNS, AnalyticsStore
 from .models import Case, Computer, EvidenceImage
 
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows fallback
+    fcntl = None
+
 
 LOGGER = logging.getLogger(__name__)
 
@@ -307,12 +312,27 @@ class Database:
             raise ValueError("FORENSIC_ANALYTICS_MODE must be one of: sqlite, duckdb, mirror")
         self.analytics = AnalyticsStore(self.conn) if self.analytics_mode in {"duckdb", "mirror"} else None
         self._sqlite_table_columns: dict[str, list[str]] = {}
-        self.migrate()
+        with self._migration_lock():
+            self.migrate()
 
     def close(self) -> None:
         if self.analytics is not None:
             self.analytics.close()
         self.conn.close()
+
+    @contextmanager
+    def _migration_lock(self):
+        if fcntl is None:
+            yield
+            return
+        lock_path = self.path.with_suffix(self.path.suffix + ".migrate.lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("w") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
     @contextmanager
     def bulk_transaction(self):

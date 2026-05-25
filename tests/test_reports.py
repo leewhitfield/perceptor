@@ -14,11 +14,13 @@ from forensic_orchestrator.reports import (
     account_compromise_markdown,
     account_compromise_report,
     artifact_correlations_report,
+    artifact_processing_status_report,
     autostarts_markdown,
     autostarts_report,
     brute_force_markdown,
     brute_force_report,
     case_summary_report,
+    case_executive_summary_report,
     case_overview_markdown,
     case_overview_report,
     correlations_report,
@@ -33,6 +35,7 @@ from forensic_orchestrator.reports import (
     data_exfiltration_report,
     file_dossier_report,
     communication_review_report,
+    combined_artifact_family_report,
     cloud_artifacts_report,
     cloud_configuration_report,
     cloud_files_report,
@@ -197,6 +200,9 @@ def test_high_level_investigation_reports_smoke_on_empty_case(tmp_path):
     suspicious_exec = suspicious_executions_report(db, case.id, limit=5)
     overview = case_overview_report(db, case.id, limit=5)
     regression = regression_smoke_report(db, case.id, limit=5)
+    executive = case_executive_summary_report(db, case.id, limit=5)
+    combined = combined_artifact_family_report(db, case.id, limit=5)
+    processing = artifact_processing_status_report(db, case.id, limit=5)
 
     assert suspicious["summary"]["window_count"] == 0
     assert triage["summary"]["cards"] >= 5
@@ -206,6 +212,9 @@ def test_high_level_investigation_reports_smoke_on_empty_case(tmp_path):
     assert suspicious_exec["summary"]["finding_count"] == 0
     assert overview["summary"]["computers"] == 1
     assert regression["summary"]["failed"] == 0
+    assert executive["summary"]["computers"] == 1
+    assert combined["summary"]["family_count"] >= 1
+    assert "status_counts" in processing["summary"]
     assert "Suspicious Timeline Windows" in suspicious_timeline_windows_markdown(suspicious)
     assert "Investigation Triage Dashboard" in investigation_triage_dashboard_markdown(triage)
     assert "Data Exfiltration Report" in data_exfiltration_markdown(exfiltration)

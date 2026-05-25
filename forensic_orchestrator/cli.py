@@ -35,6 +35,7 @@ from .reports import (
     amcache_report,
     artifact_sources_report,
     artifact_completeness_report,
+    artifact_processing_status_report,
     artifact_summary_report,
     autostarts_markdown,
     autostarts_report,
@@ -60,9 +61,13 @@ from .reports import (
     copied_file_indicators_report,
     copied_usb_files_report,
     common_dialog_items_report,
+    combined_artifact_family_markdown,
+    combined_artifact_family_report,
     communication_groups_report,
     communications_report,
     case_summary_report,
+    case_executive_summary_markdown,
+    case_executive_summary_report,
     case_overview_markdown,
     case_overview_report,
     cleanup_candidates_report,
@@ -346,18 +351,22 @@ def write_report_output(report: dict[str, object], rows: list[dict[str, object]]
 
 def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, limit: int = 100) -> dict[str, object]:
     output_dir.mkdir(parents=True, exist_ok=True)
+    memory_disk = memory_disk_correlations_report(db, case_id, limit=max(limit * 10, 500))
     specs: list[tuple[str, str, str, object]] = [
-        ("case-overview", "md", "Case overview", case_overview_markdown(case_overview_report(db, case_id, limit=limit))),
+        ("executive-summary", "md", "Executive summary", case_executive_summary_markdown(case_executive_summary_report(db, case_id, limit=limit, memory_disk_report=memory_disk))),
+        ("case-overview", "md", "Case overview", case_overview_markdown(case_overview_report(db, case_id, limit=limit, memory_disk_report=memory_disk))),
         ("evidence-gaps", "md", "Evidence gaps", evidence_gaps_markdown(evidence_gaps_report(db, case_id, limit=limit))),
         ("memory-analysis", "md", "Memory analysis", memory_analysis_markdown(memory_analysis_report(db, case_id, limit=limit))),
         ("memory-credentials", "md", "Memory credentials", memory_credentials_markdown(memory_credentials_report(db, case_id, limit=limit))),
-        ("memory-disk-correlations", "md", "Memory/disk correlations", memory_disk_correlations_markdown(memory_disk_correlations_report(db, case_id, limit=limit))),
+        ("memory-disk-correlations", "md", "Memory/disk correlations", memory_disk_correlations_markdown(memory_disk)),
+        ("combined-artifacts", "md", "Combined artifact families", combined_artifact_family_markdown(combined_artifact_family_report(db, case_id, limit=limit, memory_disk_report=memory_disk))),
         ("crash-dump-analysis", "md", "Crash dump analysis", crash_dump_analysis_markdown(crash_dump_analysis_report(db, case_id, limit=limit))),
         ("suspicious-executions", "md", "Suspicious executions", suspicious_executions_markdown(suspicious_executions_report(db, case_id, limit=limit))),
-        ("browser-activity", "json", "Browser activity", browser_activity_report(db, case_id, limit=limit)),
-        ("cloud-artifacts", "json", "Cloud artifacts", cloud_artifacts_report(db, case_id, limit=limit)),
-        ("email-artifacts", "json", "Email artifacts", email_artifacts_report(db, case_id, limit=limit)),
-        ("remote-access", "json", "Remote access", remote_access_sessions_report(db, case_id, limit=limit)),
+        ("artifact-processing-status", "json", "Artifact processing status", artifact_processing_status_report(db, case_id, limit=limit)),
+        ("browser-activity", "json", "Browser activity", browser_activity_report(db, case_id, limit=limit, memory_disk_report=memory_disk)),
+        ("cloud-artifacts", "json", "Cloud artifacts", cloud_artifacts_report(db, case_id, limit=limit, memory_disk_report=memory_disk)),
+        ("email-artifacts", "json", "Email artifacts", email_artifacts_report(db, case_id, limit=limit, memory_disk_report=memory_disk)),
+        ("remote-access", "json", "Remote access", remote_access_sessions_report(db, case_id, limit=limit, memory_disk_report=memory_disk)),
         ("regression-smoke", "json", "Regression smoke", regression_smoke_report(db, case_id, limit=min(limit, 25))),
     ]
     written: list[dict[str, object]] = []
@@ -379,6 +388,85 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
         "index": str(index_path),
         "reports": written,
         "total_written": len(written) + 1,
+    }
+
+
+def run_memory_processing_profile(
+    db: Database,
+    paths: WorkspacePaths,
+    *,
+    case_id: str,
+    computer_id: str | None = None,
+    image_id: str | None = None,
+    min_length: int = 6,
+    include_crash_dumps: bool = True,
+) -> dict[str, object]:
+    artifacts = memory_artifacts_report(db, case_id, limit=5000).get("artifacts") or []
+    scans: list[dict[str, object]] = []
+    output_base = paths.case_dir(case_id) / "supplemental" / "memory-profile" / str(uuid.uuid4())
+    total_imported = 0
+    for index, artifact in enumerate(artifacts, 1):
+        artifact_type = str(artifact.get("artifact_type") or "")
+        if artifact_type in {"crash_dump", "process_dump", "full_memory_dump"} and not include_crash_dumps:
+            continue
+        source = Path(str(artifact.get("actual_path") or artifact.get("path") or ""))
+        if not source.exists() or not source.is_file():
+            scans.append({"artifact_path": artifact.get("path"), "artifact_type": artifact_type, "status": "skipped", "reason": "No accessible file path."})
+            continue
+        local_computer_id, local_image_id = _cloud_or_memory_evidence_ids(
+            db,
+            case_id=case_id,
+            evidence_path=source,
+            computer_id=computer_id,
+            image_id=image_id,
+        )
+        try:
+            csv_path, metadata = scan_memory_strings_to_csv(source, output_base / f"{index:04d}", min_length=min_length)
+            output_id = str(uuid.uuid4())
+            db.insert_tool_output(
+                {
+                    "id": output_id,
+                    "case_id": case_id,
+                    "computer_id": local_computer_id,
+                    "image_id": local_image_id,
+                    "job_id": None,
+                    "tool_name": "MemoryStringScanner",
+                    "output_type": "csv",
+                    "path": csv_path,
+                    "row_count": _count_csv_rows(csv_path),
+                }
+            )
+            imported = ingest_csv_output(
+                db=db,
+                case_id=case_id,
+                computer_id=local_computer_id,
+                image_id=local_image_id,
+                tool_output_id=output_id,
+                tool_name="MemoryStringScanner",
+                path=csv_path,
+            )
+            total_imported += imported
+            scans.append({"artifact_path": artifact.get("path"), "artifact_type": artifact_type, "status": "scanned", "output": str(csv_path), "imported_rows": imported, **metadata})
+        except Exception as exc:
+            db.log_activity(
+                case_id=case_id,
+                computer_id=local_computer_id,
+                image_id=local_image_id,
+                event="memory.profile_scan_failed",
+                level="warning",
+                message=f"Memory profile scan failed for {source}",
+                details={"path": str(source), "error": str(exc)},
+            )
+            scans.append({"artifact_path": artifact.get("path"), "artifact_type": artifact_type, "status": "failed", "error": str(exc)})
+    return {
+        "case_id": case_id,
+        "artifact_count": len(artifacts),
+        "scanned_count": sum(1 for row in scans if row.get("status") == "scanned"),
+        "skipped_count": sum(1 for row in scans if row.get("status") == "skipped"),
+        "failed_count": sum(1 for row in scans if row.get("status") == "failed"),
+        "imported_rows": total_imported,
+        "output_dir": str(output_base),
+        "scans": scans,
     }
 
 
@@ -582,6 +670,12 @@ def build_parser() -> argparse.ArgumentParser:
     memory_crash_dumps.add_argument("--image", dest="image_id")
     memory_crash_dumps.add_argument("--min-length", type=int, default=6)
     memory_crash_dumps.add_argument("--copy", action="store_true", help="Copy accessible crash dumps into the case supplemental folder before scanning")
+    memory_profile = memory_sub.add_parser("profile")
+    memory_profile.add_argument("--case", required=True, dest="case_id")
+    memory_profile.add_argument("--computer", dest="computer_id")
+    memory_profile.add_argument("--image", dest="image_id")
+    memory_profile.add_argument("--min-length", type=int, default=6)
+    memory_profile.add_argument("--no-crash-dumps", action="store_true")
     memory_search_carves = memory_sub.add_parser("windows-search-carves")
     memory_search_carves.add_argument("--case", required=True, dest="case_id")
     memory_search_carves.add_argument("--path", required=True, help="Directory or file containing SearchIndexer SQLite memory carves")
@@ -1408,6 +1502,7 @@ def build_parser() -> argparse.ArgumentParser:
     report_timeline_review.add_argument("--user")
     report_timeline_review.add_argument("--contains")
     report_timeline_review.add_argument("--source")
+    report_timeline_review.add_argument("--preset", choices=["memory", "suspicious", "cloud", "usb", "remote_access"])
     report_timeline_review.add_argument("--format", choices=["json", "table", "csv"], default="json")
     report_timeline_review.add_argument("--output")
     report_user_timeline = report_sub.add_parser("user-timeline")
@@ -1778,6 +1873,11 @@ def build_parser() -> argparse.ArgumentParser:
     report_case_review.add_argument("--limit", type=int, default=25)
     report_case_review.add_argument("--format", choices=["json", "table"], default="json")
     report_case_review.add_argument("--output")
+    report_executive_summary = report_sub.add_parser("executive-summary")
+    report_executive_summary.add_argument("--case", required=True, dest="case_id")
+    report_executive_summary.add_argument("--limit", type=int, default=25)
+    report_executive_summary.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
+    report_executive_summary.add_argument("--output")
     report_case_overview = report_sub.add_parser("case-overview")
     report_case_overview.add_argument("--case", required=True, dest="case_id")
     report_case_overview.add_argument("--limit", type=int, default=25)
@@ -1794,6 +1894,17 @@ def build_parser() -> argparse.ArgumentParser:
     report_write_bundle.add_argument("--case", required=True, dest="case_id")
     report_write_bundle.add_argument("--limit", type=int, default=100)
     report_write_bundle.add_argument("--output-dir", required=True)
+    report_combined = report_sub.add_parser("combined-artifacts")
+    report_combined.add_argument("--case", required=True, dest="case_id")
+    report_combined.add_argument("--family", default="all")
+    report_combined.add_argument("--limit", type=int, default=100)
+    report_combined.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
+    report_combined.add_argument("--output")
+    report_artifact_processing = report_sub.add_parser("artifact-processing-status")
+    report_artifact_processing.add_argument("--case", required=True, dest="case_id")
+    report_artifact_processing.add_argument("--limit", type=int, default=250)
+    report_artifact_processing.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    report_artifact_processing.add_argument("--output")
     report_evidence_gaps = report_sub.add_parser("evidence-gaps")
     report_evidence_gaps.add_argument("--case", required=True, dest="case_id")
     report_evidence_gaps.add_argument("--limit", type=int, default=100)
@@ -2343,6 +2454,20 @@ def run(args: argparse.Namespace) -> int:
             )
             return 0
 
+        if args.resource == "memory" and args.action == "profile":
+            print_json(
+                run_memory_processing_profile(
+                    db,
+                    paths,
+                    case_id=args.case_id,
+                    computer_id=args.computer_id,
+                    image_id=args.image_id,
+                    min_length=args.min_length,
+                    include_crash_dumps=not args.no_crash_dumps,
+                )
+            )
+            return 0
+
         if args.resource == "memory" and args.action == "windows-search-carves":
             source = Path(args.path)
             computer_id, image_id = _cloud_or_memory_evidence_ids(
@@ -2882,6 +3007,33 @@ def run(args: argparse.Namespace) -> int:
 
         if args.resource == "report" and args.action == "write-bundle":
             print_json(write_case_report_bundle(db, args.case_id, Path(args.output_dir), limit=args.limit))
+            return 0
+
+        if args.resource == "report" and args.action == "combined-artifacts":
+            report = combined_artifact_family_report(db, args.case_id, family=args.family, limit=args.limit)
+            if args.format == "md":
+                write_text_output(combined_artifact_family_markdown(report), args.output)
+            else:
+                write_report_output(
+                    report,
+                    report["families"],
+                    args.format,
+                    args.output,
+                    title=f"Combined artifact family report for case {args.case_id}",
+                    columns=["family", "disk_reference_count", "memory_correlation_count", "evidence_strength"],
+                )
+            return 0
+
+        if args.resource == "report" and args.action == "artifact-processing-status":
+            report = artifact_processing_status_report(db, args.case_id, limit=args.limit)
+            write_report_output(
+                report,
+                report["items"],
+                args.format,
+                args.output,
+                title=f"Artifact processing status for case {args.case_id}",
+                columns=["artifact_family", "artifact_type", "status", "path", "row_count", "source", "notes"],
+            )
             return 0
 
         if args.resource == "report" and args.action == "specs":
@@ -3499,6 +3651,21 @@ def run(args: argparse.Namespace) -> int:
                 )
             else:
                 write_text_output(json.dumps(report, indent=2, default=str), args.output)
+            return 0
+
+        if args.resource == "report" and args.action == "executive-summary":
+            report = case_executive_summary_report(db, args.case_id, limit=args.limit)
+            if args.format == "md":
+                write_text_output(case_executive_summary_markdown(report), args.output)
+            else:
+                write_report_output(
+                    report,
+                    report["conclusions"],
+                    args.format,
+                    args.output,
+                    title=f"Executive summary for case {args.case_id}",
+                    columns=["priority", "evidence_strength", "topic", "summary"],
+                )
             return 0
 
         if args.resource == "report" and args.action == "evidence-gaps":
@@ -5550,6 +5717,7 @@ def run(args: argparse.Namespace) -> int:
                 user=args.user,
                 contains=args.contains,
                 source=args.source,
+                preset=args.preset,
             )
             write_report_output(
                 report,

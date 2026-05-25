@@ -200,7 +200,13 @@ def case_summary_report(db: Database, case_id: str) -> dict[str, Any]:
     }
 
 
-def case_overview_report(db: Database, case_id: str, *, limit: int = 25) -> dict[str, Any]:
+def case_overview_report(
+    db: Database,
+    case_id: str,
+    *,
+    limit: int = 25,
+    memory_disk_report: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     db.get_case(case_id)
     summary = case_summary_report(db, case_id)
     gaps = evidence_gaps_report(db, case_id, limit=limit)
@@ -208,7 +214,7 @@ def case_overview_report(db: Database, case_id: str, *, limit: int = 25) -> dict
     credentials = memory_credentials_report(db, case_id, limit=limit)
     crash_dumps = crash_dump_analysis_report(db, case_id, limit=limit)
     suspicious = suspicious_executions_report(db, case_id, limit=limit)
-    memory_disk = memory_disk_correlations_report(db, case_id, limit=limit)
+    memory_disk = memory_disk_report or memory_disk_correlations_report(db, case_id, limit=limit)
     return {
         "case_id": case_id,
         "case": summary.get("case"),
@@ -317,6 +323,92 @@ def regression_smoke_report(db: Database, case_id: str, *, limit: int = 10) -> d
         },
         "checks": checks,
     }
+
+
+def case_executive_summary_report(
+    db: Database,
+    case_id: str,
+    *,
+    limit: int = 25,
+    memory_disk_report: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    memory_disk = memory_disk_report or memory_disk_correlations_report(db, case_id, limit=max(limit * 10, 250))
+    overview = case_overview_report(db, case_id, limit=limit, memory_disk_report=memory_disk)
+    suspicious = overview.get("top_suspicious_executions") if isinstance(overview.get("top_suspicious_executions"), list) else []
+    gaps = overview.get("top_evidence_gaps") if isinstance(overview.get("top_evidence_gaps"), list) else []
+    memory_findings = overview.get("memory_findings") if isinstance(overview.get("memory_findings"), list) else []
+    conclusions: list[dict[str, Any]] = []
+    if suspicious:
+        conclusions.append(
+            {
+                "priority": "high",
+                "topic": "Suspicious execution",
+                "summary": f"{len(suspicious)} suspicious execution finding(s) are present in the overview window.",
+                "evidence_strength": _evidence_strength_for_category("execution"),
+            }
+        )
+    if (overview.get("credential_summary") or {}).get("likely_usable_count", 0):
+        conclusions.append(
+            {
+                "priority": "high",
+                "topic": "Memory credentials",
+                "summary": "Likely usable credential-looking memory strings were identified and need controlled validation.",
+                "evidence_strength": "lead",
+            }
+        )
+    if (overview.get("crash_dump_summary") or {}).get("dump_count", 0):
+        conclusions.append(
+            {
+                "priority": "medium",
+                "topic": "Crash dumps",
+                "summary": "Crash dump artifacts are available and should be reviewed as process/kernel memory snapshots.",
+                "evidence_strength": "supporting",
+            }
+        )
+    if gaps:
+        conclusions.append(
+            {
+                "priority": "medium",
+                "topic": "Evidence gaps",
+                "summary": f"{len(gaps)} evidence gap(s) need disclosure or follow-up collection.",
+                "evidence_strength": "limitation",
+            }
+        )
+    recommendations = [
+        "Review suspicious executions with timeline context and source-specific caveats.",
+        "Validate any likely credential memory hits before reporting them as active credentials.",
+        "Use combined artifact-family reports to disclose both disk evidence and memory corroboration.",
+        "Collect live RAM when encrypted user-session databases must be decrypted and offline memory did not recover keys.",
+    ]
+    return {
+        "case_id": case_id,
+        "summary": overview.get("summary") or {},
+        "conclusions": conclusions[:limit],
+        "top_suspicious_executions": suspicious[:limit],
+        "memory_findings": memory_findings[:limit],
+        "evidence_gaps": gaps[:limit],
+        "recommendations": recommendations,
+        "evidence_strength_guide": evidence_strength_guide(),
+    }
+
+
+def case_executive_summary_markdown(report: dict[str, Any]) -> str:
+    lines = ["# Executive Summary", "", f"Case: `{report.get('case_id') or ''}`", "", "## Conclusions", ""]
+    conclusions = report.get("conclusions") if isinstance(report.get("conclusions"), list) else []
+    if not conclusions:
+        lines.append("- No high-priority conclusions were generated from the current report set.")
+    for row in conclusions:
+        lines.append(
+            f"- `{row.get('priority') or ''}` `{row.get('evidence_strength') or ''}` "
+            f"{row.get('topic') or ''}: {row.get('summary') or ''}"
+        )
+    lines.extend(["", "## Recommendations", ""])
+    for recommendation in report.get("recommendations") or []:
+        lines.append(f"- {recommendation}")
+    lines.extend(["", "## Evidence Strength Guide", ""])
+    for row in report.get("evidence_strength_guide") or []:
+        lines.append(f"- `{row.get('strength')}`: {row.get('meaning')}")
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def issues_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str, Any]:
@@ -3326,7 +3418,13 @@ def _format_report_window_time(value: Any) -> str:
     return str(value or "")
 
 
-def remote_access_sessions_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str, Any]:
+def remote_access_sessions_report(
+    db: Database,
+    case_id: str,
+    *,
+    limit: int = 100,
+    memory_disk_report: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     db.get_case(case_id)
     rdp_sessions = _rdp_client_sessions(db, case_id)
     vpn_rows = _vpn_all_rows(db, case_id, max(limit * 20, 500))
@@ -3418,7 +3516,7 @@ def remote_access_sessions_report(db: Database, case_id: str, *, limit: int = 10
             "vpn_context_source_counts": _vpn_source_counts(vpn_context_rows),
             "vpn_context_profile_count": len(_vpn_context_groups(vpn_context_rows)),
         },
-        "memory_corroboration": _memory_domain_corroboration(db, case_id, "remote_access", limit=min(limit, 50)),
+        "memory_corroboration": _memory_domain_corroboration(db, case_id, "remote_access", limit=min(limit, 50), memory_disk_report=memory_disk_report),
         "vpn_context": _vpn_context_groups(vpn_context_rows),
         "vpn_context_rows": vpn_context_rows[:50],
         "remote_access_sessions": session_rows[:limit],
@@ -7495,6 +7593,7 @@ def browser_activity_report(
     browser: str | None = None,
     user: str | None = None,
     exclude_noise: bool = True,
+    memory_disk_report: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     hosts = browser_hosts_report(db, case_id, limit=limit, browser=browser, exclude_noise=exclude_noise)["hosts"]
     downloads = browser_downloads_report(db, case_id, limit=limit)["downloads"]
@@ -7509,7 +7608,7 @@ def browser_activity_report(
     return {
         "case_id": case_id,
         "filters": {"browser": browser, "user": user, "exclude_noise": exclude_noise},
-        "memory_corroboration": _memory_domain_corroboration(db, case_id, "browser", limit=min(limit, 50)),
+        "memory_corroboration": _memory_domain_corroboration(db, case_id, "browser", limit=min(limit, 50), memory_disk_report=memory_disk_report),
         "top_hosts": hosts,
         "downloads": downloads[:limit],
         "webcache_file_accesses": webcache_files[:limit],
@@ -7983,7 +8082,13 @@ def user_timeline_report(
     }
 
 
-def cloud_artifacts_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str, Any]:
+def cloud_artifacts_report(
+    db: Database,
+    case_id: str,
+    *,
+    limit: int = 100,
+    memory_disk_report: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     db.get_case(case_id)
     rows: list[dict[str, Any]] = []
     for row in db.conn.execute(
@@ -8031,7 +8136,7 @@ def cloud_artifacts_report(db: Database, case_id: str, *, limit: int = 100) -> d
     if not remaining:
         return {
             "case_id": case_id,
-            "memory_corroboration": _memory_domain_corroboration(db, case_id, "cloud", limit=min(limit, 50)),
+            "memory_corroboration": _memory_domain_corroboration(db, case_id, "cloud", limit=min(limit, 50), memory_disk_report=memory_disk_report),
             "cloud_artifacts": rows,
             "total_returned": len(rows),
         }
@@ -8122,7 +8227,7 @@ def cloud_artifacts_report(db: Database, case_id: str, *, limit: int = 100) -> d
             rows.append(item)
     return {
         "case_id": case_id,
-        "memory_corroboration": _memory_domain_corroboration(db, case_id, "cloud", limit=min(limit, 50)),
+        "memory_corroboration": _memory_domain_corroboration(db, case_id, "cloud", limit=min(limit, 50), memory_disk_report=memory_disk_report),
         "cloud_artifacts": rows,
         "total_returned": len(rows),
     }
@@ -8394,7 +8499,13 @@ def _cloud_config_type(row: dict[str, Any]) -> str:
     return artifact or "cloud_config"
 
 
-def email_artifacts_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str, Any]:
+def email_artifacts_report(
+    db: Database,
+    case_id: str,
+    *,
+    limit: int = 100,
+    memory_disk_report: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     db.get_case(case_id)
     file_rows = [
         dict(row)
@@ -8517,7 +8628,7 @@ def email_artifacts_report(db: Database, case_id: str, *, limit: int = 100) -> d
         row["dedupe_key"] = row.get("dedupe_key") or _email_dedupe_key(row)
     return {
         "case_id": case_id,
-        "memory_corroboration": _memory_domain_corroboration(db, case_id, "email", limit=min(limit, 50)),
+        "memory_corroboration": _memory_domain_corroboration(db, case_id, "email", limit=min(limit, 50), memory_disk_report=memory_disk_report),
         "email_artifacts": file_rows,
         "deduplicated": _dedupe_email_rows(file_rows),
         "total_returned": len(file_rows),
@@ -10595,6 +10706,7 @@ def timeline_review_report(
     user: str | None = None,
     contains: str | None = None,
     source: str | None = None,
+    preset: str | None = None,
 ) -> dict[str, Any]:
     db.get_case(case_id)
     events: list[dict[str, Any]] = []
@@ -10632,6 +10744,8 @@ def timeline_review_report(
         if contains and contains.lower() not in " ".join(str(value or "").lower() for value in row.values()):
             return
         if source and source.lower() != source_name.lower():
+            return
+        if preset and not _timeline_preset_matches(row, preset):
             return
         events.append(row)
 
@@ -11058,13 +11172,29 @@ def timeline_review_report(
     events.sort(key=lambda item: (item["timestamp"], item["source"], item["event_type"]))
     return {
         "case_id": case_id,
-        "filters": {"user": user, "contains": contains, "source": source},
+        "filters": {"user": user, "contains": contains, "source": source, "preset": preset},
         "events": events[:limit],
         "total_events": len(events),
         "total_returned": min(len(events), limit),
         "source_counts": _review_event_counts(events, "source"),
         "event_type_counts": _review_event_counts(events, "event_type"),
     }
+
+
+def _timeline_preset_matches(row: dict[str, Any], preset: str) -> bool:
+    text = " ".join(str(value or "") for value in row.values()).casefold()
+    name = preset.casefold()
+    if name == "memory":
+        return "memory" in text or row.get("source_table") == "memory_string_hits"
+    if name == "suspicious":
+        return any(token in text for token in ("suspicious", "prefetch", "bam", "runmru", "wevtutil", "rundll32", "powershell"))
+    if name == "cloud":
+        return any(token in text for token in ("cloud", "onedrive", "google drive", "drivefs", "dropbox", "icloud"))
+    if name == "usb":
+        return any(token in text for token in ("usb", "removable", "setupapi", "volume serial"))
+    if name == "remote_access":
+        return any(token in text for token in ("rdp", "vpn", "remote", "mstsc", "terminal services"))
+    return True
 
 
 def validation_report(db: Database, case_id: str) -> dict[str, Any]:
@@ -16902,6 +17032,142 @@ def evidence_strength_guide() -> list[dict[str, str]]:
     ]
 
 
+def _evidence_strength_for_category(category: Any) -> str:
+    text = str(category or "").casefold()
+    if any(token in text for token in ("prefetch", "execution", "evtx", "bam", "srum")):
+        return "strong"
+    if any(token in text for token in ("correlation", "browser", "cloud", "email", "remote")):
+        return "moderate"
+    if any(token in text for token in ("memory", "string", "credential", "crash")):
+        return "lead"
+    if any(token in text for token in ("gap", "failed", "missing", "skipped", "encrypted")):
+        return "limitation"
+    return "moderate"
+
+
+def combined_artifact_family_report(
+    db: Database,
+    case_id: str,
+    *,
+    family: str = "all",
+    limit: int = 100,
+    memory_disk_report: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    db.get_case(case_id)
+    memory_disk = memory_disk_report or memory_disk_correlations_report(db, case_id, limit=max(limit * 10, 500))
+    families = ["browser", "cloud", "email", "remote_access", "windows_search", "file"]
+    if family != "all":
+        families = [family]
+    disk_refs = _memory_disk_reference_rows(db, case_id, max_rows=5000)
+    family_rows: list[dict[str, Any]] = []
+    for name in families:
+        correlations = [
+            row for row in memory_disk.get("correlations") or []
+            if str(row.get("disk_artifact_family") or "") == name
+        ][:limit]
+        family_rows.append(
+            {
+                "family": name,
+                "disk_reference_count": sum(1 for row in disk_refs if row.get("artifact_family") == name),
+                "memory_correlation_count": len(correlations),
+                "evidence_strength": _evidence_strength_for_category(name if correlations else "lead"),
+                "memory_corroboration": correlations,
+            }
+        )
+    return {
+        "case_id": case_id,
+        "filters": {"family": family, "limit": limit},
+        "summary": {
+            "family_count": len(family_rows),
+            "memory_correlation_count": sum(int(row.get("memory_correlation_count") or 0) for row in family_rows),
+        },
+        "families": family_rows,
+        "evidence_strength_guide": evidence_strength_guide(),
+    }
+
+
+def combined_artifact_family_markdown(report: dict[str, Any]) -> str:
+    lines = ["# Combined Artifact Family Report", "", f"Case: `{report.get('case_id') or ''}`", "", "## Families", ""]
+    for row in report.get("families") or []:
+        lines.append(
+            f"- `{row.get('family')}` strength `{row.get('evidence_strength')}` "
+            f"disk refs `{row.get('disk_reference_count')}` memory correlations `{row.get('memory_correlation_count')}`"
+        )
+        for corr in row.get("memory_corroboration") or []:
+            lines.append(
+                f"  - `{corr.get('match_type')}` `{corr.get('match_value')}` "
+                f"memory `{corr.get('source_artifact_type')}` disk `{corr.get('disk_table')}`"
+            )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def artifact_processing_status_report(db: Database, case_id: str, *, limit: int = 250) -> dict[str, Any]:
+    db.get_case(case_id)
+    rows: list[dict[str, Any]] = []
+    for artifact in memory_artifacts_report(db, case_id, limit=limit).get("artifacts") or []:
+        rows.append(
+            {
+                "artifact_family": "memory",
+                "artifact_type": artifact.get("artifact_type"),
+                "path": artifact.get("path"),
+                "status": artifact.get("processed_status") or "not_processed",
+                "source": artifact.get("source"),
+                "notes": artifact.get("notes"),
+            }
+        )
+    for output in _query_report_rows(
+        db,
+        case_id,
+        "tool_outputs",
+        """
+        SELECT tool_name, output_type, path, row_count, created_at
+        FROM tool_outputs
+        WHERE case_id = ?
+        ORDER BY created_at DESC
+        LIMIT ?
+        """,
+        (case_id, limit),
+    ):
+        rows.append(
+            {
+                "artifact_family": _tool_output_family(output.get("tool_name")),
+                "artifact_type": output.get("tool_name"),
+                "path": output.get("path"),
+                "status": "processed" if int(output.get("row_count") or 0) >= 0 else "unknown",
+                "row_count": output.get("row_count"),
+                "source": "tool_outputs",
+                "notes": output.get("output_type"),
+            }
+        )
+    return {
+        "case_id": case_id,
+        "summary": {
+            "item_count": len(rows),
+            "status_counts": _count_by_key(rows, "status"),
+            "family_counts": _count_by_key(rows, "artifact_family"),
+        },
+        "items": rows[:limit],
+        "total_returned": min(len(rows), limit),
+    }
+
+
+def _tool_output_family(tool_name: Any) -> str:
+    text = str(tool_name or "").casefold()
+    if "memory" in text or "crash" in text:
+        return "memory"
+    if "browser" in text or "webcache" in text:
+        return "browser"
+    if "cloud" in text or "onedrive" in text or "drive" in text:
+        return "cloud"
+    if "mail" in text or "email" in text:
+        return "email"
+    if "rdp" in text or "vpn" in text or "remote" in text:
+        return "remote_access"
+    if "search" in text:
+        return "windows_search"
+    return "general"
+
+
 def memory_artifacts_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str, Any]:
     db.get_case(case_id)
     mounted = _mounted_memory_artifacts(db, case_id)
@@ -17295,8 +17561,15 @@ def memory_disk_correlations_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _memory_domain_corroboration(db: Database, case_id: str, family: str, *, limit: int = 50) -> dict[str, Any]:
-    report = memory_disk_correlations_report(db, case_id, limit=max(limit * 10, 250))
+def _memory_domain_corroboration(
+    db: Database,
+    case_id: str,
+    family: str,
+    *,
+    limit: int = 50,
+    memory_disk_report: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    report = memory_disk_report or memory_disk_correlations_report(db, case_id, limit=max(limit * 10, 250))
     rows = [
         row for row in report.get("correlations") or []
         if str(row.get("disk_artifact_family") or "") == family
@@ -17348,6 +17621,7 @@ def crash_dump_analysis_report(db: Database, case_id: str, *, limit: int = 100) 
         (case_id, limit),
     )
     correlated = _correlate_crash_dumps_to_wer(artifacts, wer_rows)
+    dump_metadata = _crash_dump_metadata(artifacts, wer_rows, string_rows)
     return {
         "case_id": case_id,
         "summary": {
@@ -17356,8 +17630,10 @@ def crash_dump_analysis_report(db: Database, case_id: str, *, limit: int = 100) 
             "memory_string_source_count": len({row.get("source_path") for row in string_rows if row.get("source_path")}),
             "memory_string_hit_groups": len(string_rows),
             "correlated_dump_count": sum(1 for row in correlated if row.get("wer_report_id")),
+            "metadata_count": len(dump_metadata),
         },
         "dumps": artifacts[:limit],
+        "dump_metadata": dump_metadata[:limit],
         "wer_reports": wer_rows[:limit],
         "string_hit_summary": string_rows,
         "correlations": correlated[:limit],
@@ -17403,6 +17679,16 @@ def crash_dump_analysis_markdown(report: dict[str, Any]) -> str:
             f"- `{row.get('event_time_utc') or ''}` app `{row.get('app_name') or row.get('original_filename') or ''}` "
             f"module `{row.get('fault_module_name') or ''}` exception `{row.get('exception_code') or ''}`"
         )
+    lines.extend(["", "## Dump Metadata", ""])
+    metadata_rows = report.get("dump_metadata") if isinstance(report.get("dump_metadata"), list) else []
+    if not metadata_rows:
+        lines.append("- No derived dump metadata was available.")
+    for row in metadata_rows[:25]:
+        lines.append(
+            f"- `{row.get('dump_type') or ''}` `{row.get('dump_name') or ''}` "
+            f"access `{row.get('access_status') or ''}` strings `{row.get('string_hit_groups') or 0}` "
+            f"likely app `{row.get('likely_application') or ''}`"
+        )
     lines.extend(["", "## String Hit Summary", ""])
     for row in (report.get("string_hit_summary") if isinstance(report.get("string_hit_summary"), list) else [])[:25]:
         lines.append(
@@ -17413,6 +17699,44 @@ def crash_dump_analysis_markdown(report: dict[str, Any]) -> str:
     for caveat in report.get("caveats") or []:
         lines.append(f"- {caveat}")
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _crash_dump_metadata(
+    artifacts: list[dict[str, Any]],
+    wer_rows: list[dict[str, Any]],
+    string_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    string_counts: dict[str, int] = {}
+    for row in string_rows:
+        path = str(row.get("source_path") or "")
+        if path:
+            string_counts[path.casefold()] = string_counts.get(path.casefold(), 0) + int(row.get("count") or 0)
+    output: list[dict[str, Any]] = []
+    for artifact in artifacts:
+        path = str(artifact.get("actual_path") or artifact.get("path") or "")
+        name = _basename(path) or ""
+        access_status = "accessible" if artifact.get("actual_path") and Path(str(artifact.get("actual_path"))).exists() else "metadata_only"
+        wer_match = next(
+            (
+                row for row in wer_rows
+                if name and name.casefold() in " ".join(str(row.get(field) or "") for field in ("source_file", "report_folder", "ui_path")).casefold()
+            ),
+            None,
+        )
+        output.append(
+            {
+                "dump_path": artifact.get("path"),
+                "dump_name": name,
+                "dump_type": artifact.get("artifact_type"),
+                "size_bytes": artifact.get("size_bytes"),
+                "access_status": access_status,
+                "string_hit_groups": string_counts.get(path.casefold(), 0) or string_counts.get(str(artifact.get("path") or "").casefold(), 0),
+                "likely_application": (wer_match or {}).get("app_name") or (wer_match or {}).get("original_filename"),
+                "exception_code": (wer_match or {}).get("exception_code"),
+                "event_time_utc": (wer_match or {}).get("event_time_utc"),
+            }
+        )
+    return output
 
 
 _MEMORY_CREDENTIAL_ASSIGNMENT_RE = re.compile(

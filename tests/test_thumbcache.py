@@ -117,9 +117,11 @@ def test_thumbcache_ingest_correlates_with_windows_search_and_timeline(tmp_path)
     events = query_rows(db, "timeline_events", "SELECT * FROM timeline_events ORDER BY event_type")
     report = thumbcache_report(db, case.id, confidence="high")
     filesystem_count = rebuild_filesystem_review(db, case_id=case.id, image_id=image.id)
-    filesystem_row = db.conn.execute(
-        "SELECT * FROM filesystem_review WHERE source_table = 'thumbcache_search_correlations'"
-    ).fetchone()
+    filesystem_row = query_one(
+        db,
+        "filesystem_review",
+        "SELECT * FROM filesystem_review WHERE source_table = 'thumbcache_search_correlations'",
+    )
     history = file_history_report(db, case.id, name="photo.jpg", limit=10)
     assert row_count == 1
     assert entry["cache_id"] == "abc123"
