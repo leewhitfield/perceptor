@@ -12,7 +12,7 @@ from typing import Any
 from .db import Database
 from .paths import WorkspacePaths
 from .reports import processing_readiness_report
-from .tools.registry import ToolRegistry
+from .tools.registry import ToolRegistry, resolve_dotnet_runtime
 
 
 REQUIRED_TOOLS = [
@@ -327,6 +327,10 @@ def _which(name: str) -> str | None:
         return os.environ["SIDR_BIN"]
     if name == "usnjrnl-forensic" and os.environ.get("USNJRNL_FORENSIC_BIN"):
         return os.environ["USNJRNL_FORENSIC_BIN"]
+    if name == "dotnet":
+        candidate = resolve_dotnet_runtime()
+        if candidate and Path(candidate).exists():
+            return candidate
     return shutil.which(name)
 
 
