@@ -2366,6 +2366,8 @@ def test_external_storage_report_combines_devices_activity_and_event_logs(tmp_pa
     assert sandisk["computer_label"] == "Desktop"
     assert sandisk["attributable_computer"] == "Desktop"
     assert sandisk["observed_computers"] == "Desktop"
+    assert sandisk["identifier_type"] == "physical_serial"
+    assert sandisk["cross_computer_identity_basis"] == "physical_serial"
     assert sandisk["observed_drive_letters"] == "E:"
     assert sandisk["normalized_vendor_id"] == "0781"
     assert uasp["last_observed_utc"] == "2020-11-14T12:01:00Z"
@@ -2435,11 +2437,77 @@ def test_external_storage_report_attributes_same_device_to_multiple_computers(tm
     assert {row["computer_label"] for row in rows} == {"Alpha", "Beta"}
     assert all(row["observed_computers"] == "Alpha, Beta" for row in rows)
     assert all(row["observed_computer_count"] == 2 for row in rows)
+    assert all(row["identifier_type"] == "physical_serial" for row in rows)
+    assert all(row["cross_computer_confidence"] == "high" for row in rows)
     assert all(row["observed_drive_letters"] == "E:" for row in rows)
     assert all(row["normalized_vendor_id"] == "0781" for row in rows)
     assert all(row["normalized_product_id"] == "5581" for row in rows)
     assert "Observed computers: `Alpha, Beta`" in markdown
     assert "Last observed: `2020-01-03T00:00:00Z`" in markdown
+
+
+def test_external_storage_report_does_not_cross_host_match_windows_generated_usb_ids(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-a", case_id=case.id, label="Alpha")
+    db.create_computer(computer_id="computer-b", case_id=case.id, label="Beta")
+    db.add_image("image-a", case.id, Path("/evidence/alpha.E01"), computer_id="computer-a")
+    db.add_image("image-b", case.id, Path("/evidence/beta.E01"), computer_id="computer-b")
+    base = {
+        "case_id": case.id,
+        "serial": "6&31b8b127&0&1",
+        "vendor_id": "05E3",
+        "product_id": "0723",
+        "vendor": "",
+        "product": "USB Storage",
+        "revision": "",
+        "friendly_name": "USB Storage",
+        "parent_id_prefix": "",
+        "device_service": "USBSTOR",
+        "volume_guid": "",
+        "volume_serial_number": "ABCD-1234",
+        "volume_name": "",
+        "capacity_bytes": "",
+        "file_system": "",
+        "alternate_scsi_serial": "",
+        "user_profiles": "",
+        "first_install_date_utc": "2020-01-01T00:00:00Z",
+        "last_arrival_utc": "",
+        "last_removal_utc": "",
+        "first_volume_serial_event_utc": "",
+        "last_partition_event_utc": "",
+        "last_migration_present_utc": "",
+        "evidence_row_count": 1,
+        "source_artifacts": "tzworks_usp",
+        "created_at": "2026-01-01T00:00:00Z",
+    }
+    db.insert_usb_storage_devices(
+        [
+            {**base, "id": "usb-a", "computer_id": "computer-a", "image_id": "image-a", "drive_letter": "E:"},
+            {**base, "id": "usb-b", "computer_id": "computer-b", "image_id": "image-b", "drive_letter": "F:"},
+        ]
+    )
+
+    report = external_storage_report(db, case.id, limit=50)
+    markdown = external_storage_markdown(report)
+    export_rows = external_storage_export_rows(report)
+
+    rows = [device for device in report["devices"] if device["normalized_serial"] == "6&31b8b127&0&1"]
+    assert len(rows) == 2
+    assert {row["observed_computers"] for row in rows} == {"Alpha", "Beta"}
+    assert all(row["observed_computer_count"] == 1 for row in rows)
+    assert all(row["identifier_type"] == "windows_generated_instance_id" for row in rows)
+    assert all(row["cross_computer_identity_basis"] == "windows_generated_instance_id_not_cross_host_safe" for row in rows)
+    assert all(row["cross_computer_confidence"] == "low" for row in rows)
+    assert all("should not be used by itself" in row["cross_computer_note"] for row in rows)
+    assert any(
+        row["section"] == "device"
+        and row["identifier_type"] == "windows_generated_instance_id"
+        and row["cross_computer_confidence"] == "low"
+        for row in export_rows
+    )
+    assert "windows_generated_instance_id_not_cross_host_safe" in markdown
+
 
 
 def test_external_storage_report_lists_unattributed_removable_volume_activity(tmp_path):

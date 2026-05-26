@@ -13143,6 +13143,10 @@ EXTERNAL_STORAGE_EXPORT_COLUMNS = [
     "image_path",
     "device_identity",
     "serial",
+    "identifier_type",
+    "cross_computer_identity_basis",
+    "cross_computer_confidence",
+    "cross_computer_note",
     "alternate_serial",
     "volume_serial_number",
     "volume_name",
@@ -13189,6 +13193,10 @@ def external_storage_export_rows(report: dict[str, Any]) -> list[dict[str, Any]]
                 id=device.get("id"),
                 device_identity=device.get("device_identity") or _external_storage_device_label(device),
                 serial=device.get("normalized_serial") or device.get("serial"),
+                identifier_type=device.get("identifier_type"),
+                cross_computer_identity_basis=device.get("cross_computer_identity_basis"),
+                cross_computer_confidence=device.get("cross_computer_confidence"),
+                cross_computer_note=device.get("cross_computer_note"),
                 alternate_serial=device.get("alternate_scsi_serial") or device.get("parent_device_serial"),
                 volume_serial_number=device.get("observed_volume_serial_numbers") or device.get("volume_serial_number"),
                 volume_name=device.get("volume_name"),
@@ -13333,6 +13341,10 @@ def _external_storage_export_row(case_id: str, section: str, source: dict[str, A
     row["case_id"] = case_id or _first_non_empty(source.get("case_id"))
     row["section"] = section
     row["attributable_computer"] = _first_non_empty(source.get("attributable_computer"), source.get("computer_label"), source.get("computer_id"))
+    row["identifier_type"] = _first_non_empty(source.get("identifier_type"))
+    row["cross_computer_identity_basis"] = _first_non_empty(source.get("cross_computer_identity_basis"))
+    row["cross_computer_confidence"] = _first_non_empty(source.get("cross_computer_confidence"))
+    row["cross_computer_note"] = _first_non_empty(source.get("cross_computer_note"))
     row["computer_id"] = _first_non_empty(source.get("computer_id"))
     row["image_id"] = _first_non_empty(source.get("image_id"))
     row["image_path"] = _first_non_empty(source.get("image_path"))
@@ -13389,6 +13401,9 @@ def external_storage_markdown(report: dict[str, Any]) -> str:
                     f"- Computer: `{device.get('computer_label') or device.get('computer_id') or ''}`",
                     f"- Observed computers: `{device.get('observed_computers') or ''}`",
                     f"- Serial: `{device.get('normalized_serial') or device.get('serial') or ''}`",
+                    f"- Identifier type: `{device.get('identifier_type') or ''}`",
+                    f"- Cross-computer identity: `{device.get('cross_computer_identity_basis') or ''}` / `{device.get('cross_computer_confidence') or ''}`",
+                    f"- Cross-computer note: `{device.get('cross_computer_note') or ''}`",
                     f"- SCSI/event serial: `{device.get('alternate_scsi_serial') or ''}`",
                     f"- Parent/device serial: `{device.get('parent_device_serial') or ''}`",
                     f"- VID/PID: `{device.get('normalized_vendor_id') or device.get('vendor_id') or ''}` / `{device.get('normalized_product_id') or device.get('product_id') or ''}`",
@@ -13627,12 +13642,18 @@ def _annotate_external_storage_devices(db: Database, case_id: str, devices: list
     observed = _external_storage_observed_computers(db, case_id)
     for device in devices:
         serial_key = _external_storage_serial_key(device.get("serial"))
+        identifier_type = _external_storage_identifier_type(serial_key)
         current_computer = str(device.get("computer_label") or device.get("computer_id") or "").strip()
-        computers = observed.get(serial_key, []) if serial_key else []
+        computers = observed.get(serial_key, []) if _external_storage_is_cross_host_serial(serial_key) else []
         if not computers and current_computer:
             computers = [current_computer]
+        identity = _external_storage_identity_assessment(device, identifier_type, len(computers))
         device["device_identity"] = _external_storage_device_label(device)
         device["normalized_serial"] = serial_key
+        device["identifier_type"] = identifier_type
+        device["cross_computer_identity_basis"] = identity["basis"]
+        device["cross_computer_confidence"] = identity["confidence"]
+        device["cross_computer_note"] = identity["note"]
         device["normalized_vendor_id"] = _normalize_external_storage_id_values(device.get("vendor_id"))
         device["normalized_product_id"] = _normalize_external_storage_id_values(device.get("product_id"))
         device["observed_drive_letters"] = _normalize_external_storage_drive_letters(device.get("drive_letter"))
@@ -13685,7 +13706,7 @@ def _external_storage_observed_computers(db: Database, case_id: str) -> dict[str
     observed: dict[str, list[str]] = {}
     for row in rows:
         serial_key = _external_storage_serial_key(row.get("serial"))
-        if not serial_key:
+        if not _external_storage_is_cross_host_serial(serial_key):
             continue
         computer_id = str(row.get("computer_id") or "").strip()
         label = str(labels.get(computer_id) or computer_id).strip()
@@ -13697,6 +13718,54 @@ def _external_storage_observed_computers(db: Database, case_id: str) -> dict[str
     for bucket in observed.values():
         bucket.sort(key=str.casefold)
     return observed
+
+
+def _external_storage_identifier_type(serial: Any) -> str:
+    value = _external_storage_serial_key(serial)
+    if not value:
+        return "none"
+    if _external_storage_is_windows_generated_id(value):
+        return "windows_generated_instance_id"
+    return "physical_serial"
+
+
+def _external_storage_is_cross_host_serial(serial: Any) -> bool:
+    value = _external_storage_serial_key(serial)
+    return bool(value and not _external_storage_is_windows_generated_id(value))
+
+
+def _external_storage_is_windows_generated_id(serial: Any) -> bool:
+    text = _external_storage_serial_key(serial).strip()
+    if not text:
+        return False
+    return bool(re.match(r"^[0-9]+&[0-9A-Fa-f]+(?:&|$)", text))
+
+
+def _external_storage_identity_assessment(device: dict[str, Any], identifier_type: str, observed_computer_count: int) -> dict[str, str]:
+    volume_serial = _normalize_external_storage_volume_serials(device.get("volume_serial_number"))
+    if identifier_type == "physical_serial":
+        return {
+            "basis": "physical_serial",
+            "confidence": "high" if observed_computer_count > 1 else "single_computer",
+            "note": "Cross-computer attribution is based on a non-generated USB serial." if observed_computer_count > 1 else "Only one computer is represented for this physical serial in the current report.",
+        }
+    if identifier_type == "windows_generated_instance_id":
+        return {
+            "basis": "windows_generated_instance_id_not_cross_host_safe",
+            "confidence": "low",
+            "note": "Identifier appears Windows-generated and should not be used by itself to track a physical USB device across computers.",
+        }
+    if volume_serial:
+        return {
+            "basis": "volume_serial_only",
+            "confidence": "medium",
+            "note": "Only a filesystem volume serial is available; this can link a volume but not prove the same physical USB device.",
+        }
+    return {
+        "basis": "no_cross_host_identifier",
+        "confidence": "none",
+        "note": "No cross-host-safe USB identifier is available.",
+    }
 
 
 def _split_external_storage_values(value: Any) -> list[str]:
