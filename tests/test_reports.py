@@ -77,6 +77,8 @@ from forensic_orchestrator.reports import (
     memory_credentials_report,
     memory_disk_correlations_markdown,
     memory_disk_correlations_report,
+    memory_support_files_markdown,
+    memory_support_files_report,
     processing_decision_markdown,
     processing_decision_report,
     processing_readiness_markdown,
@@ -304,6 +306,61 @@ def test_memory_artifacts_report_inventories_mounted_files(tmp_path):
     pagefile = next(row for row in report["artifacts"] if row["artifact_type"] == "pagefile")
     assert pagefile["processed_status"] == "processed"
     assert "Memory Artifact Inventory" in memory_artifacts_markdown(report)
+
+
+def test_memory_support_files_report_rolls_up_scan_status_and_categories(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    volume = case.root / "mounts" / "volumes" / "part-001"
+    volume.mkdir(parents=True)
+    pagefile = volume / "pagefile.sys"
+    hiberfil = volume / "hiberfil.sys"
+    pagefile.write_bytes(b"token=abcdef123456 C:\\Users\\Jane\\Desktop\\a.txt")
+    hiberfil.write_bytes(b"WAKE" + b"\x00" * 32)
+    db.log_activity(
+        case_id=case.id,
+        computer_id="computer-1",
+        image_id="image-1",
+        event="memory.profile_artifact_scanned",
+        message="Scanned memory-profile artifact for targeted strings",
+        details={
+            "source_path": str(pagefile),
+            "scanned_path": str(pagefile),
+            "scanner": "strings",
+            "decompress_status": "not_applicable",
+            "imported_rows": 1,
+        },
+    )
+    db.insert_memory_string_hits(
+        [
+            {
+                "id": "hit-1",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "output-1",
+                "source_artifact_type": "pagefile",
+                "source_path": str(pagefile),
+                "scanned_path": str(pagefile),
+                "hit_category": "credentials",
+                "matched_term": "token",
+                "string_value": "token=abcdef123456",
+                "string_sha256": "abc",
+                "offset": "10",
+            }
+        ]
+    )
+
+    report = memory_support_files_report(db, case.id)
+
+    assert report["summary"]["support_file_count"] == 2
+    assert report["summary"]["processed_count"] == 1
+    page_row = next(row for row in report["support_files"] if row["artifact_type"] == "pagefile")
+    assert page_row["hit_count"] == 1
+    assert page_row["categories"] == {"credentials": 1}
+    assert "Memory Support File Processing" in memory_support_files_markdown(report)
 
 
 def test_processing_readiness_report_lists_project_workflow_items(tmp_path):

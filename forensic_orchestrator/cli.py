@@ -4,7 +4,10 @@ import argparse
 import csv
 import json
 import logging
+import os
+import re
 import shutil
+import subprocess
 import sys
 import uuid
 from datetime import datetime, timezone
@@ -146,6 +149,8 @@ from .reports import (
     memory_credentials_report,
     memory_disk_correlations_markdown,
     memory_disk_correlations_report,
+    memory_support_files_markdown,
+    memory_support_files_report,
     memory_string_hits_report,
     windows_search_combined_markdown,
     windows_search_combined_report,
@@ -541,6 +546,7 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
         ("memory-analysis", "md", "Memory analysis", memory_analysis_markdown(memory_analysis_report(db, case_id, limit=limit))),
         ("memory-credentials", "md", "Memory credentials", memory_credentials_markdown(memory_credentials_report(db, case_id, limit=limit))),
         ("memory-disk-correlations", "md", "Memory/disk correlations", memory_disk_correlations_markdown(memory_disk)),
+        ("memory-support-files", "md", "Memory support files", memory_support_files_markdown(memory_support_files_report(db, case_id, limit=limit))),
         ("combined-artifacts", "md", "Combined artifact families", combined_artifact_family_markdown(combined_artifact_family_report(db, case_id, limit=limit, memory_disk_report=memory_disk))),
         ("crash-dump-analysis", "md", "Crash dump analysis", crash_dump_analysis_markdown(crash_dump_analysis_report(db, case_id, limit=limit))),
         ("suspicious-executions", "md", "Suspicious executions", suspicious_executions_markdown(suspicious_executions_report(db, case_id, limit=limit))),
@@ -588,6 +594,7 @@ def run_memory_processing_profile(
     image_id: str | None = None,
     min_length: int = 6,
     include_crash_dumps: bool = True,
+    extract_fallback: bool = True,
     workers: int = 1,
 ) -> dict[str, object]:
     timing_id = db.start_process_timing(
@@ -600,6 +607,7 @@ def run_memory_processing_profile(
         details={
             "profile": "memory-profile",
             "include_crash_dumps": include_crash_dumps,
+            "extract_fallback": extract_fallback,
             "requested_workers": workers,
             "effective_workers": max(1, workers),
             "parallel_scope": "memory_artifact_string_scans" if workers > 1 else "serial",
@@ -621,8 +629,30 @@ def run_memory_processing_profile(
             continue
         source = Path(str(artifact.get("actual_path") or artifact.get("path") or ""))
         if not source.exists() or not source.is_file():
-            scans.append({"artifact_path": artifact.get("path"), "artifact_type": artifact_type, "status": "skipped", "reason": "No accessible file path."})
-            continue
+            extracted = (
+                _extract_memory_artifact_fallback(
+                    db,
+                    paths,
+                    case_id=case_id,
+                    artifact=artifact,
+                    computer_id=computer_id,
+                    image_id=image_id,
+                )
+                if extract_fallback
+                else {"status": "disabled", "reason": "Extraction fallback disabled."}
+            )
+            if extracted.get("status") != "extracted":
+                scans.append(
+                    {
+                        "artifact_path": artifact.get("path"),
+                        "artifact_type": artifact_type,
+                        "status": "skipped",
+                        "reason": extracted.get("reason") or "No accessible file path.",
+                        "extract_status": extracted.get("status"),
+                    }
+                )
+                continue
+            source = Path(str(extracted["path"]))
         task_output_dir = output_base / f"{index:04d}"
         scan_tasks.append(
             ProcessingTask(
@@ -737,6 +767,104 @@ def run_memory_processing_profile(
     except Exception as exc:
         db.finish_process_timing(timing_id, status="failed", details={"error": str(exc)})
         raise
+
+
+def _extract_memory_artifact_fallback(
+    db: Database,
+    paths: WorkspacePaths,
+    *,
+    case_id: str,
+    artifact: dict[str, object],
+    computer_id: str | None = None,
+    image_id: str | None = None,
+) -> dict[str, object]:
+    icat = shutil.which("icat")
+    if not icat:
+        return {"status": "unavailable", "reason": "icat is not available on PATH."}
+    entry_number = str(artifact.get("entry_number") or "").strip()
+    if not entry_number:
+        return {"status": "missing_entry", "reason": "MFT entry number is unavailable for extraction."}
+    local_image_id = str(artifact.get("image_id") or image_id or "").strip()
+    image = _image_row_for_memory_artifact(db, case_id, local_image_id)
+    if not image:
+        return {"status": "missing_image", "reason": "No image path is available for MFT extraction."}
+    source_image = Path(str(image["path"]))
+    if not source_image.exists():
+        return {"status": "missing_image_file", "reason": f"Image path is not accessible: {source_image}"}
+    artifact_type = str(artifact.get("artifact_type") or "memory")
+    name = _safe_memory_extract_name(str(artifact.get("path") or artifact_type))
+    output_dir = paths.case_dir(case_id) / "supplemental" / "extracted-memory-support"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / name
+    if output_path.exists() and output_path.stat().st_size:
+        return {"status": "extracted", "path": str(output_path), "reason": "Existing extracted copy reused."}
+    offset = _icat_offset_for_image(db, case_id, str(image["id"]))
+    command = [icat, "-o", str(offset), str(source_image), entry_number]
+    try:
+        with output_path.open("wb") as handle:
+            completed = subprocess.run(command, stdout=handle, stderr=subprocess.PIPE, text=False, check=False, timeout=3600)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        output_path.unlink(missing_ok=True)
+        return {"status": "failed", "reason": str(exc)}
+    if completed.returncode != 0:
+        output_path.unlink(missing_ok=True)
+        return {"status": "failed", "reason": completed.stderr.decode("utf-8", errors="replace").strip()}
+    if not output_path.exists() or output_path.stat().st_size == 0:
+        output_path.unlink(missing_ok=True)
+        return {"status": "empty", "reason": "icat produced an empty output file."}
+    db.log_activity(
+        case_id=case_id,
+        computer_id=str(artifact.get("computer_id") or computer_id or image.get("computer_id") or "") or None,
+        image_id=str(image["id"]),
+        event="memory.support_file_extracted",
+        message="Extracted memory support file from image using MFT entry fallback",
+        details={
+            "artifact_path": artifact.get("path"),
+            "artifact_type": artifact_type,
+            "entry_number": entry_number,
+            "image_path": str(source_image),
+            "output_path": str(output_path),
+            "icat_offset": offset,
+        },
+    )
+    return {"status": "extracted", "path": str(output_path)}
+
+
+def _image_row_for_memory_artifact(db: Database, case_id: str, image_id: str | None) -> dict[str, object] | None:
+    if image_id:
+        row = db.conn.execute("SELECT id, computer_id, path FROM images WHERE case_id = ? AND id = ?", (case_id, image_id)).fetchone()
+        if row:
+            return dict(row)
+    row = db.conn.execute("SELECT id, computer_id, path FROM images WHERE case_id = ? ORDER BY created_at LIMIT 1", (case_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def _icat_offset_for_image(db: Database, case_id: str, image_id: str) -> int:
+    env_offset = os.environ.get("FORENSIC_ICAT_OFFSET")
+    if env_offset:
+        try:
+            return int(env_offset, 0)
+        except ValueError:
+            return 0
+    try:
+        row = db.conn.execute(
+            """
+            SELECT offset_bytes
+            FROM mounts
+            WHERE case_id = ? AND image_id = ? AND offset_bytes IS NOT NULL
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (case_id, image_id),
+        ).fetchone()
+    except Exception:
+        row = None
+    return int(row["offset_bytes"]) if row and row["offset_bytes"] is not None else 0
+
+
+def _safe_memory_extract_name(value: str) -> str:
+    name = Path(value.replace("\\", "/")).name or "memory.bin"
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", name)
 
 
 def usb_files_table(report: dict[str, object]) -> str:
@@ -991,6 +1119,7 @@ def build_parser() -> argparse.ArgumentParser:
     memory_profile.add_argument("--min-length", type=int, default=6)
     memory_profile.add_argument("--workers", type=int, default=1, help="Run file scanning with this many workers; database ingest remains serialized")
     memory_profile.add_argument("--no-crash-dumps", action="store_true")
+    memory_profile.add_argument("--no-extract-fallback", action="store_true", help="Do not extract MFT-discovered memory support files with icat when mounts are unavailable")
     memory_search_carves = memory_sub.add_parser("windows-search-carves")
     memory_search_carves.add_argument("--case", required=True, dest="case_id")
     memory_search_carves.add_argument("--path", required=True, help="Directory or file containing SearchIndexer SQLite memory carves")
@@ -2250,6 +2379,11 @@ def build_parser() -> argparse.ArgumentParser:
     report_processing_readiness.add_argument("--limit", type=int, default=100)
     report_processing_readiness.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
     report_processing_readiness.add_argument("--output")
+    report_readiness_gate = report_sub.add_parser("readiness-gate")
+    report_readiness_gate.add_argument("--case", required=True, dest="case_id")
+    report_readiness_gate.add_argument("--limit", type=int, default=100)
+    report_readiness_gate.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    report_readiness_gate.add_argument("--output")
     report_evidence_gaps = report_sub.add_parser("evidence-gaps")
     report_evidence_gaps.add_argument("--case", required=True, dest="case_id")
     report_evidence_gaps.add_argument("--limit", type=int, default=100)
@@ -2260,6 +2394,11 @@ def build_parser() -> argparse.ArgumentParser:
     report_memory_artifacts.add_argument("--limit", type=int, default=100)
     report_memory_artifacts.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
     report_memory_artifacts.add_argument("--output")
+    report_memory_support = report_sub.add_parser("memory-support-files")
+    report_memory_support.add_argument("--case", required=True, dest="case_id")
+    report_memory_support.add_argument("--limit", type=int, default=100)
+    report_memory_support.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
+    report_memory_support.add_argument("--output")
     report_memory_analysis = report_sub.add_parser("memory-analysis")
     report_memory_analysis.add_argument("--case", required=True, dest="case_id")
     report_memory_analysis.add_argument("--limit", type=int, default=100)
@@ -3171,6 +3310,7 @@ def run(args: argparse.Namespace) -> int:
                     image_id=args.image_id,
                     min_length=args.min_length,
                     include_crash_dumps=not args.no_crash_dumps,
+                    extract_fallback=not args.no_extract_fallback,
                     workers=args.workers,
                 )
             )
@@ -4504,6 +4644,19 @@ def run(args: argparse.Namespace) -> int:
                 )
             return 0
 
+        if args.resource == "report" and args.action == "readiness-gate":
+            report = processing_readiness_report(db, args.case_id, limit=args.limit)
+            failed = [row for row in report.get("items", []) if row.get("status") != "complete"]
+            write_report_output(
+                report,
+                report["items"],
+                args.format,
+                args.output,
+                title=f"Processing readiness gate for case {args.case_id}",
+                columns=["key", "title", "status", "next_step"],
+            )
+            return 1 if failed else 0
+
         if args.resource == "report" and args.action == "evidence-gaps":
             report = evidence_gaps_report(db, args.case_id, limit=args.limit)
             if args.format == "md":
@@ -4534,6 +4687,29 @@ def run(args: argparse.Namespace) -> int:
                 )
             return 0
 
+        if args.resource == "report" and args.action == "memory-support-files":
+            report = memory_support_files_report(db, args.case_id, limit=args.limit)
+            if args.format == "md":
+                write_text_output(memory_support_files_markdown(report), args.output)
+            else:
+                write_report_output(
+                    report,
+                    report["support_files"],
+                    args.format,
+                    args.output,
+                    title=f"Memory support file processing for case {args.case_id}",
+                    columns=[
+                        "artifact_type",
+                        "processed_status",
+                        "scan_status",
+                        "hit_count",
+                        "decompress_status",
+                        "hiberfil_status",
+                        "path",
+                    ],
+                )
+            return 0
+
         if args.resource == "report" and args.action == "memory-analysis":
             report = memory_analysis_report(db, args.case_id, limit=args.limit)
             if args.format == "md":
@@ -4560,7 +4736,7 @@ def run(args: argparse.Namespace) -> int:
                     args.format,
                     args.output,
                     title=f"Memory credential review for case {args.case_id}",
-                    columns=["credential_status", "matched_term", "display_value", "source_artifact_type", "offset", "credential_reason"],
+                    columns=["credential_triage", "credential_score", "credential_status", "matched_term", "display_value", "source_artifact_type", "offset", "credential_reason"],
                 )
             return 0
 

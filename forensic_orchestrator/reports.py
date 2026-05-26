@@ -303,6 +303,7 @@ def regression_smoke_report(db: Database, case_id: str, *, limit: int = 10) -> d
         ("summary", lambda: case_summary_report(db, case_id)),
         ("evidence_gaps", lambda: evidence_gaps_report(db, case_id, limit=limit)),
         ("memory_artifacts", lambda: memory_artifacts_report(db, case_id, limit=limit)),
+        ("memory_support_files", lambda: memory_support_files_report(db, case_id, limit=limit)),
         ("memory_analysis", lambda: memory_analysis_report(db, case_id, limit=limit)),
         ("memory_credentials", lambda: memory_credentials_report(db, case_id, limit=limit)),
         ("memory_disk_correlations", lambda: memory_disk_correlations_report(db, case_id, limit=limit)),
@@ -17941,6 +17942,7 @@ def processing_readiness_report(db: Database, case_id: str, *, limit: int = 100)
     postprocess_rows = [row for row in timings.get("timings") or [] if row.get("scope") == "postprocess"]
     worker_rows = timings.get("worker_requests") or []
     memory_summary = memory.get("summary") or {}
+    memory_support_summary = memory_support_files_report(db, case_id, limit=max(limit, 100)).get("summary") or {}
     recovery_summary = recovery.get("summary") or {}
     carve_summary = carve.get("summary") or {}
     decision_summary = decisions.get("summary") or {}
@@ -17970,6 +17972,7 @@ def processing_readiness_report(db: Database, case_id: str, *, limit: int = 100)
     add("hiberfil_inventory", "Hiberfil status is assessed when present", not memory_summary.get("hiberfil_present") or any(row.get("hiberfil_status") for row in memory.get("artifacts") or [] if row.get("artifact_type") == "hiberfil"), memory_summary, "Run memory-artifacts against an accessible hiberfil.sys.")
     add("crash_dump_inventory", "Crash/process dumps are inventoried", bool(memory_summary.get("crash_dump_present") or memory_summary.get("process_dump_present")), memory_summary, "Run memory crash-dumps when dumps exist or document absence.")
     add("memory_processed", "Memory artifacts have been processed", bool(memory_summary.get("processed_count")), memory_summary, "Run memory profile or memory crash-dumps.")
+    add("memory_support_report", "Memory support-file processing is summarized", bool(memory_support_summary.get("support_file_count")), memory_support_summary, "Run report memory-support-files after memory inventory.")
     add("memory_timeline", "Memory string hits can feed the timeline", _report_table_count(db, case_id, "memory_string_hits") == 0 or _report_table_count(db, case_id, "timeline_events") > 0, {"memory_string_hits": _report_table_count(db, case_id, "memory_string_hits"), "timeline_events": _report_table_count(db, case_id, "timeline_events")}, "Re-run memory processing or timeline rebuild.")
     add("carve_coverage", "Carve scan ranges or staged carves are tracked", bool(carve_summary.get("scan_range_count") or carve_summary.get("carve_count")), carve_summary, "Run explicit carve sqlite/ese commands for in-scope sources.")
     add("carve_empty_ranges", "Zero-hit carve ranges are recorded", bool(carve_summary.get("scan_range_count")), carve_summary, "Use chunked carve scanning so empty coverage is documented.")
@@ -17984,6 +17987,7 @@ def processing_readiness_report(db: Database, case_id: str, *, limit: int = 100)
     add("deep_recovery_separated", "Deep recovery is represented separately from windows-full", True, {"profiles": ["windows-basic-evtx-deep-recovery", "windows-browser-deep-recovery", "windows-full-deep-recovery"]}, "")
     add("windows_old_scoped", "Windows.old is tracked as a separate source scope", any(row.get("source_scope") == "Windows.old" for row in timings.get("timings") or []), {"windows_old_timings": sum(1 for row in timings.get("timings") or [] if row.get("source_scope") == "Windows.old")}, "Run windows-old or a profile that includes Windows.old when present.")
     add("combined_reports", "Combined disk/memory reports are available", True, {"reports": ["combined-artifacts", "memory-disk-correlations", "windows-search-combined"]}, "")
+    add("ual_external_option", "UAL external parser option is checked", True, {"ual_timeliner": shutil.which("ual-timeliner") or os.environ.get("UAL_TIMELINER_BIN") or "not installed; internal parser fallback remains available"}, "")
     add("processing_decisions", "Processing decisions report has evaluated follow-ups", True, decision_summary, "")
     add("duckdb_write_serialized", "Same-case DuckDB writes are serialized", True, {"lock_file": "events.duckdb.write.lock"}, "")
     backlog_path = Path(__file__).resolve().parents[1] / "docs" / "OUTSTANDING_ITEMS.md"
@@ -18147,6 +18151,219 @@ def memory_artifacts_markdown(report: dict[str, Any]) -> str:
     lines.extend(["", "## Notes", ""])
     for note in report.get("notes") or []:
         lines.append(f"- {note}")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def memory_support_files_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str, Any]:
+    db.get_case(case_id)
+    artifacts = memory_artifacts_report(db, case_id, limit=max(limit, 5000)).get("artifacts") or []
+    hits = _query_report_rows(
+        db,
+        case_id,
+        "memory_string_hits",
+        """
+        SELECT source_artifact_type, source_path, scanned_path, decompressed_path,
+               hit_category, COUNT(*) AS hit_count
+        FROM memory_string_hits
+        WHERE case_id = ?
+        GROUP BY source_artifact_type, source_path, scanned_path, decompressed_path, hit_category
+        """,
+        (case_id,),
+    )
+    scan_activity = _memory_scan_activity_rows(db, case_id)
+    scan_by_source: dict[str, dict[str, Any]] = {}
+    scan_by_artifact_type: dict[str, dict[str, Any]] = {}
+    for row in scan_activity:
+        for key in ("source_path", "original_source_path", "scanned_path"):
+            normalized = _normalize_memory_source_key(row.get(key))
+            if normalized:
+                scan_by_source[normalized] = row
+        artifact_type = str(row.get("source_artifact_type") or row.get("artifact_type") or "")
+        if artifact_type:
+            scan_by_artifact_type.setdefault(artifact_type, row)
+    hit_by_source: dict[str, dict[str, Any]] = {}
+    for row in hits:
+        keys = {
+            _normalize_memory_source_key(row.get("source_path")),
+            _normalize_memory_source_key(row.get("scanned_path")),
+            _normalize_memory_source_key(row.get("decompressed_path")),
+        }
+        for key in keys:
+            if not key:
+                continue
+            bucket = hit_by_source.setdefault(key, {"hit_count": 0, "categories": {}, "source_artifact_type": row.get("source_artifact_type")})
+            count = int(row.get("hit_count") or 0)
+            bucket["hit_count"] += count
+            categories = bucket.setdefault("categories", {})
+            categories[str(row.get("hit_category") or "unknown")] = int(categories.get(str(row.get("hit_category") or "unknown"), 0)) + count
+    items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for artifact in artifacts:
+        keys = [
+            _normalize_memory_source_key(artifact.get("actual_path")),
+            _normalize_memory_source_key(artifact.get("path")),
+        ]
+        key = next((candidate for candidate in keys if candidate in hit_by_source or candidate in scan_by_source), keys[0] or keys[1] or "")
+        if key in seen:
+            continue
+        seen.add(key)
+        scan = scan_by_source.get(key) or scan_by_artifact_type.get(str(artifact.get("artifact_type") or "")) or {}
+        if scan:
+            for scan_key in ("source_path", "original_source_path", "scanned_path", "decompressed_path"):
+                normalized_scan_key = _normalize_memory_source_key(scan.get(scan_key))
+                if normalized_scan_key:
+                    seen.add(normalized_scan_key)
+        hit = hit_by_source.get(key, {})
+        if not hit and scan:
+            for scan_key in ("source_path", "original_source_path", "scanned_path", "decompressed_path"):
+                hit = hit_by_source.get(_normalize_memory_source_key(scan.get(scan_key)), {})
+                if hit:
+                    break
+        hit_count = int(hit.get("hit_count") or 0)
+        processed = artifact.get("processed_status") == "processed" or bool(scan) or hit_count > 0
+        items.append(
+            {
+                "artifact_type": artifact.get("artifact_type"),
+                "path": artifact.get("path"),
+                "actual_path": artifact.get("actual_path"),
+                "source": artifact.get("source"),
+                "size_bytes": artifact.get("size_bytes"),
+                "entry_number": artifact.get("entry_number"),
+                "sequence_number": artifact.get("sequence_number"),
+                "processed_status": "processed" if processed else "not_processed",
+                "scan_status": scan.get("status") or ("scanned" if hit_count else ""),
+                "hit_count": hit_count,
+                "categories": hit.get("categories") or {},
+                "scanner": scan.get("scanner") or "",
+                "decompress_status": scan.get("decompress_status") or "",
+                "decompress_error": scan.get("decompress_error") or "",
+                "hiberfil_status": scan.get("hiberfil_status") or artifact.get("hiberfil_status") or "",
+                "hiberfil_note": scan.get("hiberfil_note") or artifact.get("hiberfil_note") or "",
+                "scanned_path": scan.get("scanned_path") or "",
+                "output": scan.get("output") or "",
+                "imported_rows": scan.get("imported_rows"),
+                "notes": artifact.get("notes"),
+            }
+        )
+    for key, hit in hit_by_source.items():
+        if key in seen:
+            continue
+        seen.add(key)
+        scan = scan_by_source.get(key, {})
+        items.append(
+            {
+                "artifact_type": hit.get("source_artifact_type") or scan.get("source_artifact_type") or "",
+                "path": scan.get("source_path") or key,
+                "actual_path": scan.get("source_path") or key,
+                "source": "memory_string_hits",
+                "processed_status": "processed",
+                "scan_status": scan.get("status") or "scanned",
+                "hit_count": int(hit.get("hit_count") or 0),
+                "categories": hit.get("categories") or {},
+                "scanner": scan.get("scanner") or "",
+                "decompress_status": scan.get("decompress_status") or "",
+                "decompress_error": scan.get("decompress_error") or "",
+                "hiberfil_status": scan.get("hiberfil_status") or "",
+                "hiberfil_note": scan.get("hiberfil_note") or "",
+                "scanned_path": scan.get("scanned_path") or "",
+                "output": scan.get("output") or "",
+                "imported_rows": scan.get("imported_rows"),
+                "notes": "Processed memory source not present in current artifact inventory.",
+            }
+        )
+    for key, scan in scan_by_source.items():
+        if key in seen or key in hit_by_source:
+            continue
+        seen.add(key)
+        items.append(
+            {
+                "artifact_type": scan.get("source_artifact_type") or scan.get("artifact_type") or "",
+                "path": scan.get("original_source_path") or scan.get("source_path") or key,
+                "actual_path": scan.get("source_path") or key,
+                "source": "activity_log",
+                "processed_status": "processed",
+                "scan_status": scan.get("status") or "scanned",
+                "hit_count": int(scan.get("imported_rows") or 0),
+                "categories": {},
+                "scanner": scan.get("scanner") or "",
+                "decompress_status": scan.get("decompress_status") or "",
+                "decompress_error": scan.get("decompress_error") or "",
+                "hiberfil_status": scan.get("hiberfil_status") or "",
+                "hiberfil_note": scan.get("hiberfil_note") or "",
+                "scanned_path": scan.get("scanned_path") or "",
+                "output": scan.get("output") or "",
+                "imported_rows": scan.get("imported_rows"),
+                "notes": "Processed memory source recorded in activity log with no imported string hits.",
+            }
+        )
+    items.sort(key=lambda row: (str(row.get("artifact_type") or ""), str(row.get("path") or "")))
+    return {
+        "case_id": case_id,
+        "summary": {
+            "support_file_count": len(items),
+            "processed_count": sum(1 for row in items if row.get("processed_status") == "processed"),
+            "not_processed_count": sum(1 for row in items if row.get("processed_status") != "processed"),
+            "hit_count": sum(int(row.get("hit_count") or 0) for row in items),
+            "hiberfil_count": sum(1 for row in items if row.get("artifact_type") == "hiberfil"),
+            "decompress_caveat_count": sum(1 for row in items if row.get("decompress_status") and row.get("decompress_status") != "decompressed" and row.get("decompress_status") != "not_applicable"),
+            "sources": _count_by_key(items, "artifact_type"),
+        },
+        "support_files": items[:limit],
+        "total_returned": min(len(items), limit),
+        "caveats": [
+            "A processed memory support file means targeted string scanning completed or produced logged scan metadata.",
+            "Zero imported rows is a useful negative result when the scan status and source file are recorded.",
+            "Hiberfil decompression failures are reported as caveats; raw-file string scans may still produce leads but are not equivalent to full decompression.",
+        ],
+    }
+
+
+def memory_support_files_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    lines = [
+        "# Memory Support File Processing",
+        "",
+        f"Case: `{report.get('case_id') or ''}`",
+        "",
+        "## Summary",
+        "",
+        f"- Support files: `{summary.get('support_file_count', 0)}`",
+        f"- Processed: `{summary.get('processed_count', 0)}`",
+        f"- Not processed: `{summary.get('not_processed_count', 0)}`",
+        f"- Memory string hits: `{summary.get('hit_count', 0)}`",
+        f"- Hiberfil files: `{summary.get('hiberfil_count', 0)}`",
+        f"- Decompression caveats: `{summary.get('decompress_caveat_count', 0)}`",
+        "",
+        "## Files",
+        "",
+    ]
+    rows = report.get("support_files") if isinstance(report.get("support_files"), list) else []
+    if not rows:
+        lines.append("- No memory support files were inventoried.")
+    for row in rows:
+        category_text = ", ".join(f"{key}:{value}" for key, value in sorted((row.get("categories") or {}).items()))
+        lines.append(
+            f"- `{row.get('artifact_type') or ''}` `{row.get('processed_status') or ''}` "
+            f"hits `{row.get('hit_count') or 0}` path `{row.get('path') or ''}`"
+        )
+        details = []
+        if row.get("scan_status"):
+            details.append(f"scan `{row.get('scan_status')}`")
+        if row.get("scanner"):
+            details.append(f"scanner `{row.get('scanner')}`")
+        if row.get("decompress_status"):
+            details.append(f"decompress `{row.get('decompress_status')}`")
+        if category_text:
+            details.append(f"categories `{category_text}`")
+        if details:
+            lines.append(f"  - {'; '.join(details)}")
+        if row.get("hiberfil_status"):
+            lines.append(f"  - hiberfil `{row.get('hiberfil_status')}` {row.get('hiberfil_note') or ''}")
+        if row.get("decompress_error"):
+            lines.append(f"  - decompression caveat: `{str(row.get('decompress_error'))[:180]}`")
+    lines.extend(["", "## Caveats", ""])
+    for caveat in report.get("caveats") or []:
+        lines.append(f"- {caveat}")
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -18335,6 +18552,7 @@ def memory_credentials_report(db: Database, case_id: str, *, limit: int = 100, r
         item = dict(row)
         assessment = _assess_memory_credential_hit(item.get("string_value"), item.get("matched_term"))
         item.update(assessment)
+        item.update(_memory_credential_score(item))
         item["display_value"] = item.get("string_value") if reveal else _redact_memory_credential(item.get("string_value"))
         reviewed.append(item)
     reviewed = _dedupe_memory_credentials(reviewed)[:limit]
@@ -18346,6 +18564,7 @@ def memory_credentials_report(db: Database, case_id: str, *, limit: int = 100, r
             "likely_usable_count": sum(1 for row in reviewed if row.get("credential_status") == "likely_usable_secret"),
             "possible_secret_count": sum(1 for row in reviewed if row.get("credential_status") == "possible_secret"),
             "false_positive_or_label_count": sum(1 for row in reviewed if row.get("credential_status") == "label_or_false_positive"),
+            "high_value_candidate_count": sum(1 for row in reviewed if row.get("credential_triage") == "high_value_candidate"),
         },
         "credentials": reviewed,
         "total_returned": len(reviewed),
@@ -18371,6 +18590,7 @@ def memory_credentials_markdown(report: dict[str, Any]) -> str:
         f"- Confirmed usable credentials: `{summary.get('confirmed_usable_count', 0)}`",
         f"- Likely usable secrets: `{summary.get('likely_usable_count', 0)}`",
         f"- Possible secrets: `{summary.get('possible_secret_count', 0)}`",
+        f"- High-value candidates: `{summary.get('high_value_candidate_count', 0)}`",
         f"- Labels/false positives: `{summary.get('false_positive_or_label_count', 0)}`",
         "",
         "## Reviewed Hits",
@@ -18381,7 +18601,7 @@ def memory_credentials_markdown(report: dict[str, Any]) -> str:
         lines.append("- No memory credential hits were imported.")
     for row in rows:
         lines.append(
-            f"- `{row.get('credential_validation_status') or ''}` `{row.get('credential_status') or ''}` `{row.get('matched_term') or ''}` "
+            f"- `{row.get('credential_validation_status') or ''}` `{row.get('credential_status') or ''}` triage `{row.get('credential_triage') or ''}` score `{row.get('credential_score') or 0}` `{row.get('matched_term') or ''}` "
             f"source `{row.get('source_artifact_type') or ''}` offset `{row.get('offset') or ''}` "
             f"value `{row.get('display_value') or ''}` reason: {row.get('credential_reason') or ''}"
         )
@@ -18753,6 +18973,49 @@ def _redact_memory_credential(value: Any) -> str:
     if redacted != text:
         return redacted[:240]
     return f"<redacted-context:{_short_hash(text)}>"
+
+
+def _memory_credential_score(row: dict[str, Any]) -> dict[str, Any]:
+    status = str(row.get("credential_status") or "")
+    text = str(row.get("string_value") or "")
+    matched = str(row.get("matched_term") or "").casefold()
+    score = 0
+    reasons: list[str] = []
+    if status == "likely_usable_secret":
+        score += 70
+        reasons.append("assignment_or_bearer_pattern")
+    elif status == "possible_secret":
+        score += 35
+        reasons.append("credential_keyword_present")
+    if matched in {"bearer ", "refresh_token", "token"}:
+        score += 15
+        reasons.append("token_term")
+    assignment = _MEMORY_CREDENTIAL_ASSIGNMENT_RE.search(text) or _MEMORY_BEARER_RE.search(text)
+    if assignment:
+        secret = assignment.group("secret")
+        if len(secret) >= 24:
+            score += 10
+            reasons.append("long_secret_value")
+        if re.search(r"[A-Za-z]", secret) and re.search(r"\d", secret):
+            score += 5
+            reasons.append("mixed_alpha_numeric")
+    if _MEMORY_URL_RE.search(text) or _MEMORY_EMAIL_RE.search(text):
+        score += 5
+        reasons.append("service_context_present")
+    if status == "label_or_false_positive":
+        score = 0
+    score = max(0, min(score, 100))
+    if score >= 75:
+        triage = "high_value_candidate"
+    elif score >= 35:
+        triage = "review_candidate"
+    else:
+        triage = "low_value_or_noise"
+    return {
+        "credential_score": score,
+        "credential_triage": triage,
+        "credential_score_reasons": ",".join(reasons),
+    }
 
 
 def _memory_secret_is_placeholder(value: Any) -> bool:
@@ -26761,7 +27024,24 @@ def _mft_memory_artifacts(db: Database, case_id: str, *, limit: int) -> list[dic
         return []
     if "file_name" not in columns:
         return []
-    select_columns = [column for column in ("file_name", "parent_path", "extension", "file_size", "created_si", "modified_si", "accessed_si", "source_csv") if column in columns]
+    select_columns = [
+        column
+        for column in (
+            "computer_id",
+            "image_id",
+            "entry_number",
+            "sequence_number",
+            "file_name",
+            "parent_path",
+            "extension",
+            "file_size",
+            "created_si",
+            "modified_si",
+            "accessed_si",
+            "source_csv",
+        )
+        if column in columns
+    ]
     if not select_columns:
         return []
     rows = _query_report_rows(
@@ -26800,6 +27080,10 @@ def _mft_memory_artifacts(db: Database, case_id: str, *, limit: int) -> list[dic
             {
                 "artifact_type": _memory_artifact_type(name),
                 "path": display_evidence_path(path),
+                "computer_id": row.get("computer_id"),
+                "image_id": row.get("image_id"),
+                "entry_number": row.get("entry_number"),
+                "sequence_number": row.get("sequence_number"),
                 "size_bytes": _int_or_none(row.get("file_size")),
                 "source": "mft_entries",
                 "processed_status": "not_processed",
@@ -26949,6 +27233,32 @@ def _processed_memory_sources(db: Database, case_id: str) -> set[str]:
             normalized = _normalize_memory_source_key(details.get(key))
             if normalized:
                 output.add(normalized)
+    return output
+
+
+def _memory_scan_activity_rows(db: Database, case_id: str) -> list[dict[str, Any]]:
+    rows = db.conn.execute(
+        """
+        SELECT created_at, event, level, message, details_json
+        FROM activity_log
+        WHERE case_id = ?
+          AND event IN ('memory.strings_scanned', 'memory.profile_artifact_scanned', 'memory.crash_dump_scanned')
+        ORDER BY created_at DESC
+        """,
+        (case_id,),
+    ).fetchall()
+    output: list[dict[str, Any]] = []
+    for row in rows:
+        details = _json_details(row["details_json"])
+        item = {
+            "created_at": row["created_at"],
+            "event": row["event"],
+            "level": row["level"],
+            "message": row["message"],
+            "status": "scanned",
+            **details,
+        }
+        output.append(item)
     return output
 
 
