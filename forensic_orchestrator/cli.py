@@ -272,6 +272,18 @@ from .safety import OrchestratorError
 from .artifact_dedupe import rebuild_artifact_windows_old_dedupe
 from .correlation_framework import rebuild_correlation_framework
 from .sessions import rebuild_sessions
+from .standalone import (
+    artifact_capability_report,
+    backup_case_databases,
+    benchmark_report,
+    dependency_report,
+    doctor_report,
+    job_status_report,
+    profile_catalog_report,
+    schema_status_report,
+    standalone_backlog_report,
+    version_report,
+)
 from .timeline_dedupe import rebuild_timeline_windows_old_dedupe
 from .tools.profiles import profile_extraction_preview, run_profile
 from .tools.registry import ToolRegistry
@@ -1207,6 +1219,7 @@ def usb_timeline_table(report: dict[str, object]) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="forensic-orchestrator")
     parser.add_argument("--root", help="Workspace root directory")
+    parser.add_argument("--config", help="YAML config file with root and plugins values")
     parser.add_argument("--plugin", action="append", help="Tool plugin YAML path")
     parser.add_argument("--dry-run", action="store_true", help="Record and print commands without executing")
 
@@ -2789,6 +2802,46 @@ def build_parser() -> argparse.ArgumentParser:
     search_show.add_argument("--format", choices=["json", "table"], default="json")
     search_show.add_argument("--output")
 
+    standalone = subparsers.add_parser("standalone")
+    standalone_sub = standalone.add_subparsers(dest="action", required=True)
+    standalone_doctor = standalone_sub.add_parser("doctor")
+    standalone_doctor.add_argument("--case", dest="case_id")
+    standalone_doctor.add_argument("--profile")
+    standalone_doctor.add_argument("--format", choices=["json", "table"], default="json")
+    standalone_doctor.add_argument("--output")
+    standalone_version = standalone_sub.add_parser("version")
+    standalone_version.add_argument("--format", choices=["json", "table"], default="json")
+    standalone_version.add_argument("--output")
+    standalone_dependencies = standalone_sub.add_parser("dependencies")
+    standalone_dependencies.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    standalone_dependencies.add_argument("--output")
+    standalone_profiles = standalone_sub.add_parser("profile-catalog")
+    standalone_profiles.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    standalone_profiles.add_argument("--output")
+    standalone_capabilities = standalone_sub.add_parser("artifact-capability")
+    standalone_capabilities.add_argument("--profile")
+    standalone_capabilities.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    standalone_capabilities.add_argument("--output")
+    standalone_schema = standalone_sub.add_parser("schema-status")
+    standalone_schema.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    standalone_schema.add_argument("--output")
+    standalone_backup = standalone_sub.add_parser("backup")
+    standalone_backup.add_argument("--case", required=True, dest="case_id")
+    standalone_backup.add_argument("--output-dir", required=True)
+    standalone_jobs = standalone_sub.add_parser("jobs")
+    standalone_jobs.add_argument("--case", required=True, dest="case_id")
+    standalone_jobs.add_argument("--limit", type=int, default=100)
+    standalone_jobs.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    standalone_jobs.add_argument("--output")
+    standalone_benchmark = standalone_sub.add_parser("benchmark")
+    standalone_benchmark.add_argument("--case", required=True, dest="case_id")
+    standalone_benchmark.add_argument("--limit", type=int, default=100)
+    standalone_benchmark.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    standalone_benchmark.add_argument("--output")
+    standalone_backlog = standalone_sub.add_parser("backlog")
+    standalone_backlog.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    standalone_backlog.add_argument("--output")
+
     return parser
 
 
@@ -2813,13 +2866,76 @@ def command_preview(db: Database, case_id: str) -> list[dict[str, object]]:
 
 def run(args: argparse.Namespace) -> int:
     configure_logging()
-    config = load_config(root=args.root, plugins=args.plugin)
+    config = load_config(root=args.root, plugins=args.plugin, config_path=args.config)
     paths = WorkspacePaths(config.root)
     paths.ensure_root()
     db = Database(paths.db_path())
     registry = ToolRegistry.from_files(config.plugin_paths)
 
     try:
+        if args.resource == "standalone" and args.action == "doctor":
+            report = doctor_report(db, paths, registry, case_id=args.case_id, profile=args.profile)
+            if args.format == "table":
+                write_report_output(
+                    report,
+                    report["checks"],
+                    "table",
+                    args.output,
+                    title="Standalone doctor",
+                    columns=["name", "passed", "details"],
+                )
+            else:
+                write_text_output(json.dumps(report, indent=2, default=str), args.output)
+            return 0 if report.get("passed") else 1
+
+        if args.resource == "standalone" and args.action == "version":
+            report = version_report(paths.root, config.plugin_paths)
+            if args.format == "table":
+                write_report_output(report, [report], "table", args.output, title="Standalone version", columns=["application", "version", "python", "platform", "root"])
+            else:
+                write_text_output(json.dumps(report, indent=2, default=str), args.output)
+            return 0
+
+        if args.resource == "standalone" and args.action == "dependencies":
+            report = dependency_report()
+            rows = [*report["required"], *report["optional"]]
+            write_report_output(report, rows, args.format, args.output, title="Standalone dependencies", columns=["tool", "required", "available", "path", "purpose"])
+            return 1 if report["summary"]["required_missing"] else 0
+
+        if args.resource == "standalone" and args.action == "profile-catalog":
+            report = profile_catalog_report(registry)
+            write_report_output(report, report["profiles"], args.format, args.output, title="Profile catalog", columns=["profile", "tool_count", "extraction_policy", "recovery_tier", "carve_stage", "description"])
+            return 0
+
+        if args.resource == "standalone" and args.action == "artifact-capability":
+            report = artifact_capability_report(registry, profile=args.profile)
+            write_report_output(report, report["artifacts"], args.format, args.output, title="Artifact capability matrix", columns=["profile", "tool_name", "artifact_name", "method", "optional", "recursive", "source", "destination"])
+            return 0
+
+        if args.resource == "standalone" and args.action == "schema-status":
+            report = schema_status_report(db)
+            write_report_output(report, report["objects"], args.format, args.output, title="Schema status", columns=["table", "type"])
+            return 0
+
+        if args.resource == "standalone" and args.action == "backup":
+            print_json(backup_case_databases(db, paths, case_id=args.case_id, output_dir=Path(args.output_dir)))
+            return 0
+
+        if args.resource == "standalone" and args.action == "jobs":
+            report = job_status_report(db, case_id=args.case_id, limit=args.limit)
+            write_report_output(report, report["jobs"], args.format, args.output, title=f"Jobs for case {args.case_id}", columns=["status", "tool_name", "source_scope", "exit_code", "start_time", "end_time", "output_folder"])
+            return 0
+
+        if args.resource == "standalone" and args.action == "benchmark":
+            report = benchmark_report(db, case_id=args.case_id, limit=args.limit)
+            write_report_output(report, report["timings"], args.format, args.output, title=f"Benchmark timings for case {args.case_id}", columns=["duration_ms", "scope", "phase", "name", "tool_name", "artifact_name", "status"])
+            return 0
+
+        if args.resource == "standalone" and args.action == "backlog":
+            report = standalone_backlog_report()
+            write_report_output(report, report["items"], args.format, args.output, title="Standalone pre-UI backlog", columns=["number", "status", "item"])
+            return 0
+
         if args.resource == "process":
             case_id = args.case_id or create_case(db, paths)
             db.get_case(case_id)

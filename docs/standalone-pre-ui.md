@@ -1,0 +1,72 @@
+# Standalone Pre-UI Checklist
+
+This is the pre-UI operator surface for running the project as a standalone CLI
+tool.
+
+## Install
+
+```bash
+uv sync
+uv run forensic-orchestrator standalone version
+uv run forensic-orchestrator standalone dependencies
+```
+
+Supported target: Linux with Python 3.11 or newer. Windows evidence processing
+expects Linux forensic tooling such as Sleuth Kit, libewf, ntfs-3g, qemu-img,
+and optional memory tooling.
+
+## Config File
+
+Use `--config` or `FORENSIC_ORCHESTRATOR_CONFIG` with YAML:
+
+```yaml
+root: /mnt/forensic-ssd/forensic-orchestrator
+plugins:
+  - /home/lee/projects/investigator/forensic_orchestrator/plugins/eztools.yaml
+```
+
+Command-line `--root` and `--plugin` values override the file.
+
+## First-Run Doctor
+
+```bash
+uv run forensic-orchestrator --config config.yaml standalone doctor
+uv run forensic-orchestrator --config config.yaml standalone doctor --case CASE_ID --profile windows-full
+```
+
+The doctor checks Python/OS support, workspace availability, schema migration,
+external dependencies, loaded tools/profiles, optional case readiness, and
+unfinished jobs.
+
+## Standalone Commands
+
+- `standalone version`: application, Python, OS, root, and plugin paths.
+- `standalone dependencies`: required and optional external tools.
+- `standalone profile-catalog`: configured workflow profiles.
+- `standalone artifact-capability`: tool/artifact extraction matrix.
+- `standalone schema-status`: SQLite schema version and objects.
+- `standalone backup --case CASE_ID --output-dir DIR`: copy SQLite and DuckDB
+  databases with a manifest.
+- `standalone jobs --case CASE_ID`: recent job status.
+- `standalone benchmark --case CASE_ID`: slowest recorded process timings.
+- `standalone backlog`: the pre-UI standalone hardening checklist.
+
+## Operational Defaults
+
+Use `report write-bundle` for report bundle defaults, `report regression-smoke`
+for end-to-end report health checks, and `image cleanup-stale-mounts` when FUSE
+mount paths become inaccessible.
+
+Credential reports redact values by default. Use `report memory-credentials
+--reveal` only for controlled examiner output, and record analyst decisions with
+`report memory-credential-review`.
+
+## Troubleshooting
+
+- FUSE: ensure `/etc/fuse.conf` contains `user_allow_other` when needed, and use
+  `image cleanup-stale-mounts --apply` only after reviewing the dry-run output.
+- DuckDB: same-case writes are serialized with the case write lock; stale locks
+  should only be removed after confirming no processing process is active.
+- Missing tools: run `standalone dependencies`; optional tools reduce coverage
+  but should not fail normal profiles unless the selected artifact requires them.
+
