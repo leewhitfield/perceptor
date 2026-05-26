@@ -366,16 +366,27 @@ def write_text_output(text: str, output: str | None = None) -> None:
 
 def write_csv_rows(rows: list[dict[str, object]], output: str | None = None) -> None:
     rows = [_flatten_row(sanitize_report_paths(row)) for row in rows]
-    fieldnames = list(rows[0].keys()) if rows else []
+    fieldnames = _csv_fieldnames(rows)
     if output:
         with Path(output).open("w", newline="", encoding="utf-8") as handle:
-            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
             writer.writeheader()
             writer.writerows(rows)
         return
-    writer = csv.DictWriter(sys.stdout, fieldnames=fieldnames)
+    writer = csv.DictWriter(sys.stdout, fieldnames=fieldnames, extrasaction="ignore")
     writer.writeheader()
     writer.writerows(rows)
+
+
+def _csv_fieldnames(rows: list[dict[str, object]]) -> list[str]:
+    fieldnames: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        for key in row:
+            if key not in seen:
+                fieldnames.append(key)
+                seen.add(key)
+    return fieldnames
 
 
 def _flatten_row(row: dict[str, object]) -> dict[str, object]:

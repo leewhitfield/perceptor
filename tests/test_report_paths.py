@@ -1,3 +1,6 @@
+import csv
+
+from forensic_orchestrator.cli import write_csv_rows
 from forensic_orchestrator.report_paths import display_evidence_path, sanitize_report_paths, sanitize_report_text
 
 
@@ -84,3 +87,24 @@ def test_sanitize_report_text_strips_case_prefixes_and_drive_letters():
         "2b1fdb43-1ae6-45c2-9b21-9c920ea784f9/Windows.old/Windows/System32/winevt/Logs/App.evtx`"
     )
     assert sanitize_report_text(short_text) == "file `/Windows.old/Windows/System32/winevt/Logs/App.evtx`"
+
+
+def test_write_csv_rows_uses_union_schema_for_mixed_report_sections(tmp_path):
+    output = tmp_path / "mixed.csv"
+
+    write_csv_rows(
+        [
+            {"section": "device", "serial": "USB1"},
+            {"section": "timeline", "timestamp": "2020-01-01T00:00:00Z", "event_type": "usb_arrival"},
+        ],
+        str(output),
+    )
+
+    with output.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+
+    assert rows[0]["serial"] == "USB1"
+    assert rows[0]["timestamp"] == ""
+    assert rows[1]["serial"] == ""
+    assert rows[1]["timestamp"] == "2020-01-01T00:00:00Z"
+    assert rows[1]["event_type"] == "usb_arrival"
