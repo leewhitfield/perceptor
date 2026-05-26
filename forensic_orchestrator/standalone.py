@@ -323,6 +323,8 @@ def _tool_status(name: str, purpose: str, *, required: bool) -> dict[str, Any]:
 
 
 def _which(name: str) -> str | None:
+    if name == "bstrings" and os.environ.get("BSTRINGS_BIN"):
+        return os.environ["BSTRINGS_BIN"]
     if name == "sidr" and os.environ.get("SIDR_BIN"):
         return os.environ["SIDR_BIN"]
     if name == "usnjrnl-forensic" and os.environ.get("USNJRNL_FORENSIC_BIN"):
@@ -331,6 +333,21 @@ def _which(name: str) -> str | None:
         candidate = resolve_dotnet_runtime()
         if candidate and Path(candidate).exists():
             return candidate
+    if name == "volatility3":
+        candidate = shutil.which("vol")
+        if candidate:
+            return candidate
+    local_candidates = {
+        "bstrings": [
+            Path.home() / "tools" / "bstrings" / "bstrings.dll",
+            Path.home() / "tools" / "bstrings" / "bstrings.exe",
+        ],
+        "MemProcFS": [Path.home() / "tools" / "MemProcFS" / "memprocfs"],
+        "sidr": [Path.home() / "tools" / "sidr" / "sidr"],
+    }
+    for candidate in local_candidates.get(name, []):
+        if candidate.exists():
+            return str(candidate)
     return shutil.which(name)
 
 
