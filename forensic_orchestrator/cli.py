@@ -278,11 +278,13 @@ from .standalone import (
     benchmark_report,
     dependency_report,
     doctor_report,
+    install_third_party_tool,
     job_status_report,
     profile_catalog_report,
     repair_dependencies,
     schema_status_report,
     standalone_backlog_report,
+    tool_status_report,
     version_report,
 )
 from .timeline_dedupe import rebuild_timeline_windows_old_dedupe
@@ -2827,6 +2829,18 @@ def build_parser() -> argparse.ArgumentParser:
     standalone_repair.add_argument("--required-only", action="store_true", help="Skip optional dependencies")
     standalone_repair.add_argument("--format", choices=["json", "table"], default="json")
     standalone_repair.add_argument("--output")
+    standalone_tool_status = standalone_sub.add_parser("tool-status")
+    standalone_tool_status.add_argument("--env-file", help="Read tool environment variables from this file before checking")
+    standalone_tool_status.add_argument("--tools-dir", help="Managed tools directory")
+    standalone_tool_status.add_argument("--format", choices=["json", "table", "csv"], default="table")
+    standalone_tool_status.add_argument("--output")
+    standalone_install_tool = standalone_sub.add_parser("install-tool")
+    standalone_install_tool.add_argument("tool", help="eztools, bstrings, sidr, memprocfs, dotnet, pypykatz, volatility3, usnjrnl-forensic, or all")
+    standalone_install_tool.add_argument("--env-file", help="Write/read repaired tool environment variables from this file")
+    standalone_install_tool.add_argument("--tools-dir", help="Managed tools directory")
+    standalone_install_tool.add_argument("--force", action="store_true")
+    standalone_install_tool.add_argument("--format", choices=["json", "table"], default="json")
+    standalone_install_tool.add_argument("--output")
     standalone_profiles = standalone_sub.add_parser("profile-catalog")
     standalone_profiles.add_argument("--format", choices=["json", "table", "csv"], default="json")
     standalone_profiles.add_argument("--output")
@@ -2894,7 +2908,7 @@ def run(args: argparse.Namespace) -> int:
                 profile=args.profile,
                 repair=args.repair,
                 repair_env_file=Path(args.repair_env_file) if args.repair_env_file else None,
-                tools_dir=Path(args.tools_dir) if args.tools_dir else None,
+                tools_dir=Path(args.tools_dir) if args.tools_dir else config.tools_root,
                 include_optional_repair=not args.required_only,
             )
             if args.format == "table":
@@ -2926,7 +2940,7 @@ def run(args: argparse.Namespace) -> int:
 
         if args.resource == "standalone" and args.action == "repair-dependencies":
             report = repair_dependencies(
-                tools_dir=Path(args.tools_dir) if args.tools_dir else None,
+                tools_dir=Path(args.tools_dir) if args.tools_dir else config.tools_root,
                 env_file=Path(args.env_file) if args.env_file else None,
                 include_optional=not args.required_only,
                 apply=not args.dry_run,
@@ -2943,6 +2957,28 @@ def run(args: argparse.Namespace) -> int:
             else:
                 write_text_output(json.dumps(report, indent=2, default=str), args.output)
             return 0 if report["after"]["required_missing"] == 0 else 1
+
+        if args.resource == "standalone" and args.action == "tool-status":
+            report = tool_status_report(
+                tools_dir=Path(args.tools_dir) if args.tools_dir else config.tools_root,
+                env_file=Path(args.env_file) if args.env_file else None,
+            )
+            write_report_output(report, report["tools"], args.format, args.output, title="Third-party tool status", columns=["tool", "available", "path", "managed_path", "installable", "purpose"])
+            return 0
+
+        if args.resource == "standalone" and args.action == "install-tool":
+            report = install_third_party_tool(
+                args.tool,
+                tools_dir=Path(args.tools_dir) if args.tools_dir else config.tools_root,
+                env_file=Path(args.env_file) if args.env_file else None,
+                force=args.force,
+                apply=not args.dry_run,
+            )
+            if args.format == "table":
+                write_report_output(report, report["tools"], "table", args.output, title="Third-party tool install", columns=["tool", "status", "path", "url", "command", "reason", "next_step"])
+            else:
+                write_text_output(json.dumps(report, indent=2, default=str), args.output)
+            return 0 if report["status"] == "completed" else 1
 
         if args.resource == "standalone" and args.action == "profile-catalog":
             report = profile_catalog_report(registry)

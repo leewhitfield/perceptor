@@ -7,11 +7,13 @@ from forensic_orchestrator.standalone import (
     artifact_capability_report,
     backup_case_databases,
     doctor_report,
+    install_third_party_tool,
     job_status_report,
     profile_catalog_report,
     repair_dependencies,
     schema_status_report,
     standalone_backlog_report,
+    tool_status_report,
 )
 from forensic_orchestrator.tools.registry import ToolRegistry
 
@@ -20,12 +22,19 @@ def test_config_file_supplies_root_and_plugins(tmp_path):
     plugin = tmp_path / "plugin.yaml"
     plugin.write_text("tools: {}\nprofiles: {}\n", encoding="utf-8")
     config = tmp_path / "config.yaml"
-    config.write_text(f"root: {tmp_path / 'workspace'}\nplugins:\n  - {plugin}\n", encoding="utf-8")
+    tools_root = tmp_path / "tools"
+    eztools_root = tools_root / "eztools"
+    config.write_text(
+        f"root: {tmp_path / 'workspace'}\ntools_root: {tools_root}\neztools_root: {eztools_root}\nplugins:\n  - {plugin}\n",
+        encoding="utf-8",
+    )
 
     loaded = load_config(config_path=str(config))
 
     assert loaded.root == tmp_path / "workspace"
     assert loaded.plugin_paths == [plugin]
+    assert loaded.tools_root == tools_root
+    assert loaded.eztools_root == eztools_root
 
 
 def test_standalone_reports_cover_profiles_schema_jobs_and_backups(tmp_path):
@@ -81,3 +90,12 @@ def test_repair_dependencies_writes_local_tool_env(monkeypatch, tmp_path):
     assert "BSTRINGS_BIN" in env_text
     assert "SIDR_BIN" in env_text
     assert "MEMPROCFS_BIN" in env_text
+
+
+def test_tool_status_and_install_dry_run_use_managed_tools_dir(tmp_path):
+    report = tool_status_report(tools_dir=tmp_path / "managed")
+    sidr = next(row for row in report["tools"] if row["tool"] == "sidr")
+    dry_run = install_third_party_tool("dotnet", tools_dir=tmp_path / "managed", apply=False)
+
+    assert sidr["managed_path"].endswith("managed/sidr/sidr")
+    assert dry_run["tools"][0]["status"] == "would_download_and_run"

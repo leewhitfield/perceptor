@@ -21,6 +21,8 @@ Use `--config` or `FORENSIC_ORCHESTRATOR_CONFIG` with YAML:
 
 ```yaml
 root: /mnt/forensic-ssd/forensic-orchestrator
+tools_root: /home/lee/forensic-orchestrator-tools
+eztools_root: /home/lee/forensic-orchestrator-tools/eztools
 plugins:
   - /home/lee/projects/investigator/forensic_orchestrator/plugins/eztools.yaml
 ```
@@ -43,6 +45,9 @@ installed or configured without interactive system package management:
 
 ```bash
 uv run forensic-orchestrator --config config.yaml standalone repair-dependencies
+uv run forensic-orchestrator --config config.yaml standalone install-tool eztools
+uv run forensic-orchestrator --config config.yaml standalone install-tool sidr
+uv run forensic-orchestrator --config config.yaml standalone install-tool memprocfs
 source ~/tools/forensic-orchestrator.env
 uv run forensic-orchestrator --config config.yaml standalone doctor
 ```
@@ -55,12 +60,26 @@ System packages such as Sleuth Kit, libewf, ntfs-3g, poppler, or tesseract are
 reported with apt commands because they require an interactive privileged
 install on most workstations.
 
+`install-tool` gives the app a managed way to place third-party tools where the
+resolver expects them. It supports `eztools`, `bstrings`, `sidr`, `memprocfs`,
+`dotnet`, `pypykatz`, `volatility3`, `usnjrnl-forensic`, and `all`. Use
+`--dry-run` to preview downloads and commands first:
+
+```bash
+uv run forensic-orchestrator --config config.yaml --dry-run standalone install-tool all --format table
+uv run forensic-orchestrator --config config.yaml standalone tool-status
+```
+
 ## Standalone Commands
 
 - `standalone version`: application, Python, OS, root, and plugin paths.
 - `standalone dependencies`: required and optional external tools.
 - `standalone repair-dependencies`: safe install/config repair for Python tools
   and local external-tool env variables.
+- `standalone install-tool`: download or install supported third-party tools
+  into the managed tools directory.
+- `standalone tool-status`: show resolved paths, managed paths, and installable
+  state for third-party tools.
 - `standalone profile-catalog`: configured workflow profiles.
 - `standalone artifact-capability`: tool/artifact extraction matrix.
 - `standalone schema-status`: SQLite schema version and objects.

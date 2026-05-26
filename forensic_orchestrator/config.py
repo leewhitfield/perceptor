@@ -13,6 +13,8 @@ from .paths import DEFAULT_ROOT
 class AppConfig:
     root: Path
     plugin_paths: list[Path]
+    tools_root: Path | None = None
+    eztools_root: Path | None = None
 
 
 def default_plugin_path() -> Path:
@@ -28,7 +30,10 @@ def load_config(root: str | None = None, plugins: list[str] | None = None, confi
     )
     configured_plugins = plugins or config.get("plugins")
     plugin_paths = [Path(p) for p in configured_plugins] if configured_plugins else [default_plugin_path()]
-    return AppConfig(root=configured_root, plugin_paths=plugin_paths)
+    tools_root = Path(config["tools_root"]).expanduser() if config.get("tools_root") else None
+    eztools_root = Path(config["eztools_root"]).expanduser() if config.get("eztools_root") else None
+    _apply_tool_environment(config, tools_root=tools_root, eztools_root=eztools_root)
+    return AppConfig(root=configured_root, plugin_paths=plugin_paths, tools_root=tools_root, eztools_root=eztools_root)
 
 
 def _load_config_file(config_path: str | None) -> dict:
@@ -42,3 +47,20 @@ def _load_config_file(config_path: str | None) -> dict:
     if not isinstance(data, dict):
         raise ValueError(f"Config file must contain a mapping: {path}")
     return data
+
+
+def _apply_tool_environment(config: dict, *, tools_root: Path | None, eztools_root: Path | None) -> None:
+    if tools_root:
+        os.environ.setdefault("FORENSIC_ORCHESTRATOR_TOOLS_ROOT", str(tools_root))
+    if eztools_root:
+        os.environ.setdefault("EZTOOLS_ROOT", str(eztools_root))
+    env_map = {
+        "bstrings_bin": "BSTRINGS_BIN",
+        "sidr_bin": "SIDR_BIN",
+        "memprocfs_bin": "MEMPROCFS_BIN",
+        "dotnet_bin": "FORENSIC_ORCHESTRATOR_DOTNET",
+        "usnjrnl_forensic_bin": "USNJRNL_FORENSIC_BIN",
+    }
+    for key, variable in env_map.items():
+        if config.get(key):
+            os.environ.setdefault(variable, str(Path(config[key]).expanduser()))

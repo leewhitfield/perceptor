@@ -5,6 +5,9 @@ import platform
 import shutil
 import subprocess
 import sys
+import tarfile
+import urllib.request
+import zipfile
 from datetime import datetime, timezone
 from importlib import metadata
 from pathlib import Path
@@ -112,6 +115,44 @@ def version_report(root: Path, plugin_paths: list[Path]) -> dict[str, Any]:
         "root": str(root),
         "plugin_paths": [str(path) for path in plugin_paths],
         "generated_at": _now(),
+    }
+
+
+def tool_status_report(*, tools_dir: Path | None = None, env_file: Path | None = None) -> dict[str, Any]:
+    tools_dir = _tools_dir(tools_dir)
+    if env_file:
+        _load_env_file(env_file)
+    rows = []
+    for name, purpose in [*REQUIRED_TOOLS, *OPTIONAL_TOOLS]:
+        path = _which(name)
+        rows.append(
+            {
+                "tool": name,
+                "purpose": purpose,
+                "available": bool(path),
+                "path": path or "",
+                "managed_path": str(_managed_tool_path(name, tools_dir)),
+                "installable": name in {"dotnet", "eztools", "bstrings", "sidr", "MemProcFS", "pypykatz", "vol", "volatility3", "usnjrnl-forensic"},
+            }
+        )
+    rows.append(
+        {
+            "tool": "eztools",
+            "purpose": "Eric Zimmerman tool suite",
+            "available": bool(_resolve_eztools_root(tools_dir)),
+            "path": str(_resolve_eztools_root(tools_dir) or ""),
+            "managed_path": str(tools_dir / "eztools"),
+            "installable": True,
+        }
+    )
+    return {
+        "tools_dir": str(tools_dir),
+        "summary": {
+            "tool_count": len(rows),
+            "available": sum(1 for row in rows if row["available"]),
+            "missing": sum(1 for row in rows if not row["available"]),
+        },
+        "tools": rows,
     }
 
 
@@ -365,7 +406,7 @@ def repair_dependencies(
     include_optional: bool = True,
     apply: bool = True,
 ) -> dict[str, Any]:
-    tools_dir = (tools_dir or Path.home() / "tools").expanduser()
+    tools_dir = _tools_dir(tools_dir)
     env_file = (env_file or tools_dir / "forensic-orchestrator.env").expanduser()
     before = dependency_report(env_file=env_file if env_file.exists() else None)
     targets = [row for row in before["required"] if not row["available"]]
@@ -416,6 +457,254 @@ def repair_dependencies(
     }
 
 
+def install_third_party_tool(
+    tool: str,
+    *,
+    tools_dir: Path | None = None,
+    env_file: Path | None = None,
+    force: bool = False,
+    apply: bool = True,
+) -> dict[str, Any]:
+    tools_dir = _tools_dir(tools_dir)
+    env_file = (env_file or tools_dir / "forensic-orchestrator.env").expanduser()
+    names = _expand_tool_selection(tool)
+    results = []
+    for name in names:
+        results.append(_install_one_tool(name, tools_dir=tools_dir, env_file=env_file, force=force, apply=apply))
+    env_updates = _discover_local_env_updates(tools_dir)
+    if apply and env_updates:
+        _write_env_file(env_file, env_updates)
+        os.environ.update(env_updates)
+    return {
+        "tools_dir": str(tools_dir),
+        "env_file": str(env_file),
+        "applied": apply,
+        "tools": results,
+        "env_updates": env_updates,
+        "status": "completed" if all(row.get("status") not in {"failed"} for row in results) else "partial",
+    }
+
+
+def _install_one_tool(tool: str, *, tools_dir: Path, env_file: Path, force: bool, apply: bool) -> dict[str, Any]:
+    tool = _normalize_tool_name(tool)
+    if tool in {"pypykatz", "vol", "volatility3", "usnjrnl-forensic"}:
+        command = PYTHON_TOOL_REPAIRS.get(tool)
+        if tool == "usnjrnl-forensic":
+            command = ["cargo", "install", "usnjrnl-forensic", "--root", str(Path.home() / ".cargo")]
+        if not command:
+            return {"tool": tool, "status": "manual", "reason": "No installer recipe is configured."}
+        if not apply:
+            return {"tool": tool, "status": "would_run", "command": command}
+        if not shutil.which(command[0]):
+            return {"tool": tool, "status": "missing_installer", "command": command, "reason": f"{command[0]} is not on PATH"}
+        completed = subprocess.run(command, capture_output=True, text=True, check=False)
+        return {
+            "tool": tool,
+            "status": "installed" if completed.returncode == 0 else "failed",
+            "command": command,
+            "returncode": completed.returncode,
+            "stdout": completed.stdout.strip()[-2000:],
+            "stderr": completed.stderr.strip()[-2000:],
+        }
+    if tool == "dotnet":
+        return _install_dotnet(tools_dir=tools_dir, force=force, apply=apply)
+    if tool == "memprocfs":
+        return _install_github_asset(
+            "memprocfs",
+            repo="ufrisk/MemProcFS",
+            target_dir=tools_dir / "MemProcFS",
+            asset_terms=("linux", "x64", ".tar.gz"),
+            force=force,
+            apply=apply,
+        )
+    if tool == "sidr":
+        return _install_github_asset(
+            "sidr",
+            repo="strozfriedberg/sidr",
+            target_dir=tools_dir / "sidr",
+            asset_terms=("linux",),
+            force=force,
+            apply=apply,
+        )
+    if tool in {"eztools", "bstrings"}:
+        return _install_eztools(tools_dir=tools_dir, force=force, apply=apply, wanted_tool=tool)
+    return {"tool": tool, "status": "unknown", "reason": "Supported tools: eztools, bstrings, sidr, memprocfs, dotnet, pypykatz, volatility3, usnjrnl-forensic, all."}
+
+
+def _install_dotnet(*, tools_dir: Path, force: bool, apply: bool) -> dict[str, Any]:
+    target = tools_dir / "dotnet"
+    dotnet = target / "dotnet"
+    if dotnet.exists() and not force:
+        return {"tool": "dotnet", "status": "present", "path": str(dotnet)}
+    script_url = "https://dot.net/v1/dotnet-install.sh"
+    script = tools_dir / "dotnet-install.sh"
+    command = ["bash", str(script), "--channel", "9.0", "--runtime", "dotnet", "--install-dir", str(target)]
+    if not apply:
+        return {"tool": "dotnet", "status": "would_download_and_run", "url": script_url, "command": command}
+    tools_dir.mkdir(parents=True, exist_ok=True)
+    _download_file(script_url, script)
+    script.chmod(0o755)
+    completed = subprocess.run(command, capture_output=True, text=True, check=False)
+    return {
+        "tool": "dotnet",
+        "status": "installed" if completed.returncode == 0 and dotnet.exists() else "failed",
+        "path": str(dotnet) if dotnet.exists() else "",
+        "command": command,
+        "returncode": completed.returncode,
+        "stdout": completed.stdout.strip()[-2000:],
+        "stderr": completed.stderr.strip()[-2000:],
+    }
+
+
+def _install_eztools(*, tools_dir: Path, force: bool, apply: bool, wanted_tool: str) -> dict[str, Any]:
+    target = tools_dir / "eztools"
+    marker = target / "Get-ZimmermanTools.ps1"
+    url = "https://download.ericzimmermanstools.com/Get-ZimmermanTools.zip"
+    if _resolve_eztools_root(tools_dir) and not force:
+        return {"tool": wanted_tool, "status": "present", "path": str(_resolve_eztools_root(tools_dir))}
+    if not apply:
+        return {"tool": wanted_tool, "status": "would_download", "url": url, "path": str(target)}
+    target.mkdir(parents=True, exist_ok=True)
+    archive = target / "Get-ZimmermanTools.zip"
+    _download_file(url, archive)
+    _extract_archive(archive, target)
+    pwsh = shutil.which("pwsh") or shutil.which("powershell")
+    if not pwsh or not marker.exists():
+        return {
+            "tool": wanted_tool,
+            "status": "downloaded_script",
+            "path": str(target),
+            "reason": "PowerShell is required to run Get-ZimmermanTools automatically.",
+            "next_step": f"Install PowerShell, then run: pwsh {marker} -Dest {target} -NetVersion 9",
+        }
+    command = [pwsh, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(marker), "-Dest", str(target), "-NetVersion", "9"]
+    completed = subprocess.run(command, capture_output=True, text=True, check=False, timeout=1800)
+    return {
+        "tool": wanted_tool,
+        "status": "installed" if completed.returncode == 0 else "failed",
+        "path": str(target),
+        "command": command,
+        "returncode": completed.returncode,
+        "stdout": completed.stdout.strip()[-2000:],
+        "stderr": completed.stderr.strip()[-2000:],
+    }
+
+
+def _install_github_asset(
+    tool: str,
+    *,
+    repo: str,
+    target_dir: Path,
+    asset_terms: tuple[str, ...],
+    force: bool,
+    apply: bool,
+) -> dict[str, Any]:
+    existing = _managed_tool_path(tool, target_dir.parent)
+    if existing.exists() and not force:
+        return {"tool": tool, "status": "present", "path": str(existing)}
+    api = f"https://api.github.com/repos/{repo}/releases/latest"
+    if not apply:
+        return {"tool": tool, "status": "would_query_github_latest", "repo": repo, "api": api, "path": str(target_dir)}
+    release = _read_json_url(api)
+    asset = _select_release_asset(release.get("assets") or [], asset_terms)
+    if not asset:
+        return {"tool": tool, "status": "manual", "reason": f"No latest release asset matched terms {asset_terms}", "repo": repo}
+    url = asset["browser_download_url"]
+    target_dir.mkdir(parents=True, exist_ok=True)
+    archive = target_dir / str(asset["name"])
+    _download_file(url, archive)
+    _extract_archive(archive, target_dir)
+    _chmod_executables(target_dir)
+    return {"tool": tool, "status": "installed", "url": url, "path": str(target_dir)}
+
+
+def _expand_tool_selection(tool: str) -> list[str]:
+    normalized = _normalize_tool_name(tool)
+    if normalized == "all":
+        return ["dotnet", "eztools", "sidr", "memprocfs", "pypykatz", "volatility3", "usnjrnl-forensic"]
+    return [normalized]
+
+
+def _normalize_tool_name(tool: str) -> str:
+    lowered = tool.strip().casefold()
+    aliases = {"memprocfs": "memprocfs", "volatility": "volatility3", "vol": "vol", "ez": "eztools"}
+    return aliases.get(lowered, lowered)
+
+
+def _read_json_url(url: str) -> dict[str, Any]:
+    import json
+
+    with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "forensic-orchestrator"}), timeout=60) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _select_release_asset(assets: list[dict[str, Any]], terms: tuple[str, ...]) -> dict[str, Any] | None:
+    lowered_terms = tuple(term.casefold() for term in terms)
+    for asset in assets:
+        name = str(asset.get("name") or "").casefold()
+        if all(term in name for term in lowered_terms):
+            return asset
+    return None
+
+
+def _download_file(url: str, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "forensic-orchestrator"}), timeout=300) as response:
+        with destination.open("wb") as handle:
+            shutil.copyfileobj(response, handle)
+
+
+def _extract_archive(archive: Path, target_dir: Path) -> None:
+    if archive.suffix == ".zip":
+        with zipfile.ZipFile(archive) as handle:
+            handle.extractall(target_dir)
+        return
+    if archive.name.endswith((".tar.gz", ".tgz")):
+        with tarfile.open(archive) as handle:
+            handle.extractall(target_dir, filter="data")
+
+
+def _chmod_executables(target_dir: Path) -> None:
+    for path in target_dir.rglob("*"):
+        if path.is_file() and path.name.lower() in {"sidr", "memprocfs"}:
+            path.chmod(path.stat().st_mode | 0o755)
+
+
+def _managed_tool_path(name: str, tools_dir: Path) -> Path:
+    normalized = _normalize_tool_name(name)
+    if normalized == "dotnet":
+        return tools_dir / "dotnet" / "dotnet"
+    if normalized == "memprocfs":
+        return tools_dir / "MemProcFS" / "memprocfs"
+    if normalized == "sidr":
+        return tools_dir / "sidr" / "sidr"
+    if normalized == "bstrings":
+        return tools_dir / "bstrings" / "bstrings.dll"
+    if normalized == "eztools":
+        return tools_dir / "eztools"
+    return tools_dir / normalized
+
+
+def _resolve_eztools_root(tools_dir: Path) -> Path | None:
+    candidates = [
+        Path(os.environ["EZTOOLS_ROOT"]).expanduser() if os.environ.get("EZTOOLS_ROOT") else None,
+        tools_dir / "eztools",
+        Path.home() / "tools" / "eztools",
+    ]
+    for candidate in candidates:
+        if candidate and candidate.exists():
+            return candidate
+    return None
+
+
+def _tools_dir(tools_dir: Path | None) -> Path:
+    if tools_dir:
+        return tools_dir.expanduser()
+    if os.environ.get("FORENSIC_ORCHESTRATOR_TOOLS_ROOT"):
+        return Path(os.environ["FORENSIC_ORCHESTRATOR_TOOLS_ROOT"]).expanduser()
+    return Path.home() / "tools"
+
+
 def _repair_tool(tool: str, *, apply: bool) -> dict[str, Any]:
     if tool in PYTHON_TOOL_REPAIRS:
         command = PYTHON_TOOL_REPAIRS[tool]
@@ -451,7 +740,12 @@ def _discover_local_env_updates(tools_dir: Path) -> dict[str, str]:
         "BSTRINGS_BIN": [
             tools_dir / "bstrings" / "bstrings.dll",
             tools_dir / "bstrings" / "bstrings.exe",
+            tools_dir / "eztools" / "bstrings" / "bstrings.dll",
             Path.home() / "tools" / "bstrings" / "bstrings.dll",
+        ],
+        "EZTOOLS_ROOT": [
+            tools_dir / "eztools",
+            Path.home() / "tools" / "eztools",
         ],
         "SIDR_BIN": [
             tools_dir / "sidr" / "sidr",
