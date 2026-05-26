@@ -280,6 +280,7 @@ from .standalone import (
     doctor_report,
     job_status_report,
     profile_catalog_report,
+    repair_dependencies,
     schema_status_report,
     standalone_backlog_report,
     version_report,
@@ -2807,14 +2808,25 @@ def build_parser() -> argparse.ArgumentParser:
     standalone_doctor = standalone_sub.add_parser("doctor")
     standalone_doctor.add_argument("--case", dest="case_id")
     standalone_doctor.add_argument("--profile")
+    standalone_doctor.add_argument("--repair", action="store_true", help="Attempt safe dependency repairs before running checks")
+    standalone_doctor.add_argument("--repair-env-file", help="Write/read repaired tool environment variables from this file")
+    standalone_doctor.add_argument("--tools-dir", help="Directory used for locally installed external tools")
+    standalone_doctor.add_argument("--required-only", action="store_true", help="When repairing, skip optional dependencies")
     standalone_doctor.add_argument("--format", choices=["json", "table"], default="json")
     standalone_doctor.add_argument("--output")
     standalone_version = standalone_sub.add_parser("version")
     standalone_version.add_argument("--format", choices=["json", "table"], default="json")
     standalone_version.add_argument("--output")
     standalone_dependencies = standalone_sub.add_parser("dependencies")
+    standalone_dependencies.add_argument("--env-file", help="Read tool environment variables from this file before checking")
     standalone_dependencies.add_argument("--format", choices=["json", "table", "csv"], default="json")
     standalone_dependencies.add_argument("--output")
+    standalone_repair = standalone_sub.add_parser("repair-dependencies")
+    standalone_repair.add_argument("--env-file", help="Write/read repaired tool environment variables from this file")
+    standalone_repair.add_argument("--tools-dir", help="Directory used for locally installed external tools")
+    standalone_repair.add_argument("--required-only", action="store_true", help="Skip optional dependencies")
+    standalone_repair.add_argument("--format", choices=["json", "table"], default="json")
+    standalone_repair.add_argument("--output")
     standalone_profiles = standalone_sub.add_parser("profile-catalog")
     standalone_profiles.add_argument("--format", choices=["json", "table", "csv"], default="json")
     standalone_profiles.add_argument("--output")
@@ -2874,7 +2886,17 @@ def run(args: argparse.Namespace) -> int:
 
     try:
         if args.resource == "standalone" and args.action == "doctor":
-            report = doctor_report(db, paths, registry, case_id=args.case_id, profile=args.profile)
+            report = doctor_report(
+                db,
+                paths,
+                registry,
+                case_id=args.case_id,
+                profile=args.profile,
+                repair=args.repair,
+                repair_env_file=Path(args.repair_env_file) if args.repair_env_file else None,
+                tools_dir=Path(args.tools_dir) if args.tools_dir else None,
+                include_optional_repair=not args.required_only,
+            )
             if args.format == "table":
                 write_report_output(
                     report,
@@ -2897,10 +2919,30 @@ def run(args: argparse.Namespace) -> int:
             return 0
 
         if args.resource == "standalone" and args.action == "dependencies":
-            report = dependency_report()
+            report = dependency_report(env_file=Path(args.env_file) if args.env_file else None)
             rows = [*report["required"], *report["optional"]]
             write_report_output(report, rows, args.format, args.output, title="Standalone dependencies", columns=["tool", "required", "available", "path", "purpose"])
             return 1 if report["summary"]["required_missing"] else 0
+
+        if args.resource == "standalone" and args.action == "repair-dependencies":
+            report = repair_dependencies(
+                tools_dir=Path(args.tools_dir) if args.tools_dir else None,
+                env_file=Path(args.env_file) if args.env_file else None,
+                include_optional=not args.required_only,
+                apply=not args.dry_run,
+            )
+            if args.format == "table":
+                write_report_output(
+                    report,
+                    report["repairs"],
+                    "table",
+                    args.output,
+                    title="Standalone dependency repair",
+                    columns=["tool", "status", "command", "env_file", "reason"],
+                )
+            else:
+                write_text_output(json.dumps(report, indent=2, default=str), args.output)
+            return 0 if report["after"]["required_missing"] == 0 else 1
 
         if args.resource == "standalone" and args.action == "profile-catalog":
             report = profile_catalog_report(registry)

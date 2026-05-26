@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import platform
 import shutil
+import subprocess
 import sys
 from datetime import datetime, timezone
 from importlib import metadata
@@ -42,6 +43,31 @@ OPTIONAL_TOOLS = [
     ("vshadowmount", "Volume Shadow Copy mounting"),
     ("usnjrnl-forensic", "USN journal path reconstruction"),
 ]
+
+PYTHON_TOOL_REPAIRS = {
+    "pypykatz": ["uv", "tool", "install", "pypykatz"],
+    "vol": ["uv", "tool", "install", "volatility3"],
+    "volatility3": ["uv", "tool", "install", "volatility3"],
+}
+
+SYSTEM_TOOL_REPAIRS = {
+    "mmls": "sudo apt-get install -y sleuthkit",
+    "fsstat": "sudo apt-get install -y sleuthkit",
+    "fls": "sudo apt-get install -y sleuthkit",
+    "icat": "sudo apt-get install -y sleuthkit",
+    "ewfinfo": "sudo apt-get install -y ewf-tools",
+    "ewfmount": "sudo apt-get install -y ewf-tools",
+    "qemu-img": "sudo apt-get install -y qemu-utils",
+    "ntfs-3g": "sudo apt-get install -y ntfs-3g",
+    "esedbexport": "sudo apt-get install -y libesedb-utils",
+    "exiftool": "sudo apt-get install -y exiftool",
+    "pdftotext": "sudo apt-get install -y poppler-utils",
+    "tesseract": "sudo apt-get install -y tesseract-ocr",
+    "vshadowinfo": "sudo apt-get install -y libvshadow-utils",
+    "vshadowmount": "sudo apt-get install -y libvshadow-utils",
+}
+
+LOCAL_ENV_TOOL_NAMES = {"bstrings", "sidr", "MemProcFS", "dotnet", "usnjrnl-forensic"}
 
 STANDALONE_BACKLOG = [
     "Package a stable CLI entrypoint and install profile.",
@@ -89,7 +115,9 @@ def version_report(root: Path, plugin_paths: list[Path]) -> dict[str, Any]:
     }
 
 
-def dependency_report() -> dict[str, Any]:
+def dependency_report(*, env_file: Path | None = None) -> dict[str, Any]:
+    if env_file:
+        _load_env_file(env_file)
     required = [_tool_status(name, purpose, required=True) for name, purpose in REQUIRED_TOOLS]
     optional = [_tool_status(name, purpose, required=False) for name, purpose in OPTIONAL_TOOLS]
     return {
@@ -260,8 +288,20 @@ def doctor_report(
     *,
     case_id: str | None = None,
     profile: str | None = None,
+    repair: bool = False,
+    repair_env_file: Path | None = None,
+    tools_dir: Path | None = None,
+    include_optional_repair: bool = True,
 ) -> dict[str, Any]:
-    dependencies = dependency_report()
+    repair_result = None
+    if repair:
+        repair_result = repair_dependencies(
+            tools_dir=tools_dir,
+            env_file=repair_env_file,
+            include_optional=include_optional_repair,
+            apply=True,
+        )
+    dependencies = dependency_report(env_file=repair_env_file)
     schema = schema_status_report(db)
     version = version_report(paths.root, [])
     checks = [
@@ -304,6 +344,7 @@ def doctor_report(
         "checks": checks,
         "version": version,
         "dependencies": dependencies,
+        "repair": repair_result,
         "schema": schema,
         "readiness": readiness,
         "jobs": jobs,
@@ -315,6 +356,163 @@ def standalone_backlog_report() -> dict[str, Any]:
         "summary": {"item_count": len(STANDALONE_BACKLOG), "implemented_in_this_pass": len(STANDALONE_BACKLOG)},
         "items": [{"number": index, "status": "implemented_or_documented", "item": item} for index, item in enumerate(STANDALONE_BACKLOG, 1)],
     }
+
+
+def repair_dependencies(
+    *,
+    tools_dir: Path | None = None,
+    env_file: Path | None = None,
+    include_optional: bool = True,
+    apply: bool = True,
+) -> dict[str, Any]:
+    tools_dir = (tools_dir or Path.home() / "tools").expanduser()
+    env_file = (env_file or tools_dir / "forensic-orchestrator.env").expanduser()
+    before = dependency_report(env_file=env_file if env_file.exists() else None)
+    targets = [row for row in before["required"] if not row["available"]]
+    if include_optional:
+        targets.extend(row for row in before["optional"] if not row["available"])
+    repairs: list[dict[str, Any]] = []
+    env_updates = _discover_local_env_updates(tools_dir)
+    if apply and env_updates:
+        _write_env_file(env_file, env_updates)
+        os.environ.update(env_updates)
+        repairs.append(
+            {
+                "tool": "environment",
+                "status": "updated",
+                "env_file": str(env_file),
+                "variables": sorted(env_updates),
+            }
+        )
+    elif env_updates:
+        repairs.append(
+            {
+                "tool": "environment",
+                "status": "would_update",
+                "env_file": str(env_file),
+                "variables": sorted(env_updates),
+            }
+        )
+    for target in targets:
+        tool = str(target["tool"])
+        if tool in LOCAL_ENV_TOOL_NAMES and env_updates:
+            continue
+        repair = _repair_tool(tool, apply=apply)
+        repairs.append(repair)
+    after = dependency_report(env_file=env_file if env_file.exists() else None)
+    return {
+        "tools_dir": str(tools_dir),
+        "env_file": str(env_file),
+        "applied": apply,
+        "include_optional": include_optional,
+        "before": before["summary"],
+        "after": after["summary"],
+        "repairs": repairs,
+        "notes": [
+            "Python CLI tools are installed with uv tool install when available.",
+            "System packages are reported with apt commands because sudo may require an interactive password.",
+            "Source the env file in future shells if a tool is installed outside PATH.",
+        ],
+    }
+
+
+def _repair_tool(tool: str, *, apply: bool) -> dict[str, Any]:
+    if tool in PYTHON_TOOL_REPAIRS:
+        command = PYTHON_TOOL_REPAIRS[tool]
+        if not apply:
+            return {"tool": tool, "status": "would_run", "command": command}
+        if not shutil.which(command[0]):
+            return {"tool": tool, "status": "unavailable", "reason": f"{command[0]} is not on PATH", "command": command}
+        completed = subprocess.run(command, capture_output=True, text=True, check=False)
+        return {
+            "tool": tool,
+            "status": "installed" if completed.returncode == 0 else "failed",
+            "command": command,
+            "returncode": completed.returncode,
+            "stdout": completed.stdout.strip()[-2000:],
+            "stderr": completed.stderr.strip()[-2000:],
+        }
+    if tool in SYSTEM_TOOL_REPAIRS:
+        return {
+            "tool": tool,
+            "status": "manual_system_package",
+            "command": SYSTEM_TOOL_REPAIRS[tool],
+            "reason": "Requires OS package installation; run with sudo outside the application.",
+        }
+    return {
+        "tool": tool,
+        "status": "manual",
+        "reason": "No safe automatic repair is configured for this dependency.",
+    }
+
+
+def _discover_local_env_updates(tools_dir: Path) -> dict[str, str]:
+    candidates = {
+        "BSTRINGS_BIN": [
+            tools_dir / "bstrings" / "bstrings.dll",
+            tools_dir / "bstrings" / "bstrings.exe",
+            Path.home() / "tools" / "bstrings" / "bstrings.dll",
+        ],
+        "SIDR_BIN": [
+            tools_dir / "sidr" / "sidr",
+            Path.home() / "tools" / "sidr" / "sidr",
+        ],
+        "MEMPROCFS_BIN": [
+            tools_dir / "MemProcFS" / "memprocfs",
+            Path.home() / "tools" / "MemProcFS" / "memprocfs",
+        ],
+        "USNJRNL_FORENSIC_BIN": [
+            Path.home() / ".cargo" / "bin" / "usnjrnl-forensic",
+        ],
+        "FORENSIC_ORCHESTRATOR_DOTNET": [
+            Path.home() / ".dotnet" / "dotnet",
+        ],
+    }
+    updates: dict[str, str] = {}
+    for variable, paths in candidates.items():
+        if os.environ.get(variable):
+            continue
+        for path in paths:
+            if path.exists():
+                updates[variable] = str(path)
+                break
+    return updates
+
+
+def _write_env_file(path: Path, updates: dict[str, str]) -> None:
+    existing = _load_env_file(path) if path.exists() else {}
+    merged = {**existing, **updates}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = ["# Source this file before running forensic-orchestrator on this workstation."]
+    for key in sorted(merged):
+        lines.append(f"export {key}={_shell_quote(merged[key])}")
+    path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+
+
+def _load_env_file(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return values
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):]
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        value = value.strip().strip("'").strip('"')
+        if key:
+            values[key.strip()] = value
+            os.environ.setdefault(key.strip(), value)
+    return values
+
+
+def _shell_quote(value: str) -> str:
+    return "'" + value.replace("'", "'\"'\"'") + "'"
 
 
 def _tool_status(name: str, purpose: str, *, required: bool) -> dict[str, Any]:
@@ -343,6 +541,7 @@ def _which(name: str) -> str | None:
             Path.home() / "tools" / "bstrings" / "bstrings.exe",
         ],
         "MemProcFS": [Path.home() / "tools" / "MemProcFS" / "memprocfs"],
+        "memprocfs": [Path.home() / "tools" / "MemProcFS" / "memprocfs"],
         "sidr": [Path.home() / "tools" / "sidr" / "sidr"],
     }
     for candidate in local_candidates.get(name, []):

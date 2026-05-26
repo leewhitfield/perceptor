@@ -9,6 +9,7 @@ from forensic_orchestrator.standalone import (
     doctor_report,
     job_status_report,
     profile_catalog_report,
+    repair_dependencies,
     schema_status_report,
     standalone_backlog_report,
 )
@@ -60,3 +61,23 @@ def test_standalone_reports_cover_profiles_schema_jobs_and_backups(tmp_path):
     backup = backup_case_databases(db, paths, case_id=case.id, output_dir=tmp_path / "backups")
     assert Path(backup["manifest"]).exists()
     assert standalone_backlog_report()["summary"]["item_count"] == 28
+
+
+def test_repair_dependencies_writes_local_tool_env(monkeypatch, tmp_path):
+    tools = tmp_path / "tools"
+    bstrings = tools / "bstrings" / "bstrings.dll"
+    sidr = tools / "sidr" / "sidr"
+    memprocfs = tools / "MemProcFS" / "memprocfs"
+    for path in (bstrings, sidr, memprocfs):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("tool", encoding="utf-8")
+    for key in ("BSTRINGS_BIN", "SIDR_BIN", "MEMPROCFS_BIN"):
+        monkeypatch.delenv(key, raising=False)
+
+    report = repair_dependencies(tools_dir=tools, env_file=tmp_path / "tools.env", include_optional=False)
+
+    env_text = (tmp_path / "tools.env").read_text(encoding="utf-8")
+    assert report["applied"] is True
+    assert "BSTRINGS_BIN" in env_text
+    assert "SIDR_BIN" in env_text
+    assert "MEMPROCFS_BIN" in env_text

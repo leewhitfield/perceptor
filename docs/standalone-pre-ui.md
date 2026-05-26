@@ -38,10 +38,29 @@ The doctor checks Python/OS support, workspace availability, schema migration,
 external dependencies, loaded tools/profiles, optional case readiness, and
 unfinished jobs.
 
+Use repair mode when the dependency check is missing tools that can be safely
+installed or configured without interactive system package management:
+
+```bash
+uv run forensic-orchestrator --config config.yaml standalone repair-dependencies
+source ~/tools/forensic-orchestrator.env
+uv run forensic-orchestrator --config config.yaml standalone doctor
+```
+
+`repair-dependencies` installs Python CLI tools such as `pypykatz` and
+Volatility with `uv tool install`, discovers local tool installs under
+`~/tools`, and writes a sourceable env file for values such as `BSTRINGS_BIN`,
+`SIDR_BIN`, `MEMPROCFS_BIN`, and `FORENSIC_ORCHESTRATOR_DOTNET`.
+System packages such as Sleuth Kit, libewf, ntfs-3g, poppler, or tesseract are
+reported with apt commands because they require an interactive privileged
+install on most workstations.
+
 ## Standalone Commands
 
 - `standalone version`: application, Python, OS, root, and plugin paths.
 - `standalone dependencies`: required and optional external tools.
+- `standalone repair-dependencies`: safe install/config repair for Python tools
+  and local external-tool env variables.
 - `standalone profile-catalog`: configured workflow profiles.
 - `standalone artifact-capability`: tool/artifact extraction matrix.
 - `standalone schema-status`: SQLite schema version and objects.
@@ -69,4 +88,3 @@ Credential reports redact values by default. Use `report memory-credentials
   should only be removed after confirming no processing process is active.
 - Missing tools: run `standalone dependencies`; optional tools reduce coverage
   but should not fail normal profiles unless the selected artifact requires them.
-
