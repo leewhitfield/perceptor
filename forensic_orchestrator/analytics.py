@@ -225,9 +225,7 @@ class AnalyticsStore:
         key = str(db_path)
         if key not in self._connections:
             db_path.parent.mkdir(parents=True, exist_ok=True)
-            conn = duckdb.connect(str(db_path))
-            _configure_duckdb_connection(conn, db_path)
-            self._connections[key] = conn
+            self._connections[key] = duckdb.connect(str(db_path), config=_duckdb_connection_config(db_path))
         return self._connections[key]
 
     def _analytics_db_path(self, case_id: str) -> Path:
@@ -241,9 +239,8 @@ class AnalyticsStore:
         db_path = self._analytics_db_path(case_id)
         db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._case_write_lock(db_path):
-            conn = duckdb.connect(str(db_path))
+            conn = duckdb.connect(str(db_path), config=_duckdb_connection_config(db_path))
             try:
-                _configure_duckdb_connection(conn, db_path)
                 yield conn
             finally:
                 conn.close()
@@ -326,21 +323,23 @@ def _normalize_value(value: Any) -> Any:
     return value
 
 
-def _configure_duckdb_connection(conn: duckdb.DuckDBPyConnection, db_path: Path) -> None:
+def _duckdb_connection_config(db_path: Path) -> dict[str, str]:
     temp_directory = os.environ.get("FORENSIC_DUCKDB_TEMP_DIRECTORY")
     if temp_directory:
         temp_path = Path(temp_directory).expanduser()
     else:
         temp_path = db_path.with_suffix(db_path.suffix + ".tmp")
     temp_path.mkdir(parents=True, exist_ok=True)
-    conn.execute("SET temp_directory = ?", [str(temp_path)])
-
-    max_temp_size = os.environ.get("FORENSIC_DUCKDB_MAX_TEMP_DIRECTORY_SIZE", "80GB")
-    conn.execute(f"SET max_temp_directory_size = '{_duckdb_memory_setting(max_temp_size)}'")
-
+    config = {
+        "temp_directory": str(temp_path),
+        "max_temp_directory_size": _duckdb_memory_setting(
+            os.environ.get("FORENSIC_DUCKDB_MAX_TEMP_DIRECTORY_SIZE", "80GB")
+        ),
+    }
     memory_limit = os.environ.get("FORENSIC_DUCKDB_MEMORY_LIMIT")
     if memory_limit:
-        conn.execute(f"SET memory_limit = '{_duckdb_memory_setting(memory_limit)}'")
+        config["memory_limit"] = _duckdb_memory_setting(memory_limit)
+    return config
 
 
 def _duckdb_memory_setting(value: str) -> str:
