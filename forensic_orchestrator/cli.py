@@ -2487,6 +2487,8 @@ def build_parser() -> argparse.ArgumentParser:
     report_external_storage.add_argument("--limit", type=int, default=500)
     report_external_storage.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
     report_external_storage.add_argument("--output", help="Write report output to a file")
+    report_external_storage.add_argument("--rebuild-correlations", action="store_true", help="Rebuild USB file/folder correlations before reporting; can be slow on large cases")
+    report_external_storage.add_argument("--skip-file-activity", action="store_true", help="Skip USB file/folder activity sections for a faster device/timeline report")
     report_device_inventory = report_sub.add_parser("device-inventory")
     report_device_inventory.add_argument("--case", required=True, dest="case_id")
     report_device_inventory.add_argument("--limit", type=int, default=250)
@@ -2503,6 +2505,7 @@ def build_parser() -> argparse.ArgumentParser:
     report_usb_timeline.add_argument("--limit", type=int, default=500)
     report_usb_timeline.add_argument("--format", choices=["json", "table", "csv"], default="json")
     report_usb_timeline.add_argument("--output", help="Write report output to a file")
+    report_usb_timeline.add_argument("--rebuild-correlations", action="store_true", help="Rebuild USB file/folder correlations before building the timeline; can be slow on large cases")
     report_usb_verbose = report_sub.add_parser("usb-verbose")
     report_usb_verbose.add_argument("--case", required=True, dest="case_id")
     report_usb_verbose.add_argument("--serial")
@@ -7488,7 +7491,7 @@ def run(args: argparse.Namespace) -> int:
             return 0
 
         if args.resource == "report" and args.action == "external-storage":
-            report = external_storage_report(db, args.case_id, limit=args.limit)
+            report = external_storage_report(db, args.case_id, limit=args.limit, rebuild_correlations=args.rebuild_correlations, include_file_activity=not args.skip_file_activity)
             rows = (
                 [{"section": "device", **row} for row in report["devices"]]
                 + [{"section": "file_activity", **row} for row in report["file_activity"]]
@@ -7561,7 +7564,7 @@ def run(args: argparse.Namespace) -> int:
             return 0
 
         if args.resource == "report" and args.action == "usb-timeline":
-            report = usb_timeline_report(db, args.case_id, limit=args.limit)
+            report = usb_timeline_report(db, args.case_id, limit=args.limit, rebuild_correlations=args.rebuild_correlations)
             if args.format == "csv":
                 write_csv_rows(report["events"], args.output)
             elif args.format == "table":

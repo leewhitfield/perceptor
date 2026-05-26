@@ -12868,9 +12868,16 @@ def _split_multi_value(value: str | None) -> list[str]:
     return [part.strip() for part in value.split(",") if part.strip()]
 
 
-def usb_timeline_report(db: Database, case_id: str, *, limit: int = 500) -> dict[str, Any]:
+def usb_timeline_report(
+    db: Database,
+    case_id: str,
+    *,
+    limit: int = 500,
+    rebuild_correlations: bool = False,
+) -> dict[str, Any]:
     db.get_case(case_id)
-    rebuild_usb_file_correlations(db, case_id)
+    if rebuild_correlations:
+        rebuild_usb_file_correlations(db, case_id)
     events = []
     connection_count_rows = _query_report_rows(
         db,
@@ -12999,29 +13006,39 @@ def usb_timeline_report(db: Database, case_id: str, *, limit: int = 500) -> dict
     return {"case_id": case_id, "events": events[:limit], "total_returned": min(len(events), limit), "total_events": len(events)}
 
 
-def external_storage_report(db: Database, case_id: str, *, limit: int = 500) -> dict[str, Any]:
+def external_storage_report(
+    db: Database,
+    case_id: str,
+    *,
+    limit: int = 500,
+    rebuild_correlations: bool = True,
+    include_file_activity: bool = True,
+) -> dict[str, Any]:
     db.get_case(case_id)
-    rebuild_usb_file_correlations(db, case_id)
+    if rebuild_correlations:
+        rebuild_usb_file_correlations(db, case_id)
     devices = _external_storage_devices(db, case_id, limit=limit)
     _merge_external_storage_partition_events(db, case_id, devices)
-    file_activity = _dedupe_usb_file_items(
-        _query_report_rows(
-            db,
-            case_id,
-            "usb_file_correlations",
-            """
-            SELECT *
-            FROM usb_file_correlations
-            WHERE case_id = ?
-            ORDER BY
-              CASE confidence WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
-              COALESCE(target_modified, target_created, target_accessed, ''),
-              COALESCE(file_location, file_name, '')
-            LIMIT ?
-            """,
-            (case_id, max(limit * 5, 500)),
-        )
-    )[:limit]
+    file_activity = []
+    if include_file_activity:
+        file_activity = _dedupe_usb_file_items(
+            _query_report_rows(
+                db,
+                case_id,
+                "usb_file_correlations",
+                """
+                SELECT *
+                FROM usb_file_correlations
+                WHERE case_id = ?
+                ORDER BY
+                  CASE confidence WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
+                  COALESCE(target_modified, target_created, target_accessed, ''),
+                  COALESCE(file_location, file_name, '')
+                LIMIT ?
+                """,
+                (case_id, max(limit * 5, 500)),
+            )
+        )[:limit]
     _annotate_external_storage_file_activity(devices, file_activity)
     unattributed_volume_activity = _external_storage_unattributed_removable_activity(
         db,
@@ -13031,7 +13048,7 @@ def external_storage_report(db: Database, case_id: str, *, limit: int = 500) -> 
         limit=limit,
     )
     timeline = _external_storage_filtered_timeline(
-        usb_timeline_report(db, case_id, limit=max(limit * 5, 500))["events"],
+        usb_timeline_report(db, case_id, limit=max(limit * 5, 500), rebuild_correlations=False)["events"],
         devices,
         limit=limit,
     )
