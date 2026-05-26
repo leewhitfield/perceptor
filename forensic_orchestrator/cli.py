@@ -539,24 +539,30 @@ def _sqlite_artifact_route(name: str):
 def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, limit: int = 100) -> dict[str, object]:
     output_dir.mkdir(parents=True, exist_ok=True)
     memory_disk = memory_disk_correlations_report(db, case_id, limit=max(limit * 10, 500))
+    overview = case_overview_report(db, case_id, limit=limit, memory_disk_report=memory_disk)
+    credentials = memory_credentials_report(db, case_id, limit=limit)
+    memory_support = memory_support_files_report(db, case_id, limit=limit)
+    readiness = processing_readiness_report(db, case_id, limit=limit)
+    gaps = evidence_gaps_report(db, case_id, limit=limit)
+    suspicious = suspicious_executions_report(db, case_id, limit=limit)
     specs: list[tuple[str, str, str, object]] = [
         ("executive-summary", "md", "Executive summary", case_executive_summary_markdown(case_executive_summary_report(db, case_id, limit=limit, memory_disk_report=memory_disk))),
-        ("case-overview", "md", "Case overview", case_overview_markdown(case_overview_report(db, case_id, limit=limit, memory_disk_report=memory_disk))),
-        ("evidence-gaps", "md", "Evidence gaps", evidence_gaps_markdown(evidence_gaps_report(db, case_id, limit=limit))),
+        ("case-overview", "md", "Case overview", case_overview_markdown(overview)),
+        ("evidence-gaps", "md", "Evidence gaps", evidence_gaps_markdown(gaps)),
         ("memory-analysis", "md", "Memory analysis", memory_analysis_markdown(memory_analysis_report(db, case_id, limit=limit))),
-        ("memory-credentials", "md", "Memory credentials", memory_credentials_markdown(memory_credentials_report(db, case_id, limit=limit))),
+        ("memory-credentials", "md", "Memory credentials", memory_credentials_markdown(credentials)),
         ("memory-disk-correlations", "md", "Memory/disk correlations", memory_disk_correlations_markdown(memory_disk)),
-        ("memory-support-files", "md", "Memory support files", memory_support_files_markdown(memory_support_files_report(db, case_id, limit=limit))),
+        ("memory-support-files", "md", "Memory support files", memory_support_files_markdown(memory_support)),
         ("combined-artifacts", "md", "Combined artifact families", combined_artifact_family_markdown(combined_artifact_family_report(db, case_id, limit=limit, memory_disk_report=memory_disk))),
         ("crash-dump-analysis", "md", "Crash dump analysis", crash_dump_analysis_markdown(crash_dump_analysis_report(db, case_id, limit=limit))),
-        ("suspicious-executions", "md", "Suspicious executions", suspicious_executions_markdown(suspicious_executions_report(db, case_id, limit=limit))),
+        ("suspicious-executions", "md", "Suspicious executions", suspicious_executions_markdown(suspicious)),
         ("memory-artifacts", "md", "Memory artifact inventory", memory_artifacts_markdown(memory_artifacts_report(db, case_id, limit=limit))),
         ("recovery-coverage", "json", "Recovery coverage", recovery_coverage_report(db, case_id, limit=max(limit, 250))),
         ("carve-coverage", "md", "Carve coverage", carve_coverage_markdown(carve_coverage_report(db, case_id, limit=max(limit, 250)))),
         ("sqlite-inventory", "md", "SQLite carve inventory", sqlite_inventory_markdown(sqlite_inventory_report(db, case_id, limit=limit))),
         ("artifact-processing-status", "json", "Artifact processing status", artifact_processing_status_report(db, case_id, limit=limit)),
         ("processing-decisions", "md", "Processing decisions", processing_decision_markdown(processing_decision_report(db, case_id, limit=limit))),
-        ("processing-readiness", "md", "Processing readiness", processing_readiness_markdown(processing_readiness_report(db, case_id, limit=limit))),
+        ("processing-readiness", "md", "Processing readiness", processing_readiness_markdown(readiness)),
         ("browser-activity", "json", "Browser activity", browser_activity_report(db, case_id, limit=limit, memory_disk_report=memory_disk)),
         ("cloud-artifacts", "json", "Cloud artifacts", cloud_artifacts_report(db, case_id, limit=limit, memory_disk_report=memory_disk)),
         ("email-artifacts", "json", "Email artifacts", email_artifacts_report(db, case_id, limit=limit, memory_disk_report=memory_disk)),
@@ -571,7 +577,29 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
         else:
             write_text_output(json.dumps(sanitize_report_paths(payload), indent=2, default=str), str(path))
         written.append({"name": stem, "title": title, "path": str(path), "format": extension})
-    index_lines = ["# Case Report Bundle", "", f"Case: `{case_id}`", ""]
+    overview_summary = overview.get("summary") if isinstance(overview.get("summary"), dict) else {}
+    credential_summary = credentials.get("summary") if isinstance(credentials.get("summary"), dict) else {}
+    support_summary = memory_support.get("summary") if isinstance(memory_support.get("summary"), dict) else {}
+    readiness_summary = readiness.get("summary") if isinstance(readiness.get("summary"), dict) else {}
+    gaps_summary = gaps.get("summary") if isinstance(gaps.get("summary"), dict) else {}
+    suspicious_summary = suspicious.get("summary") if isinstance(suspicious.get("summary"), dict) else {}
+    index_lines = [
+        "# Case Report Bundle",
+        "",
+        f"Case: `{case_id}`",
+        "",
+        "## At-a-Glance",
+        "",
+        f"- Suspicious executions: `{suspicious_summary.get('finding_count', overview_summary.get('suspicious_executions', 0))}`",
+        f"- Memory support files processed: `{support_summary.get('processed_count', 0)}` / `{support_summary.get('support_file_count', 0)}`",
+        f"- Memory string hits: `{support_summary.get('hit_count', overview_summary.get('memory_string_hits', 0))}`",
+        f"- High-value credential candidates: `{credential_summary.get('high_value_candidate_count', 0)}`",
+        f"- Evidence gaps: `{gaps_summary.get('gap_count', overview_summary.get('evidence_gaps', 0))}`",
+        f"- Readiness required needs action: `{readiness_summary.get('required_needs_action_count', readiness_summary.get('needs_action_count', 0))}`",
+        "",
+        "## Reports",
+        "",
+    ]
     for item in written:
         index_lines.append(f"- [{item['title']}]({Path(str(item['path'])).name})")
     index_path = output_dir / "index.md"
@@ -865,6 +893,42 @@ def _icat_offset_for_image(db: Database, case_id: str, image_id: str) -> int:
 def _safe_memory_extract_name(value: str) -> str:
     name = Path(value.replace("\\", "/")).name or "memory.bin"
     return re.sub(r"[^A-Za-z0-9._-]+", "_", name)
+
+
+def _profile_should_run_memory(profile: str, *, include_memory_profile: bool = False, no_memory_profile: bool = False) -> bool:
+    if no_memory_profile:
+        return False
+    if include_memory_profile:
+        return True
+    normalized = profile.casefold()
+    return normalized.startswith("windows-full") or normalized.endswith("-memory") or "memory" in normalized
+
+
+def _run_memory_after_profile(
+    db: Database,
+    paths: WorkspacePaths,
+    *,
+    case_id: str,
+    computer_id: str | None,
+    image_id: str | None,
+    profile: str,
+    workers: int,
+    include_memory_profile: bool = False,
+    no_memory_profile: bool = False,
+    dry_run: bool = False,
+) -> dict[str, object] | None:
+    if not _profile_should_run_memory(profile, include_memory_profile=include_memory_profile, no_memory_profile=no_memory_profile):
+        return None
+    if dry_run:
+        return {"status": "dry_run", "profile": profile, "would_run": True}
+    return run_memory_processing_profile(
+        db,
+        paths,
+        case_id=case_id,
+        computer_id=computer_id,
+        image_id=image_id,
+        workers=workers,
+    )
 
 
 def usb_files_table(report: dict[str, object]) -> str:
@@ -1365,6 +1429,8 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Run the selected profile against Windows.old artifacts only, storing output under a Windows.old namespace",
     )
+    run.add_argument("--include-memory-profile", action="store_true", help="Run memory support-file processing after the selected profile")
+    run.add_argument("--no-memory-profile", action="store_true", help="Skip automatic memory support-file processing for profiles that normally include it")
     run.add_argument("--workers", type=int, default=1, help="Worker slots for external tool output generation; database ingest and internal parsers remain serialized")
 
     process = subparsers.add_parser("process")
@@ -1420,6 +1486,8 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Run the selected profile against Windows.old artifacts only, storing output under a Windows.old namespace",
     )
+    process.add_argument("--include-memory-profile", action="store_true", help="Run memory support-file processing after the selected profile")
+    process.add_argument("--no-memory-profile", action="store_true", help="Skip automatic memory support-file processing for profiles that normally include it")
     process.add_argument("--workers", type=int, default=1, help="Worker slots for external tool output generation; database ingest and internal parsers remain serialized")
 
     report_bundle = subparsers.add_parser("report-bundle")
@@ -2377,11 +2445,13 @@ def build_parser() -> argparse.ArgumentParser:
     report_processing_readiness = report_sub.add_parser("processing-readiness")
     report_processing_readiness.add_argument("--case", required=True, dest="case_id")
     report_processing_readiness.add_argument("--limit", type=int, default=100)
+    report_processing_readiness.add_argument("--profile", help="Evaluate readiness against a specific workflow profile")
     report_processing_readiness.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
     report_processing_readiness.add_argument("--output")
     report_readiness_gate = report_sub.add_parser("readiness-gate")
     report_readiness_gate.add_argument("--case", required=True, dest="case_id")
     report_readiness_gate.add_argument("--limit", type=int, default=100)
+    report_readiness_gate.add_argument("--profile", help="Evaluate readiness against a specific workflow profile")
     report_readiness_gate.add_argument("--format", choices=["json", "table", "csv"], default="json")
     report_readiness_gate.add_argument("--output")
     report_evidence_gaps = report_sub.add_parser("evidence-gaps")
@@ -2573,6 +2643,7 @@ def run(args: argparse.Namespace) -> int:
                 use_sudo_mount=args.use_sudo_mount,
             )
             run_error: Exception | None = None
+            memory_profile_result: dict[str, object] | None = None
             unmounted_path = None
             try:
                 run_profile(
@@ -2590,6 +2661,18 @@ def run(args: argparse.Namespace) -> int:
                     accept_duplicate=args.accept_duplicate,
                     include_windows_old=args.include_windows_old,
                     workers=args.workers,
+                )
+                memory_profile_result = _run_memory_after_profile(
+                    db,
+                    paths,
+                    case_id=case_id,
+                    computer_id=computer_id,
+                    image_id=image.id,
+                    profile=args.profile,
+                    workers=args.workers,
+                    include_memory_profile=args.include_memory_profile,
+                    no_memory_profile=args.no_memory_profile,
+                    dry_run=args.dry_run,
                 )
             except Exception as exc:  # pragma: no cover - exercised through CLI behavior
                 run_error = exc
@@ -2636,6 +2719,7 @@ def run(args: argparse.Namespace) -> int:
                 "volume_mount_path": str(volume) if volume else None,
                 "unmounted_path": str(unmounted_path) if unmounted_path else None,
                 "kept_mounted": bool(args.filesystem and args.keep_mounted),
+                "memory_profile": memory_profile_result,
                 "warning_count": len(warnings),
                 "error_count": len(errors),
                 "counts": {
@@ -3824,6 +3908,18 @@ def run(args: argparse.Namespace) -> int:
                 include_windows_old=args.include_windows_old,
                 workers=args.workers,
             )
+            memory_profile_result = _run_memory_after_profile(
+                db,
+                paths,
+                case_id=args.case_id,
+                computer_id=None,
+                image_id=args.image_id,
+                profile=args.profile,
+                workers=args.workers,
+                include_memory_profile=args.include_memory_profile,
+                no_memory_profile=args.no_memory_profile,
+                dry_run=args.dry_run,
+            )
             payload = {
                 "case_id": args.case_id,
                 "image_id": args.image_id,
@@ -3832,6 +3928,7 @@ def run(args: argparse.Namespace) -> int:
                 "requested_workers": args.workers,
                 "effective_workers": max(1, args.workers),
                 "parallel_scope": "artifact_extraction_and_external_tools" if args.workers > 1 else "serial",
+                "memory_profile": memory_profile_result,
             }
             if args.dry_run:
                 payload["commands"] = command_preview(db, args.case_id)
@@ -3919,7 +4016,7 @@ def run(args: argparse.Namespace) -> int:
             return 0
 
         if args.resource == "report" and args.action == "processing-readiness":
-            report = processing_readiness_report(db, args.case_id, limit=args.limit)
+            report = processing_readiness_report(db, args.case_id, limit=args.limit, profile=args.profile)
             if args.format == "md":
                 write_text_output(processing_readiness_markdown(report), args.output)
             else:
@@ -4645,8 +4742,8 @@ def run(args: argparse.Namespace) -> int:
             return 0
 
         if args.resource == "report" and args.action == "readiness-gate":
-            report = processing_readiness_report(db, args.case_id, limit=args.limit)
-            failed = [row for row in report.get("items", []) if row.get("status") != "complete"]
+            report = processing_readiness_report(db, args.case_id, limit=args.limit, profile=args.profile)
+            failed = [row for row in report.get("items", []) if row.get("required", True) and row.get("status") != "complete"]
             write_report_output(
                 report,
                 report["items"],

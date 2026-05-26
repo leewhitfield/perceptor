@@ -208,6 +208,14 @@ def test_memory_profile_extracts_mft_support_file_when_mount_missing(tmp_path, m
     assert extracted.exists()
 
 
+def test_windows_full_profiles_auto_include_memory_profile():
+    assert cli_module._profile_should_run_memory("windows-full")
+    assert cli_module._profile_should_run_memory("windows-full-deep-recovery")
+    assert cli_module._profile_should_run_memory("windows-basic", include_memory_profile=True)
+    assert not cli_module._profile_should_run_memory("windows-full", no_memory_profile=True)
+    assert not cli_module._profile_should_run_memory("windows-basic")
+
+
 def test_memory_crash_dump_command_scans_with_workers(tmp_path, capsys):
     paths = WorkspacePaths(tmp_path / "workspace", live_mount_root=tmp_path / "live-mounts")
     db = Database(paths.db_path())

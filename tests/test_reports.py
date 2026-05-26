@@ -377,6 +377,21 @@ def test_processing_readiness_report_lists_project_workflow_items(tmp_path):
     assert "Processing Readiness Report" in processing_readiness_markdown(report)
 
 
+def test_processing_readiness_profile_marks_unrelated_items_optional(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+
+    report = processing_readiness_report(db, case.id, profile="memory")
+
+    carve = next(row for row in report["items"] if row["key"] == "carve_coverage")
+    memory = next(row for row in report["items"] if row["key"] == "memory_processed")
+    assert carve["required"] is False
+    assert memory["required"] is True
+    assert report["summary"]["required_needs_action_count"] < report["summary"]["needs_action_count"]
+
+
 def test_timeline_report_adds_memory_source_labels(tmp_path):
     db = Database(tmp_path / "orchestrator.sqlite3")
     case = db.create_case("case-1", tmp_path / "cases" / "case-1")
@@ -804,9 +819,11 @@ def test_memory_credentials_report_classifies_and_redacts_usable_secrets(tmp_pat
     markdown = memory_credentials_markdown(report)
 
     assert report["summary"]["likely_usable_count"] == 1
+    assert report["summary"]["high_value_candidate_count"] == 1
     assert report["summary"]["confirmed_usable_count"] == 0
     assert report["summary"]["false_positive_or_label_count"] == 1
     assert report["credentials"][0]["credential_validation_status"] == "candidate_unverified"
+    assert report["credential_groups"][0]["credential_triage"] == "high_value_candidate"
     assert "abc1234567890" not in markdown
     assert "Confirmed usable credentials" in markdown
     assert "Memory Credential Review" in markdown

@@ -17911,7 +17911,7 @@ def processing_decision_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def processing_readiness_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str, Any]:
+def processing_readiness_report(db: Database, case_id: str, *, limit: int = 100, profile: str | None = None) -> dict[str, Any]:
     case = db.get_case(case_id)
     timings = process_timing_report(db, case_id, limit=max(limit * 5, 500))
     memory = memory_artifacts_report(db, case_id, limit=max(limit * 5, 500))
@@ -17934,7 +17934,7 @@ def processing_readiness_report(db: Database, case_id: str, *, limit: int = 100)
     ]
     active_mounts = [
         row for row in mount_rows
-        if row.get("volume_mount_path") and Path(str(row["volume_mount_path"])).exists()
+        if row.get("volume_mount_path") and _path_accessible(Path(str(row["volume_mount_path"])))
     ]
     profile_rows = [row for row in timings.get("timings") or [] if row.get("scope") == "profile"]
     artifact_rows = [row for row in timings.get("timings") or [] if row.get("scope") == "artifact"]
@@ -17947,12 +17947,16 @@ def processing_readiness_report(db: Database, case_id: str, *, limit: int = 100)
     carve_summary = carve.get("summary") or {}
     decision_summary = decisions.get("summary") or {}
 
+    required_keys = _readiness_required_keys(profile)
+
     def add(key: str, title: str, complete: bool, details: dict[str, Any], next_step: str) -> None:
+        required = required_keys is None or key in required_keys
         items.append(
             {
                 "key": key,
                 "title": title,
                 "status": "complete" if complete else "needs_action",
+                "required": required,
                 "details": details,
                 "next_step": "" if complete else next_step,
             }
@@ -17969,9 +17973,23 @@ def processing_readiness_report(db: Database, case_id: str, *, limit: int = 100)
     add("memory_inventory", "Memory-support artifacts are inventoried", bool(memory_summary.get("artifact_count")), memory_summary, "Run report memory-artifacts after mounting or parsing MFT.")
     add("pagefile_inventory", "Pagefile is represented when present", bool(memory_summary.get("pagefile_present")), memory_summary, "Confirm pagefile.sys exists or document absence.")
     add("swapfile_inventory", "Swapfile is represented when present", bool(memory_summary.get("swapfile_present")), memory_summary, "Confirm swapfile.sys exists or document absence.")
-    add("hiberfil_inventory", "Hiberfil status is assessed when present", not memory_summary.get("hiberfil_present") or any(row.get("hiberfil_status") for row in memory.get("artifacts") or [] if row.get("artifact_type") == "hiberfil"), memory_summary, "Run memory-artifacts against an accessible hiberfil.sys.")
+    add(
+        "hiberfil_inventory",
+        "Hiberfil status is assessed when present",
+        not memory_summary.get("hiberfil_present")
+        or any(row.get("hiberfil_status") for row in memory.get("artifacts") or [] if row.get("artifact_type") == "hiberfil")
+        or bool(memory_support_summary.get("hiberfil_count")),
+        {"memory": memory_summary, "memory_support": memory_support_summary},
+        "Run memory-artifacts or memory-support-files against hiberfil.sys.",
+    )
     add("crash_dump_inventory", "Crash/process dumps are inventoried", bool(memory_summary.get("crash_dump_present") or memory_summary.get("process_dump_present")), memory_summary, "Run memory crash-dumps when dumps exist or document absence.")
-    add("memory_processed", "Memory artifacts have been processed", bool(memory_summary.get("processed_count")), memory_summary, "Run memory profile or memory crash-dumps.")
+    add(
+        "memory_processed",
+        "Memory artifacts have been processed",
+        bool(memory_summary.get("processed_count") or memory_support_summary.get("processed_count")),
+        {"memory": memory_summary, "memory_support": memory_support_summary},
+        "Run memory profile or memory crash-dumps.",
+    )
     add("memory_support_report", "Memory support-file processing is summarized", bool(memory_support_summary.get("support_file_count")), memory_support_summary, "Run report memory-support-files after memory inventory.")
     add("memory_timeline", "Memory string hits can feed the timeline", _report_table_count(db, case_id, "memory_string_hits") == 0 or _report_table_count(db, case_id, "timeline_events") > 0, {"memory_string_hits": _report_table_count(db, case_id, "memory_string_hits"), "timeline_events": _report_table_count(db, case_id, "timeline_events")}, "Re-run memory processing or timeline rebuild.")
     add("carve_coverage", "Carve scan ranges or staged carves are tracked", bool(carve_summary.get("scan_range_count") or carve_summary.get("carve_count")), carve_summary, "Run explicit carve sqlite/ese commands for in-scope sources.")
@@ -17995,10 +18013,12 @@ def processing_readiness_report(db: Database, case_id: str, *, limit: int = 100)
 
     return {
         "case_id": case_id,
+        "profile": profile or "",
         "summary": {
             "item_count": len(items),
             "complete_count": sum(1 for row in items if row["status"] == "complete"),
             "needs_action_count": sum(1 for row in items if row["status"] != "complete"),
+            "required_needs_action_count": sum(1 for row in items if row.get("required", True) and row["status"] != "complete"),
         },
         "items": items[:limit],
         "total_returned": min(len(items), limit),
@@ -18017,15 +18037,63 @@ def processing_readiness_markdown(report: dict[str, Any]) -> str:
         f"- Items: `{summary.get('item_count', 0)}`",
         f"- Complete: `{summary.get('complete_count', 0)}`",
         f"- Needs action: `{summary.get('needs_action_count', 0)}`",
+        f"- Required needs action: `{summary.get('required_needs_action_count', summary.get('needs_action_count', 0))}`",
         "",
         "## Items",
         "",
     ]
     for row in report.get("items") or []:
-        lines.append(f"- `{row.get('status')}` `{row.get('key')}` {row.get('title')}")
+        required = "required" if row.get("required", True) else "optional"
+        lines.append(f"- `{row.get('status')}` `{required}` `{row.get('key')}` {row.get('title')}")
         if row.get("next_step"):
             lines.append(f"  - next: {row.get('next_step')}")
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _readiness_required_keys(profile: str | None) -> set[str] | None:
+    if not profile:
+        return None
+    normalized = profile.casefold()
+    base = {
+        "case_exists",
+        "mount_recorded",
+        "profile_run_recorded",
+        "artifact_extraction_timed",
+        "tool_parse_timed",
+        "postprocess_timed",
+        "combined_reports",
+        "processing_decisions",
+        "duckdb_write_serialized",
+        "ual_external_option",
+        "outstanding_backlog_documented",
+    }
+    memory = {
+        "memory_inventory",
+        "pagefile_inventory",
+        "swapfile_inventory",
+        "hiberfil_inventory",
+        "memory_processed",
+        "memory_support_report",
+        "memory_timeline",
+    }
+    recovery = {
+        "carve_coverage",
+        "carve_empty_ranges",
+        "sqlite_inventory",
+        "recovery_coverage",
+        "deep_recovery_separated",
+    }
+    if normalized in {"memory", "memory-profile"} or normalized.endswith("-memory"):
+        return {"case_exists", *memory, "duckdb_write_serialized"}
+    if "deep-recovery" in normalized or normalized.endswith("-deep"):
+        return base | memory | recovery | {"parallel_workers_used"}
+    if normalized.startswith("windows-full"):
+        return base | memory | {"parallel_workers_used"}
+    if normalized.startswith("windows-browser"):
+        return base | {"carve_coverage", "sqlite_inventory"}
+    if "windows-old" in normalized:
+        return base | {"windows_old_scoped"}
+    return base
 
 
 def _processing_decision_summary(row: dict[str, Any], details: dict[str, Any]) -> str:
@@ -18556,6 +18624,7 @@ def memory_credentials_report(db: Database, case_id: str, *, limit: int = 100, r
         item["display_value"] = item.get("string_value") if reveal else _redact_memory_credential(item.get("string_value"))
         reviewed.append(item)
     reviewed = _dedupe_memory_credentials(reviewed)[:limit]
+    groups = _memory_credential_groups(reviewed)
     return {
         "case_id": case_id,
         "summary": {
@@ -18567,6 +18636,7 @@ def memory_credentials_report(db: Database, case_id: str, *, limit: int = 100, r
             "high_value_candidate_count": sum(1 for row in reviewed if row.get("credential_triage") == "high_value_candidate"),
         },
         "credentials": reviewed,
+        "credential_groups": groups,
         "total_returned": len(reviewed),
         "caveats": [
             "Credential string hits are memory artifacts and must be validated before use or reporting as active credentials.",
@@ -18605,6 +18675,14 @@ def memory_credentials_markdown(report: dict[str, Any]) -> str:
             f"source `{row.get('source_artifact_type') or ''}` offset `{row.get('offset') or ''}` "
             f"value `{row.get('display_value') or ''}` reason: {row.get('credential_reason') or ''}"
         )
+    groups = report.get("credential_groups") if isinstance(report.get("credential_groups"), list) else []
+    if groups:
+        lines.extend(["", "## Groups", ""])
+        for group in groups[:20]:
+            lines.append(
+                f"- `{group.get('credential_triage')}` `{group.get('credential_status')}` "
+                f"`{group.get('matched_term')}` count `{group.get('count')}` sources `{group.get('sources')}`"
+            )
     lines.extend(["", "## Caveats", ""])
     for caveat in report.get("caveats") or []:
         lines.append(f"- {caveat}")
@@ -19063,6 +19141,38 @@ def _dedupe_memory_credentials(rows: list[dict[str, Any]]) -> list[dict[str, Any
         output.append(row)
     status_order = {"likely_usable_secret": 0, "possible_secret": 1, "label_or_false_positive": 2}
     output.sort(key=lambda row: (status_order.get(str(row.get("credential_status") or ""), 9), str(row.get("source_artifact_type") or ""), str(row.get("offset") or "")))
+    return output
+
+
+def _memory_credential_groups(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for row in rows:
+        key = (
+            str(row.get("credential_triage") or ""),
+            str(row.get("credential_status") or ""),
+            str(row.get("matched_term") or ""),
+        )
+        group = grouped.setdefault(
+            key,
+            {
+                "credential_triage": key[0],
+                "credential_status": key[1],
+                "matched_term": key[2],
+                "count": 0,
+                "sources": set(),
+                "max_score": 0,
+            },
+        )
+        group["count"] += 1
+        if row.get("source_artifact_type"):
+            group["sources"].add(str(row.get("source_artifact_type")))
+        group["max_score"] = max(int(group.get("max_score") or 0), int(row.get("credential_score") or 0))
+    output = []
+    for group in grouped.values():
+        item = dict(group)
+        item["sources"] = ",".join(sorted(item["sources"]))
+        output.append(item)
+    output.sort(key=lambda row: (-int(row.get("max_score") or 0), -int(row.get("count") or 0), str(row.get("matched_term") or "")))
     return output
 
 
@@ -26978,7 +27088,7 @@ def _mounted_memory_artifacts(db: Database, case_id: str) -> list[dict[str, Any]
     ]
     paths: list[Path] = []
     for mounts in mount_roots:
-        if mounts.exists():
+        if _path_accessible(mounts):
             paths.extend(_mounted_memory_candidate_paths(mounts))
     for path in paths:
         try:
@@ -27140,6 +27250,18 @@ def _mounted_memory_candidate_paths(mounts: Path) -> list[Path]:
         except OSError:
             continue
     return sorted(set(existing))
+
+
+def _path_accessible(path: Path) -> bool:
+    try:
+        if not path.exists():
+            return False
+        # Stale FUSE mounts can report existence but fail when opened/listed.
+        if path.is_dir():
+            next(path.iterdir(), None)
+        return True
+    except OSError:
+        return False
 
 
 def _correlate_crash_dumps_to_wer(artifacts: list[dict[str, Any]], wer_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
