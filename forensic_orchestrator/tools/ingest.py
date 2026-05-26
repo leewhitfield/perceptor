@@ -101,6 +101,7 @@ from forensic_orchestrator.tools.taskband import taskband_pin_rows_from_registry
 from forensic_orchestrator.tools.usb import usb_rows_from_registry_artifact
 from forensic_orchestrator.tools.usb_partition import usb_rows_from_partition_diagnostic_event
 from forensic_orchestrator.tools.usb_summary import rebuild_usb_connection_events, rebuild_usb_storage_devices
+from forensic_orchestrator.tools.usp import normalized_usp_row
 
 
 LOGGER = logging.getLogger(__name__)
@@ -268,6 +269,7 @@ def ingest_csv_output(
         "RegistryParser",
         "RegistryArtifactParser",
         "SetupApiParser",
+        "USPParser",
         "RECmd",
         "AmcacheParser",
         "AppCompatCacheParser",
@@ -730,6 +732,19 @@ def ingest_csv_output(
                     if tool_name == "SetupApiParser":
                         setupapi_rows.append(
                             normalized_setupapi_device_event_row(
+                                case_id=case_id,
+                                computer_id=computer_id,
+                                image_id=image_id,
+                                tool_output_id=tool_output_id,
+                                tool_name=tool_name,
+                                source_csv=path,
+                                row_number=row_number,
+                                row=dict(row),
+                            )
+                        )
+                    if tool_name == "USPParser":
+                        usb_rows.append(
+                            normalized_usp_row(
                                 case_id=case_id,
                                 computer_id=computer_id,
                                 image_id=image_id,

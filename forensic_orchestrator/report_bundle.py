@@ -343,6 +343,27 @@ def infer_report_candidate(path: Path) -> ReportCandidate | None:
         return ReportCandidate(path, "WindowsActivitiesParser", _transform_windows_activity_package, "SQLECmd Windows Activity package mapping normalized")
     if lower.startswith("googledrive_"):
         return ReportCandidate(path, "CloudSyncParser", _transform_google_drive, "SQLECmd Google Drive output normalized")
+    header = _detect_csv_header(path)
+    if not header:
+        return None
+    if _header_has(header, "recordnumber", "eventrecordid", "timecreated", "eventid", "provider", "channel"):
+        return ReportCandidate(path, "EvtxECmd", note="Event log CSV detected by header")
+    if _header_has(header, "entrynumber", "sequencenumber", "parentpath", "filename", "created0x10"):
+        return ReportCandidate(path, "MFTECmd", note="MFT CSV detected by header")
+    if _header_has(header, "sourcefilename", "executablename", "hash", "runcount", "lastrun"):
+        return ReportCandidate(path, "PrefetchParser", _transform_pecmd_prefetch, "PECmd prefetch output normalized")
+    if _header_has(header, "sourcefile", "appid", "appiddescription"):
+        return ReportCandidate(path, "JLECmd", note="JLECmd jump list output detected by header")
+    if _header_has(header, "controlset", "cacheentryposition", "path", "lastmodifiedtimeutc", "executed"):
+        return ReportCandidate(path, "AppCompatCacheParser", note="Shimcache output detected by header")
+    if _header_has(header, "bagpath", "absolutepath", "lastwritetime"):
+        return ReportCandidate(path, "SBECmd", note="Shellbags output detected by header")
+    if _header_has(header, "sourcename", "filetype", "filename", "deletedon"):
+        return ReportCandidate(path, "RecycleParser", _transform_rbcmd, "RBCmd recycle-bin output normalized")
+    if _header_has(header, "source path/filename", "target name", "local path", "vol serial"):
+        return ReportCandidate(path, "LECmd", _transform_tzworks_lnk, "TZWorks lp output normalized to LECmd columns")
+    if _header_has(header, "device name", "instance/serial#", "volume guid", "vol name/details"):
+        return ReportCandidate(path, "USPParser", _transform_tzworks_usp, "TZWorks USP output normalized")
     return None
 
 
@@ -432,6 +453,40 @@ def _looks_like_recmd_plugin_csv(path: Path) -> bool:
     )
 
 
+def _detect_csv_header(path: Path) -> set[str]:
+    try:
+        with path.open("r", encoding="utf-8-sig", errors="replace", newline="") as handle:
+            reader = csv.reader(handle)
+            for index, row in enumerate(reader):
+                if index > 40:
+                    break
+                lowered = {cell.strip().lower() for cell in row if cell.strip()}
+                if _looks_like_supported_header(lowered):
+                    return lowered
+    except OSError:
+        return set()
+    return set()
+
+
+def _looks_like_supported_header(header: set[str]) -> bool:
+    signatures = (
+        {"recordnumber", "eventrecordid", "timecreated", "eventid", "provider", "channel"},
+        {"entrynumber", "sequencenumber", "parentpath", "filename", "created0x10"},
+        {"sourcefilename", "executablename", "hash", "runcount", "lastrun"},
+        {"sourcefile", "appid", "appiddescription"},
+        {"controlset", "cacheentryposition", "path", "lastmodifiedtimeutc", "executed"},
+        {"bagpath", "absolutepath", "lastwritetime"},
+        {"sourcename", "filetype", "filename", "deletedon"},
+        {"source path/filename", "target name", "local path", "vol serial"},
+        {"device name", "instance/serial#", "volume guid", "vol name/details"},
+    )
+    return any(signature <= header for signature in signatures)
+
+
+def _header_has(header: set[str], *columns: str) -> bool:
+    return set(columns) <= header
+
+
 def _recmd_detail_artifact(path: Path) -> str | None:
     if not path.parent.name.isdigit():
         return None
@@ -488,6 +543,157 @@ def _transform_rbcmd(source: Path, destination: Path) -> Path:
             "is_directory": "true" if row.get("FileType", "").lower() == "directory" else "",
         },
     )
+
+
+def _transform_pecmd_prefetch(source: Path, destination: Path) -> Path:
+    return _transform_csv(
+        source,
+        destination,
+        lambda row: {
+            "source_path": row.get("SourceFilename", ""),
+            "prefetch_name": Path(row.get("SourceFilename", "")).name,
+            "executable_name": row.get("ExecutableName", ""),
+            "prefetch_hash": row.get("Hash", ""),
+            "prefetch_version": row.get("Version", ""),
+            "run_count": row.get("RunCount", ""),
+            "last_run_time_utc": row.get("LastRun", ""),
+            "last_run_times_utc": json.dumps(
+                [
+                    value
+                    for value in [
+                        row.get("LastRun", ""),
+                        row.get("PreviousRun0", ""),
+                        row.get("PreviousRun1", ""),
+                        row.get("PreviousRun2", ""),
+                        row.get("PreviousRun3", ""),
+                        row.get("PreviousRun4", ""),
+                        row.get("PreviousRun5", ""),
+                        row.get("PreviousRun6", ""),
+                    ]
+                    if value
+                ]
+            ),
+            "referenced_strings": json.dumps(_split_prefetch_references(row.get("FilesLoaded", ""))),
+            "referenced_string_count": str(len(_split_prefetch_references(row.get("FilesLoaded", "")))),
+            "parser_note": row.get("Note", "") or row.get("ParsingError", ""),
+        },
+    )
+
+
+def _split_prefetch_references(value: str | None) -> list[str]:
+    if not value:
+        return []
+    parts = re.split(r"\s*[|;]\s*|,\s+", value)
+    return [part for part in parts if part]
+
+
+def _transform_tzworks_lnk(source: Path, destination: Path) -> Path:
+    rows = []
+    for row in _iter_rows_after_header(source, {"source path/filename", "target name", "local path"}):
+        rows.append(
+            {
+                "SourceFile": _cell(row, 0),
+                "SourceCreated": _date_time(_cell(row, 6), _cell(row, 7)),
+                "SourceModified": _date_time(_cell(row, 2), _cell(row, 3)),
+                "SourceAccessed": _date_time(_cell(row, 4), _cell(row, 5)),
+                "TargetCreated": _date_time(_cell(row, 12), _cell(row, 13)),
+                "TargetModified": _date_time(_cell(row, 8), _cell(row, 9)),
+                "TargetAccessed": _date_time(_cell(row, 10), _cell(row, 11)),
+                "FileSize": _cell(row, 19),
+                "FileName": _cell(row, 20),
+                "LocalPath": _cell(row, 25),
+                "CommonPath": _cell(row, 26),
+                "NetworkPath": _cell(row, 27),
+                "DriveType": _cell(row, 22),
+                "VolumeSerialNumber": _cell(row, 23),
+                "VolumeLabel": _cell(row, 24),
+                "Arguments": _cell(row, 28),
+                "MachineID": _cell(row, 29),
+            }
+        )
+    return _write_rows(destination, rows)
+
+
+def _transform_tzworks_usp(source: Path, destination: Path) -> Path:
+    rows = []
+    for row in _iter_rows_after_header(source, {"device name", "instance/serial#", "volume guid"}):
+        rows.append(
+            {
+                "device_name": _cell(row, 0),
+                "device_seen_utc": _date_time(_cell(row, 1), _cell(row, 2)),
+                "install_time_local": _date_time(_cell(row, 3), _cell(row, 4)),
+                "disk_device_utc": _date_time(_cell(row, 5), _cell(row, 6)),
+                "volume_device_utc": _date_time(_cell(row, 7), _cell(row, 8)),
+                "device_type_raw": _cell(row, 9),
+                "vendor_id": _strip_hash(_cell(row, 10)),
+                "product_id": _strip_hash(_cell(row, 11)),
+                "hub": _cell(row, 12),
+                "port": _cell(row, 13),
+                "vendor": _cell(row, 14),
+                "product": _cell(row, 15),
+                "revision": _cell(row, 16),
+                "volume_guid": _cell(row, 17),
+                "volume_name": _cell(row, 18),
+                "users": _cell(row, 19),
+                "serial": _cell(row, 20),
+                "other_dates": _cell(row, 21),
+                "readyboost": _cell(row, 22),
+                "raw_record": json.dumps(row, ensure_ascii=False),
+            }
+        )
+    return _write_rows(destination, rows)
+
+
+def _iter_rows_after_header(source: Path, required_columns: set[str]) -> list[list[str]]:
+    with source.open("r", encoding="utf-8-sig", errors="replace", newline="") as input_handle:
+        reader = csv.reader(input_handle)
+        found = False
+        rows: list[list[str]] = []
+        for row in reader:
+            lowered = {cell.strip().lower() for cell in row if cell.strip()}
+            if not found:
+                if required_columns <= lowered:
+                    found = True
+                continue
+            if any(cell.strip() for cell in row):
+                rows.append(row)
+        return rows
+
+
+def _write_rows(destination: Path, rows: list[dict[str, Any]]) -> Path:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        for key in row:
+            if key not in seen:
+                seen.add(key)
+                fieldnames.append(key)
+    with destination.open("w", encoding="utf-8", newline="") as output_handle:
+        writer = csv.DictWriter(output_handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    return destination
+
+
+def _cell(row: list[str], index: int) -> str:
+    if index >= len(row):
+        return ""
+    return row[index].strip()
+
+
+def _date_time(date_value: str, time_value: str) -> str:
+    date_value = (date_value or "").strip()
+    time_value = (time_value or "").strip()
+    if not date_value:
+        return ""
+    if not time_value:
+        return date_value
+    return f"{date_value} {time_value}"
+
+
+def _strip_hash(value: str) -> str:
+    return value.lstrip("#").strip()
 
 
 def _transform_recmd_detail(source: Path, destination: Path) -> Path:
