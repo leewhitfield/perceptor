@@ -5,6 +5,7 @@ import zipfile
 
 import duckdb
 
+import forensic_orchestrator.report_bundle as report_bundle
 from forensic_orchestrator.db import Database
 from forensic_orchestrator.paths import WorkspacePaths
 from forensic_orchestrator.report_bundle import infer_report_candidate
@@ -133,3 +134,73 @@ def test_report_bundle_import_many_zip_creates_one_computer_per_top_level_folder
         assert conn.execute("SELECT count(*) FROM distinct_mft_entries").fetchone()[0] == 2
     finally:
         conn.close()
+
+
+def test_report_bundle_import_many_emits_progress(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORENSIC_ANALYTICS_MODE", "duckdb")
+    input_root = tmp_path / "input" / "ComputerA" / "MFT"
+    input_root.mkdir(parents=True)
+    (input_root / "ComputerA_$MFT.csv").write_text(
+        "EntryNumber,SequenceNumber,ParentPath,FileName,Created0x10\n"
+        "42,3,C:/Users/ComputerA,note.txt,2023-01-01 00:00:00\n",
+        encoding="utf-8",
+    )
+
+    paths = WorkspacePaths(tmp_path / "analysis")
+    db = Database(paths.db_path())
+    messages: list[str] = []
+    result = import_report_bundle_many(
+        db=db,
+        paths=paths,
+        report_root=tmp_path / "input",
+        accept_duplicate=True,
+        progress=messages.append,
+    )
+    db.close()
+
+    assert result.imported_computers == 1
+    assert any(message.startswith("report-bundle-many start") for message in messages)
+    assert any("computer 1/1 start" in message for message in messages)
+    assert any("csv 1/1 import" in message for message in messages)
+    assert any("csv 1/1 imported" in message for message in messages)
+    assert any(message.startswith("report-bundle postprocess start") for message in messages)
+    assert any(message.startswith("report-bundle-many completed") for message in messages)
+
+
+def test_report_bundle_import_many_warns_when_distinct_rebuild_hits_disk_full(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORENSIC_ANALYTICS_MODE", "duckdb")
+    input_root = tmp_path / "input" / "ComputerA" / "MFT"
+    input_root.mkdir(parents=True)
+    (input_root / "ComputerA_$MFT.csv").write_text(
+        "EntryNumber,SequenceNumber,ParentPath,FileName,Created0x10\n"
+        "42,3,C:/Users/ComputerA,note.txt,2023-01-01 00:00:00\n",
+        encoding="utf-8",
+    )
+
+    original = report_bundle.rebuild_distinct_artifact_tables
+    calls = {"count": 0}
+
+    def flaky_distinct(*args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise duckdb.IOException(
+                'IO Error: Could not write file "events.duckdb.tmp/duckdb_temp_storage_DEFAULT-1.tmp": No space left'
+            )
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(report_bundle, "rebuild_distinct_artifact_tables", flaky_distinct)
+    paths = WorkspacePaths(tmp_path / "analysis")
+    db = Database(paths.db_path())
+    result = import_report_bundle_many(
+        db=db,
+        paths=paths,
+        report_root=tmp_path / "input",
+        accept_duplicate=True,
+    )
+    db.close()
+
+    assert result.imported_computers == 1
+    assert result.imported_files == 1
+    assert result.failed_files == 0
+    assert result.warnings
+    assert "DuckDB ran out of temporary disk space" in result.warnings[0]

@@ -315,6 +315,11 @@ def print_json(value: object) -> None:
     print(json.dumps(sanitize_report_paths(value), indent=2, default=str))
 
 
+def print_progress(message: str) -> None:
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    print(f"[{timestamp}] {message}", file=sys.stderr, flush=True)
+
+
 def _count_csv_rows(path: Path) -> int:
     with path.open("r", encoding="utf-8-sig", errors="replace", newline="") as handle:
         return max(0, sum(1 for _ in csv.DictReader(handle)))
@@ -1728,6 +1733,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Import output even when the same content hash already exists for this evidence source/tool",
     )
+    report_bundle_import.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Suppress timestamped import progress messages on stderr",
+    )
     report_bundle_many = report_bundle_sub.add_parser("import-many")
     report_bundle_many.add_argument("--case", dest="case_id", help="Existing case/project ID; creates one when omitted")
     report_bundle_many.add_argument("--path", required=True, help="Directory or zip containing one top-level folder per computer")
@@ -1735,6 +1745,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--accept-duplicate",
         action="store_true",
         help="Import output even when the same content hash already exists for this evidence source/tool",
+    )
+    report_bundle_many.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Suppress timestamped import progress messages on stderr",
     )
 
     report = subparsers.add_parser("report")
@@ -3173,6 +3188,7 @@ def run(args: argparse.Namespace) -> int:
                 computer_id=args.computer_id,
                 computer_label=args.computer_label,
                 accept_duplicate=args.accept_duplicate,
+                progress=None if args.no_progress else print_progress,
             )
             print_json(
                 {
@@ -3185,6 +3201,7 @@ def run(args: argparse.Namespace) -> int:
                     "imported_rows": result.imported_rows,
                     "skipped_files": result.skipped_files,
                     "failed_files": result.failed_files,
+                    "warnings": result.warnings,
                     "markdown_path": result.markdown_path,
                 }
             )
@@ -3197,6 +3214,7 @@ def run(args: argparse.Namespace) -> int:
                 report_root=Path(args.path),
                 case_id=args.case_id,
                 accept_duplicate=args.accept_duplicate,
+                progress=None if args.no_progress else print_progress,
             )
             print_json(
                 {
@@ -3208,6 +3226,7 @@ def run(args: argparse.Namespace) -> int:
                     "imported_rows": result.imported_rows,
                     "skipped_files": result.skipped_files,
                     "failed_files": result.failed_files,
+                    "warnings": result.warnings,
                     "markdown_path": result.markdown_path,
                     "computers": [
                         {
@@ -3218,6 +3237,7 @@ def run(args: argparse.Namespace) -> int:
                             "imported_rows": item.imported_rows,
                             "skipped_files": item.skipped_files,
                             "failed_files": item.failed_files,
+                            "warnings": item.warnings,
                             "markdown_path": item.markdown_path,
                         }
                         for item in result.items

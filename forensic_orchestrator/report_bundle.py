@@ -7,6 +7,7 @@ import shutil
 import uuid
 import zipfile
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -28,6 +29,7 @@ from forensic_orchestrator.tools.usb_summary import rebuild_usb_connection_event
 
 
 TransformFn = Callable[[Path, Path], Path]
+ProgressFn = Callable[[str], None]
 
 
 @dataclass(frozen=True)
@@ -60,6 +62,7 @@ class ReportBundleImportResult:
     imported_rows: int = 0
     skipped_files: int = 0
     failed_files: int = 0
+    warnings: list[str] = field(default_factory=list)
     items: list[ReportImportItem] = field(default_factory=list)
 
 
@@ -72,6 +75,7 @@ class ReportBundleBulkImportResult:
     imported_rows: int = 0
     skipped_files: int = 0
     failed_files: int = 0
+    warnings: list[str] = field(default_factory=list)
     items: list[ReportBundleImportResult] = field(default_factory=list)
     markdown_path: str = ""
 
@@ -85,10 +89,13 @@ def import_report_bundle(
     computer_id: str | None = None,
     computer_label: str | None = None,
     accept_duplicate: bool = False,
+    progress: ProgressFn | None = None,
 ) -> ReportBundleImportResult:
     report_root = report_root.resolve()
     if not report_root.is_dir():
         raise ValueError(f"Report bundle path is not a directory: {report_root}")
+    started = datetime.now(timezone.utc)
+    _progress(progress, f"report-bundle start root={report_root}")
 
     if case_id is None:
         case_id = create_case(db, paths)
@@ -150,7 +157,9 @@ def import_report_bundle(
     transformed_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        for csv_path in sorted(report_root.rglob("*.csv")):
+        csv_paths = sorted(report_root.rglob("*.csv"))
+        _progress(progress, f"report-bundle discovered csv_files={len(csv_paths)} computer={computer_label or report_root.name}")
+        for index, csv_path in enumerate(csv_paths, 1):
             candidate = infer_report_candidate(csv_path)
             if candidate is None:
                 result.skipped_files += 1
@@ -162,7 +171,15 @@ def import_report_bundle(
                         note="No safe importer mapping for this CSV",
                     )
                 )
+                _progress(
+                    progress,
+                    f"report-bundle csv {index}/{len(csv_paths)} unsupported path={_display_path(csv_path, report_root)}",
+                )
                 continue
+            _progress(
+                progress,
+                f"report-bundle csv {index}/{len(csv_paths)} import tool={candidate.tool_name} path={_display_path(csv_path, report_root)}",
+            )
             item_timing_id = db.start_process_timing(
                 case_id=case_id,
                 computer_id=computer_id,
@@ -202,6 +219,10 @@ def import_report_bundle(
                         )
                     )
                     db.finish_process_timing(item_timing_id, status="skipped", details={"duplicate_output_id": duplicate["id"]})
+                    _progress(
+                        progress,
+                        f"report-bundle csv {index}/{len(csv_paths)} duplicate tool={candidate.tool_name} imported_files={result.imported_files} skipped={result.skipped_files}",
+                    )
                     continue
                 tool_output_id = str(uuid.uuid4())
                 row_count = ingest_csv_output(
@@ -240,6 +261,10 @@ def import_report_bundle(
                     )
                 )
                 db.finish_process_timing(item_timing_id, details={"row_count": row_count, "output_path": str(import_path)})
+                _progress(
+                    progress,
+                    f"report-bundle csv {index}/{len(csv_paths)} imported tool={candidate.tool_name} rows={row_count} total_rows={result.imported_rows}",
+                )
             except Exception as exc:  # keep importing remaining report outputs
                 result.failed_files += 1
                 result.items.append(
@@ -261,8 +286,14 @@ def import_report_bundle(
                     details={"path": str(csv_path), "tool_name": candidate.tool_name, "error": str(exc)},
                 )
                 db.finish_process_timing(item_timing_id, status="failed", details={"error": str(exc)})
+                _progress(
+                    progress,
+                    f"report-bundle csv {index}/{len(csv_paths)} failed tool={candidate.tool_name} failed={result.failed_files} error={exc}",
+                )
 
-        _run_post_import_rebuilds(db, case_id=case_id, image_id=image_id)
+        _progress(progress, "report-bundle postprocess start")
+        result.warnings.extend(_run_post_import_rebuilds(db, case_id=case_id, image_id=image_id))
+        _progress(progress, "report-bundle postprocess completed")
         markdown_path = _write_markdown_report(paths, result)
         result.markdown_path = str(markdown_path)
         db.log_activity(
@@ -278,6 +309,7 @@ def import_report_bundle(
                 "imported_rows": result.imported_rows,
                 "skipped_files": result.skipped_files,
                 "failed_files": result.failed_files,
+                "warnings": result.warnings,
                 "markdown_path": str(markdown_path),
             },
         )
@@ -289,8 +321,15 @@ def import_report_bundle(
                 "imported_rows": result.imported_rows,
                 "skipped_files": result.skipped_files,
                 "failed_files": result.failed_files,
+                "warnings": result.warnings,
                 "markdown_path": str(markdown_path),
             },
+        )
+        _progress(
+            progress,
+            "report-bundle completed "
+            f"elapsed={_format_elapsed(started)} imported_files={result.imported_files} imported_rows={result.imported_rows} "
+            f"skipped={result.skipped_files} failed={result.failed_files} report={markdown_path}",
         )
         return result
     except Exception as exc:
@@ -305,22 +344,29 @@ def import_report_bundle_many(
     report_root: Path,
     case_id: str | None = None,
     accept_duplicate: bool = False,
+    progress: ProgressFn | None = None,
 ) -> ReportBundleBulkImportResult:
-    source_root, cleanup_root = _prepare_bulk_report_root(paths, report_root)
+    started = datetime.now(timezone.utc)
+    _progress(progress, f"report-bundle-many start root={report_root.resolve()}")
+    source_root, cleanup_root = _prepare_bulk_report_root(paths, report_root, progress=progress)
     try:
         computer_roots = _top_level_report_roots(source_root)
         if not computer_roots:
             raise ValueError(f"No top-level computer folders found under: {source_root}")
+        _progress(progress, f"report-bundle-many discovered computers={len(computer_roots)}")
         active_case_id = case_id
         bulk = ReportBundleBulkImportResult(case_id=case_id or "", report_root=str(report_root.resolve()))
-        for computer_root in computer_roots:
+        for index, computer_root in enumerate(computer_roots, 1):
+            label = _computer_label_for_folder(computer_root)
+            _progress(progress, f"report-bundle-many computer {index}/{len(computer_roots)} start label={label} path={computer_root}")
             result = import_report_bundle(
                 db=db,
                 paths=paths,
                 report_root=computer_root,
                 case_id=active_case_id,
-                computer_label=_computer_label_for_folder(computer_root),
+                computer_label=label,
                 accept_duplicate=accept_duplicate,
+                progress=progress,
             )
             if active_case_id is None:
                 active_case_id = result.case_id
@@ -330,15 +376,37 @@ def import_report_bundle_many(
             bulk.imported_rows += result.imported_rows
             bulk.skipped_files += result.skipped_files
             bulk.failed_files += result.failed_files
+            bulk.warnings.extend(result.warnings)
             bulk.items.append(result)
+            _progress(
+                progress,
+                f"report-bundle-many computer {index}/{len(computer_roots)} completed label={label} "
+                f"files={result.imported_files} rows={result.imported_rows} skipped={result.skipped_files} failed={result.failed_files}",
+            )
         if active_case_id is None:
             raise ValueError("Bulk import did not create or use a case")
         bulk.case_id = active_case_id
-        distinct_stats = rebuild_distinct_artifact_tables(db, case_id=active_case_id, image_id=None)
+        _progress(progress, "report-bundle-many distinct rebuild start")
+        distinct_stats, distinct_warning = _try_rebuild_distinct_artifact_tables(db, case_id=active_case_id, image_id=None)
+        if distinct_warning:
+            bulk.warnings.append(distinct_warning)
+            _progress(progress, f"report-bundle-many distinct rebuild warning warning={distinct_warning}")
+        _progress(
+            progress,
+            "report-bundle-many distinct rebuild completed "
+            f"distinct_rows={distinct_stats.get('distinct_rows', 0)} duplicate_rows={distinct_stats.get('duplicate_rows', 0)}",
+        )
         bulk.markdown_path = str(_write_bulk_markdown_report(paths, bulk, distinct_stats))
+        _progress(
+            progress,
+            "report-bundle-many completed "
+            f"elapsed={_format_elapsed(started)} computers={bulk.imported_computers} files={bulk.imported_files} "
+            f"rows={bulk.imported_rows} skipped={bulk.skipped_files} failed={bulk.failed_files} report={bulk.markdown_path}",
+        )
         return bulk
     finally:
         if cleanup_root is not None:
+            _progress(progress, f"report-bundle-many cleanup staging={cleanup_root}")
             shutil.rmtree(cleanup_root, ignore_errors=True)
 
 
@@ -428,7 +496,8 @@ def infer_report_candidate(path: Path) -> ReportCandidate | None:
     return None
 
 
-def _run_post_import_rebuilds(db: Database, *, case_id: str, image_id: str) -> None:
+def _run_post_import_rebuilds(db: Database, *, case_id: str, image_id: str) -> list[str]:
+    warnings: list[str] = []
     rebuild_common_dialog_items(db, case_id=case_id, image_id=image_id)
     rebuild_copied_file_indicators(db, case_id=case_id, image_id=image_id)
     rebuild_file_correlations(db, case_id=case_id, image_id=image_id)
@@ -438,7 +507,47 @@ def _run_post_import_rebuilds(db: Database, *, case_id: str, image_id: str) -> N
     rebuild_sessions(db, case_id=case_id, image_id=image_id)
     rebuild_usb_storage_devices(db, case_id=case_id, image_id=image_id)
     rebuild_usb_connection_events(db, case_id=case_id, image_id=image_id)
-    rebuild_distinct_artifact_tables(db, case_id=case_id, image_id=image_id)
+    _, distinct_warning = _try_rebuild_distinct_artifact_tables(db, case_id=case_id, image_id=image_id)
+    if distinct_warning:
+        warnings.append(distinct_warning)
+    return warnings
+
+
+def _try_rebuild_distinct_artifact_tables(
+    db: Database, *, case_id: str, image_id: str | None
+) -> tuple[dict[str, Any], str | None]:
+    try:
+        return rebuild_distinct_artifact_tables(db, case_id=case_id, image_id=image_id), None
+    except Exception as exc:
+        if not _is_disk_full_error(exc):
+            raise
+        warning = f"Skipped distinct artifact table rebuild because DuckDB ran out of temporary disk space: {exc}"
+        db.log_activity(
+            case_id=case_id,
+            image_id=image_id,
+            level="warning",
+            event="report_bundle.distinct_rebuild_skipped",
+            message="Skipped distinct artifact rebuild after disk-full error",
+            details={"error": str(exc)},
+        )
+        return _empty_distinct_stats(case_id, image_id), warning
+
+
+def _is_disk_full_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "no space left" in text or ("could not write file" in text and "duckdb_temp_storage" in text)
+
+
+def _empty_distinct_stats(case_id: str, image_id: str | None) -> dict[str, Any]:
+    return {
+        "case_id": case_id,
+        "image_id": image_id,
+        "tables": {},
+        "distinct_rows": 0,
+        "source_rows": 0,
+        "duplicate_rows": 0,
+        "skipped": True,
+    }
 
 
 def _write_markdown_report(paths: WorkspacePaths, result: ReportBundleImportResult) -> Path:
@@ -457,9 +566,13 @@ def _write_markdown_report(paths: WorkspacePaths, result: ReportBundleImportResu
         f"- Skipped files: {result.skipped_files}",
         f"- Failed files: {result.failed_files}",
         "",
-        "## Imported",
-        "",
     ]
+    if result.warnings:
+        lines.extend(["## Warnings", ""])
+        for warning in result.warnings:
+            lines.append(f"- {warning}")
+        lines.append("")
+    lines.extend(["## Imported", ""])
     imported = [item for item in result.items if item.status == "imported"]
     if imported:
         for item in imported:
@@ -502,9 +615,13 @@ def _write_bulk_markdown_report(paths: WorkspacePaths, result: ReportBundleBulkI
         f"- Distinct rows: {distinct_stats.get('distinct_rows', 0)}",
         f"- Duplicate rows collapsed in distinct tables: {distinct_stats.get('duplicate_rows', 0)}",
         "",
-        "## Computers",
-        "",
     ]
+    if result.warnings:
+        lines.extend(["## Warnings", ""])
+        for warning in result.warnings:
+            lines.append(f"- {warning}")
+        lines.append("")
+    lines.extend(["## Computers", ""])
     for item in result.items:
         lines.append(
             f"- Computer `{item.computer_id}` evidence `{item.image_id}`: "
@@ -524,7 +641,7 @@ def _write_bulk_markdown_report(paths: WorkspacePaths, result: ReportBundleBulkI
     return report_path
 
 
-def _prepare_bulk_report_root(paths: WorkspacePaths, report_root: Path) -> tuple[Path, Path | None]:
+def _prepare_bulk_report_root(paths: WorkspacePaths, report_root: Path, *, progress: ProgressFn | None = None) -> tuple[Path, Path | None]:
     report_root = report_root.resolve()
     if report_root.is_dir():
         return report_root, None
@@ -532,18 +649,22 @@ def _prepare_bulk_report_root(paths: WorkspacePaths, report_root: Path) -> tuple
         raise ValueError(f"Bulk report input must be a directory or .zip file: {report_root}")
     staging_root = paths.root / "staging" / "report-bundle-import" / f"{report_root.stem}-{uuid.uuid4()}"
     staging_root.mkdir(parents=True, exist_ok=True)
-    _safe_extract_zip(report_root, staging_root)
+    _progress(progress, f"report-bundle-many extract start zip={report_root} staging={staging_root}")
+    _safe_extract_zip(report_root, staging_root, progress=progress)
+    _progress(progress, f"report-bundle-many extract completed staging={staging_root}")
     return staging_root, staging_root
 
 
-def _safe_extract_zip(zip_path: Path, destination: Path) -> None:
+def _safe_extract_zip(zip_path: Path, destination: Path, *, progress: ProgressFn | None = None) -> None:
     destination_resolved = destination.resolve()
     with zipfile.ZipFile(zip_path) as archive:
-        for member in archive.infolist():
+        members = archive.infolist()
+        for member in members:
             member_path = destination / member.filename
             resolved = member_path.resolve()
             if destination_resolved not in resolved.parents and resolved != destination_resolved:
                 raise ValueError(f"Unsafe zip member path: {member.filename}")
+        _progress(progress, f"report-bundle-many extract members={len(members)}")
         archive.extractall(destination)
 
 
@@ -556,6 +677,29 @@ def _top_level_report_roots(root: Path) -> list[Path]:
         if nested:
             return [path for path in nested if any(path.rglob("*.csv"))]
     return [path for path in children if any(path.rglob("*.csv"))]
+
+
+def _progress(progress: ProgressFn | None, message: str) -> None:
+    if progress is not None:
+        progress(message)
+
+
+def _display_path(path: Path, root: Path) -> str:
+    try:
+        return str(path.relative_to(root))
+    except ValueError:
+        return str(path)
+
+
+def _format_elapsed(started: datetime) -> str:
+    seconds = max(0, int((datetime.now(timezone.utc) - started).total_seconds()))
+    minutes, seconds = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h{minutes:02d}m{seconds:02d}s"
+    if minutes:
+        return f"{minutes}m{seconds:02d}s"
+    return f"{seconds}s"
 
 
 def _has_artifact_named_children(path: Path) -> bool:
