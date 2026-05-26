@@ -2354,9 +2354,82 @@ def test_external_storage_report_combines_devices_activity_and_event_logs(tmp_pa
     assert report["file_activity"][0]["artifact_count"] == 2
     assert report["file_activity"][0]["source_artifact_types"] == "jumplist, lnk"
     assert report["event_log_observations"][0]["event_id"] == "20001"
+    assert report["event_log_observations"][0]["computer_label"] == "Desktop"
+    assert report["event_log_observations"][0]["attributable_computer"] == "Desktop"
     assert {row["event_id"] for row in report["event_log_observations"]} == {"20001"}
+    assert report["file_activity"][0]["computer_label"] == "Desktop"
+    assert report["file_activity"][0]["attributable_computer"] == "Desktop"
+    assert any(row.get("computer_label") == "Desktop" for row in report["timeline"] if row.get("usb_serial") == "SER123")
+    sandisk = next(device for device in report["devices"] if device["serial"] == "SER123")
+    uasp = next(device for device in report["devices"] if device["serial"] == "UASP123456")
+    assert sandisk["computer_label"] == "Desktop"
+    assert sandisk["attributable_computer"] == "Desktop"
+    assert sandisk["observed_computers"] == "Desktop"
+    assert sandisk["observed_drive_letters"] == "E:"
+    assert sandisk["normalized_vendor_id"] == "0781"
+    assert uasp["last_observed_utc"] == "2020-11-14T12:01:00Z"
+    assert "many USB artifacts do not record removals" in uasp["last_removal_note"]
     assert "SanDisk Ultra" in markdown
+    assert "Observed computers: `Desktop`" in markdown
+    assert "First observed: `2020-11-10T10:00:00Z`" in markdown
     assert "Attributable file/folder activity: `detected" in markdown
+
+
+def test_external_storage_report_attributes_same_device_to_multiple_computers(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-a", case_id=case.id, label="Alpha")
+    db.create_computer(computer_id="computer-b", case_id=case.id, label="Beta")
+    db.add_image("image-a", case.id, Path("/evidence/alpha.E01"), computer_id="computer-a")
+    db.add_image("image-b", case.id, Path("/evidence/beta.E01"), computer_id="computer-b")
+    base = {
+        "case_id": case.id,
+        "serial": "SER123&0",
+        "vendor_id": "vid_0781",
+        "product_id": "pid_5581",
+        "vendor": "SanDisk",
+        "product": "Ultra",
+        "revision": "1.00",
+        "friendly_name": "SanDisk Ultra",
+        "parent_id_prefix": "",
+        "device_service": "USBSTOR",
+        "volume_guid": "",
+        "volume_serial_number": "",
+        "volume_name": "",
+        "capacity_bytes": "",
+        "file_system": "",
+        "alternate_scsi_serial": "",
+        "user_profiles": "",
+        "first_install_date_utc": "2020-01-01T00:00:00Z",
+        "last_arrival_utc": "",
+        "last_removal_utc": "",
+        "first_volume_serial_event_utc": "",
+        "last_partition_event_utc": "2020-01-03T00:00:00Z",
+        "last_migration_present_utc": "2020-01-02T00:00:00Z",
+        "evidence_row_count": 1,
+        "source_artifacts": "tzworks_usp",
+        "created_at": "2026-01-01T00:00:00Z",
+    }
+    db.insert_usb_storage_devices(
+        [
+            {**base, "id": "usb-a", "computer_id": "computer-a", "image_id": "image-a", "drive_letter": "e"},
+            {**base, "id": "usb-b", "computer_id": "computer-b", "image_id": "image-b", "drive_letter": "E:"},
+        ]
+    )
+
+    report = external_storage_report(db, case.id, limit=50)
+    markdown = external_storage_markdown(report)
+
+    rows = [device for device in report["devices"] if device["normalized_serial"] == "SER123"]
+    assert len(rows) == 2
+    assert {row["computer_label"] for row in rows} == {"Alpha", "Beta"}
+    assert all(row["observed_computers"] == "Alpha, Beta" for row in rows)
+    assert all(row["observed_computer_count"] == 2 for row in rows)
+    assert all(row["observed_drive_letters"] == "E:" for row in rows)
+    assert all(row["normalized_vendor_id"] == "0781" for row in rows)
+    assert all(row["normalized_product_id"] == "5581" for row in rows)
+    assert "Observed computers: `Alpha, Beta`" in markdown
+    assert "Last observed: `2020-01-03T00:00:00Z`" in markdown
 
 
 def test_external_storage_report_lists_unattributed_removable_volume_activity(tmp_path):

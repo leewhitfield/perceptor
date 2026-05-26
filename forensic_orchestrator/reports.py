@@ -13,7 +13,7 @@ import sqlite3
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 from urllib.parse import unquote, urlparse
 
 import duckdb
@@ -12570,6 +12570,8 @@ def _dedupe_usb_file_items(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "file_name": row.get("file_name"),
                 "file_location": row.get("file_location"),
                 "artifact_count": 0,
+                "computer_ids": set(),
+                "image_ids": set(),
                 "source_artifact_types": set(),
                 "user_profiles": set(),
                 "first_target_time": None,
@@ -12585,6 +12587,10 @@ def _dedupe_usb_file_items(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             },
         )
         item["artifact_count"] += 1
+        if row.get("computer_id"):
+            item["computer_ids"].add(str(row["computer_id"]))
+        if row.get("image_id"):
+            item["image_ids"].add(str(row["image_id"]))
         if row.get("source_artifact_type"):
             item["source_artifact_types"].add(row["source_artifact_type"])
         if row.get("user_profile"):
@@ -12621,6 +12627,8 @@ def _dedupe_usb_file_items(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     result = []
     for item in grouped.values():
         converted = dict(item)
+        converted["computer_id"] = ", ".join(sorted(item["computer_ids"]))
+        converted["image_id"] = ", ".join(sorted(item["image_ids"]))
         converted["source_artifact_types"] = ", ".join(sorted(item["source_artifact_types"]))
         converted["user_profiles"] = ", ".join(sorted(item["user_profiles"]))
         converted["match_types"] = ", ".join(sorted(item["match_types"]))
@@ -12914,6 +12922,8 @@ def usb_timeline_report(
                 {
                     "timestamp": base["event_time_utc"],
                     "event_type": f"usb_{base['event_type']}",
+                    "computer_id": base.get("computer_id"),
+                    "image_id": base.get("image_id"),
                     "usb_serial": base["serial"],
                     "usb_volume_serial_number": base["volume_serial_number"],
                     "usb_volume_name": storage.get("volume_name"),
@@ -12932,7 +12942,7 @@ def usb_timeline_report(
             case_id,
             "usb_storage_devices",
             """
-            SELECT serial, volume_serial_number, volume_name, drive_letter, product,
+            SELECT computer_id, image_id, serial, volume_serial_number, volume_name, drive_letter, product,
                    first_install_date_utc, last_arrival_utc, last_removal_utc,
                    first_volume_serial_event_utc, last_partition_event_utc
             FROM usb_storage_devices
@@ -12954,6 +12964,8 @@ def usb_timeline_report(
                         {
                             "timestamp": timestamp,
                             "event_type": event_type,
+                            "computer_id": base.get("computer_id"),
+                            "image_id": base.get("image_id"),
                             "usb_serial": base["serial"],
                             "usb_volume_serial_number": base["volume_serial_number"],
                             "usb_volume_name": base["volume_name"],
@@ -12989,6 +13001,8 @@ def usb_timeline_report(
                     {
                         "timestamp": timestamp,
                         "event_type": event_type,
+                        "computer_id": item.get("computer_id"),
+                        "image_id": item.get("image_id"),
                         "usb_serial": item["usb_serial"],
                         "usb_volume_serial_number": item["usb_volume_serial_number"],
                         "usb_volume_name": item["usb_volume_name"],
@@ -13039,6 +13053,7 @@ def external_storage_report(
                 (case_id, max(limit * 5, 500)),
             )
         )[:limit]
+    _annotate_external_storage_row_attribution(db, case_id, file_activity)
     _annotate_external_storage_file_activity(devices, file_activity)
     unattributed_volume_activity = _external_storage_unattributed_removable_activity(
         db,
@@ -13055,9 +13070,12 @@ def external_storage_report(
     timeline = _dedupe_timeline_events([*timeline, *_external_storage_partition_event_timeline(db, case_id, devices)])
     setupapi_observations = _external_storage_setupapi_rows(db, case_id, devices=devices, limit=limit)
     timeline = _dedupe_timeline_events([*timeline, *_setupapi_storage_timeline(setupapi_observations)])
+    _annotate_external_storage_row_attribution(db, case_id, timeline)
+    _annotate_external_storage_row_attribution(db, case_id, setupapi_observations)
     timeline.sort(key=lambda item: (item.get("timestamp") or "", item.get("event_type") or "", item.get("description") or ""))
     timeline = timeline[:limit]
     event_logs = _external_storage_event_log_rows(db, case_id, devices=devices, limit=limit)
+    _annotate_external_storage_row_attribution(db, case_id, event_logs)
     registry_counts = _external_storage_registry_counts(db, case_id)
     source_counts: dict[str, int] = {}
     temporal_counts: dict[str, int] = {}
@@ -13150,20 +13168,26 @@ def external_storage_markdown(report: dict[str, Any]) -> str:
                 [
                     f"### {index}. {label}",
                     "",
-                    f"- Serial: `{device.get('serial') or ''}`",
+                    f"- Computer: `{device.get('computer_label') or device.get('computer_id') or ''}`",
+                    f"- Observed computers: `{device.get('observed_computers') or ''}`",
+                    f"- Serial: `{device.get('normalized_serial') or device.get('serial') or ''}`",
                     f"- SCSI/event serial: `{device.get('alternate_scsi_serial') or ''}`",
                     f"- Parent/device serial: `{device.get('parent_device_serial') or ''}`",
-                    f"- VID/PID: `{device.get('vendor_id') or ''}` / `{device.get('product_id') or ''}`",
-                    f"- Volume serial: `{device.get('volume_serial_number') or ''}`",
+                    f"- VID/PID: `{device.get('normalized_vendor_id') or device.get('vendor_id') or ''}` / `{device.get('normalized_product_id') or device.get('product_id') or ''}`",
+                    f"- Volume serial: `{device.get('observed_volume_serial_numbers') or device.get('volume_serial_number') or ''}`",
                     f"- Volume name: `{device.get('volume_name') or ''}`",
-                    f"- Drive letter: `{device.get('drive_letter') or ''}`",
+                    f"- Volume GUID: `{device.get('observed_volume_guids') or device.get('volume_guid') or ''}`",
+                    f"- Drive letter: `{device.get('observed_drive_letters') or device.get('drive_letter') or ''}`",
                     f"- Capacity: `{_format_capacity(device.get('capacity_bytes'))}`",
                     f"- File system: `{device.get('file_system') or ''}`",
                     f"- Associated user(s): `{device.get('user_profiles') or ''}`",
                     f"- Attributable file/folder activity: `{_external_storage_file_activity_summary(device)}`",
                     f"- First connected: `{device.get('first_install_date_utc') or ''}`",
+                    f"- First observed: `{device.get('first_observed_utc') or ''}`",
+                    f"- Last observed: `{device.get('last_observed_utc') or ''}`",
                     f"- Last arrival: `{device.get('last_arrival_utc') or ''}`",
                     f"- Last removal: `{device.get('last_removal_utc') or ''}`",
+                    f"- Arrival/removal note: `{'; '.join(part for part in (device.get('last_arrival_note'), device.get('last_removal_note')) if part)}`",
                     f"- Source artifacts: `{device.get('source_artifacts') or ''}`",
                     f"- Registry evidence rows: `{device.get('evidence_row_count') or 0}`",
                     "",
@@ -13219,6 +13243,7 @@ def external_storage_markdown(report: dict[str, Any]) -> str:
                 f"`{event.get('timestamp') or ''}` "
                 f"`{event.get('event_type') or ''}` "
                 f"`{event.get('source_artifact_type') or ''}` "
+                f"computer `{event.get('computer_label') or event.get('computer_id') or ''}` "
                 f"{event.get('description') or ''} "
                 f"(serial `{event.get('usb_serial') or ''}`, volume `{event.get('usb_volume_serial_number') or ''}`)"
             )
@@ -13237,6 +13262,7 @@ def external_storage_markdown(report: dict[str, Any]) -> str:
                 f"`{row.get('time_created') or ''}` "
                 f"`{row.get('provider') or ''}` "
                 f"`{row.get('event_id') or ''}` "
+                f"computer `{row.get('computer_label') or row.get('computer_id') or ''}` "
                 f"{row.get('description') or ''} "
                 f"{details} "
                 f"source `{row.get('source_file') or ''}`"
@@ -13254,6 +13280,7 @@ def external_storage_markdown(report: dict[str, Any]) -> str:
                 "- "
                 f"`{row.get('event_time_utc') or ''}` "
                 f"`{row.get('operation') or ''}` "
+                f"computer `{row.get('computer_label') or row.get('computer_id') or ''}` "
                 f"`{row.get('device_instance_id') or ''}` "
                 f"serial `{row.get('serial') or ''}` "
                 f"VID/PID `{row.get('vendor_id') or ''}`/`{row.get('product_id') or ''}` "
@@ -13316,6 +13343,8 @@ def _setupapi_storage_timeline(rows: list[dict[str, Any]]) -> list[dict[str, Any
             {
                 "timestamp": timestamp,
                 "event_type": row.get("operation") or "setupapi_device_event",
+                "computer_id": row.get("computer_id"),
+                "image_id": row.get("image_id"),
                 "source_artifact_type": "setupapi.dev.log",
                 "usb_serial": row.get("serial") or "",
                 "usb_volume_serial_number": "",
@@ -13345,9 +13374,189 @@ def _external_storage_devices(db: Database, case_id: str, *, limit: int) -> list
         (case_id, limit),
     )
     if rows:
-        _fill_computer_image_fields(db, case_id, rows)
+        _annotate_external_storage_devices(db, case_id, rows)
         return rows
-    return _external_storage_devices_from_events(db, case_id, limit=limit)
+    devices = _external_storage_devices_from_events(db, case_id, limit=limit)
+    _annotate_external_storage_devices(db, case_id, devices)
+    return devices
+
+
+def _annotate_external_storage_row_attribution(db: Database, case_id: str, rows: list[dict[str, Any]]) -> None:
+    labels = _computer_labels(db, case_id)
+    paths = _image_paths(db, case_id)
+    for row in rows:
+        computer_ids = _split_external_storage_values(row.get("computer_ids") or row.get("computer_id"))
+        image_ids = _split_external_storage_values(row.get("image_ids") or row.get("image_id"))
+        computer_labels = [labels.get(item, item) for item in computer_ids if item]
+        image_paths = [paths.get(item, item) for item in image_ids if item]
+        if computer_labels:
+            row["computer_label"] = _join_external_storage_values(computer_labels)
+        elif row.get("computer_id"):
+            row.setdefault("computer_label", labels.get(str(row.get("computer_id"))))
+        if image_paths:
+            row["image_path"] = _join_external_storage_values(image_paths)
+        elif row.get("image_id"):
+            row.setdefault("image_path", paths.get(str(row.get("image_id"))))
+        row["attributable_computer"] = row.get("computer_label") or row.get("computer_id") or ""
+        row["attributable_image"] = row.get("image_path") or row.get("image_id") or ""
+
+
+def _annotate_external_storage_devices(db: Database, case_id: str, devices: list[dict[str, Any]]) -> None:
+    if not devices:
+        return
+    _annotate_external_storage_row_attribution(db, case_id, devices)
+    observed = _external_storage_observed_computers(db, case_id)
+    for device in devices:
+        serial_key = _external_storage_serial_key(device.get("serial"))
+        current_computer = str(device.get("computer_label") or device.get("computer_id") or "").strip()
+        computers = observed.get(serial_key, []) if serial_key else []
+        if not computers and current_computer:
+            computers = [current_computer]
+        device["device_identity"] = _external_storage_device_label(device)
+        device["normalized_serial"] = serial_key
+        device["normalized_vendor_id"] = _normalize_external_storage_id_values(device.get("vendor_id"))
+        device["normalized_product_id"] = _normalize_external_storage_id_values(device.get("product_id"))
+        device["observed_drive_letters"] = _normalize_external_storage_drive_letters(device.get("drive_letter"))
+        device["observed_volume_guids"] = _normalize_external_storage_guids(device.get("volume_guid"))
+        device["observed_volume_serial_numbers"] = _normalize_external_storage_volume_serials(device.get("volume_serial_number"))
+        device["observed_computers"] = _join_external_storage_values(computers)
+        device["observed_computer_count"] = len(computers)
+        device["first_observed_utc"] = _external_storage_min_timestamp(
+            device,
+            (
+                "first_install_date_utc",
+                "first_volume_serial_event_utc",
+                "last_migration_present_utc",
+                "last_partition_event_utc",
+                "last_arrival_utc",
+                "last_removal_utc",
+            ),
+        )
+        device["last_observed_utc"] = _external_storage_max_timestamp(
+            device,
+            (
+                "last_removal_utc",
+                "last_arrival_utc",
+                "last_partition_event_utc",
+                "last_migration_present_utc",
+                "first_volume_serial_event_utc",
+                "first_install_date_utc",
+            ),
+        )
+        if not device.get("last_arrival_utc") and device.get("last_observed_utc"):
+            device["last_arrival_note"] = "No source artifact reported a true last-arrival value; use Last observed for last-seen context."
+        if not device.get("last_removal_utc") and device.get("last_observed_utc"):
+            device["last_removal_note"] = "No source artifact reported a true removal value; many USB artifacts do not record removals."
+
+
+def _external_storage_observed_computers(db: Database, case_id: str) -> dict[str, list[str]]:
+    rows = _query_report_rows(
+        db,
+        case_id,
+        "usb_storage_devices",
+        """
+        SELECT serial, computer_id
+        FROM usb_storage_devices
+        WHERE case_id = ?
+          AND COALESCE(serial, '') <> ''
+        """,
+        (case_id,),
+    )
+    labels = _computer_labels(db, case_id)
+    observed: dict[str, list[str]] = {}
+    for row in rows:
+        serial_key = _external_storage_serial_key(row.get("serial"))
+        if not serial_key:
+            continue
+        computer_id = str(row.get("computer_id") or "").strip()
+        label = str(labels.get(computer_id) or computer_id).strip()
+        if not label:
+            continue
+        bucket = observed.setdefault(serial_key, [])
+        if label not in bucket:
+            bucket.append(label)
+    for bucket in observed.values():
+        bucket.sort(key=str.casefold)
+    return observed
+
+
+def _split_external_storage_values(value: Any) -> list[str]:
+    values: list[str] = []
+    raw_values = value if isinstance(value, (list, tuple, set)) else [value]
+    for raw in raw_values:
+        for part in str(raw or "").replace(";", ",").split(","):
+            text = part.strip()
+            if text and text not in values:
+                values.append(text)
+    return values
+
+
+def _join_external_storage_values(values: Iterable[Any]) -> str:
+    joined: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if text and text not in joined:
+            joined.append(text)
+    return ", ".join(joined)
+
+
+def _normalize_external_storage_id_values(value: Any) -> str:
+    normalized: list[str] = []
+    for text in _split_external_storage_values(value):
+        item = text.upper().removeprefix("VID_").removeprefix("PID_")
+        if item not in normalized:
+            normalized.append(item)
+    return ", ".join(normalized)
+
+
+def _normalize_external_storage_drive_letters(value: Any) -> str:
+    letters: list[str] = []
+    for text in _split_external_storage_values(value):
+        candidate = text.upper()
+        if len(candidate) == 1 and candidate.isalpha():
+            candidate = f"{candidate}:"
+        if candidate not in letters:
+            letters.append(candidate)
+    return ", ".join(sorted(letters))
+
+
+def _normalize_external_storage_guids(value: Any) -> str:
+    guids: list[str] = []
+    for text in _split_external_storage_values(value):
+        candidate = text.strip().strip("{}").lower()
+        if candidate:
+            candidate = "{" + candidate + "}"
+        if candidate and candidate not in guids:
+            guids.append(candidate)
+    return ", ".join(guids)
+
+
+def _normalize_external_storage_volume_serials(value: Any) -> str:
+    serials: list[str] = []
+    for text in _split_external_storage_values(value):
+        candidate = text.upper()
+        if candidate and candidate not in serials:
+            serials.append(candidate)
+    return ", ".join(serials)
+
+
+def _external_storage_timestamp_values(device: dict[str, Any], fields: tuple[str, ...]) -> list[str]:
+    values: list[str] = []
+    for field in fields:
+        for text in _split_external_storage_values(device.get(field)):
+            if text and text not in values:
+                values.append(text)
+    return values
+
+
+def _external_storage_min_timestamp(device: dict[str, Any], fields: tuple[str, ...]) -> str:
+    values = _external_storage_timestamp_values(device, fields)
+    return min(values) if values else ""
+
+
+def _external_storage_max_timestamp(device: dict[str, Any], fields: tuple[str, ...]) -> str:
+    values = _external_storage_timestamp_values(device, fields)
+    return max(values) if values else ""
 
 
 def _external_storage_devices_from_events(db: Database, case_id: str, *, limit: int) -> list[dict[str, Any]]:
@@ -13668,6 +13877,8 @@ def _external_storage_partition_event_timeline(
                 {
                     "timestamp": parsed.get("key_last_write_utc") or row.get("time_created"),
                     "event_type": "usb_event_log_observed",
+                    "computer_id": row.get("computer_id"),
+                    "image_id": row.get("image_id"),
                     "usb_serial": serial,
                     "usb_volume_serial_number": parsed.get("volume_serial_number") or "",
                     "usb_volume_name": parsed.get("volume_name") or "",
@@ -13877,6 +14088,8 @@ def _external_storage_event_log_rows(
             {
                 "time_created": row.get("time_created"),
                 "event_id": row.get("event_id"),
+                "computer_id": row.get("computer_id"),
+                "image_id": row.get("image_id"),
                 "provider": row.get("provider"),
                 "channel": row.get("channel"),
                 "description": description,
@@ -14233,6 +14446,8 @@ def _dedupe_timeline_events(events: list[dict[str, Any]]) -> list[dict[str, Any]
             event.get("event_type"),
             event.get("usb_serial"),
             event.get("usb_volume_serial_number"),
+            event.get("computer_id"),
+            event.get("image_id"),
             event.get("source_artifact_type"),
             event.get("user_profile"),
             event.get("file_location"),
