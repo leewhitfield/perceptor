@@ -270,6 +270,7 @@ from .report_specs import list_report_specs, run_report_spec
 from .report_bundle import import_report_bundle
 from .safety import OrchestratorError
 from .artifact_dedupe import rebuild_artifact_windows_old_dedupe
+from .artifact_distinct import rebuild_distinct_artifact_tables
 from .correlation_framework import rebuild_correlation_framework
 from .sessions import rebuild_sessions
 from .standalone import (
@@ -642,6 +643,7 @@ def rebuild_case_postprocess(
         ),
     )
     run_step("artifact_windows_old_dedupe", lambda: rebuild_artifact_windows_old_dedupe(db, case_id=case_id, image_id=image_id))
+    run_step("distinct_artifact_tables", lambda: rebuild_distinct_artifact_tables(db, case_id=case_id, image_id=image_id))
     run_step("derived_sessions", lambda: rebuild_sessions(db, case_id=case_id, image_id=image_id))
     run_step("correlation_framework", lambda: rebuild_correlation_framework(db, case_id=case_id, image_id=image_id))
     run_step("user_file_references", lambda: rebuild_user_controlled_file_references(db, case_id=case_id, image_id=image_id))
@@ -1281,6 +1283,9 @@ def build_parser() -> argparse.ArgumentParser:
     project_rebuild_artifact_dedupe = project_sub.add_parser("rebuild-artifact-dedupe")
     project_rebuild_artifact_dedupe.add_argument("case_id")
     project_rebuild_artifact_dedupe.add_argument("--image", dest="image_id")
+    project_rebuild_distinct_artifacts = project_sub.add_parser("rebuild-distinct-artifacts")
+    project_rebuild_distinct_artifacts.add_argument("case_id")
+    project_rebuild_distinct_artifacts.add_argument("--image", dest="image_id")
     project_rebuild_correlations = project_sub.add_parser("rebuild-correlations")
     project_rebuild_correlations.add_argument("case_id")
     project_rebuild_correlations.add_argument("--image", dest="image_id")
@@ -3231,6 +3236,11 @@ def run(args: argparse.Namespace) -> int:
 
         if args.resource in {"case", "project"} and args.action == "rebuild-artifact-dedupe":
             stats = rebuild_artifact_windows_old_dedupe(db, case_id=args.case_id, image_id=args.image_id)
+            print_json(stats)
+            return 0
+
+        if args.resource in {"case", "project"} and args.action == "rebuild-distinct-artifacts":
+            stats = rebuild_distinct_artifact_tables(db, case_id=args.case_id, image_id=args.image_id)
             print_json(stats)
             return 0
 

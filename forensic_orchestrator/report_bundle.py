@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from forensic_orchestrator.artifact_correlations import rebuild_artifact_correlations
+from forensic_orchestrator.artifact_distinct import rebuild_distinct_artifact_tables
 from forensic_orchestrator.common_dialog import rebuild_common_dialog_items
 from forensic_orchestrator.copied_indicators import rebuild_copied_file_indicators
 from forensic_orchestrator.correlation import rebuild_file_correlations
@@ -375,6 +376,7 @@ def _run_post_import_rebuilds(db: Database, *, case_id: str, image_id: str) -> N
     rebuild_nested_evidence_inventory(db, case_id=case_id, image_id=image_id)
     rebuild_timeline_windows_old_dedupe(db, case_id=case_id, image_id=image_id)
     rebuild_sessions(db, case_id=case_id, image_id=image_id)
+    rebuild_distinct_artifact_tables(db, case_id=case_id, image_id=image_id)
 
 
 def _write_markdown_report(paths: WorkspacePaths, result: ReportBundleImportResult) -> Path:
