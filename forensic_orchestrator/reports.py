@@ -13062,6 +13062,7 @@ def external_storage_report(
         attributed_file_activity=file_activity,
         limit=limit,
     )
+    _annotate_external_storage_row_attribution(db, case_id, unattributed_volume_activity)
     timeline = _external_storage_filtered_timeline(
         usb_timeline_report(db, case_id, limit=max(limit * 5, 500), rebuild_correlations=False)["events"],
         devices,
@@ -13130,6 +13131,223 @@ def external_storage_report(
             "setupapi_observations": len(setupapi_observations),
         },
     }
+
+
+EXTERNAL_STORAGE_EXPORT_COLUMNS = [
+    "id",
+    "case_id",
+    "section",
+    "attributable_computer",
+    "computer_id",
+    "image_id",
+    "image_path",
+    "device_identity",
+    "serial",
+    "alternate_serial",
+    "volume_serial_number",
+    "volume_name",
+    "volume_guid",
+    "drive_letter",
+    "vendor_id",
+    "product_id",
+    "vendor",
+    "product",
+    "capacity_bytes",
+    "file_system",
+    "user_profile",
+    "source_artifact",
+    "source_path",
+    "timestamp",
+    "event_type",
+    "event_id",
+    "provider",
+    "description",
+    "confidence",
+    "first_connected_utc",
+    "first_observed_utc",
+    "last_observed_utc",
+    "last_arrival_utc",
+    "last_removal_utc",
+    "file_location",
+    "file_name",
+    "file_activity_count",
+    "artifact_count",
+    "evidence_row_count",
+    "notes",
+]
+
+
+def external_storage_export_rows(report: dict[str, Any]) -> list[dict[str, Any]]:
+    case_id = str(report.get("case_id") or "")
+    rows: list[dict[str, Any]] = []
+    for device in report.get("devices") or []:
+        rows.append(
+            _external_storage_export_row(
+                case_id,
+                "device",
+                device,
+                id=device.get("id"),
+                device_identity=device.get("device_identity") or _external_storage_device_label(device),
+                serial=device.get("normalized_serial") or device.get("serial"),
+                alternate_serial=device.get("alternate_scsi_serial") or device.get("parent_device_serial"),
+                volume_serial_number=device.get("observed_volume_serial_numbers") or device.get("volume_serial_number"),
+                volume_name=device.get("volume_name"),
+                volume_guid=device.get("observed_volume_guids") or device.get("volume_guid"),
+                drive_letter=device.get("observed_drive_letters") or device.get("drive_letter"),
+                vendor_id=device.get("normalized_vendor_id") or device.get("vendor_id"),
+                product_id=device.get("normalized_product_id") or device.get("product_id"),
+                vendor=device.get("vendor"),
+                product=device.get("product"),
+                capacity_bytes=device.get("capacity_bytes"),
+                file_system=device.get("file_system"),
+                user_profile=device.get("user_profiles"),
+                source_artifact=device.get("source_artifacts"),
+                timestamp=device.get("last_observed_utc") or device.get("last_arrival_utc") or device.get("first_observed_utc"),
+                event_type="device_summary",
+                first_connected_utc=device.get("first_install_date_utc"),
+                first_observed_utc=device.get("first_observed_utc"),
+                last_observed_utc=device.get("last_observed_utc"),
+                last_arrival_utc=device.get("last_arrival_utc"),
+                last_removal_utc=device.get("last_removal_utc"),
+                file_activity_count=device.get("file_activity_count"),
+                evidence_row_count=device.get("evidence_row_count"),
+                notes="; ".join(part for part in (device.get("last_arrival_note"), device.get("last_removal_note")) if part),
+            )
+        )
+    for row in report.get("file_activity") or []:
+        rows.append(
+            _external_storage_export_row(
+                case_id,
+                "file_activity",
+                row,
+                id=row.get("id"),
+                device_identity=row.get("usb_product"),
+                serial=row.get("usb_serial"),
+                volume_serial_number=row.get("usb_volume_serial_number"),
+                volume_name=row.get("usb_volume_name"),
+                drive_letter=row.get("usb_drive_letter"),
+                product=row.get("usb_product"),
+                user_profile=row.get("user_profiles") or row.get("user_profile"),
+                source_artifact=row.get("source_artifact_types") or row.get("source_artifact_type"),
+                timestamp=row.get("last_target_time") or row.get("first_target_time"),
+                event_type="file_activity",
+                description=row.get("file_location") or row.get("file_name"),
+                confidence=row.get("best_confidence") or row.get("confidence"),
+                first_observed_utc=row.get("first_target_time"),
+                last_observed_utc=row.get("last_target_time"),
+                file_location=row.get("file_location"),
+                file_name=row.get("file_name"),
+                artifact_count=row.get("artifact_count"),
+                notes=row.get("temporal_statuses") or row.get("temporal_bases"),
+            )
+        )
+    for row in report.get("unattributed_removable_volume_activity") or []:
+        rows.append(
+            _external_storage_export_row(
+                case_id,
+                "unattributed_volume_activity",
+                row,
+                id=row.get("id"),
+                volume_serial_number=row.get("volume_serial_number"),
+                volume_name=row.get("volume_name"),
+                volume_guid=row.get("volume_guid"),
+                drive_letter=row.get("drive_letter"),
+                user_profile=row.get("user_profiles"),
+                source_artifact=row.get("source_artifact_types"),
+                timestamp=row.get("last_target_time") or row.get("first_target_time"),
+                event_type="unattributed_removable_volume_activity",
+                description="; ".join(str(item) for item in (row.get("examples") or [])[:3]),
+                first_observed_utc=row.get("first_target_time"),
+                last_observed_utc=row.get("last_target_time"),
+                file_activity_count=row.get("file_activity_count"),
+                notes="Volume/file activity could not be bridged to a physical USB device row.",
+            )
+        )
+    for row in report.get("timeline") or []:
+        rows.append(
+            _external_storage_export_row(
+                case_id,
+                "timeline",
+                row,
+                id=row.get("id"),
+                device_identity=row.get("usb_product"),
+                serial=row.get("usb_serial"),
+                volume_serial_number=row.get("usb_volume_serial_number"),
+                volume_name=row.get("usb_volume_name"),
+                drive_letter=row.get("usb_drive_letter"),
+                product=row.get("usb_product"),
+                user_profile=row.get("user_profile"),
+                source_artifact=row.get("source_artifact_type"),
+                source_path=row.get("source_path"),
+                timestamp=row.get("timestamp"),
+                event_type=row.get("event_type"),
+                description=row.get("description"),
+                confidence=row.get("confidence"),
+                file_location=row.get("file_location"),
+            )
+        )
+    for row in report.get("event_log_observations") or []:
+        rows.append(
+            _external_storage_export_row(
+                case_id,
+                "event_log",
+                row,
+                id=row.get("id"),
+                source_path=row.get("source_file"),
+                timestamp=row.get("time_created"),
+                event_type="event_log_observation",
+                event_id=row.get("event_id"),
+                provider=row.get("provider"),
+                description=row.get("description"),
+            )
+        )
+    for row in report.get("setupapi_observations") or []:
+        rows.append(
+            _external_storage_export_row(
+                case_id,
+                "setupapi",
+                row,
+                id=row.get("id"),
+                serial=row.get("serial"),
+                alternate_serial=row.get("parent_id_prefix"),
+                vendor_id=row.get("vendor_id"),
+                product_id=row.get("product_id"),
+                vendor=row.get("vendor"),
+                product=row.get("product"),
+                source_path=row.get("source_path"),
+                timestamp=row.get("event_time_utc"),
+                event_type=row.get("operation") or "setupapi_device_event",
+                description=row.get("device_instance_id") or row.get("section_title"),
+                confidence=row.get("confidence"),
+            )
+        )
+    for index, row in enumerate(rows, start=1):
+        if not row.get("id"):
+            row["id"] = f"external-storage-{index:06d}"
+    return rows
+
+
+def _external_storage_export_row(case_id: str, section: str, source: dict[str, Any], **values: Any) -> dict[str, Any]:
+    row = {column: "" for column in EXTERNAL_STORAGE_EXPORT_COLUMNS}
+    row["id"] = _first_non_empty(values.get("id"), source.get("id"))
+    row["case_id"] = case_id or _first_non_empty(source.get("case_id"))
+    row["section"] = section
+    row["attributable_computer"] = _first_non_empty(source.get("attributable_computer"), source.get("computer_label"), source.get("computer_id"))
+    row["computer_id"] = _first_non_empty(source.get("computer_id"))
+    row["image_id"] = _first_non_empty(source.get("image_id"))
+    row["image_path"] = _first_non_empty(source.get("image_path"))
+    for key, value in values.items():
+        if key in row and value not in (None, ""):
+            row[key] = value
+    return {key: _external_storage_export_value(value) for key, value in row.items()}
+
+
+def _external_storage_export_value(value: Any) -> Any:
+    if isinstance(value, set):
+        return ", ".join(sorted(str(item) for item in value if item not in (None, "")))
+    if isinstance(value, (list, tuple)):
+        return "; ".join(str(item) for item in value if item not in (None, ""))
+    return value if value is not None else ""
 
 
 def external_storage_markdown(report: dict[str, Any]) -> str:
@@ -13224,6 +13442,7 @@ def external_storage_markdown(report: dict[str, Any]) -> str:
             example_text = "; ".join(f"`{item}`" for item in examples[:3])
             lines.append(
                 "- "
+                f"computer `{row.get('computer_label') or row.get('computer_id') or ''}` "
                 f"volume `{row.get('volume_serial_number') or ''}` "
                 f"name `{row.get('volume_name') or ''}` "
                 f"drive `{row.get('drive_letter') or ''}`: "
@@ -14265,7 +14484,9 @@ def _external_storage_unattributed_removable_activity(
               volume_name,
               NULL AS volume_guid,
               NULL AS drive_letter,
-              NULL AS user_profile
+              NULL AS user_profile,
+              computer_id,
+              image_id
             FROM shortcut_items
             WHERE case_id = ?
               AND volume_serial_number IS NOT NULL
@@ -14298,7 +14519,9 @@ def _external_storage_unattributed_removable_activity(
               volume_name,
               volume_guid,
               drive_letter,
-              user_profile
+              user_profile,
+              computer_id,
+              image_id
             FROM shellbag_entries
             WHERE case_id = ?
               AND (
@@ -14340,6 +14563,8 @@ def _external_storage_unattributed_removable_activity(
                 "volume_name": row.get("volume_name") or "",
                 "drive_letter": drive,
                 "file_activity_count": 0,
+                "computer_ids": set(),
+                "image_ids": set(),
                 "source_artifact_types": set(),
                 "user_profiles": set(),
                 "first_target_time": None,
@@ -14348,6 +14573,10 @@ def _external_storage_unattributed_removable_activity(
             },
         )
         item["file_activity_count"] += 1
+        if row.get("computer_id"):
+            item["computer_ids"].add(str(row["computer_id"]))
+        if row.get("image_id"):
+            item["image_ids"].add(str(row["image_id"]))
         if row.get("source_artifact_type"):
             item["source_artifact_types"].add(str(row["source_artifact_type"]))
         user = row.get("user_profile") or _user_profile_from_artifact_path(row.get("source_artifact_path"))
@@ -14366,6 +14595,8 @@ def _external_storage_unattributed_removable_activity(
     output = []
     for item in grouped.values():
         converted = dict(item)
+        converted["computer_id"] = ", ".join(sorted(item["computer_ids"]))
+        converted["image_id"] = ", ".join(sorted(item["image_ids"]))
         converted["source_artifact_types"] = ", ".join(sorted(item["source_artifact_types"]))
         converted["user_profiles"] = ", ".join(sorted(item["user_profiles"]))
         output.append(converted)

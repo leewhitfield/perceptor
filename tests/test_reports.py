@@ -50,6 +50,7 @@ from forensic_orchestrator.reports import (
     encrypted_volume_indicators_report,
     event_interpretation_report,
     evidence_quality_report,
+    external_storage_export_rows,
     external_storage_markdown,
     external_storage_report,
     interesting_executables_markdown,
@@ -2369,6 +2370,15 @@ def test_external_storage_report_combines_devices_activity_and_event_logs(tmp_pa
     assert sandisk["normalized_vendor_id"] == "0781"
     assert uasp["last_observed_utc"] == "2020-11-14T12:01:00Z"
     assert "many USB artifacts do not record removals" in uasp["last_removal_note"]
+    export_rows = external_storage_export_rows(report)
+    assert export_rows[0]["id"]
+    assert all(row["id"] for row in export_rows)
+    assert all(row["case_id"] == case.id for row in export_rows)
+    assert all("usb_volume_serial_number" not in row for row in export_rows)
+    assert all("source_artifact_types" not in row for row in export_rows)
+    assert any(row["section"] == "device" and row["volume_serial_number"] == "A1B2-C3D4" for row in export_rows)
+    assert any(row["section"] == "timeline" and row["attributable_computer"] == "Desktop" for row in export_rows)
+    assert any(row["section"] == "event_log" and row["attributable_computer"] == "Desktop" for row in export_rows)
     assert "SanDisk Ultra" in markdown
     assert "Observed computers: `Desktop`" in markdown
     assert "First observed: `2020-11-10T10:00:00Z`" in markdown
@@ -2486,7 +2496,16 @@ def test_external_storage_report_lists_unattributed_removable_volume_activity(tm
     assert volume["volume_name"] == "Homework"
     assert volume["drive_letter"] == "E:"
     assert volume["source_artifact_types"] == "lnk"
+    assert volume["computer_label"] == "Desktop"
+    export_rows = external_storage_export_rows(report)
+    assert any(
+        row["section"] == "unattributed_volume_activity"
+        and row["attributable_computer"] == "Desktop"
+        and row["volume_serial_number"] == "5E93-8BFB"
+        for row in export_rows
+    )
     assert "Removable Volumes Not Tied To A Physical Device" in markdown
+    assert "computer `Desktop` volume `5E93-8BFB`" in markdown
     assert "E:\\New Homework\\Homework.docx" in markdown
 
 

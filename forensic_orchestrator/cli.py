@@ -108,6 +108,8 @@ from .reports import (
     evtx_recovery_report,
     brute_force_markdown,
     brute_force_report,
+    EXTERNAL_STORAGE_EXPORT_COLUMNS,
+    external_storage_export_rows,
     external_storage_markdown,
     external_storage_report,
     execution_markdown,
@@ -7503,12 +7505,7 @@ def run(args: argparse.Namespace) -> int:
 
         if args.resource == "report" and args.action == "external-storage":
             report = external_storage_report(db, args.case_id, limit=args.limit, rebuild_correlations=args.rebuild_correlations, include_file_activity=not args.skip_file_activity)
-            rows = (
-                [{"section": "device", **row} for row in report["devices"]]
-                + [{"section": "file_activity", **row} for row in report["file_activity"]]
-                + [{"section": "timeline", **row} for row in report["timeline"]]
-                + [{"section": "event_log", **row} for row in report["event_log_observations"]]
-            )
+            rows = external_storage_export_rows(report)
             if args.format == "md":
                 write_text_output(external_storage_markdown(report), args.output)
             elif args.format == "json":
@@ -7522,40 +7519,7 @@ def run(args: argparse.Namespace) -> int:
                     args.format,
                     args.output,
                     title=f"External storage report for case {args.case_id}",
-                    columns=[
-                        "section",
-                        "attributable_computer",
-                        "computer_label",
-                        "observed_computers",
-                        "device_identity",
-                        "normalized_serial",
-                        "serial",
-                        "friendly_name",
-                        "product",
-                        "observed_volume_serial_numbers",
-                        "volume_serial_number",
-                        "capacity_bytes",
-                        "file_system",
-                        "observed_drive_letters",
-                        "drive_letter",
-                        "first_install_date_utc",
-                        "first_observed_utc",
-                        "last_observed_utc",
-                        "last_arrival_utc",
-                        "last_removal_utc",
-                        "source_artifacts",
-                        "source_artifact_types",
-                        "file_location",
-                        "first_target_time",
-                        "last_target_time",
-                        "timestamp",
-                        "event_type",
-                        "time_created",
-                        "provider",
-                        "event_id",
-                        "description",
-                        "confidence",
-                    ],
+                    columns=EXTERNAL_STORAGE_EXPORT_COLUMNS,
                 )
             return 0
 
