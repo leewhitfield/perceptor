@@ -24,6 +24,7 @@ from forensic_orchestrator.sessions import rebuild_sessions
 from forensic_orchestrator.timeline_dedupe import rebuild_timeline_windows_old_dedupe
 from forensic_orchestrator.tools.ingest import ingest_csv_output
 from forensic_orchestrator.tools.runner import file_sha256
+from forensic_orchestrator.tools.usb_summary import rebuild_usb_connection_events, rebuild_usb_storage_devices
 
 
 TransformFn = Callable[[Path, Path], Path]
@@ -435,6 +436,8 @@ def _run_post_import_rebuilds(db: Database, *, case_id: str, image_id: str) -> N
     rebuild_nested_evidence_inventory(db, case_id=case_id, image_id=image_id)
     rebuild_timeline_windows_old_dedupe(db, case_id=case_id, image_id=image_id)
     rebuild_sessions(db, case_id=case_id, image_id=image_id)
+    rebuild_usb_storage_devices(db, case_id=case_id, image_id=image_id)
+    rebuild_usb_connection_events(db, case_id=case_id, image_id=image_id)
     rebuild_distinct_artifact_tables(db, case_id=case_id, image_id=image_id)
 
 

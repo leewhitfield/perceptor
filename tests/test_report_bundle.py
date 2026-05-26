@@ -9,6 +9,7 @@ from forensic_orchestrator.db import Database
 from forensic_orchestrator.paths import WorkspacePaths
 from forensic_orchestrator.report_bundle import infer_report_candidate
 from forensic_orchestrator.report_bundle import import_report_bundle_many
+from forensic_orchestrator.tools.usp import normalized_usp_row
 
 
 def test_report_bundle_detects_vsc_named_mft_by_header(tmp_path):
@@ -65,7 +66,7 @@ def test_report_bundle_detects_and_transforms_tzworks_usp(tmp_path):
         "instance/serial#,Other dates defined by explicit property keys,Readyboost\n"
         "SanDisk Ultra,2020-12-12,03:37:00,2020-12-12,03:38:00,2020-12-12,03:39:00,"
         "2020-12-12,03:40:00,disk [usbstor],#0781,#5581,hub1,1,SanDisk,Ultra,1.00,"
-        "{11111111-2222-3333-4444-555555555555},E: DATA,user1,SERIAL123,,\n",
+        "{11111111-2222-3333-4444-555555555555},E={\"\"utc\"\":\"\"2020-12-12 03:40:00\"\"},user1,SERIAL123,,\n",
         encoding="utf-8",
     )
 
@@ -81,6 +82,18 @@ def test_report_bundle_detects_and_transforms_tzworks_usp(tmp_path):
     assert rows[0]["product_id"] == "5581"
     assert rows[0]["serial"] == "SERIAL123"
     assert rows[0]["volume_device_utc"] == "2020-12-12 03:40:00"
+    normalized = normalized_usp_row(
+        case_id="case-1",
+        computer_id="computer-1",
+        image_id="image-1",
+        tool_output_id="tool-output-1",
+        tool_name="USPParser",
+        source_csv=transformed,
+        row_number=1,
+        row=rows[0],
+    )
+    assert normalized["drive_letter"] == "E:"
+    assert normalized["volume_name"] is None
 
 
 def test_report_bundle_import_many_zip_creates_one_computer_per_top_level_folder(tmp_path, monkeypatch):

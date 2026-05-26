@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+import re
 from collections import defaultdict
 from typing import Any
 
@@ -16,6 +17,7 @@ STORAGE_TYPES = {
     "mounted_device",
     "readyboost_device",
     "usb_partition_diagnostic",
+    "usb_cdrom",
 }
 SUPPORTING_TYPES = {"usb_device"}
 
@@ -142,15 +144,15 @@ def _summary_for_group(items: list[dict[str, Any]], serial: str) -> dict[str, An
         "friendly_name": _join_unique(items, "friendly_name"),
         "parent_id_prefix": _join_unique(items, "parent_id_prefix"),
         "device_service": _join_unique(items, "device_service"),
-        "drive_letter": _join_unique(items, "drive_letter"),
+        "drive_letter": _join_drive_letters(items),
         "volume_guid": _join_unique(items, "volume_guid"),
         "volume_serial_number": _join_unique(items, "volume_serial_number"),
-        "volume_name": _join_unique(items, "volume_name"),
+        "volume_name": _join_volume_names(items),
         "capacity_bytes": _join_unique(items, "capacity_bytes", exclude={"0"}),
         "file_system": _join_unique(items, "file_system"),
         "alternate_scsi_serial": _join_unique(items, "alternate_scsi_serial"),
         "user_profiles": _join_unique(items, "user_profile"),
-        "first_install_date_utc": _property_time(items, "0064", prefer_value=True),
+        "first_install_date_utc": _property_time(items, "0064", prefer_value=True) or _earliest_value(items, "key_last_write_utc"),
         "last_arrival_utc": _property_time(items, "0066", prefer_value=True, latest=True),
         "last_removal_utc": _property_time(items, "0067", prefer_value=True, latest=True),
         "first_volume_serial_event_utc": _event_time(items, require_volume_serial=True),
@@ -158,13 +160,45 @@ def _summary_for_group(items: list[dict[str, Any]], serial: str) -> dict[str, An
         "last_migration_present_utc": _latest_value(items, "last_present_date_utc"),
         "evidence_row_count": len(items),
         "source_artifacts": _join_unique(items, "artifact"),
+        "source_device_types": _join_unique(items, "device_type"),
     }
 
 
 def _connection_events_for_row(item: dict[str, Any], serial: str) -> list[dict[str, Any]]:
     if item.get("artifact") == "partition_diagnostic":
         return _partition_diagnostic_events_for_row(item, serial)
+    if item.get("artifact") == "tzworks_usp":
+        return _tzworks_usp_events_for_row(item, serial)
     return _registry_property_events_for_row(item, serial)
+
+
+def _tzworks_usp_events_for_row(item: dict[str, Any], serial: str) -> list[dict[str, Any]]:
+    events = []
+    first_seen = _clean(item.get("key_last_write_utc"))
+    if first_seen:
+        events.append(
+            _connection_event(
+                item,
+                serial,
+                event_time_utc=first_seen,
+                event_type="arrival",
+                event_source="tzworks_usp",
+                event_id="device_seen",
+            )
+        )
+    last_present = _clean(item.get("last_present_date_utc"))
+    if last_present and last_present != first_seen:
+        events.append(
+            _connection_event(
+                item,
+                serial,
+                event_time_utc=last_present,
+                event_type="last_present",
+                event_source="tzworks_usp",
+                event_id="volume_or_disk_seen",
+            )
+        )
+    return events
 
 
 def _partition_diagnostic_events_for_row(item: dict[str, Any], serial: str) -> list[dict[str, Any]]:
@@ -278,7 +312,10 @@ def _normalize_utc_timestamp(value: Any) -> str | None:
 
 def _is_storage_summary(summary: dict[str, Any]) -> bool:
     artifacts = set((summary.get("source_artifacts") or "").split(", "))
+    device_types = set((summary.get("source_device_types") or "").split(", "))
     if artifacts & {"mounted_devices", "partition_diagnostic", "usb_volume_history"}:
+        return True
+    if artifacts & {"tzworks_usp"} and device_types & STORAGE_TYPES:
         return True
     service = (summary.get("device_service") or "").lower()
     if ("disk" in service or "usbstor" in service) and (
@@ -305,10 +342,57 @@ def _join_unique(items: list[dict[str, Any]], key: str, *, exclude: set[str] | N
     return ", ".join(seen) if seen else None
 
 
+def _join_drive_letters(items: list[dict[str, Any]]) -> str | None:
+    seen = []
+    seen_normalized = set()
+    for item in items:
+        for value in (item.get("drive_letter"), item.get("volume_name"), item.get("property_value")):
+            drive = _drive_letter_from_text(value)
+            if not drive or drive in seen_normalized:
+                continue
+            seen.append(drive)
+            seen_normalized.add(drive)
+    return ", ".join(seen) if seen else None
+
+
+def _join_volume_names(items: list[dict[str, Any]]) -> str | None:
+    seen = []
+    seen_normalized = set()
+    for item in items:
+        value = _clean(item.get("volume_name"))
+        if not value or _looks_like_drive_metadata(value):
+            continue
+        normalized = value.casefold()
+        if normalized not in seen_normalized:
+            seen.append(value)
+            seen_normalized.add(normalized)
+    return ", ".join(seen) if seen else None
+
+
+def _looks_like_drive_metadata(value: str) -> bool:
+    return bool(re.match(r"^[A-Z]=", value.strip(), re.IGNORECASE))
+
+
+def _drive_letter_from_text(value: Any) -> str | None:
+    text = _clean(value)
+    if not text:
+        return None
+    match = re.search(r"(?:^|\b)([A-Z])(?::|=)", text, re.IGNORECASE)
+    if not match:
+        return None
+    return match.group(1).upper() + ":"
+
+
 def _latest_value(items: list[dict[str, Any]], key: str) -> str | None:
     values = [_clean(item.get(key)) for item in items]
     values = [value for value in values if value]
     return max(values) if values else None
+
+
+def _earliest_value(items: list[dict[str, Any]], key: str) -> str | None:
+    values = [_clean(item.get(key)) for item in items]
+    values = [value for value in values if value]
+    return min(values) if values else None
 
 
 def _property_time(

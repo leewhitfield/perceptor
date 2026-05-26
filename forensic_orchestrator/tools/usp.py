@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+import re
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ def normalized_usp_row(
     row: dict[str, Any],
 ) -> dict[str, Any]:
     device_type_raw = _text(row.get("device_type_raw"))
+    volume_name, drive_letter = _volume_fields(row.get("volume_name"))
     return {
         "id": str(uuid.uuid4()),
         "case_id": case_id,
@@ -40,10 +42,10 @@ def normalized_usp_row(
         "parent_id_prefix": None,
         "device_service": None,
         "user_profile": _text(row.get("users")),
-        "drive_letter": None,
+        "drive_letter": drive_letter,
         "volume_guid": _text(row.get("volume_guid")),
         "volume_serial_number": None,
-        "volume_name": _text(row.get("volume_name")),
+        "volume_name": volume_name,
         "capacity_bytes": None,
         "alternate_scsi_serial": None,
         "key_path": None,
@@ -64,6 +66,24 @@ def _device_type(value: str | None) -> str:
     if "hid" in lowered:
         return "hid_device"
     return "usb"
+
+
+def _volume_fields(value: Any) -> tuple[str | None, str | None]:
+    text = _text(value)
+    if not text:
+        return None, None
+    drive = _drive_letter(text)
+    if drive:
+        drive_prefix = drive.rstrip(":")
+        return None if text.startswith((f"{drive}=", f"{drive_prefix}=")) else text, drive
+    return text, None
+
+
+def _drive_letter(value: str) -> str | None:
+    match = re.search(r"(?:^|\b)([A-Z])(?::|=)", value, re.IGNORECASE)
+    if not match:
+        return None
+    return match.group(1).upper() + ":"
 
 
 def _text(value: Any) -> str | None:
