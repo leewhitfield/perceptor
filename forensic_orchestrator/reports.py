@@ -308,6 +308,7 @@ def regression_smoke_report(db: Database, case_id: str, *, limit: int = 10) -> d
         ("memory_credentials", lambda: memory_credentials_report(db, case_id, limit=limit)),
         ("memory_disk_correlations", lambda: memory_disk_correlations_report(db, case_id, limit=limit)),
         ("crash_dump_analysis", lambda: crash_dump_analysis_report(db, case_id, limit=limit)),
+        ("deep_recovery_status", lambda: deep_recovery_status_report(db, case_id, limit=limit)),
         ("suspicious_executions", lambda: suspicious_executions_report(db, case_id, limit=limit)),
         ("case_overview", lambda: case_overview_report(db, case_id, limit=limit)),
     ]
@@ -18050,6 +18051,105 @@ def processing_readiness_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def deep_recovery_status_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str, Any]:
+    readiness = processing_readiness_report(db, case_id, limit=limit, profile="windows-full-deep-recovery")
+    recovery = recovery_coverage_report(db, case_id, limit=max(limit, 250))
+    carve = carve_coverage_report(db, case_id, limit=max(limit, 250))
+    sqlite_inventory = sqlite_inventory_report(db, case_id, limit=limit)
+    failed_required = [
+        row for row in readiness.get("items") or []
+        if row.get("required", True) and row.get("status") != "complete"
+    ]
+    recovery_summary = recovery.get("summary") if isinstance(recovery.get("summary"), dict) else {}
+    carve_summary = carve.get("summary") if isinstance(carve.get("summary"), dict) else {}
+    sqlite_summary = sqlite_inventory.get("summary") if isinstance(sqlite_inventory.get("summary"), dict) else {}
+    return {
+        "case_id": case_id,
+        "profile": "windows-full-deep-recovery",
+        "passed": not failed_required,
+        "summary": {
+            "required_needs_action_count": len(failed_required),
+            "recovery_artifact_extracts_returned": recovery_summary.get("artifact_extracts_returned", 0),
+            "tsk_recovery_artifacts": recovery_summary.get("tsk_recovery_artifacts", 0),
+            "carve_scan_range_count": carve_summary.get("scan_range_count", 0),
+            "carve_count": carve_summary.get("carve_count", 0),
+            "parsed_sqlite_count": carve_summary.get("parsed_sqlite_count", 0),
+            "sqlite_carves": sqlite_summary.get("sqlite_carves", 0),
+            "readable_sqlite_carves": sqlite_summary.get("readable", 0),
+        },
+        "required_gaps": failed_required,
+        "recovery_by_artifact": recovery.get("by_artifact") or [],
+        "carve_source_coverage": carve_summary.get("source_coverage") if isinstance(carve_summary.get("source_coverage"), list) else [],
+        "next_steps": [
+            {
+                "key": row.get("key"),
+                "title": row.get("title"),
+                "next_step": row.get("next_step"),
+            }
+            for row in failed_required
+            if row.get("next_step")
+        ],
+        "notes": [
+            "Deep recovery is an opt-in profile family separate from windows-full because it can be slower and noisier.",
+            "Deleted/orphaned artifact recovery is tracked from TSK-backed extraction timings.",
+            "Carve coverage is complete only for explicitly scanned ranges; unscanned bytes remain outside the report scope.",
+        ],
+        "readiness": readiness,
+        "total_returned": len(failed_required),
+    }
+
+
+def deep_recovery_status_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    lines = [
+        "# Deep Recovery Status",
+        "",
+        f"Case: `{report.get('case_id') or ''}`",
+        f"Profile: `{report.get('profile') or ''}`",
+        "",
+        "## Summary",
+        "",
+        f"- Passed: `{bool(report.get('passed'))}`",
+        f"- Required gaps: `{summary.get('required_needs_action_count', 0)}`",
+        f"- TSK recovery artifacts: `{summary.get('tsk_recovery_artifacts', 0)}`",
+        f"- Recovery artifact extracts returned: `{summary.get('recovery_artifact_extracts_returned', 0)}`",
+        f"- Carve scan ranges: `{summary.get('carve_scan_range_count', 0)}`",
+        f"- Staged carves: `{summary.get('carve_count', 0)}`",
+        f"- Parsed SQLite carves: `{summary.get('parsed_sqlite_count', 0)}`",
+        "",
+        "## Required Gaps",
+        "",
+    ]
+    gaps = report.get("required_gaps") if isinstance(report.get("required_gaps"), list) else []
+    if not gaps:
+        lines.append("- No required deep-recovery readiness gaps were found.")
+    for row in gaps:
+        lines.append(f"- `{row.get('key') or ''}` {row.get('title') or ''}: {row.get('next_step') or 'Review readiness details.'}")
+    lines.extend(["", "## Recovery By Artifact", ""])
+    artifacts = report.get("recovery_by_artifact") if isinstance(report.get("recovery_by_artifact"), list) else []
+    if not artifacts:
+        lines.append("- No TSK deleted/orphaned recovery artifact runs were found.")
+    for row in artifacts[:25]:
+        lines.append(
+            f"- `{row.get('artifact_name') or ''}` runs `{row.get('runs') or 0}` "
+            f"extracted `{row.get('extracted_count') or 0}` failed `{row.get('failed_count') or 0}` "
+            f"duration `{row.get('duration_seconds') or 0}`s"
+        )
+    lines.extend(["", "## Carve Source Coverage", ""])
+    coverage = report.get("carve_source_coverage") if isinstance(report.get("carve_source_coverage"), list) else []
+    if not coverage:
+        lines.append("- No carve source coverage rows were found.")
+    for row in coverage[:25]:
+        lines.append(
+            f"- `{row.get('carve_type') or ''}` `{row.get('source_path') or ''}` "
+            f"coverage `{row.get('coverage_percent') or 0}%` hits `{row.get('hits_found') or 0}`"
+        )
+    lines.extend(["", "## Notes", ""])
+    for note in report.get("notes") or []:
+        lines.append(f"- {note}")
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def _readiness_required_keys(profile: str | None) -> set[str] | None:
     if not profile:
         return None
@@ -18616,11 +18716,13 @@ def memory_credentials_report(db: Database, case_id: str, *, limit: int = 100, r
         (case_id, max(limit * 10, limit)),
     )
     reviewed: list[dict[str, Any]] = []
+    review_rows = _memory_credential_review_rows(db, case_id)
     for row in rows:
         item = dict(row)
         assessment = _assess_memory_credential_hit(item.get("string_value"), item.get("matched_term"))
         item.update(assessment)
         item.update(_memory_credential_score(item))
+        item.update(review_rows.get(str(item.get("id") or ""), {}))
         item["display_value"] = item.get("string_value") if reveal else _redact_memory_credential(item.get("string_value"))
         reviewed.append(item)
     reviewed = _dedupe_memory_credentials(reviewed)[:limit]
@@ -18634,6 +18736,8 @@ def memory_credentials_report(db: Database, case_id: str, *, limit: int = 100, r
             "possible_secret_count": sum(1 for row in reviewed if row.get("credential_status") == "possible_secret"),
             "false_positive_or_label_count": sum(1 for row in reviewed if row.get("credential_status") == "label_or_false_positive"),
             "high_value_candidate_count": sum(1 for row in reviewed if row.get("credential_triage") == "high_value_candidate"),
+            "reviewed_count": sum(1 for row in reviewed if row.get("review_status")),
+            "validated_count": sum(1 for row in reviewed if row.get("review_status") == "validated"),
         },
         "credentials": reviewed,
         "credential_groups": groups,
@@ -18644,6 +18748,35 @@ def memory_credentials_report(db: Database, case_id: str, *, limit: int = 100, r
             "Values are redacted by default; use reveal only in controlled examiner output.",
             "PublicKeyToken, CancellationToken, UI labels, and configuration words are not usable credentials.",
         ],
+    }
+
+
+def _memory_credential_review_rows(db: Database, case_id: str) -> dict[str, dict[str, Any]]:
+    try:
+        columns = _report_table_columns(db, case_id, "memory_credential_reviews")
+    except Exception:
+        return {}
+    if not {"memory_hit_id", "review_status"} <= columns:
+        return {}
+    try:
+        rows = db.conn.execute(
+            """
+            SELECT memory_hit_id, review_status, reviewer, note, reviewed_at
+            FROM memory_credential_reviews
+            WHERE case_id = ?
+            """,
+            (case_id,),
+        ).fetchall()
+    except Exception:
+        return {}
+    return {
+        str(row["memory_hit_id"]): {
+            "review_status": row["review_status"],
+            "reviewer": row["reviewer"],
+            "review_note": row["note"],
+            "reviewed_at": row["reviewed_at"],
+        }
+        for row in rows
     }
 
 
@@ -18661,6 +18794,8 @@ def memory_credentials_markdown(report: dict[str, Any]) -> str:
         f"- Likely usable secrets: `{summary.get('likely_usable_count', 0)}`",
         f"- Possible secrets: `{summary.get('possible_secret_count', 0)}`",
         f"- High-value candidates: `{summary.get('high_value_candidate_count', 0)}`",
+        f"- Reviewed: `{summary.get('reviewed_count', 0)}`",
+        f"- Validated: `{summary.get('validated_count', 0)}`",
         f"- Labels/false positives: `{summary.get('false_positive_or_label_count', 0)}`",
         "",
         "## Reviewed Hits",
@@ -18673,7 +18808,7 @@ def memory_credentials_markdown(report: dict[str, Any]) -> str:
         lines.append(
             f"- `{row.get('credential_validation_status') or ''}` `{row.get('credential_status') or ''}` triage `{row.get('credential_triage') or ''}` score `{row.get('credential_score') or 0}` `{row.get('matched_term') or ''}` "
             f"source `{row.get('source_artifact_type') or ''}` offset `{row.get('offset') or ''}` "
-            f"value `{row.get('display_value') or ''}` reason: {row.get('credential_reason') or ''}"
+            f"review `{row.get('review_status') or 'unreviewed'}` value `{row.get('display_value') or ''}` reason: {row.get('credential_reason') or ''}"
         )
     groups = report.get("credential_groups") if isinstance(report.get("credential_groups"), list) else []
     if groups:

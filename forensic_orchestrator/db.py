@@ -3919,6 +3919,20 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_memory_string_hits_output
               ON memory_string_hits(tool_output_id);
 
+            CREATE TABLE IF NOT EXISTS memory_credential_reviews (
+              id TEXT PRIMARY KEY,
+              case_id TEXT NOT NULL REFERENCES cases(id),
+              memory_hit_id TEXT NOT NULL,
+              review_status TEXT NOT NULL,
+              reviewer TEXT,
+              note TEXT,
+              reviewed_at TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              UNIQUE(case_id, memory_hit_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_memory_credential_reviews_case
+              ON memory_credential_reviews(case_id, review_status);
+
             CREATE TABLE IF NOT EXISTS messaging_records (
               id TEXT PRIMARY KEY,
               case_id TEXT NOT NULL REFERENCES cases(id),
@@ -7233,6 +7247,41 @@ class Database:
                 "created_at",
             ],
             rows,
+        )
+
+    def upsert_memory_credential_review(self, row: dict[str, Any]) -> None:
+        now = utc_now()
+        payload = {
+            "id": row.get("id") or str(uuid.uuid4()),
+            "case_id": row["case_id"],
+            "memory_hit_id": row["memory_hit_id"],
+            "review_status": row["review_status"],
+            "reviewer": row.get("reviewer"),
+            "note": row.get("note"),
+            "reviewed_at": row.get("reviewed_at") or now,
+            "created_at": row.get("created_at") or now,
+        }
+        self.conn.execute(
+            """
+            INSERT INTO memory_credential_reviews
+              (id, case_id, memory_hit_id, review_status, reviewer, note, reviewed_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(case_id, memory_hit_id) DO UPDATE SET
+              review_status = excluded.review_status,
+              reviewer = excluded.reviewer,
+              note = excluded.note,
+              reviewed_at = excluded.reviewed_at
+            """,
+            (
+                payload["id"],
+                payload["case_id"],
+                payload["memory_hit_id"],
+                payload["review_status"],
+                payload["reviewer"],
+                payload["note"],
+                payload["reviewed_at"],
+                payload["created_at"],
+            ),
         )
 
     def insert_messaging_records(self, rows: list[dict[str, Any]]) -> None:

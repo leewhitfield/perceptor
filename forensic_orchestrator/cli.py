@@ -12,8 +12,10 @@ import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from .config import load_config
+from .analytics_query import query_one as analytics_query_one
 from .db import Database
 from .evidence import add_image, create_case, create_computer
 from .logging_config import configure_logging
@@ -94,6 +96,8 @@ from .reports import (
     database_storage_report,
     data_exfiltration_markdown,
     data_exfiltration_report,
+    deep_recovery_status_markdown,
+    deep_recovery_status_report,
     email_artifacts_report,
     encrypted_volume_indicators_report,
     event_interpretation_report,
@@ -383,6 +387,201 @@ def write_report_output(report: dict[str, object], rows: list[dict[str, object]]
         write_text_output(json.dumps(report, indent=2, default=str), output)
 
 
+def _mount_path_state(path: Path) -> tuple[str, str]:
+    try:
+        if not path.exists():
+            return "missing", "Path does not exist."
+        if path.is_dir():
+            next(path.iterdir(), None)
+        return "accessible", ""
+    except OSError as exc:
+        return "stale", str(exc)
+
+
+def _unmount_command(path: Path, *, use_sudo_mount: bool) -> list[str]:
+    umount = shutil.which("umount") or "umount"
+    command = [umount, str(path)]
+    if use_sudo_mount:
+        command = ["sudo", "-n", *command]
+    return command
+
+
+def cleanup_stale_mounts(
+    db: Database,
+    *,
+    case_id: str,
+    apply: bool = False,
+    use_sudo_mount: bool = False,
+) -> dict[str, object]:
+    db.get_case(case_id)
+    rows = [
+        dict(row)
+        for row in db.conn.execute(
+            """
+            SELECT id, image_id, volume_mount_path, ewf_mount_path, raw_path, created_at
+            FROM mounts
+            WHERE case_id = ?
+            ORDER BY created_at DESC
+            """,
+            (case_id,),
+        ).fetchall()
+    ]
+    results: list[dict[str, object]] = []
+    for row in rows:
+        for path_key in ("volume_mount_path", "ewf_mount_path"):
+            value = row.get(path_key)
+            if not value:
+                continue
+            path = Path(str(value))
+            state, error = _mount_path_state(path)
+            command = _unmount_command(path, use_sudo_mount=use_sudo_mount)
+            result: dict[str, object] = {
+                "mount_id": row.get("id"),
+                "image_id": row.get("image_id"),
+                "path_type": path_key,
+                "path": str(path),
+                "state": state,
+                "action": "none",
+                "command": command,
+            }
+            if error:
+                result["error"] = error
+            if state == "stale":
+                if apply:
+                    completed = subprocess.run(command, capture_output=True, text=True, check=False)
+                    result.update(
+                        {
+                            "action": "unmount",
+                            "returncode": completed.returncode,
+                            "stdout": completed.stdout.strip(),
+                            "stderr": completed.stderr.strip(),
+                            "status": "unmounted" if completed.returncode == 0 else "failed",
+                        }
+                    )
+                else:
+                    result.update({"action": "dry_run", "status": "would_unmount"})
+            else:
+                result["status"] = state
+            results.append(result)
+    return {
+        "case_id": case_id,
+        "apply": apply,
+        "mount_path_count": len(results),
+        "stale_count": sum(1 for row in results if row.get("state") == "stale"),
+        "unmounted_count": sum(1 for row in results if row.get("status") == "unmounted"),
+        "failed_count": sum(1 for row in results if row.get("status") == "failed"),
+        "results": results,
+    }
+
+
+def _readiness_gate_summary(report: dict[str, object], failed: list[dict[str, object]]) -> dict[str, object]:
+    return {
+        "case_id": report.get("case_id"),
+        "profile": report.get("profile"),
+        "passed": not failed,
+        "summary": report.get("summary") if isinstance(report.get("summary"), dict) else {},
+        "failed_required": failed,
+    }
+
+
+def _parse_case_ref(value: str) -> tuple[str, Path, str]:
+    parts = value.split(":", 2)
+    if len(parts) != 3 or not all(parts):
+        raise ValueError("--case-ref must use LABEL:ROOT:CASE_ID")
+    return parts[0], Path(parts[1]), parts[2]
+
+
+def case_comparison_report(case_refs: list[str], *, limit: int = 100) -> dict[str, object]:
+    cases: list[dict[str, object]] = []
+    for value in case_refs:
+        label, root, case_id = _parse_case_ref(value)
+        paths = WorkspacePaths(root)
+        case_db = Database(paths.db_path())
+        try:
+            memory_gate = processing_readiness_report(case_db, case_id, limit=limit, profile="memory")
+            full_gate = processing_readiness_report(case_db, case_id, limit=limit, profile="windows-full")
+            deep_gate = processing_readiness_report(case_db, case_id, limit=limit, profile="windows-full-deep-recovery")
+            credentials = memory_credentials_report(case_db, case_id, limit=limit)
+            support = memory_support_files_report(case_db, case_id, limit=limit)
+            suspicious = suspicious_executions_report(case_db, case_id, limit=limit)
+            gaps = evidence_gaps_report(case_db, case_id, limit=limit)
+            deep_status = deep_recovery_status_report(case_db, case_id, limit=limit)
+            cases.append(
+                {
+                    "label": label,
+                    "root": str(root),
+                    "case_id": case_id,
+                    "memory_required_gaps": (memory_gate.get("summary") or {}).get("required_needs_action_count", 0),
+                    "windows_full_required_gaps": (full_gate.get("summary") or {}).get("required_needs_action_count", 0),
+                    "deep_recovery_required_gaps": (deep_gate.get("summary") or {}).get("required_needs_action_count", 0),
+                    "memory_support_files": (support.get("summary") or {}).get("support_file_count", 0),
+                    "memory_processed": (support.get("summary") or {}).get("processed_count", 0),
+                    "memory_string_hits": (support.get("summary") or {}).get("hit_count", 0),
+                    "high_value_credentials": (credentials.get("summary") or {}).get("high_value_candidate_count", 0),
+                    "validated_credentials": (credentials.get("summary") or {}).get("validated_count", 0),
+                    "suspicious_executions": (suspicious.get("summary") or {}).get("finding_count", 0),
+                    "evidence_gaps": (gaps.get("summary") or {}).get("gap_count", 0),
+                    "deep_recovery_passed": bool(deep_status.get("passed")),
+                    "carve_scan_ranges": (deep_status.get("summary") or {}).get("carve_scan_range_count", 0),
+                    "tsk_recovery_artifacts": (deep_status.get("summary") or {}).get("tsk_recovery_artifacts", 0),
+                }
+            )
+        finally:
+            case_db.close()
+    return {
+        "case_count": len(cases),
+        "cases": cases,
+        "summary": {
+            "memory_ready_count": sum(1 for row in cases if not row.get("memory_required_gaps")),
+            "windows_full_ready_count": sum(1 for row in cases if not row.get("windows_full_required_gaps")),
+            "deep_recovery_ready_count": sum(1 for row in cases if not row.get("deep_recovery_required_gaps")),
+            "total_suspicious_executions": sum(int(row.get("suspicious_executions") or 0) for row in cases),
+            "total_high_value_credentials": sum(int(row.get("high_value_credentials") or 0) for row in cases),
+        },
+    }
+
+
+def case_comparison_markdown(report: dict[str, object]) -> str:
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    lines = [
+        "# Case Comparison",
+        "",
+        f"- Cases: `{report.get('case_count', 0)}`",
+        f"- Memory ready: `{summary.get('memory_ready_count', 0)}`",
+        f"- Windows-full ready: `{summary.get('windows_full_ready_count', 0)}`",
+        f"- Deep-recovery ready: `{summary.get('deep_recovery_ready_count', 0)}`",
+        f"- Suspicious executions: `{summary.get('total_suspicious_executions', 0)}`",
+        f"- High-value credential candidates: `{summary.get('total_high_value_credentials', 0)}`",
+        "",
+        "| Case | Memory Gaps | Full Gaps | Deep Gaps | Memory Files | Hits | Suspicious Execs | High-Value Creds |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for row in report.get("cases") or []:
+        lines.append(
+            f"| {row.get('label') or row.get('case_id')} | {row.get('memory_required_gaps') or 0} | "
+            f"{row.get('windows_full_required_gaps') or 0} | {row.get('deep_recovery_required_gaps') or 0} | "
+            f"{row.get('memory_support_files') or 0} | {row.get('memory_string_hits') or 0} | "
+            f"{row.get('suspicious_executions') or 0} | {row.get('high_value_credentials') or 0} |"
+        )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _memory_hit_count(db: Database, case_id: str, hit_id: str) -> int:
+    row = analytics_query_one(
+        db,
+        "memory_string_hits",
+        """
+        SELECT COUNT(*) AS count
+        FROM memory_string_hits
+        WHERE case_id = ?
+          AND id = ?
+          AND hit_category = 'credentials'
+        """,
+        (case_id, hit_id),
+    )
+    return int((row or {}).get("count") or 0)
+
+
 def rebuild_case_postprocess(
     db: Database,
     *,
@@ -545,6 +744,7 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
     readiness = processing_readiness_report(db, case_id, limit=limit)
     gaps = evidence_gaps_report(db, case_id, limit=limit)
     suspicious = suspicious_executions_report(db, case_id, limit=limit)
+    deep_recovery = deep_recovery_status_report(db, case_id, limit=limit)
     specs: list[tuple[str, str, str, object]] = [
         ("executive-summary", "md", "Executive summary", case_executive_summary_markdown(case_executive_summary_report(db, case_id, limit=limit, memory_disk_report=memory_disk))),
         ("case-overview", "md", "Case overview", case_overview_markdown(overview)),
@@ -557,6 +757,7 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
         ("crash-dump-analysis", "md", "Crash dump analysis", crash_dump_analysis_markdown(crash_dump_analysis_report(db, case_id, limit=limit))),
         ("suspicious-executions", "md", "Suspicious executions", suspicious_executions_markdown(suspicious)),
         ("memory-artifacts", "md", "Memory artifact inventory", memory_artifacts_markdown(memory_artifacts_report(db, case_id, limit=limit))),
+        ("deep-recovery-status", "md", "Deep recovery status", deep_recovery_status_markdown(deep_recovery)),
         ("recovery-coverage", "json", "Recovery coverage", recovery_coverage_report(db, case_id, limit=max(limit, 250))),
         ("carve-coverage", "md", "Carve coverage", carve_coverage_markdown(carve_coverage_report(db, case_id, limit=max(limit, 250)))),
         ("sqlite-inventory", "md", "SQLite carve inventory", sqlite_inventory_markdown(sqlite_inventory_report(db, case_id, limit=limit))),
@@ -1150,6 +1351,10 @@ def build_parser() -> argparse.ArgumentParser:
         dest="use_sudo_mount",
         help="Use non-interactive sudo for the unmount command",
     )
+    image_stale = image_sub.add_parser("cleanup-stale-mounts")
+    image_stale.add_argument("--case", required=True, dest="case_id")
+    image_stale.add_argument("--apply", action="store_true", help="Unmount stale mount paths; default is dry-run")
+    image_stale.add_argument("--sudo", action="store_true", dest="use_sudo_mount")
 
     cloud = subparsers.add_parser("cloud")
     cloud_sub = cloud.add_subparsers(dest="action", required=True)
@@ -2452,8 +2657,18 @@ def build_parser() -> argparse.ArgumentParser:
     report_readiness_gate.add_argument("--case", required=True, dest="case_id")
     report_readiness_gate.add_argument("--limit", type=int, default=100)
     report_readiness_gate.add_argument("--profile", help="Evaluate readiness against a specific workflow profile")
+    report_readiness_gate.add_argument("--summary-only", action="store_true")
     report_readiness_gate.add_argument("--format", choices=["json", "table", "csv"], default="json")
     report_readiness_gate.add_argument("--output")
+    report_deep_recovery = report_sub.add_parser("deep-recovery-status")
+    report_deep_recovery.add_argument("--case", required=True, dest="case_id")
+    report_deep_recovery.add_argument("--limit", type=int, default=100)
+    report_deep_recovery.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
+    report_deep_recovery.add_argument("--output")
+    report_case_comparison = report_sub.add_parser("case-comparison")
+    report_case_comparison.add_argument("--case-ref", action="append", required=True, help="LABEL:ROOT:CASE_ID")
+    report_case_comparison.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
+    report_case_comparison.add_argument("--output")
     report_evidence_gaps = report_sub.add_parser("evidence-gaps")
     report_evidence_gaps.add_argument("--case", required=True, dest="case_id")
     report_evidence_gaps.add_argument("--limit", type=int, default=100)
@@ -2480,6 +2695,12 @@ def build_parser() -> argparse.ArgumentParser:
     report_memory_credentials.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
     report_memory_credentials.add_argument("--output")
     report_memory_credentials.add_argument("--reveal", action="store_true", help="Include unredacted memory strings in the report output")
+    report_memory_credential_review = report_sub.add_parser("memory-credential-review")
+    report_memory_credential_review.add_argument("--case", required=True, dest="case_id")
+    report_memory_credential_review.add_argument("--hit", required=True, dest="hit_id")
+    report_memory_credential_review.add_argument("--status", required=True, choices=["false_positive", "candidate", "validated", "out_of_scope"])
+    report_memory_credential_review.add_argument("--reviewer")
+    report_memory_credential_review.add_argument("--note", default="")
     report_memory_disk = report_sub.add_parser("memory-disk-correlations")
     report_memory_disk.add_argument("--case", required=True, dest="case_id")
     report_memory_disk.add_argument("--limit", type=int, default=100)
@@ -3638,6 +3859,17 @@ def run(args: argparse.Namespace) -> int:
             print_json(payload)
             return 0
 
+        if args.resource == "image" and args.action == "cleanup-stale-mounts":
+            print_json(
+                cleanup_stale_mounts(
+                    db,
+                    case_id=args.case_id,
+                    apply=args.apply,
+                    use_sudo_mount=args.use_sudo_mount,
+                )
+            )
+            return 0
+
         if args.resource == "vsc" and args.action == "list":
             case = db.get_case(args.case_id)
             image = db.get_image(args.image_id, args.case_id)
@@ -4744,6 +4976,17 @@ def run(args: argparse.Namespace) -> int:
         if args.resource == "report" and args.action == "readiness-gate":
             report = processing_readiness_report(db, args.case_id, limit=args.limit, profile=args.profile)
             failed = [row for row in report.get("items", []) if row.get("required", True) and row.get("status") != "complete"]
+            if args.summary_only:
+                summary = _readiness_gate_summary(report, failed)
+                write_report_output(
+                    summary,
+                    summary["failed_required"],
+                    args.format,
+                    args.output,
+                    title=f"Processing readiness gate summary for case {args.case_id}",
+                    columns=["key", "title", "status", "next_step"],
+                )
+                return 1 if failed else 0
             write_report_output(
                 report,
                 report["items"],
@@ -4753,6 +4996,45 @@ def run(args: argparse.Namespace) -> int:
                 columns=["key", "title", "status", "next_step"],
             )
             return 1 if failed else 0
+
+        if args.resource == "report" and args.action == "deep-recovery-status":
+            report = deep_recovery_status_report(db, args.case_id, limit=args.limit)
+            if args.format == "md":
+                write_text_output(deep_recovery_status_markdown(report), args.output)
+            else:
+                write_report_output(
+                    report,
+                    report["required_gaps"],
+                    args.format,
+                    args.output,
+                    title=f"Deep recovery status for case {args.case_id}",
+                    columns=["key", "title", "status", "next_step"],
+                )
+            return 0 if report.get("passed") else 1
+
+        if args.resource == "report" and args.action == "case-comparison":
+            report = case_comparison_report(args.case_ref)
+            if args.format == "md":
+                write_text_output(case_comparison_markdown(report), args.output)
+            else:
+                write_report_output(
+                    report,
+                    report["cases"],
+                    args.format,
+                    args.output,
+                    title="Case comparison",
+                    columns=[
+                        "label",
+                        "memory_required_gaps",
+                        "windows_full_required_gaps",
+                        "deep_recovery_required_gaps",
+                        "memory_support_files",
+                        "memory_string_hits",
+                        "suspicious_executions",
+                        "high_value_credentials",
+                    ],
+                )
+            return 0
 
         if args.resource == "report" and args.action == "evidence-gaps":
             report = evidence_gaps_report(db, args.case_id, limit=args.limit)
@@ -4835,6 +5117,29 @@ def run(args: argparse.Namespace) -> int:
                     title=f"Memory credential review for case {args.case_id}",
                     columns=["credential_triage", "credential_score", "credential_status", "matched_term", "display_value", "source_artifact_type", "offset", "credential_reason"],
                 )
+            return 0
+
+        if args.resource == "report" and args.action == "memory-credential-review":
+            hit_count = _memory_hit_count(db, args.case_id, args.hit_id)
+            if not hit_count:
+                raise OrchestratorError(f"Memory credential hit not found for case {args.case_id}: {args.hit_id}")
+            db.upsert_memory_credential_review(
+                {
+                    "case_id": args.case_id,
+                    "memory_hit_id": args.hit_id,
+                    "review_status": args.status,
+                    "reviewer": args.reviewer,
+                    "note": args.note,
+                }
+            )
+            print_json(
+                {
+                    "case_id": args.case_id,
+                    "memory_hit_id": args.hit_id,
+                    "review_status": args.status,
+                    "reviewer": args.reviewer,
+                }
+            )
             return 0
 
         if args.resource == "report" and args.action == "memory-disk-correlations":

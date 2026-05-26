@@ -33,6 +33,8 @@ from forensic_orchestrator.reports import (
     artifact_completeness_report,
     data_exfiltration_markdown,
     data_exfiltration_report,
+    deep_recovery_status_markdown,
+    deep_recovery_status_report,
     file_dossier_report,
     communication_review_report,
     combined_artifact_family_report,
@@ -390,6 +392,22 @@ def test_processing_readiness_profile_marks_unrelated_items_optional(tmp_path):
     assert carve["required"] is False
     assert memory["required"] is True
     assert report["summary"]["required_needs_action_count"] < report["summary"]["needs_action_count"]
+
+
+def test_deep_recovery_status_report_wraps_profile_readiness(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+
+    report = deep_recovery_status_report(db, case.id)
+    markdown = deep_recovery_status_markdown(report)
+
+    assert report["profile"] == "windows-full-deep-recovery"
+    assert report["passed"] is False
+    assert report["summary"]["required_needs_action_count"] > 0
+    assert any(row["key"] == "recovery_coverage" for row in report["required_gaps"])
+    assert "Deep recovery is an opt-in profile family" in markdown
 
 
 def test_timeline_report_adds_memory_source_labels(tmp_path):
@@ -814,15 +832,27 @@ def test_memory_credentials_report_classifies_and_redacts_usable_secrets(tmp_pat
             },
         ]
     )
+    db.upsert_memory_credential_review(
+        {
+            "case_id": case.id,
+            "memory_hit_id": "mem-hit-1",
+            "review_status": "validated",
+            "reviewer": "analyst",
+            "note": "Confirmed in controlled review.",
+        }
+    )
 
     report = memory_credentials_report(db, case.id, limit=10)
     markdown = memory_credentials_markdown(report)
 
     assert report["summary"]["likely_usable_count"] == 1
+    assert report["summary"]["reviewed_count"] == 1
+    assert report["summary"]["validated_count"] == 1
     assert report["summary"]["high_value_candidate_count"] == 1
     assert report["summary"]["confirmed_usable_count"] == 0
     assert report["summary"]["false_positive_or_label_count"] == 1
     assert report["credentials"][0]["credential_validation_status"] == "candidate_unverified"
+    assert report["credentials"][0]["review_status"] == "validated"
     assert report["credential_groups"][0]["credential_triage"] == "high_value_candidate"
     assert "abc1234567890" not in markdown
     assert "Confirmed usable credentials" in markdown
