@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 import csv
+import zipfile
 
+import duckdb
+
+from forensic_orchestrator.db import Database
+from forensic_orchestrator.paths import WorkspacePaths
 from forensic_orchestrator.report_bundle import infer_report_candidate
+from forensic_orchestrator.report_bundle import import_report_bundle_many
 
 
 def test_report_bundle_detects_vsc_named_mft_by_header(tmp_path):
@@ -75,3 +81,42 @@ def test_report_bundle_detects_and_transforms_tzworks_usp(tmp_path):
     assert rows[0]["product_id"] == "5581"
     assert rows[0]["serial"] == "SERIAL123"
     assert rows[0]["volume_device_utc"] == "2020-12-12 03:40:00"
+
+
+def test_report_bundle_import_many_zip_creates_one_computer_per_top_level_folder(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORENSIC_ANALYTICS_MODE", "duckdb")
+    input_root = tmp_path / "input"
+    for computer in ("ComputerA", "ComputerB"):
+        mft_dir = input_root / computer / "MFT"
+        mft_dir.mkdir(parents=True)
+        (mft_dir / f"{computer}_$MFT.csv").write_text(
+            "EntryNumber,SequenceNumber,ParentPath,FileName,Created0x10\n"
+            f"42,3,C:/Users/{computer},note.txt,2023-01-01 00:00:00\n",
+            encoding="utf-8",
+        )
+    zip_path = tmp_path / "case.zip"
+    with zipfile.ZipFile(zip_path, "w") as archive:
+        for path in input_root.rglob("*"):
+            if path.is_file():
+                archive.write(path, path.relative_to(input_root))
+
+    paths = WorkspacePaths(tmp_path / "analysis")
+    db = Database(paths.db_path())
+    result = import_report_bundle_many(
+        db=db,
+        paths=paths,
+        report_root=zip_path,
+        accept_duplicate=True,
+    )
+    db.close()
+
+    assert result.imported_computers == 2
+    assert result.imported_files == 2
+    assert result.imported_rows == 2
+    assert result.failed_files == 0
+    conn = duckdb.connect(str(paths.analytics_db_path(result.case_id)), read_only=True)
+    try:
+        assert conn.execute("SELECT count(*) FROM mft_entries").fetchone()[0] == 2
+        assert conn.execute("SELECT count(*) FROM distinct_mft_entries").fetchone()[0] == 2
+    finally:
+        conn.close()

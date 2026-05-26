@@ -267,7 +267,7 @@ from .search.opensearch import (
     search_result_drilldown,
 )
 from .report_specs import list_report_specs, run_report_spec
-from .report_bundle import import_report_bundle
+from .report_bundle import import_report_bundle, import_report_bundle_many
 from .safety import OrchestratorError
 from .artifact_dedupe import rebuild_artifact_windows_old_dedupe
 from .artifact_distinct import rebuild_distinct_artifact_tables
@@ -1728,6 +1728,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Import output even when the same content hash already exists for this evidence source/tool",
     )
+    report_bundle_many = report_bundle_sub.add_parser("import-many")
+    report_bundle_many.add_argument("--case", dest="case_id", help="Existing case/project ID; creates one when omitted")
+    report_bundle_many.add_argument("--path", required=True, help="Directory or zip containing one top-level folder per computer")
+    report_bundle_many.add_argument(
+        "--accept-duplicate",
+        action="store_true",
+        help="Import output even when the same content hash already exists for this evidence source/tool",
+    )
 
     report = subparsers.add_parser("report")
     report_sub = report.add_subparsers(dest="action", required=True)
@@ -3178,6 +3186,42 @@ def run(args: argparse.Namespace) -> int:
                     "skipped_files": result.skipped_files,
                     "failed_files": result.failed_files,
                     "markdown_path": result.markdown_path,
+                }
+            )
+            return 0
+
+        if args.resource == "report-bundle" and args.action == "import-many":
+            result = import_report_bundle_many(
+                db=db,
+                paths=paths,
+                report_root=Path(args.path),
+                case_id=args.case_id,
+                accept_duplicate=args.accept_duplicate,
+            )
+            print_json(
+                {
+                    "case_id": result.case_id,
+                    "project_id": result.case_id,
+                    "report_root": result.report_root,
+                    "imported_computers": result.imported_computers,
+                    "imported_files": result.imported_files,
+                    "imported_rows": result.imported_rows,
+                    "skipped_files": result.skipped_files,
+                    "failed_files": result.failed_files,
+                    "markdown_path": result.markdown_path,
+                    "computers": [
+                        {
+                            "computer_id": item.computer_id,
+                            "image_id": item.image_id,
+                            "report_root": item.report_root,
+                            "imported_files": item.imported_files,
+                            "imported_rows": item.imported_rows,
+                            "skipped_files": item.skipped_files,
+                            "failed_files": item.failed_files,
+                            "markdown_path": item.markdown_path,
+                        }
+                        for item in result.items
+                    ],
                 }
             )
             return 0

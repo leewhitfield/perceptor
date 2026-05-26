@@ -3,7 +3,9 @@ from __future__ import annotations
 import csv
 import json
 import re
+import shutil
 import uuid
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -58,6 +60,19 @@ class ReportBundleImportResult:
     skipped_files: int = 0
     failed_files: int = 0
     items: list[ReportImportItem] = field(default_factory=list)
+
+
+@dataclass
+class ReportBundleBulkImportResult:
+    case_id: str
+    report_root: str
+    imported_computers: int = 0
+    imported_files: int = 0
+    imported_rows: int = 0
+    skipped_files: int = 0
+    failed_files: int = 0
+    items: list[ReportBundleImportResult] = field(default_factory=list)
+    markdown_path: str = ""
 
 
 def import_report_bundle(
@@ -282,6 +297,50 @@ def import_report_bundle(
         raise
 
 
+def import_report_bundle_many(
+    *,
+    db: Database,
+    paths: WorkspacePaths,
+    report_root: Path,
+    case_id: str | None = None,
+    accept_duplicate: bool = False,
+) -> ReportBundleBulkImportResult:
+    source_root, cleanup_root = _prepare_bulk_report_root(paths, report_root)
+    try:
+        computer_roots = _top_level_report_roots(source_root)
+        if not computer_roots:
+            raise ValueError(f"No top-level computer folders found under: {source_root}")
+        active_case_id = case_id
+        bulk = ReportBundleBulkImportResult(case_id=case_id or "", report_root=str(report_root.resolve()))
+        for computer_root in computer_roots:
+            result = import_report_bundle(
+                db=db,
+                paths=paths,
+                report_root=computer_root,
+                case_id=active_case_id,
+                computer_label=_computer_label_for_folder(computer_root),
+                accept_duplicate=accept_duplicate,
+            )
+            if active_case_id is None:
+                active_case_id = result.case_id
+                bulk.case_id = result.case_id
+            bulk.imported_computers += 1
+            bulk.imported_files += result.imported_files
+            bulk.imported_rows += result.imported_rows
+            bulk.skipped_files += result.skipped_files
+            bulk.failed_files += result.failed_files
+            bulk.items.append(result)
+        if active_case_id is None:
+            raise ValueError("Bulk import did not create or use a case")
+        bulk.case_id = active_case_id
+        distinct_stats = rebuild_distinct_artifact_tables(db, case_id=active_case_id, image_id=None)
+        bulk.markdown_path = str(_write_bulk_markdown_report(paths, bulk, distinct_stats))
+        return bulk
+    finally:
+        if cleanup_root is not None:
+            shutil.rmtree(cleanup_root, ignore_errors=True)
+
+
 def infer_report_candidate(path: Path) -> ReportCandidate | None:
     name = _strip_timestamp(path.name)
     lower = name.lower()
@@ -421,6 +480,117 @@ def _write_markdown_report(paths: WorkspacePaths, result: ReportBundleImportResu
         lines.append("- None")
     report_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return report_path
+
+
+def _write_bulk_markdown_report(paths: WorkspacePaths, result: ReportBundleBulkImportResult, distinct_stats: dict[str, Any]) -> Path:
+    report_dir = paths.outputs_dir(result.case_id) / "reports"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    report_path = report_dir / f"report-bundle-bulk-import-{result.case_id}.md"
+    lines = [
+        "# Report Bundle Bulk Import",
+        "",
+        f"- Case ID: `{result.case_id}`",
+        f"- Report root: `{result.report_root}`",
+        f"- Imported computers: {result.imported_computers}",
+        f"- Imported files: {result.imported_files}",
+        f"- Imported rows: {result.imported_rows}",
+        f"- Skipped files: {result.skipped_files}",
+        f"- Failed files: {result.failed_files}",
+        f"- Distinct rows: {distinct_stats.get('distinct_rows', 0)}",
+        f"- Duplicate rows collapsed in distinct tables: {distinct_stats.get('duplicate_rows', 0)}",
+        "",
+        "## Computers",
+        "",
+    ]
+    for item in result.items:
+        lines.append(
+            f"- Computer `{item.computer_id}` evidence `{item.image_id}`: "
+            f"{item.imported_files} files, {item.imported_rows} rows from `{item.report_root}`"
+        )
+    lines.extend(["", "## Distinct Tables", ""])
+    tables = distinct_stats.get("tables") if isinstance(distinct_stats.get("tables"), dict) else {}
+    if tables:
+        for table, stats in sorted(tables.items()):
+            lines.append(
+                f"- `{table}`: {stats.get('distinct_rows', 0)} distinct from "
+                f"{stats.get('source_rows', 0)} source rows"
+            )
+    else:
+        lines.append("- None")
+    report_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return report_path
+
+
+def _prepare_bulk_report_root(paths: WorkspacePaths, report_root: Path) -> tuple[Path, Path | None]:
+    report_root = report_root.resolve()
+    if report_root.is_dir():
+        return report_root, None
+    if not report_root.is_file() or report_root.suffix.lower() != ".zip":
+        raise ValueError(f"Bulk report input must be a directory or .zip file: {report_root}")
+    staging_root = paths.root / "staging" / "report-bundle-import" / f"{report_root.stem}-{uuid.uuid4()}"
+    staging_root.mkdir(parents=True, exist_ok=True)
+    _safe_extract_zip(report_root, staging_root)
+    return staging_root, staging_root
+
+
+def _safe_extract_zip(zip_path: Path, destination: Path) -> None:
+    destination_resolved = destination.resolve()
+    with zipfile.ZipFile(zip_path) as archive:
+        for member in archive.infolist():
+            member_path = destination / member.filename
+            resolved = member_path.resolve()
+            if destination_resolved not in resolved.parents and resolved != destination_resolved:
+                raise ValueError(f"Unsafe zip member path: {member.filename}")
+        archive.extractall(destination)
+
+
+def _top_level_report_roots(root: Path) -> list[Path]:
+    if _has_artifact_named_children(root):
+        return [root]
+    children = [path for path in sorted(root.iterdir()) if path.is_dir() and not path.name.startswith(".")]
+    if len(children) == 1 and not _has_artifact_named_children(children[0]):
+        nested = [path for path in sorted(children[0].iterdir()) if path.is_dir() and not path.name.startswith(".")]
+        if nested:
+            return [path for path in nested if any(path.rglob("*.csv"))]
+    return [path for path in children if any(path.rglob("*.csv"))]
+
+
+def _has_artifact_named_children(path: Path) -> bool:
+    artifact_tokens = {
+        "mft",
+        "usb_info",
+        "systeminfo",
+        "system_info",
+        "eventlogs_evtxexplorer",
+        "prefetch",
+        "jumplists_jlecmd",
+        "shimcache",
+        "recyclebin_rbcmd",
+        "shellbags",
+        "lnk_files_lp",
+    }
+    child_names = {child.name.lower() for child in path.iterdir() if child.is_dir()}
+    return bool(child_names & artifact_tokens)
+
+
+def _computer_label_for_folder(path: Path) -> str:
+    metadata = _read_device_metadata(path)
+    for key in ("computer_name", "hostname", "device_name", "name", "label"):
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return path.name
+
+
+def _read_device_metadata(path: Path) -> dict[str, Any]:
+    for candidate in sorted(path.glob("*.json")):
+        try:
+            parsed = json.loads(candidate.read_text(encoding="utf-8-sig", errors="replace"))
+        except Exception:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return {}
 
 
 def _strip_timestamp(name: str) -> str:
