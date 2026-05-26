@@ -51,6 +51,24 @@ def test_duckdb_analytics_mode_is_default(tmp_path, monkeypatch):
     db.close()
 
 
+def test_duckdb_write_connections_apply_temp_settings(tmp_path, monkeypatch):
+    monkeypatch.delenv("FORENSIC_ANALYTICS_MODE", raising=False)
+    temp_dir = tmp_path / "duck-temp"
+    monkeypatch.setenv("FORENSIC_DUCKDB_TEMP_DIRECTORY", str(temp_dir))
+    monkeypatch.setenv("FORENSIC_DUCKDB_MAX_TEMP_DIRECTORY_SIZE", "12GB")
+    monkeypatch.setenv("FORENSIC_DUCKDB_MEMORY_LIMIT", "1GB")
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case_id = "case-1"
+    db.create_case(case_id, tmp_path / "cases" / case_id)
+
+    assert db.analytics is not None
+    with db.analytics._write_connection(case_id) as conn:
+        assert conn.execute("SELECT current_setting('temp_directory')").fetchone()[0] == str(temp_dir)
+        assert conn.execute("SELECT current_setting('max_temp_directory_size')").fetchone()[0] == "11.1 GiB"
+        assert conn.execute("SELECT current_setting('memory_limit')").fetchone()[0] == "953.6 MiB"
+    db.close()
+
+
 def test_default_duckdb_routes_generic_normalized_rows(tmp_path, monkeypatch):
     monkeypatch.delenv("FORENSIC_ANALYTICS_MODE", raising=False)
     db = Database(tmp_path / "orchestrator.sqlite3")

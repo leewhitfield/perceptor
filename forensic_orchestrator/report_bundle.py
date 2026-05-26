@@ -650,7 +650,12 @@ def _try_rebuild_distinct_artifact_tables(
 
 def _is_disk_full_error(exc: Exception) -> bool:
     text = str(exc).lower()
-    return "no space left" in text or ("could not write file" in text and "duckdb_temp_storage" in text)
+    return (
+        "no space left" in text
+        or "max temp directory size" in text
+        or "maximum size of the temp directory" in text
+        or ("could not write file" in text and "duckdb_temp_storage" in text)
+    )
 
 
 def _empty_distinct_stats(case_id: str, image_id: str | None) -> dict[str, Any]:
