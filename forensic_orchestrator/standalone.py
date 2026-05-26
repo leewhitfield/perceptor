@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import os
 import platform
+import csv
+import re
 import shutil
 import subprocess
 import sys
 import tarfile
+import urllib.parse
 import urllib.request
 import zipfile
 from datetime import datetime, timezone
@@ -518,14 +521,7 @@ def _install_one_tool(tool: str, *, tools_dir: Path, env_file: Path, force: bool
             apply=apply,
         )
     if tool == "sidr":
-        return _install_github_asset(
-            "sidr",
-            repo="strozfriedberg/sidr",
-            target_dir=tools_dir / "sidr",
-            asset_terms=("sidr.exe",),
-            force=force,
-            apply=apply,
-        )
+        return _install_sidr_from_source(tools_dir=tools_dir, force=force, apply=apply)
     if tool in {"eztools", "bstrings"}:
         return _install_eztools(tools_dir=tools_dir, force=force, apply=apply, wanted_tool=tool)
     return {"tool": tool, "status": "unknown", "reason": "Supported tools: eztools, bstrings, sidr, memprocfs, dotnet, pypykatz, volatility3, usnjrnl-forensic, all."}
@@ -568,16 +564,14 @@ def _install_eztools(*, tools_dir: Path, force: bool, apply: bool, wanted_tool: 
     archive = target / "Get-ZimmermanTools.zip"
     _download_file(url, archive)
     _extract_archive(archive, target)
+    direct = _install_eztools_from_catalog(target, wanted_tool=wanted_tool, force=force)
+    if direct["status"] in {"installed", "present"}:
+        return direct
     pwsh = shutil.which("pwsh") or shutil.which("powershell")
     if not pwsh or not marker.exists():
-        return {
-            "tool": wanted_tool,
-            "status": "downloaded_script",
-            "path": str(target),
-            "reason": "PowerShell is required to run Get-ZimmermanTools automatically. On Ubuntu, apt can install powershell only after the Microsoft package repository is added.",
-            "prerequisite": _powershell_install_note(),
-            "next_step": f"After pwsh is available, run: pwsh {marker} -Dest {target} -NetVersion 9",
-        }
+        direct["prerequisite"] = _powershell_install_note()
+        direct["next_step"] = f"Optional fallback: install PowerShell, then run: pwsh {marker} -Dest {target} -NetVersion 9"
+        return direct
     command = [pwsh, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(marker), "-Dest", str(target), "-NetVersion", "9"]
     completed = subprocess.run(command, capture_output=True, text=True, check=False, timeout=1800)
     return {
@@ -589,6 +583,101 @@ def _install_eztools(*, tools_dir: Path, force: bool, apply: bool, wanted_tool: 
         "stdout": completed.stdout.strip()[-2000:],
         "stderr": completed.stderr.strip()[-2000:],
     }
+
+
+def _install_eztools_from_catalog(target: Path, *, wanted_tool: str, force: bool) -> dict[str, Any]:
+    try:
+        items = _eztools_catalog_items(net_version=9)
+    except Exception as exc:
+        return {
+            "tool": wanted_tool,
+            "status": "downloaded_script_catalog_failed",
+            "path": str(target),
+            "reason": f"Downloaded Get-ZimmermanTools.ps1, but the Python catalog downloader failed: {exc}",
+        }
+    if wanted_tool == "bstrings":
+        items = [item for item in items if str(item["Name"]).casefold() == "bstrings.zip"]
+    if not items:
+        return {"tool": wanted_tool, "status": "manual", "path": str(target), "reason": "No matching EZTools catalog items were found."}
+    local_details = _load_eztools_details(target / "!!!RemoteFileDetails.csv")
+    selected: list[dict[str, Any]] = []
+    for item in items:
+        local = local_details.get(str(item["URL"]))
+        if force or not local or str(local.get("SHA1")) != str(item.get("SHA1")):
+            selected.append(item)
+    if not selected:
+        return {"tool": wanted_tool, "status": "present", "path": str(target), "downloaded": 0, "catalog_items": len(items)}
+    downloaded: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for item in selected:
+        try:
+            output_dir = target / "net9" if item.get("IsNet9") else target
+            output_dir.mkdir(parents=True, exist_ok=True)
+            archive = output_dir / str(item["Name"])
+            _download_file(str(item["URL"]), archive)
+            if archive.suffix.casefold() == ".zip":
+                _extract_archive(archive, output_dir)
+                archive.unlink(missing_ok=True)
+            downloaded.append(item)
+        except Exception as exc:
+            errors.append(f"{item.get('Name')}: {exc}")
+    _write_eztools_details(target / "!!!RemoteFileDetails.csv", [*local_details.values(), *downloaded])
+    return {
+        "tool": wanted_tool,
+        "status": "installed" if not errors else "partial",
+        "path": str(target),
+        "downloaded": len(downloaded),
+        "catalog_items": len(items),
+        "errors": errors[:20],
+    }
+
+
+def _install_sidr_from_source(*, tools_dir: Path, force: bool, apply: bool) -> dict[str, Any]:
+    target = tools_dir / "sidr" / "sidr"
+    source = tools_dir / "sidr-src"
+    repo = "https://github.com/strozfriedberg/sidr.git"
+    if target.exists() and not force:
+        return {"tool": "sidr", "status": "present", "path": str(target)}
+    commands = [
+        ["git", "clone", repo, str(source)],
+        ["cargo", "build", "--release"],
+        ["install", "-D", str(source / "target" / "release" / "sidr"), str(target)],
+    ]
+    if not apply:
+        return {"tool": "sidr", "status": "would_build_from_source", "repo": repo, "path": str(target), "commands": commands}
+    missing = [name for name in ("git", "cargo") if not shutil.which(name)]
+    if missing:
+        return {
+            "tool": "sidr",
+            "status": "manual",
+            "repo": repo,
+            "reason": f"Missing build dependency/dependencies: {', '.join(missing)}. Install Rust/cargo and git, then rerun the installer.",
+        }
+    tools_dir.mkdir(parents=True, exist_ok=True)
+    if source.exists():
+        pull = subprocess.run(["git", "-C", str(source), "pull", "--ff-only"], capture_output=True, text=True, check=False, timeout=300)
+        if pull.returncode != 0:
+            return {"tool": "sidr", "status": "failed", "repo": repo, "command": pull.args, "returncode": pull.returncode, "stderr": pull.stderr.strip()[-2000:]}
+    else:
+        clone = subprocess.run(["git", "clone", repo, str(source)], capture_output=True, text=True, check=False, timeout=600)
+        if clone.returncode != 0:
+            return {"tool": "sidr", "status": "failed", "repo": repo, "command": clone.args, "returncode": clone.returncode, "stderr": clone.stderr.strip()[-2000:]}
+    build = subprocess.run(["cargo", "build", "--release"], cwd=source, capture_output=True, text=True, check=False, timeout=1800)
+    built = source / "target" / "release" / "sidr"
+    if build.returncode != 0 or not built.exists():
+        return {
+            "tool": "sidr",
+            "status": "failed",
+            "repo": repo,
+            "command": ["cargo", "build", "--release"],
+            "returncode": build.returncode,
+            "stdout": build.stdout.strip()[-2000:],
+            "stderr": build.stderr.strip()[-2000:],
+        }
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(built, target)
+    target.chmod(target.stat().st_mode | 0o755)
+    return {"tool": "sidr", "status": "installed", "repo": repo, "source": str(source), "path": str(target)}
 
 
 def _install_github_asset(
@@ -619,12 +708,99 @@ def _install_github_asset(
     return {"tool": tool, "status": "installed", "url": url, "path": str(target_dir)}
 
 
+def _eztools_catalog_items(*, net_version: int = 9) -> list[dict[str, Any]]:
+    html = _read_text_url("https://tools.ericzimmermanstools.com")
+    urls = _extract_eztools_urls(html, net_version=net_version)
+    items: list[dict[str, Any]] = []
+    for url in urls:
+        headers = _head_url(url)
+        parsed = urllib.parse.urlparse(url)
+        items.append(
+            {
+                "Name": Path(parsed.path).name,
+                "SHA1": str(headers.get("ETag") or headers.get("etag") or ""),
+                "URL": url,
+                "Size": str(headers.get("Content-Length") or headers.get("content-length") or ""),
+                "IsNet9": "/net9/" in parsed.path.casefold(),
+            }
+        )
+    return items
+
+
+def _extract_eztools_urls(html: str, *, net_version: int = 9) -> list[str]:
+    pattern = re.compile(r"(?i)\bhttps://[-A-Z0-9+&@#/%?=~_|$!:,.;]*[A-Z0-9+&@#/%=~_|$]\.(?:zip|txt)")
+    urls: list[str] = []
+    seen: set[str] = set()
+    for match in pattern.finditer(html):
+        url = _normalize_eztools_url(match.group(0))
+        lower = url.casefold()
+        if lower.endswith(("kape.zip", "all.zip", "all_9.zip", "get-zimmermantools.zip")):
+            continue
+        if net_version == 9 and "/net9/" not in lower:
+            continue
+        if net_version == 4 and "/net9/" in lower:
+            continue
+        if url in seen:
+            continue
+        seen.add(url)
+        urls.append(url)
+    return urls
+
+
+def _normalize_eztools_url(url: str) -> str:
+    url = url.replace("https://f001.backblazeb2.com/file/EricZimmermanTools/", "https://download.ericzimmermanstools.com/")
+    url = url.replace("https://f001.backblazeb2.com/file/EricZimmermanTools", "https://download.ericzimmermanstools.com")
+    return url.replace("https://download.ericzimmermanstools.com//", "https://download.ericzimmermanstools.com/")
+
+
+def _load_eztools_details(path: Path) -> dict[str, dict[str, Any]]:
+    if not path.exists():
+        return {}
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        return {str(row.get("URL")): dict(row) for row in csv.DictReader(handle) if row.get("URL")}
+
+
+def _write_eztools_details(path: Path, rows: list[dict[str, Any]]) -> None:
+    merged = {str(row.get("URL")): row for row in rows if row.get("URL")}
+    fieldnames = ["Name", "SHA1", "URL", "Size", "IsNet9"]
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in sorted(merged.values(), key=lambda item: str(item.get("URL"))):
+            writer.writerow({field: row.get(field, "") for field in fieldnames})
+
+
 def _powershell_install_note() -> str:
+    release = _linux_release()
+    if release.get("id") == "ubuntu" and release.get("version_id") not in {"22.04", "24.04"}:
+        version = release.get("version_id") or "this release"
+        return (
+            f"Ubuntu {version} is not a Microsoft-supported PowerShell apt target. Use a supported Ubuntu LTS release, "
+            "install PowerShell with snap, or use the portable PowerShell tar.gz release."
+        )
     return (
-        "Ubuntu example: sudo apt-get update && sudo apt-get install -y wget apt-transport-https software-properties-common && "
-        "wget -q https://packages.microsoft.com/config/ubuntu/24.04/packages-microsoft-prod.deb -O /tmp/packages-microsoft-prod.deb && "
+        "Ubuntu 22.04/24.04 apt example: source /etc/os-release && sudo apt-get update && "
+        "sudo apt-get install -y wget apt-transport-https software-properties-common && "
+        "wget -q https://packages.microsoft.com/config/ubuntu/$VERSION_ID/packages-microsoft-prod.deb -O /tmp/packages-microsoft-prod.deb && "
         "sudo dpkg -i /tmp/packages-microsoft-prod.deb && sudo apt-get update && sudo apt-get install -y powershell"
     )
+
+
+def _linux_release() -> dict[str, str]:
+    path = Path("/etc/os-release")
+    if not path.exists():
+        return {}
+    values: dict[str, str] = {}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return {}
+    for line in lines:
+        if "=" not in line or line.startswith("#"):
+            continue
+        key, value = line.split("=", 1)
+        values[key.casefold()] = value.strip().strip('"')
+    return values
 
 
 def _expand_tool_selection(tool: str) -> list[str]:
@@ -645,6 +821,17 @@ def _read_json_url(url: str) -> dict[str, Any]:
 
     with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "forensic-orchestrator"}), timeout=60) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def _read_text_url(url: str) -> str:
+    with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "forensic-orchestrator"}), timeout=60) as response:
+        return response.read().decode("utf-8", errors="replace")
+
+
+def _head_url(url: str) -> dict[str, str]:
+    request = urllib.request.Request(url, headers={"User-Agent": "forensic-orchestrator"}, method="HEAD")
+    with urllib.request.urlopen(request, timeout=60) as response:
+        return {key: value for key, value in response.headers.items()}
 
 
 def _select_release_asset(assets: list[dict[str, Any]], terms: tuple[str, ...]) -> dict[str, Any] | None:
@@ -686,11 +873,7 @@ def _managed_tool_path(name: str, tools_dir: Path) -> Path:
     if normalized == "memprocfs":
         return tools_dir / "MemProcFS" / "memprocfs"
     if normalized == "sidr":
-        native = tools_dir / "sidr" / "sidr"
-        windows = tools_dir / "sidr" / "sidr.exe"
-        if windows.exists() and not native.exists():
-            return windows
-        return native
+        return tools_dir / "sidr" / "sidr"
     if normalized == "bstrings":
         return tools_dir / "bstrings" / "bstrings.dll"
     if normalized == "eztools":
@@ -753,6 +936,8 @@ def _discover_local_env_updates(tools_dir: Path) -> dict[str, str]:
         "BSTRINGS_BIN": [
             tools_dir / "bstrings" / "bstrings.dll",
             tools_dir / "bstrings" / "bstrings.exe",
+            tools_dir / "eztools" / "net9" / "bstrings.dll",
+            tools_dir / "eztools" / "net9" / "bstrings.exe",
             tools_dir / "eztools" / "bstrings" / "bstrings.dll",
             Path.home() / "tools" / "bstrings" / "bstrings.dll",
         ],
@@ -762,9 +947,7 @@ def _discover_local_env_updates(tools_dir: Path) -> dict[str, str]:
         ],
         "SIDR_BIN": [
             tools_dir / "sidr" / "sidr",
-            tools_dir / "sidr" / "sidr.exe",
             Path.home() / "tools" / "sidr" / "sidr",
-            Path.home() / "tools" / "sidr" / "sidr.exe",
         ],
         "MEMPROCFS_BIN": [
             tools_dir / "MemProcFS" / "memprocfs",
@@ -833,7 +1016,10 @@ def _which(name: str) -> str | None:
     if name == "bstrings" and os.environ.get("BSTRINGS_BIN"):
         return os.environ["BSTRINGS_BIN"]
     if name == "sidr" and os.environ.get("SIDR_BIN"):
-        return os.environ["SIDR_BIN"]
+        configured = os.environ["SIDR_BIN"]
+        if Path(configured).suffix.casefold() != ".exe":
+            return configured
+        return None
     if name == "usnjrnl-forensic" and os.environ.get("USNJRNL_FORENSIC_BIN"):
         return os.environ["USNJRNL_FORENSIC_BIN"]
     if name == "dotnet":
@@ -851,10 +1037,7 @@ def _which(name: str) -> str | None:
         ],
         "MemProcFS": [Path.home() / "tools" / "MemProcFS" / "memprocfs"],
         "memprocfs": [Path.home() / "tools" / "MemProcFS" / "memprocfs"],
-        "sidr": [
-            Path.home() / "tools" / "sidr" / "sidr",
-            Path.home() / "tools" / "sidr" / "sidr.exe",
-        ],
+        "sidr": [Path.home() / "tools" / "sidr" / "sidr"],
     }
     for candidate in local_candidates.get(name, []):
         if candidate.exists():

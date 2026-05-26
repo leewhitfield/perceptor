@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from forensic_orchestrator import standalone as standalone_module
 from forensic_orchestrator.config import load_config
 from forensic_orchestrator.db import Database
 from forensic_orchestrator.paths import WorkspacePaths
@@ -7,6 +8,7 @@ from forensic_orchestrator.standalone import (
     artifact_capability_report,
     backup_case_databases,
     doctor_report,
+    _extract_eztools_urls,
     install_third_party_tool,
     job_status_report,
     profile_catalog_report,
@@ -75,7 +77,7 @@ def test_standalone_reports_cover_profiles_schema_jobs_and_backups(tmp_path):
 def test_repair_dependencies_writes_local_tool_env(monkeypatch, tmp_path):
     tools = tmp_path / "tools"
     bstrings = tools / "bstrings" / "bstrings.dll"
-    sidr = tools / "sidr" / "sidr.exe"
+    sidr = tools / "sidr" / "sidr"
     memprocfs = tools / "MemProcFS" / "memprocfs"
     for path in (bstrings, sidr, memprocfs):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -89,17 +91,45 @@ def test_repair_dependencies_writes_local_tool_env(monkeypatch, tmp_path):
     assert report["applied"] is True
     assert "BSTRINGS_BIN" in env_text
     assert "SIDR_BIN" in env_text
-    assert "sidr.exe" in env_text
+    assert "sidr/sidr" in env_text
     assert "MEMPROCFS_BIN" in env_text
+    for key in ("BSTRINGS_BIN", "SIDR_BIN", "MEMPROCFS_BIN", "EZTOOLS_ROOT"):
+        standalone_module.os.environ.pop(key, None)
 
 
 def test_tool_status_and_install_dry_run_use_managed_tools_dir(tmp_path):
     report = tool_status_report(tools_dir=tmp_path / "managed")
     sidr = next(row for row in report["tools"] if row["tool"] == "sidr")
     dry_run = install_third_party_tool("dotnet", tools_dir=tmp_path / "managed", apply=False)
-    sidr_dry_run = install_third_party_tool("sidr", tools_dir=tmp_path / "managed", apply=False)
+    sidr_dry_run = install_third_party_tool("sidr", tools_dir=tmp_path / "managed", apply=False, force=True)
 
     assert sidr["managed_path"].endswith("managed/sidr/sidr")
     assert dry_run["tools"][0]["status"] == "would_download_and_run"
-    assert sidr_dry_run["tools"][0]["status"] == "would_query_github_latest"
-    assert sidr_dry_run["tools"][0]["repo"] == "strozfriedberg/sidr"
+    assert sidr_dry_run["tools"][0]["status"] == "would_build_from_source"
+    assert sidr_dry_run["tools"][0]["repo"] == "https://github.com/strozfriedberg/sidr.git"
+
+
+def test_sidr_install_reports_manual_without_build_tools(monkeypatch, tmp_path):
+    monkeypatch.setattr(standalone_module.shutil, "which", lambda name: None)
+
+    report = install_third_party_tool("sidr", tools_dir=tmp_path / "managed", apply=True, force=True)
+
+    assert report["tools"][0]["status"] == "manual"
+    assert "cargo" in report["tools"][0]["reason"]
+
+
+def test_eztools_catalog_url_parser_filters_net9():
+    html = """
+    https://f001.backblazeb2.com/file/EricZimmermanTools/AmcacheParser.zip
+    https://f001.backblazeb2.com/file/EricZimmermanTools/net9/AmcacheParser_6.zip
+    https://download.ericzimmermanstools.com/net9/bstrings.zip
+    https://download.ericzimmermanstools.com/All_9.zip
+    https://download.ericzimmermanstools.com/Get-ZimmermanTools.zip
+    """
+
+    urls = _extract_eztools_urls(html, net_version=9)
+
+    assert urls == [
+        "https://download.ericzimmermanstools.com/net9/AmcacheParser_6.zip",
+        "https://download.ericzimmermanstools.com/net9/bstrings.zip",
+    ]

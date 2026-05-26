@@ -81,7 +81,7 @@ def _resolve_executable(executable: str | None) -> str | None:
         configured = os.environ.get("SIDR_BIN")
         if configured:
             return configured
-        for candidate in (Path.home() / "tools" / "sidr" / "sidr", Path.home() / "tools" / "sidr" / "sidr.exe"):
+        for candidate in (Path.home() / "tools" / "sidr" / "sidr",):
             if candidate.exists():
                 return str(candidate)
     if executable == "usnjrnl-forensic":
@@ -144,6 +144,8 @@ def build_tool_command(
     ]
     if command and Path(command[0]).name.lower() == "dotnet":
         command[0] = resolve_dotnet_runtime()
+    if command and Path(command[0]).suffix.casefold() == ".exe":
+        raise ToolError(f"Windows SIDR executable is not supported on Linux; build or configure a native sidr binary: {command[0]}")
     return command
 
 

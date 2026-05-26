@@ -1021,6 +1021,24 @@ def test_sidr_is_configured_for_windows_search_index_directory(monkeypatch):
     ]
 
 
+def test_sidr_windows_exe_is_rejected_for_linux_orchestrator(monkeypatch):
+    monkeypatch.setenv("SIDR_BIN", "/tools/sidr/sidr.exe")
+    registry = ToolRegistry.from_files([default_plugin_path()])
+    tool = registry.get_tool("SIDR")
+
+    try:
+        build_tool_command(
+            tool,
+            mount=Path("/unused"),
+            output=Path("/cases/1/outputs/SIDR"),
+            artifacts={"windows_search_index": Path("/cases/1/artifacts/WindowsSearch/Applications/Windows")},
+        )
+    except Exception as exc:
+        assert "Windows SIDR executable is not supported" in str(exc)
+    else:
+        raise AssertionError("SIDR Windows executable should be rejected")
+
+
 def test_windows_wer_defender_profile_is_configured():
     registry = ToolRegistry.from_files([default_plugin_path()])
 

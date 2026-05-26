@@ -57,12 +57,14 @@ These improve coverage but are not required for every case:
   mounts, manifests, intermediate databases, and comparison reports stay under
   `cases/<case>/vsc-work/`, while supported parsed rows are promoted into the
   main case DuckDB after dedupe.
-- `sidr`: Windows Search index parsing for supported Windows Search formats. Set
-  `SIDR_BIN=/path/to/sidr` when not on `PATH`. Current case testing did not
-  identify a SIDR option that decrypts Windows 11 `AesGcm1` encrypted SQLite
-  Search databases offline; when that format is encountered, collect live RAM
-  while the target user is logged in and SearchIndexer.exe is running if full
-  Search contents are required.
+- `sidr`: Windows Search index parsing for supported Windows Search formats. On
+  Linux, use a native Rust build (`cargo build --release`) and set
+  `SIDR_BIN=/path/to/sidr` when not on `PATH`; do not use the upstream
+  Windows-only `sidr.exe` release asset for the Linux worker. Current case
+  testing did not identify a SIDR option that decrypts Windows 11 `AesGcm1`
+  encrypted SQLite Search databases offline; when that format is encountered,
+  collect live RAM while the target user is logged in and SearchIndexer.exe is
+  running if full Search contents are required.
 - `pypykatz` or `mimikatz`: optional DPAPI/LSA validation path for live-memory
   plus registry-hive cases. Use these only as a controlled follow-up to
   Volatility hive/secret extraction, and document the result only if the

@@ -29,9 +29,9 @@ Linux worker packages:
 - Eric Zimmerman's `SrumECmd` for SRUM parsing. The configured .NET tool runs
   on Windows-capable runtimes; on this Linux MVP worker it may report that
   Windows ESE libraries are unavailable.
-- `sidr` for Windows Search index parsing. Set `SIDR_BIN=/path/to/sidr` if it
-  is not on `PATH`. SIDR parses both older `Windows.edb` ESE indexes and newer
-  Windows 11 SQLite indexes.
+- Native Linux `sidr` for Windows Search index parsing. Set
+  `SIDR_BIN=/path/to/sidr` if it is not on `PATH`. The Linux worker expects a
+  Rust-built native binary, not the upstream Windows `sidr.exe` release asset.
 - `libesedb-utils` for `esedbexport`, used by the internal WebCache parser to
   export `WebCacheV01.dat` ESE tables on Linux.
 - `exiftool` for embedded/internal file metadata extraction from Office files,

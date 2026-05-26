@@ -65,6 +65,11 @@ resolver expects them. It supports `eztools`, `bstrings`, `sidr`, `memprocfs`,
 `dotnet`, `pypykatz`, `volatility3`, `usnjrnl-forensic`, and `all`. Use
 `--dry-run` to preview downloads and commands first:
 
+For SIDR on Linux, `install-tool sidr` builds the native Rust binary from
+`https://github.com/strozfriedberg/sidr.git` with `cargo build --release` and
+places it at `~/tools/sidr/sidr`. The orchestrator does not use the upstream
+Windows `sidr.exe` asset for Linux parsing.
+
 ```bash
 uv run forensic-orchestrator --config config.yaml --dry-run standalone install-tool all --format table
 uv run forensic-orchestrator --config config.yaml standalone tool-status
