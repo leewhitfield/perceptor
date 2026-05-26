@@ -17974,7 +17974,13 @@ def processing_readiness_report(db: Database, case_id: str, *, limit: int = 100)
     add("carve_coverage", "Carve scan ranges or staged carves are tracked", bool(carve_summary.get("scan_range_count") or carve_summary.get("carve_count")), carve_summary, "Run explicit carve sqlite/ese commands for in-scope sources.")
     add("carve_empty_ranges", "Zero-hit carve ranges are recorded", bool(carve_summary.get("scan_range_count")), carve_summary, "Use chunked carve scanning so empty coverage is documented.")
     add("sqlite_inventory", "SQLite staged carve inventory is available when carves exist", not carve_summary.get("parsed_sqlite_count") or bool(sqlite_inventory_report(db, case_id, limit=1).get("summary", {}).get("sqlite_carves")), {"parsed_sqlite_count": carve_summary.get("parsed_sqlite_count")}, "Run report sqlite-inventory.")
-    add("recovery_coverage", "Recovery coverage is reportable", bool(recovery_summary.get("artifact_count")), recovery_summary, "Run a profile with artifact extraction.")
+    add(
+        "recovery_coverage",
+        "Recovery coverage is reportable",
+        bool(recovery_summary.get("artifact_extracts_returned")),
+        recovery_summary,
+        "Run a balanced or deep recovery profile when deleted/orphaned artifact recovery is in scope.",
+    )
     add("deep_recovery_separated", "Deep recovery is represented separately from windows-full", True, {"profiles": ["windows-basic-evtx-deep-recovery", "windows-browser-deep-recovery", "windows-full-deep-recovery"]}, "")
     add("windows_old_scoped", "Windows.old is tracked as a separate source scope", any(row.get("source_scope") == "Windows.old" for row in timings.get("timings") or []), {"windows_old_timings": sum(1 for row in timings.get("timings") or [] if row.get("source_scope") == "Windows.old")}, "Run windows-old or a profile that includes Windows.old when present.")
     add("combined_reports", "Combined disk/memory reports are available", True, {"reports": ["combined-artifacts", "memory-disk-correlations", "windows-search-combined"]}, "")
