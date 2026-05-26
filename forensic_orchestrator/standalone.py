@@ -522,7 +522,7 @@ def _install_one_tool(tool: str, *, tools_dir: Path, env_file: Path, force: bool
             "sidr",
             repo="strozfriedberg/sidr",
             target_dir=tools_dir / "sidr",
-            asset_terms=("linux",),
+            asset_terms=("sidr.exe",),
             force=force,
             apply=apply,
         )
@@ -574,8 +574,9 @@ def _install_eztools(*, tools_dir: Path, force: bool, apply: bool, wanted_tool: 
             "tool": wanted_tool,
             "status": "downloaded_script",
             "path": str(target),
-            "reason": "PowerShell is required to run Get-ZimmermanTools automatically.",
-            "next_step": f"Install PowerShell, then run: pwsh {marker} -Dest {target} -NetVersion 9",
+            "reason": "PowerShell is required to run Get-ZimmermanTools automatically. On Ubuntu, apt can install powershell only after the Microsoft package repository is added.",
+            "prerequisite": _powershell_install_note(),
+            "next_step": f"After pwsh is available, run: pwsh {marker} -Dest {target} -NetVersion 9",
         }
     command = [pwsh, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(marker), "-Dest", str(target), "-NetVersion", "9"]
     completed = subprocess.run(command, capture_output=True, text=True, check=False, timeout=1800)
@@ -616,6 +617,14 @@ def _install_github_asset(
     _extract_archive(archive, target_dir)
     _chmod_executables(target_dir)
     return {"tool": tool, "status": "installed", "url": url, "path": str(target_dir)}
+
+
+def _powershell_install_note() -> str:
+    return (
+        "Ubuntu example: sudo apt-get update && sudo apt-get install -y wget apt-transport-https software-properties-common && "
+        "wget -q https://packages.microsoft.com/config/ubuntu/24.04/packages-microsoft-prod.deb -O /tmp/packages-microsoft-prod.deb && "
+        "sudo dpkg -i /tmp/packages-microsoft-prod.deb && sudo apt-get update && sudo apt-get install -y powershell"
+    )
 
 
 def _expand_tool_selection(tool: str) -> list[str]:
@@ -677,7 +686,11 @@ def _managed_tool_path(name: str, tools_dir: Path) -> Path:
     if normalized == "memprocfs":
         return tools_dir / "MemProcFS" / "memprocfs"
     if normalized == "sidr":
-        return tools_dir / "sidr" / "sidr"
+        native = tools_dir / "sidr" / "sidr"
+        windows = tools_dir / "sidr" / "sidr.exe"
+        if windows.exists() and not native.exists():
+            return windows
+        return native
     if normalized == "bstrings":
         return tools_dir / "bstrings" / "bstrings.dll"
     if normalized == "eztools":
@@ -749,7 +762,9 @@ def _discover_local_env_updates(tools_dir: Path) -> dict[str, str]:
         ],
         "SIDR_BIN": [
             tools_dir / "sidr" / "sidr",
+            tools_dir / "sidr" / "sidr.exe",
             Path.home() / "tools" / "sidr" / "sidr",
+            Path.home() / "tools" / "sidr" / "sidr.exe",
         ],
         "MEMPROCFS_BIN": [
             tools_dir / "MemProcFS" / "memprocfs",
@@ -836,7 +851,10 @@ def _which(name: str) -> str | None:
         ],
         "MemProcFS": [Path.home() / "tools" / "MemProcFS" / "memprocfs"],
         "memprocfs": [Path.home() / "tools" / "MemProcFS" / "memprocfs"],
-        "sidr": [Path.home() / "tools" / "sidr" / "sidr"],
+        "sidr": [
+            Path.home() / "tools" / "sidr" / "sidr",
+            Path.home() / "tools" / "sidr" / "sidr.exe",
+        ],
     }
     for candidate in local_candidates.get(name, []):
         if candidate.exists():

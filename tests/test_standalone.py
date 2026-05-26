@@ -75,7 +75,7 @@ def test_standalone_reports_cover_profiles_schema_jobs_and_backups(tmp_path):
 def test_repair_dependencies_writes_local_tool_env(monkeypatch, tmp_path):
     tools = tmp_path / "tools"
     bstrings = tools / "bstrings" / "bstrings.dll"
-    sidr = tools / "sidr" / "sidr"
+    sidr = tools / "sidr" / "sidr.exe"
     memprocfs = tools / "MemProcFS" / "memprocfs"
     for path in (bstrings, sidr, memprocfs):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -89,6 +89,7 @@ def test_repair_dependencies_writes_local_tool_env(monkeypatch, tmp_path):
     assert report["applied"] is True
     assert "BSTRINGS_BIN" in env_text
     assert "SIDR_BIN" in env_text
+    assert "sidr.exe" in env_text
     assert "MEMPROCFS_BIN" in env_text
 
 
@@ -96,6 +97,9 @@ def test_tool_status_and_install_dry_run_use_managed_tools_dir(tmp_path):
     report = tool_status_report(tools_dir=tmp_path / "managed")
     sidr = next(row for row in report["tools"] if row["tool"] == "sidr")
     dry_run = install_third_party_tool("dotnet", tools_dir=tmp_path / "managed", apply=False)
+    sidr_dry_run = install_third_party_tool("sidr", tools_dir=tmp_path / "managed", apply=False)
 
     assert sidr["managed_path"].endswith("managed/sidr/sidr")
     assert dry_run["tools"][0]["status"] == "would_download_and_run"
+    assert sidr_dry_run["tools"][0]["status"] == "would_query_github_latest"
+    assert sidr_dry_run["tools"][0]["repo"] == "strozfriedberg/sidr"

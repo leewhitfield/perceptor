@@ -2975,7 +2975,7 @@ def run(args: argparse.Namespace) -> int:
                 apply=not args.dry_run,
             )
             if args.format == "table":
-                write_report_output(report, report["tools"], "table", args.output, title="Third-party tool install", columns=["tool", "status", "path", "url", "command", "reason", "next_step"])
+                write_report_output(report, report["tools"], "table", args.output, title="Third-party tool install", columns=["tool", "status", "path", "url", "command", "reason", "prerequisite", "next_step"])
             else:
                 write_text_output(json.dumps(report, indent=2, default=str), args.output)
             return 0 if report["status"] == "completed" else 1
