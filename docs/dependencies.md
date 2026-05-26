@@ -35,7 +35,8 @@ These should be installed on Linux workers that process Windows E01 evidence:
 - `libesedb-utils`: `esedbexport` for internal WebCache parsing
 - `exiftool`: embedded/internal document, media, and executable metadata
 - `tesseract-ocr`: OCR for RDP contact sheets and other image OCR hooks
-- `usnjrnl-forensic`: USN journal replay/path reconstruction. Install with
+- `usnjrnl-forensic`: USN journal replay/path reconstruction. Requires
+  `rustc` 1.88.0 or newer. Install with
   `cargo install usnjrnl-forensic --root ~/.cargo`; set
   `USNJRNL_FORENSIC_BIN=/path/to/usnjrnl-forensic` when it is not installed
   under `~/.cargo/bin` or on `PATH`.

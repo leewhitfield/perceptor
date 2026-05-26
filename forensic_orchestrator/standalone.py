@@ -490,10 +490,10 @@ def install_third_party_tool(
 
 def _install_one_tool(tool: str, *, tools_dir: Path, env_file: Path, force: bool, apply: bool) -> dict[str, Any]:
     tool = _normalize_tool_name(tool)
-    if tool in {"pypykatz", "vol", "volatility3", "usnjrnl-forensic"}:
+    if tool == "usnjrnl-forensic":
+        return _install_usnjrnl_forensic(tools_dir=tools_dir, force=force, apply=apply)
+    if tool in {"pypykatz", "vol", "volatility3"}:
         command = PYTHON_TOOL_REPAIRS.get(tool)
-        if tool == "usnjrnl-forensic":
-            command = ["cargo", "install", "usnjrnl-forensic", "--root", str(Path.home() / ".cargo")]
         if not command:
             return {"tool": tool, "status": "manual", "reason": "No installer recipe is configured."}
         if not apply:
@@ -525,6 +525,82 @@ def _install_one_tool(tool: str, *, tools_dir: Path, env_file: Path, force: bool
     if tool in {"eztools", "bstrings"}:
         return _install_eztools(tools_dir=tools_dir, force=force, apply=apply, wanted_tool=tool)
     return {"tool": tool, "status": "unknown", "reason": "Supported tools: eztools, bstrings, sidr, memprocfs, dotnet, pypykatz, volatility3, usnjrnl-forensic, all."}
+
+
+def _install_usnjrnl_forensic(*, tools_dir: Path, force: bool, apply: bool) -> dict[str, Any]:
+    root = tools_dir / "cargo"
+    binary = root / "bin" / "usnjrnl-forensic"
+    command = ["cargo", "install", "usnjrnl-forensic", "--root", str(root)]
+    if force:
+        command.append("--force")
+    if binary.exists() and not force:
+        return {"tool": "usnjrnl-forensic", "status": "present", "path": str(binary)}
+    if not apply:
+        return {"tool": "usnjrnl-forensic", "status": "would_run", "command": command, "path": str(binary)}
+    if not shutil.which("cargo"):
+        return {
+            "tool": "usnjrnl-forensic",
+            "status": "missing_installer",
+            "command": command,
+            "reason": "cargo is not on PATH. Install Rust with rustup or the OS rust/cargo packages, then rerun this installer.",
+        }
+    rustc_check = _rustc_minimum_check((1, 88, 0))
+    if not rustc_check["ok"]:
+        return {
+            "tool": "usnjrnl-forensic",
+            "status": "missing_installer",
+            "command": command,
+            "reason": rustc_check["reason"],
+        }
+    root.parent.mkdir(parents=True, exist_ok=True)
+    completed = subprocess.run(command, capture_output=True, text=True, check=False, timeout=1800)
+    status = "installed" if completed.returncode == 0 and binary.exists() else "failed"
+    return {
+        "tool": "usnjrnl-forensic",
+        "status": status,
+        "path": str(binary) if binary.exists() else "",
+        "command": command,
+        "returncode": completed.returncode,
+        "stdout": completed.stdout.strip()[-2000:],
+        "stderr": completed.stderr.strip()[-4000:],
+        "reason": "" if status == "installed" else _cargo_failure_hint(completed.stderr),
+    }
+
+
+def _cargo_failure_hint(stderr: str) -> str:
+    lowered = stderr.casefold()
+    if "linker" in lowered or "cc" in lowered and "not found" in lowered:
+        return "Rust is installed, but native build tools appear to be missing. Install build-essential/pkg-config, then rerun."
+    if "ssl" in lowered or "openssl" in lowered:
+        return "Rust compilation appears to need OpenSSL development headers. Install pkg-config and libssl-dev, then rerun."
+    if "could not compile" in lowered:
+        return "Cargo could not compile usnjrnl-forensic. Review stderr for the crate or native dependency that failed."
+    return "Cargo install failed. Review stderr for the exact Rust or native dependency error."
+
+
+def _rustc_minimum_check(minimum: tuple[int, int, int]) -> dict[str, Any]:
+    rustc = shutil.which("rustc")
+    if not rustc:
+        return {"ok": False, "reason": "rustc is not on PATH. Install Rust with rustup, then rerun this installer."}
+    completed = subprocess.run([rustc, "--version"], capture_output=True, text=True, check=False)
+    version = _parse_rustc_version(completed.stdout.strip())
+    if version is None:
+        return {"ok": False, "reason": f"Could not determine rustc version from: {completed.stdout.strip() or completed.stderr.strip()}"}
+    if version < minimum:
+        required = ".".join(str(part) for part in minimum)
+        found = ".".join(str(part) for part in version)
+        return {
+            "ok": False,
+            "reason": f"usnjrnl-forensic requires rustc {required} or newer; found rustc {found}. Run `rustup update stable` or install a newer rustc/cargo toolchain, then rerun.",
+        }
+    return {"ok": True, "version": version}
+
+
+def _parse_rustc_version(text: str) -> tuple[int, int, int] | None:
+    match = re.search(r"rustc\s+(\d+)\.(\d+)\.(\d+)", text)
+    if not match:
+        return None
+    return tuple(int(part) for part in match.groups())
 
 
 def _install_dotnet(*, tools_dir: Path, force: bool, apply: bool) -> dict[str, Any]:
@@ -954,6 +1030,7 @@ def _discover_local_env_updates(tools_dir: Path) -> dict[str, str]:
             Path.home() / "tools" / "MemProcFS" / "memprocfs",
         ],
         "USNJRNL_FORENSIC_BIN": [
+            tools_dir / "cargo" / "bin" / "usnjrnl-forensic",
             Path.home() / ".cargo" / "bin" / "usnjrnl-forensic",
         ],
         "FORENSIC_ORCHESTRATOR_DOTNET": [
@@ -1038,6 +1115,7 @@ def _which(name: str) -> str | None:
         "MemProcFS": [Path.home() / "tools" / "MemProcFS" / "memprocfs"],
         "memprocfs": [Path.home() / "tools" / "MemProcFS" / "memprocfs"],
         "sidr": [Path.home() / "tools" / "sidr" / "sidr"],
+        "usnjrnl-forensic": [Path.home() / "tools" / "cargo" / "bin" / "usnjrnl-forensic"],
     }
     for candidate in local_candidates.get(name, []):
         if candidate.exists():

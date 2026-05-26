@@ -9,6 +9,7 @@ from forensic_orchestrator.standalone import (
     backup_case_databases,
     doctor_report,
     _extract_eztools_urls,
+    _parse_rustc_version,
     install_third_party_tool,
     job_status_report,
     profile_catalog_report,
@@ -116,6 +117,25 @@ def test_sidr_install_reports_manual_without_build_tools(monkeypatch, tmp_path):
 
     assert report["tools"][0]["status"] == "manual"
     assert "cargo" in report["tools"][0]["reason"]
+
+
+def test_usnjrnl_install_reports_old_rustc(monkeypatch, tmp_path):
+    monkeypatch.setattr(standalone_module.shutil, "which", lambda name: f"/usr/bin/{name}" if name in {"cargo", "rustc"} else None)
+
+    def fake_run(command, capture_output=None, text=None, check=None, timeout=None):
+        return standalone_module.subprocess.CompletedProcess(command, 0, stdout="rustc 1.87.0 (abc 2025-01-01)\n", stderr="")
+
+    monkeypatch.setattr(standalone_module.subprocess, "run", fake_run)
+
+    report = install_third_party_tool("usnjrnl-forensic", tools_dir=tmp_path / "managed", apply=True, force=True)
+
+    assert report["tools"][0]["status"] == "missing_installer"
+    assert "requires rustc 1.88.0 or newer" in report["tools"][0]["reason"]
+
+
+def test_parse_rustc_version():
+    assert _parse_rustc_version("rustc 1.95.0 (59807616e 2026-04-14)") == (1, 95, 0)
+    assert _parse_rustc_version("not rust") is None
 
 
 def test_eztools_catalog_url_parser_filters_net9():
