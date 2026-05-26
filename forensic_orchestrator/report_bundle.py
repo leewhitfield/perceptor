@@ -31,6 +31,20 @@ from forensic_orchestrator.tools.usb_summary import rebuild_usb_connection_event
 TransformFn = Callable[[Path, Path], Path]
 ProgressFn = Callable[[str], None]
 
+ARTIFACT_TOKENS = {
+    "mft",
+    "usb_info",
+    "systeminfo",
+    "system_info",
+    "eventlogs_evtxexplorer",
+    "prefetch",
+    "jumplists_jlecmd",
+    "shimcache",
+    "recyclebin_rbcmd",
+    "shellbags",
+    "lnk_files_lp",
+}
+
 
 @dataclass(frozen=True)
 class ReportCandidate:
@@ -38,6 +52,14 @@ class ReportCandidate:
     tool_name: str
     transform: TransformFn | None = None
     note: str = ""
+
+
+@dataclass(frozen=True)
+class ZipReportRoot:
+    prefix: str
+    label: str
+    csv_count: int
+    member_count: int
 
 
 @dataclass
@@ -347,7 +369,18 @@ def import_report_bundle_many(
     progress: ProgressFn | None = None,
 ) -> ReportBundleBulkImportResult:
     started = datetime.now(timezone.utc)
-    _progress(progress, f"report-bundle-many start root={report_root.resolve()}")
+    report_root = report_root.resolve()
+    _progress(progress, f"report-bundle-many start root={report_root}")
+    if report_root.is_file() and report_root.suffix.lower() == ".zip":
+        return _import_report_bundle_many_zip(
+            db=db,
+            paths=paths,
+            report_root=report_root,
+            case_id=case_id,
+            accept_duplicate=accept_duplicate,
+            progress=progress,
+            started=started,
+        )
     source_root, cleanup_root = _prepare_bulk_report_root(paths, report_root, progress=progress)
     try:
         computer_roots = _top_level_report_roots(source_root)
@@ -408,6 +441,88 @@ def import_report_bundle_many(
         if cleanup_root is not None:
             _progress(progress, f"report-bundle-many cleanup staging={cleanup_root}")
             shutil.rmtree(cleanup_root, ignore_errors=True)
+
+
+def _import_report_bundle_many_zip(
+    *,
+    db: Database,
+    paths: WorkspacePaths,
+    report_root: Path,
+    case_id: str | None,
+    accept_duplicate: bool,
+    progress: ProgressFn | None,
+    started: datetime,
+) -> ReportBundleBulkImportResult:
+    roots = _zip_report_roots(report_root)
+    if not roots:
+        raise ValueError(f"No top-level computer folders found under: {report_root}")
+    _progress(progress, f"report-bundle-many zip discovered computers={len(roots)}")
+    active_case_id = case_id
+    bulk = ReportBundleBulkImportResult(case_id=case_id or "", report_root=str(report_root))
+    staging_parent = paths.root / "staging" / "report-bundle-import" / f"{report_root.stem}-{uuid.uuid4()}"
+    staging_parent.mkdir(parents=True, exist_ok=True)
+    try:
+        for index, root in enumerate(roots, 1):
+            staging_root = staging_parent / f"{index:04d}-{_safe_stage_name(root.label)}"
+            _progress(
+                progress,
+                f"report-bundle-many zip computer {index}/{len(roots)} extract start "
+                f"label={root.label} csv_files={root.csv_count} members={root.member_count}",
+            )
+            _extract_zip_report_root(report_root, root.prefix, staging_root)
+            _progress(progress, f"report-bundle-many zip computer {index}/{len(roots)} extract completed staging={staging_root}")
+            try:
+                result = import_report_bundle(
+                    db=db,
+                    paths=paths,
+                    report_root=staging_root,
+                    case_id=active_case_id,
+                    computer_label=_metadata_label_for_folder(staging_root) or root.label,
+                    accept_duplicate=accept_duplicate,
+                    progress=progress,
+                )
+                if active_case_id is None:
+                    active_case_id = result.case_id
+                    bulk.case_id = result.case_id
+                bulk.imported_computers += 1
+                bulk.imported_files += result.imported_files
+                bulk.imported_rows += result.imported_rows
+                bulk.skipped_files += result.skipped_files
+                bulk.failed_files += result.failed_files
+                bulk.warnings.extend(result.warnings)
+                bulk.items.append(result)
+                _progress(
+                    progress,
+                    f"report-bundle-many computer {index}/{len(roots)} completed label={root.label} "
+                    f"files={result.imported_files} rows={result.imported_rows} skipped={result.skipped_files} failed={result.failed_files}",
+                )
+            finally:
+                _progress(progress, f"report-bundle-many zip computer {index}/{len(roots)} cleanup staging={staging_root}")
+                shutil.rmtree(staging_root, ignore_errors=True)
+        if active_case_id is None:
+            raise ValueError("Bulk import did not create or use a case")
+        bulk.case_id = active_case_id
+        _progress(progress, "report-bundle-many distinct rebuild start")
+        distinct_stats, distinct_warning = _try_rebuild_distinct_artifact_tables(db, case_id=active_case_id, image_id=None)
+        if distinct_warning:
+            bulk.warnings.append(distinct_warning)
+            _progress(progress, f"report-bundle-many distinct rebuild warning warning={distinct_warning}")
+        _progress(
+            progress,
+            "report-bundle-many distinct rebuild completed "
+            f"distinct_rows={distinct_stats.get('distinct_rows', 0)} duplicate_rows={distinct_stats.get('duplicate_rows', 0)}",
+        )
+        bulk.markdown_path = str(_write_bulk_markdown_report(paths, bulk, distinct_stats))
+        _progress(
+            progress,
+            "report-bundle-many completed "
+            f"elapsed={_format_elapsed(started)} computers={bulk.imported_computers} files={bulk.imported_files} "
+            f"rows={bulk.imported_rows} skipped={bulk.skipped_files} failed={bulk.failed_files} report={bulk.markdown_path}",
+        )
+        return bulk
+    finally:
+        _progress(progress, f"report-bundle-many zip cleanup staging={staging_parent}")
+        shutil.rmtree(staging_parent, ignore_errors=True)
 
 
 def infer_report_candidate(path: Path) -> ReportCandidate | None:
@@ -641,6 +756,99 @@ def _write_bulk_markdown_report(paths: WorkspacePaths, result: ReportBundleBulkI
     return report_path
 
 
+def _zip_report_roots(zip_path: Path) -> list[ZipReportRoot]:
+    with zipfile.ZipFile(zip_path) as archive:
+        members = archive.infolist()
+        normalized_members = []
+        for member in members:
+            normalized = _normalized_zip_member(member.filename)
+            if normalized:
+                normalized_members.append((normalized, member))
+        csv_names = [name for name, member in normalized_members if not member.is_dir() and name.lower().endswith(".csv")]
+        if not csv_names:
+            return []
+        prefixes = _zip_report_root_prefixes(csv_names)
+        return [
+            ZipReportRoot(
+                prefix=prefix,
+                label=_zip_prefix_label(prefix, zip_path),
+                csv_count=sum(1 for name in csv_names if _zip_name_in_prefix(name, prefix)),
+                member_count=sum(1 for name, _ in normalized_members if _zip_name_in_prefix(name, prefix)),
+            )
+            for prefix in prefixes
+        ]
+
+
+def _zip_report_root_prefixes(csv_names: list[str]) -> list[str]:
+    top = sorted({name.split("/", 1)[0] for name in csv_names})
+    if any("/" not in name for name in csv_names) or any(name.casefold() in ARTIFACT_TOKENS for name in top):
+        return [""]
+    if len(top) == 1:
+        wrapper = top[0]
+        direct_csv = [name for name in csv_names if name.count("/") == 1 and name.startswith(f"{wrapper}/")]
+        children = sorted({name.split("/")[1] for name in csv_names if name.startswith(f"{wrapper}/") and len(name.split("/")) > 1})
+        if direct_csv or any(child.casefold() in ARTIFACT_TOKENS for child in children):
+            return [wrapper]
+        nested = [
+            f"{wrapper}/{child}"
+            for child in children
+            if any(name == f"{wrapper}/{child}" or name.startswith(f"{wrapper}/{child}/") for name in csv_names)
+        ]
+        if nested:
+            return nested
+    return [prefix for prefix in top if any(name.startswith(f"{prefix}/") for name in csv_names)]
+
+
+def _extract_zip_report_root(zip_path: Path, prefix: str, destination: Path) -> None:
+    destination_resolved = destination.resolve()
+    destination.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(zip_path) as archive:
+        for member in archive.infolist():
+            normalized = _normalized_zip_member(member.filename)
+            if not normalized or not _zip_name_in_prefix(normalized, prefix):
+                continue
+            relative = normalized[len(prefix) :].lstrip("/") if prefix else normalized
+            if not relative:
+                continue
+            target = destination / relative
+            resolved = target.resolve()
+            if destination_resolved not in resolved.parents and resolved != destination_resolved:
+                raise ValueError(f"Unsafe zip member path: {member.filename}")
+            if member.is_dir():
+                resolved.mkdir(parents=True, exist_ok=True)
+                continue
+            resolved.parent.mkdir(parents=True, exist_ok=True)
+            with archive.open(member) as source, resolved.open("wb") as output:
+                shutil.copyfileobj(source, output)
+
+
+def _normalized_zip_member(name: str) -> str:
+    normalized = name.replace("\\", "/").strip()
+    if not normalized:
+        return ""
+    if normalized.startswith("/") or re.match(r"^[A-Za-z]:", normalized):
+        raise ValueError(f"Unsafe zip member path: {name}")
+    parts = [part for part in normalized.split("/") if part not in {"", "."}]
+    if any(part == ".." for part in parts):
+        raise ValueError(f"Unsafe zip member path: {name}")
+    return "/".join(parts)
+
+
+def _zip_name_in_prefix(name: str, prefix: str) -> bool:
+    return not prefix or name == prefix or name.startswith(f"{prefix}/")
+
+
+def _zip_prefix_label(prefix: str, zip_path: Path) -> str:
+    if not prefix:
+        return zip_path.stem
+    return prefix.rstrip("/").split("/")[-1] or zip_path.stem
+
+
+def _safe_stage_name(value: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("._")
+    return safe[:80] or "computer"
+
+
 def _prepare_bulk_report_root(paths: WorkspacePaths, report_root: Path, *, progress: ProgressFn | None = None) -> tuple[Path, Path | None]:
     report_root = report_root.resolve()
     if report_root.is_dir():
@@ -703,30 +911,21 @@ def _format_elapsed(started: datetime) -> str:
 
 
 def _has_artifact_named_children(path: Path) -> bool:
-    artifact_tokens = {
-        "mft",
-        "usb_info",
-        "systeminfo",
-        "system_info",
-        "eventlogs_evtxexplorer",
-        "prefetch",
-        "jumplists_jlecmd",
-        "shimcache",
-        "recyclebin_rbcmd",
-        "shellbags",
-        "lnk_files_lp",
-    }
     child_names = {child.name.lower() for child in path.iterdir() if child.is_dir()}
-    return bool(child_names & artifact_tokens)
+    return bool(child_names & ARTIFACT_TOKENS)
 
 
 def _computer_label_for_folder(path: Path) -> str:
+    return _metadata_label_for_folder(path) or path.name
+
+
+def _metadata_label_for_folder(path: Path) -> str | None:
     metadata = _read_device_metadata(path)
     for key in ("computer_name", "hostname", "device_name", "name", "label"):
         value = metadata.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
-    return path.name
+    return None
 
 
 def _read_device_metadata(path: Path) -> dict[str, Any]:

@@ -116,11 +116,13 @@ def test_report_bundle_import_many_zip_creates_one_computer_per_top_level_folder
 
     paths = WorkspacePaths(tmp_path / "analysis")
     db = Database(paths.db_path())
+    messages: list[str] = []
     result = import_report_bundle_many(
         db=db,
         paths=paths,
         report_root=zip_path,
         accept_duplicate=True,
+        progress=messages.append,
     )
     db.close()
 
@@ -134,6 +136,11 @@ def test_report_bundle_import_many_zip_creates_one_computer_per_top_level_folder
         assert conn.execute("SELECT count(*) FROM distinct_mft_entries").fetchone()[0] == 2
     finally:
         conn.close()
+    staging = paths.root / "staging" / "report-bundle-import"
+    assert not list(staging.glob("*"))
+    assert any("zip discovered computers=2" in message for message in messages)
+    assert sum("zip computer" in message and "extract start" in message for message in messages) == 2
+    assert sum("zip computer" in message and "cleanup staging" in message for message in messages) == 2
 
 
 def test_report_bundle_import_many_emits_progress(tmp_path, monkeypatch):
