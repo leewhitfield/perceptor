@@ -16176,9 +16176,26 @@ def opened_from_removable_media_report(
     )
     connection_rows.extend(_usb_event_log_connection_observations(db, case_id))
     rows = []
+    excluded_cloud = []
     for event in intent.get("events") or []:
         path = str(event.get("path") or "")
         if not _looks_like_removable_path(path):
+            continue
+        cloud_provider = _cloud_mounted_drive_provider(path)
+        if cloud_provider:
+            excluded_cloud.append(
+                {
+                    "timestamp": event.get("timestamp"),
+                    "source": event.get("source"),
+                    "computer_label": event.get("computer_label"),
+                    "user_profile": event.get("user_profile"),
+                    "path": path,
+                    "display_path": _display_drive_path(path),
+                    "drive_letter": _path_drive_letter(path),
+                    "top_folder": _drive_path_top_folder(path),
+                    "provider": cloud_provider,
+                }
+            )
             continue
         drive_letter = _path_drive_letter(path)
         matches = [_removable_path_device_match(path, event, device, connection_rows) for device in devices]
@@ -16212,8 +16229,10 @@ def opened_from_removable_media_report(
             "unattributed_count": sum(1 for row in rows if row.get("attribution_status") == "unattributed"),
             "matched_device_count": sum(1 for row in rows if row.get("match_count")),
             "unmatched_removable_path_count": sum(1 for row in rows if not row.get("match_count")),
+            "excluded_cloud_drive_path_count": len(excluded_cloud),
             "group_count": len(group_rows),
         },
+        "excluded_cloud_drive_paths": excluded_cloud[:25],
         "groups": group_rows,
         "items": rows,
         "total_returned": len(rows),
@@ -16258,6 +16277,7 @@ def opened_from_removable_media_markdown(report: dict[str, Any]) -> str:
             f"- Attributed references: `{summary.get('attributed_count', 0)}`",
             f"- Candidate references: `{summary.get('candidate_count', 0)}`",
             f"- Unattributed references: `{summary.get('unattributed_count', 0)}`",
+            f"- Excluded cloud-drive references: `{summary.get('excluded_cloud_drive_path_count', 0)}`",
             f"- Groups: `{summary.get('group_count', 0)}`",
             "",
         ]
@@ -16300,6 +16320,20 @@ def opened_from_removable_media_markdown(report: dict[str, Any]) -> str:
 def _looks_like_removable_path(path: str) -> bool:
     drive = _path_drive_letter(path)
     return bool(drive and drive[0].upper() != "C")
+
+
+def _cloud_mounted_drive_provider(path: Any) -> str:
+    top = _drive_path_top_folder(path).casefold()
+    text = str(path or "").casefold()
+    if top == "my drive" or any(token in text for token in ("google drive", "drivefs", "drive file stream")):
+        return "Google Drive"
+    if top == "onedrive" or "onedrive" in text:
+        return "OneDrive"
+    if top == "dropbox" or "dropbox" in text:
+        return "Dropbox"
+    if top in {"icloud drive", "icloud"} or "icloud drive" in text:
+        return "iCloud Drive"
+    return ""
 
 
 def _removable_path_device_match(

@@ -8609,6 +8609,26 @@ def test_file_movement_identity_report_and_derived_timeline_use_new_artifacts(tm
                     "last_opened": "2020-01-02T10:01:00Z",
                     "file_name": "E:\\Case Files\\notes.docx",
                     "created_at": "2020-01-02T11:00:00Z",
+                },
+                {
+                    "id": "office-cloud-1",
+                    "case_id": case.id,
+                    "computer_id": "computer-1",
+                    "image_id": "image-1",
+                    "tool_output_id": "output-shellbags",
+                    "tool_name": "RECmd",
+                    "source_csv": str(tmp_path / "RECmd.csv"),
+                    "row_number": 3,
+                    "hive_path": "NTUSER.DAT",
+                    "hive_type": "ntuser",
+                    "user_profile": "Jane",
+                    "category": "user_activity",
+                    "key_path": "Software\\Microsoft\\Office",
+                    "value_name": "Item 2",
+                    "batch_key_path": "Office",
+                    "last_opened": "2020-01-02T10:03:00Z",
+                    "file_name": "G:\\My Drive\\cloud.docx",
+                    "created_at": "2020-01-02T11:00:00Z",
                 }
             ],
             "registry_common_dialog_mru": [
@@ -8643,6 +8663,7 @@ def test_file_movement_identity_report_and_derived_timeline_use_new_artifacts(tm
 
     identity = file_movement_identity_report(db, case.id, contains="Case Files")
     removable = opened_from_removable_media_report(db, case.id, contains="Case Files")
+    removable_all = opened_from_removable_media_report(db, case.id)
     dossier = usb_dossier_report(db, case.id, volume_serial_number="A1B2-C3D4")
     dossier_markdown = usb_dossier_markdown(dossier)
     events = derived_timeline_events(db, case.id)
@@ -8650,6 +8671,9 @@ def test_file_movement_identity_report_and_derived_timeline_use_new_artifacts(tm
     assert identity["summary"]["finding_counts"]["shellbag_external_storage_match"] == 1
     assert identity["summary"]["finding_counts"]["opened_from_removable_media"] >= 1
     assert removable["summary"]["matched_device_count"] >= 1
+    assert removable_all["summary"]["excluded_cloud_drive_path_count"] == 1
+    assert removable_all["excluded_cloud_drive_paths"][0]["provider"] == "Google Drive"
+    assert all("My Drive" not in (item.get("display_path") or "") for item in removable_all["items"])
     assert removable["items"][0]["confidence"] == "medium"
     assert "# USB Device Dossier" in dossier_markdown
     assert "Shellbag external-storage rows" in dossier_markdown
