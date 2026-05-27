@@ -8226,6 +8226,7 @@ def cloud_artifacts_report(
     memory_disk_report: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     db.get_case(case_id)
+    cloud_storage_refs = opened_from_cloud_storage_report(db, case_id, limit=limit)
     rows: list[dict[str, Any]] = []
     for row in db.conn.execute(
         """
@@ -8272,6 +8273,8 @@ def cloud_artifacts_report(
     if not remaining:
         return {
             "case_id": case_id,
+            "cloud_mounts": cloud_storage_refs.get("cloud_mounts") or [],
+            "cloud_mount_summary": cloud_storage_refs.get("summary") or {},
             "memory_corroboration": _memory_domain_corroboration(db, case_id, "cloud", limit=min(limit, 50), memory_disk_report=memory_disk_report),
             "cloud_artifacts": rows,
             "total_returned": len(rows),
@@ -8363,6 +8366,8 @@ def cloud_artifacts_report(
             rows.append(item)
     return {
         "case_id": case_id,
+        "cloud_mounts": cloud_storage_refs.get("cloud_mounts") or [],
+        "cloud_mount_summary": cloud_storage_refs.get("summary") or {},
         "memory_corroboration": _memory_domain_corroboration(db, case_id, "cloud", limit=min(limit, 50), memory_disk_report=memory_disk_report),
         "cloud_artifacts": rows,
         "total_returned": len(rows),
@@ -16321,6 +16326,135 @@ def opened_from_removable_media_markdown(report: dict[str, Any]) -> str:
             )
     if not report.get("items"):
         lines.append("No removable-media user references matched the filters.")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def opened_from_cloud_storage_report(
+    db: Database,
+    case_id: str,
+    *,
+    user: str | None = None,
+    provider: str | None = None,
+    contains: str | None = None,
+    limit: int = 250,
+) -> dict[str, Any]:
+    intent = user_intent_artifacts_report(db, case_id, user=user, contains=contains, limit=max(limit * 4, 500))
+    mount_intent = intent if contains is None else user_intent_artifacts_report(db, case_id, user=user, limit=5000)
+    mounts = _cloud_mounted_drive_roots(mount_intent.get("events") or [])
+    provider_filter = provider.casefold() if provider else ""
+    if provider_filter:
+        mounts = [mount for mount in mounts if provider_filter in str(mount.get("provider") or "").casefold()]
+    rows: list[dict[str, Any]] = []
+    for event in intent.get("events") or []:
+        path = str(event.get("path") or "")
+        match = _cloud_mounted_drive_match(path, event, mounts)
+        if not match:
+            continue
+        if provider_filter and provider_filter not in str(match.get("provider") or "").casefold():
+            continue
+        rows.append(
+            {
+                **{key: event.get(key) for key in ("timestamp", "source", "activity", "computer_id", "computer_label", "image_id", "user_profile", "path", "source_id")},
+                "display_path": _display_drive_path(path),
+                "drive_letter": _path_drive_letter(path),
+                "top_folder": _drive_path_top_folder(path),
+                "provider": match.get("provider"),
+                "cloud_root": match.get("cloud_root"),
+                "mount_confidence": match.get("confidence"),
+                "mount_basis": match.get("basis"),
+                "details": event.get("details"),
+            }
+        )
+    rows.sort(key=lambda row: str(row.get("timestamp") or ""), reverse=True)
+    rows = rows[:limit]
+    provider_counts: dict[str, int] = {}
+    confidence_counts: dict[str, int] = {}
+    for row in rows:
+        provider_name = str(row.get("provider") or "unknown")
+        confidence = str(row.get("mount_confidence") or "unknown")
+        provider_counts[provider_name] = provider_counts.get(provider_name, 0) + 1
+        confidence_counts[confidence] = confidence_counts.get(confidence, 0) + 1
+    return {
+        "case_id": case_id,
+        "filters": {"user": user, "provider": provider, "contains": contains},
+        "summary": {
+            "opened_from_cloud_storage_count": len(rows),
+            "cloud_mount_count": len(mounts),
+            "provider_counts": [{"provider": key, "count": value} for key, value in sorted(provider_counts.items())],
+            "confidence_counts": [{"confidence": key, "count": value} for key, value in sorted(confidence_counts.items())],
+        },
+        "cloud_mounts": mounts[:25],
+        "items": rows,
+        "total_returned": len(rows),
+    }
+
+
+def opened_from_cloud_storage_export_rows(report: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "case_id": report.get("case_id"),
+            "timestamp": item.get("timestamp"),
+            "source": item.get("source"),
+            "activity": item.get("activity"),
+            "computer_label": item.get("computer_label"),
+            "user_profile": item.get("user_profile"),
+            "provider": item.get("provider"),
+            "drive_letter": item.get("drive_letter"),
+            "cloud_root": item.get("cloud_root"),
+            "top_folder": item.get("top_folder"),
+            "display_path": item.get("display_path"),
+            "path": item.get("display_path") or item.get("path"),
+            "mount_confidence": item.get("mount_confidence"),
+            "mount_basis": item.get("mount_basis"),
+        }
+        for item in report.get("items") or []
+    ]
+
+
+def opened_from_cloud_storage_markdown(report: dict[str, Any]) -> str:
+    lines = ["# Opened From Cloud Storage Report", "", f"Case: `{report.get('case_id')}`", ""]
+    summary = report.get("summary") or {}
+    lines.extend(
+        [
+            "## Summary",
+            "",
+            f"- Cloud-storage user references: `{summary.get('opened_from_cloud_storage_count', 0)}`",
+            f"- Derived cloud mounts: `{summary.get('cloud_mount_count', 0)}`",
+            "",
+        ]
+    )
+    mounts = report.get("cloud_mounts") or []
+    if mounts:
+        lines.extend(["## Derived Cloud Mounts", ""])
+        for mount in mounts[:25]:
+            lines.append(
+                "- "
+                f"computer `{mount.get('computer_label') or mount.get('computer_id') or ''}` "
+                f"user `{mount.get('user_profile') or ''}` "
+                f"provider `{mount.get('provider') or ''}` "
+                f"root `{mount.get('cloud_root') or ''}` "
+                f"confidence `{mount.get('confidence') or ''}` "
+                f"evidence `{mount.get('evidence_count') or 0}` "
+                f"sources `{mount.get('sources') or ''}`"
+            )
+            lines.append(f"  - basis `{mount.get('basis') or ''}`")
+        lines.append("")
+    items = report.get("items") or []
+    if items:
+        lines.extend(["## Items", ""])
+        for item in items[:150]:
+            lines.append(
+                "- "
+                f"`{item.get('timestamp') or ''}` "
+                f"`{item.get('source') or ''}` "
+                f"computer `{item.get('computer_label') or item.get('computer_id') or ''}` "
+                f"user `{item.get('user_profile') or ''}` "
+                f"provider `{item.get('provider') or ''}` "
+                f"confidence `{item.get('mount_confidence') or ''}` "
+                f"path `{item.get('display_path') or item.get('path') or ''}`"
+            )
+    else:
+        lines.append("No cloud-storage user references matched the filters.")
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -29226,6 +29360,30 @@ def derived_timeline_events(db: Database, case_id: str, *, limit: int = 5000) ->
                     "confidence_basis": item.get("confidence_basis"),
                     "matched_devices": item.get("matched_devices"),
                     "evidence_strength": "removable_media_reference",
+                },
+            )
+        )
+    for item in opened_from_cloud_storage_report(db, case_id, limit=min(limit, 1000)).get("items") or []:
+        source = item.get("details") if isinstance(item.get("details"), dict) else item
+        rows.extend(
+            _derived_event(
+                case_id=case_id,
+                item=source,
+                source_table=str(item.get("source") or "user_intent"),
+                source_row_id=str(item.get("source_id") or source.get("id") or uuid.uuid4()),
+                event_type="opened_from_cloud_storage",
+                timestamp=item.get("timestamp"),
+                description=item.get("display_path") or item.get("path"),
+                details={
+                    "path": item.get("display_path") or item.get("path"),
+                    "source": item.get("source"),
+                    "activity": item.get("activity"),
+                    "provider": item.get("provider"),
+                    "drive_letter": item.get("drive_letter"),
+                    "cloud_root": item.get("cloud_root"),
+                    "mount_confidence": item.get("mount_confidence"),
+                    "mount_basis": item.get("mount_basis"),
+                    "evidence_strength": "cloud_storage_reference",
                 },
             )
         )

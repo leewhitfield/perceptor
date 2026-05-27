@@ -91,6 +91,7 @@ from forensic_orchestrator.reports import (
     messaging_artifacts_report,
     mft_report,
     office_trust_report,
+    opened_from_cloud_storage_report,
     opened_from_removable_media_report,
     phone_link_report,
     sdelete_report,
@@ -8664,6 +8665,7 @@ def test_file_movement_identity_report_and_derived_timeline_use_new_artifacts(tm
     identity = file_movement_identity_report(db, case.id, contains="Case Files")
     removable = opened_from_removable_media_report(db, case.id, contains="Case Files")
     removable_all = opened_from_removable_media_report(db, case.id)
+    cloud_opened = opened_from_cloud_storage_report(db, case.id)
     dossier = usb_dossier_report(db, case.id, volume_serial_number="A1B2-C3D4")
     dossier_markdown = usb_dossier_markdown(dossier)
     events = derived_timeline_events(db, case.id)
@@ -8677,8 +8679,12 @@ def test_file_movement_identity_report_and_derived_timeline_use_new_artifacts(tm
     assert removable_all["excluded_cloud_drive_paths"][0]["provider"] == "Google Drive"
     assert removable_all["excluded_cloud_drive_paths"][0]["drive_letter"] == "H:"
     assert all("My Drive" not in (item.get("display_path") or "") for item in removable_all["items"])
+    assert cloud_opened["summary"]["opened_from_cloud_storage_count"] == 1
+    assert cloud_opened["items"][0]["provider"] == "Google Drive"
+    assert cloud_opened["items"][0]["drive_letter"] == "H:"
     assert removable["items"][0]["confidence"] == "medium"
     assert "# USB Device Dossier" in dossier_markdown
     assert "Shellbag external-storage rows" in dossier_markdown
     assert any(event["event_type"] == "shellbag_external_storage_match" for event in events)
     assert any(event["event_type"] == "opened_from_removable_media" for event in events)
+    assert any(event["event_type"] == "opened_from_cloud_storage" for event in events)

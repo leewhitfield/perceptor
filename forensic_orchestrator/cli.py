@@ -80,6 +80,9 @@ from .reports import (
     file_movement_identity_export_rows,
     file_movement_identity_markdown,
     file_movement_identity_report,
+    opened_from_cloud_storage_export_rows,
+    opened_from_cloud_storage_markdown,
+    opened_from_cloud_storage_report,
     opened_from_removable_media_export_rows,
     opened_from_removable_media_markdown,
     opened_from_removable_media_report,
@@ -809,6 +812,7 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
     shellbag_storage = shellbag_external_storage_report(db, case_id, limit=limit)
     file_identity = file_movement_identity_report(db, case_id, limit=limit)
     opened_removable = opened_from_removable_media_report(db, case_id, limit=limit)
+    opened_cloud = opened_from_cloud_storage_report(db, case_id, limit=limit)
     specs: list[tuple[str, str, str, object]] = [
         ("executive-summary", "md", "Executive summary", case_executive_summary_markdown(case_executive_summary_report(db, case_id, limit=limit, memory_disk_report=memory_disk))),
         ("case-overview", "md", "Case overview", case_overview_markdown(overview)),
@@ -826,6 +830,7 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
         ("shellbag-external-storage", "md", "Shellbag external storage", shellbag_external_storage_markdown(shellbag_storage)),
         ("file-movement-identity", "md", "File movement and identity", file_movement_identity_markdown(file_identity)),
         ("opened-from-removable-media", "md", "Opened from removable media", opened_from_removable_media_markdown(opened_removable)),
+        ("opened-from-cloud-storage", "md", "Opened from cloud storage", opened_from_cloud_storage_markdown(opened_cloud)),
         ("shortcut-droid-changes", "md", "Shortcut Droid changes", shortcut_droid_changes_markdown(shortcut_droid_changes_report(db, case_id, limit=limit))),
         ("shortcut-object-tracking", "md", "Shortcut Object ID tracking", shortcut_object_tracking_markdown(shortcut_object_tracking_report(db, case_id, limit=limit))),
         ("usn-lifecycle", "md", "USN file lifecycle", usn_file_lifecycle_markdown(usn_file_lifecycle_report(db, case_id, limit=limit))),
@@ -854,6 +859,7 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
         ("shellbag-external-storage", "Shellbag external storage CSV", shellbag_external_storage_export_rows(shellbag_storage)),
         ("file-movement-identity", "File movement and identity CSV", file_movement_identity_export_rows(file_identity)),
         ("opened-from-removable-media", "Opened from removable media CSV", opened_from_removable_media_export_rows(opened_removable)),
+        ("opened-from-cloud-storage", "Opened from cloud storage CSV", opened_from_cloud_storage_export_rows(opened_cloud)),
     ]
     for stem, title, rows in csv_specs:
         path = output_dir / f"{stem}.csv"
@@ -2915,6 +2921,14 @@ def build_parser() -> argparse.ArgumentParser:
     report_opened_removable.add_argument("--limit", type=int, default=250)
     report_opened_removable.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
     report_opened_removable.add_argument("--output")
+    report_opened_cloud = report_sub.add_parser("opened-from-cloud-storage")
+    report_opened_cloud.add_argument("--case", required=True, dest="case_id")
+    report_opened_cloud.add_argument("--user")
+    report_opened_cloud.add_argument("--provider")
+    report_opened_cloud.add_argument("--contains")
+    report_opened_cloud.add_argument("--limit", type=int, default=250)
+    report_opened_cloud.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
+    report_opened_cloud.add_argument("--output")
     report_derived_timeline = report_sub.add_parser("derived-timeline-events")
     report_derived_timeline.add_argument("--case", required=True, dest="case_id")
     report_derived_timeline.add_argument("--limit", type=int, default=1000)
@@ -7923,6 +7937,31 @@ def run(args: argparse.Namespace) -> int:
                     args.output,
                     title=f"Opened from removable media for case {args.case_id}",
                     columns=["timestamp", "source", "computer_label", "user_profile", "path", "confidence", "confidence_basis", "match_count", "matched_devices"],
+                )
+            return 0
+
+        if args.resource == "report" and args.action == "opened-from-cloud-storage":
+            report = opened_from_cloud_storage_report(
+                db,
+                args.case_id,
+                user=args.user,
+                provider=args.provider,
+                contains=args.contains,
+                limit=args.limit,
+            )
+            rows = opened_from_cloud_storage_export_rows(report)
+            if args.format == "md":
+                write_text_output(opened_from_cloud_storage_markdown(report), args.output)
+            elif args.format == "json":
+                write_text_output(json.dumps(report, indent=2, default=str), args.output)
+            else:
+                write_report_output(
+                    report,
+                    rows,
+                    args.format,
+                    args.output,
+                    title=f"Opened from cloud storage for case {args.case_id}",
+                    columns=["timestamp", "source", "computer_label", "user_profile", "provider", "drive_letter", "cloud_root", "path", "mount_confidence", "mount_basis"],
                 )
             return 0
 

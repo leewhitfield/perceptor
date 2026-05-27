@@ -116,7 +116,7 @@ def sanitize_report_text(text: str) -> str:
         text,
     )
     text = re.sub(
-        r"\b([A-Za-z]):[\\/](Users|Windows|ProgramData|Program Files \(x86\)|Program Files|\$Recycle\.Bin|Recovery)([^\s`'\"<>)]*)",
+        r"\b([A-Za-z]):[\\/]+(Users|Windows|ProgramData|Program Files \(x86\)|Program Files|\$Recycle\.Bin|Recovery)([^\s`'\"<>)]*)",
         lambda match: (
             "/" + match.group(2) + match.group(3).replace("\\", "/")
             if match.group(1).upper() == "C"
@@ -125,7 +125,7 @@ def sanitize_report_text(text: str) -> str:
         text,
     )
     text = re.sub(
-        r"\b([A-BD-Za-bd-z]):[\\/]([^\s`'\"<>)]*)",
+        r"\b([A-BD-Za-bd-z]):[\\/]+([^\s`'\"<>)]*)",
         lambda match: f"{match.group(1).upper()}:/" + match.group(2).replace("\\", "/"),
         text,
     )
