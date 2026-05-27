@@ -7,7 +7,13 @@ import pytest
 from forensic_orchestrator.db import Database
 from forensic_orchestrator.evidence import add_image
 from forensic_orchestrator.paths import WorkspacePaths
-from forensic_orchestrator.reports import process_timing_report, recovery_coverage_report, usb_breakdown_report
+from forensic_orchestrator.reports import (
+    process_timing_report,
+    recovery_coverage_report,
+    shortcut_droid_changes_report,
+    shortcut_object_tracking_report,
+    usb_breakdown_report,
+)
 import forensic_orchestrator.tools.ingest as ingest_module
 from forensic_orchestrator.tools.ingest import ingest_csv_output
 
@@ -631,6 +637,7 @@ def test_partition_diagnostic_evtx_enriches_usb_volume_fields(tmp_path):
     vbr[0x43:0x47] = bytes.fromhex("FD610CB8")
     vbr[0x47:0x52] = b"CASEUSB    "
     vbr[0x52:0x5A] = b"FAT32   "
+    partition_table = bytes.fromhex("010000000200000033221100554477668899AABBCCDDEEFF")
     payload = {
         "EventData": {
             "Data": [
@@ -639,7 +646,29 @@ def test_partition_diagnostic_evtx_enriches_usb_volume_fields(tmp_path):
                 {"@Name": "Model", "#text": "DISK 2.0"},
                 {"@Name": "Revision", "#text": "PMAP"},
                 {"@Name": "SerialNumber", "#text": "9F0F020780B0"},
+                {"@Name": "DiskNumber", "#text": "1"},
+                {"@Name": "BusType", "#text": "7"},
+                {"@Name": "UserRemovalPolicy", "#text": "True"},
+                {"@Name": "BytesPerSector", "#text": "512"},
+                {"@Name": "BytesPerLogicalSector", "#text": "512"},
+                {"@Name": "BytesPerPhysicalSector", "#text": "512"},
+                {"@Name": "PartitionStyle", "#text": "1"},
+                {"@Name": "PartitionCount", "#text": "2"},
+                {"@Name": "PartitionTableBytes", "#text": str(len(partition_table))},
+                {"@Name": "PartitionTable", "#text": "-".join(f"{byte:02X}" for byte in partition_table)},
+                {"@Name": "StorageIdCodeSet", "#text": "2"},
+                {"@Name": "StorageIdType", "#text": "1"},
+                {"@Name": "StorageIdAssociation", "#text": "0"},
+                {"@Name": "StorageIdBytes", "#text": "4"},
+                {"@Name": "StorageId", "#text": "41-42-43-44"},
+                {"@Name": "RegistryId", "#text": "4dbf10e4-1305-11eb-aa08-985fd34317f9"},
+                {"@Name": "AdapterId", "#text": "00000000-0000-0000-0000-000000000001"},
+                {"@Name": "PoolId", "#text": "00000000-0000-0000-0000-000000000000"},
+                {"@Name": "Location", "#text": "Integrated : Bus 0 : Device 0 : Function 1 : Adapter 0 : Port 0"},
+                {"@Name": "Flags", "#text": "8208"},
+                {"@Name": "Characteristics", "#text": "262401"},
                 {"@Name": "DiskId", "#text": "45af8b97-5331-48aa-9516-288c0e0bca01"},
+                {"@Name": "VolumeSerialNumber", "#text": "DEAD-BEEF"},
                 {"@Name": "Vbr0Bytes", "#text": "512"},
                 {"@Name": "Vbr0", "#text": "-".join(f"{byte:02X}" for byte in vbr)},
             ]
@@ -691,7 +720,19 @@ def test_partition_diagnostic_evtx_enriches_usb_volume_fields(tmp_path):
         """
         SELECT artifact, device_type, vendor_id, product_id, vendor, product, revision,
                serial, instance_id, volume_guid, volume_serial_number, volume_name,
-               capacity_bytes, file_system, key_last_write_utc
+               capacity_bytes, file_system, key_last_write_utc, vbr_index, vbr_bytes,
+               vbr_oem_name, vbr_file_system, vbr_volume_serial_number,
+               vbr_volume_serial_number_full, vbr_volume_name, vbr_parse_status,
+               vbr_serial_match, partition_disk_number, partition_bus_type,
+               partition_bus_type_code, partition_user_removal_policy,
+               partition_bytes_per_sector, partition_bytes_per_logical_sector,
+               partition_bytes_per_physical_sector, partition_style, partition_style_code,
+               partition_count, partition_table_bytes, partition_table_sha256,
+               partition_table_summary, partition_table_disk_guid, storage_id_code_set,
+               storage_id_type, storage_id_association, storage_id_bytes, storage_id_hex,
+               storage_id_ascii, storage_id_sha256, partition_registry_id,
+               partition_adapter_id, partition_pool_id, partition_location,
+               partition_flags, partition_characteristics
         FROM usb_devices
         """
     ).fetchone()
@@ -711,6 +752,42 @@ def test_partition_diagnostic_evtx_enriches_usb_volume_fields(tmp_path):
         "capacity_bytes": None,
         "file_system": "FAT32",
         "key_last_write_utc": "2020-11-10T14:21:38Z",
+        "vbr_index": "0",
+        "vbr_bytes": "512",
+        "vbr_oem_name": "MSDOS5.0",
+        "vbr_file_system": "FAT32",
+        "vbr_volume_serial_number": "B80C-61FD",
+        "vbr_volume_serial_number_full": "B80C-61FD",
+        "vbr_volume_name": "CASEUSB",
+        "vbr_parse_status": "parsed",
+        "vbr_serial_match": "mismatch",
+        "partition_disk_number": "1",
+        "partition_bus_type": "USB",
+        "partition_bus_type_code": "7",
+        "partition_user_removal_policy": "True",
+        "partition_bytes_per_sector": "512",
+        "partition_bytes_per_logical_sector": "512",
+        "partition_bytes_per_physical_sector": "512",
+        "partition_style": "GPT",
+        "partition_style_code": "1",
+        "partition_count": "2",
+        "partition_table_bytes": "24",
+        "partition_table_sha256": "b20df038abc822cb83daf58520b360ccc684908eeeaf992cde04385b269bfad1",
+        "partition_table_summary": "style=GPT count=2 bytes=24 disk_guid=00112233-4455-6677-8899-aabbccddeeff",
+        "partition_table_disk_guid": "00112233-4455-6677-8899-aabbccddeeff",
+        "storage_id_code_set": "2",
+        "storage_id_type": "1",
+        "storage_id_association": "0",
+        "storage_id_bytes": "4",
+        "storage_id_hex": "41-42-43-44",
+        "storage_id_ascii": "ABCD",
+        "storage_id_sha256": "e12e115acf4552b2568b55e93cbd39394c4ef81c82447fafc997882a02d23677",
+        "partition_registry_id": "4dbf10e4-1305-11eb-aa08-985fd34317f9",
+        "partition_adapter_id": "00000000-0000-0000-0000-000000000001",
+        "partition_pool_id": "00000000-0000-0000-0000-000000000000",
+        "partition_location": "Integrated : Bus 0 : Device 0 : Function 1 : Adapter 0 : Port 0",
+        "partition_flags": "8208",
+        "partition_characteristics": "262401",
     }
 
 
@@ -761,8 +838,21 @@ def test_partition_diagnostic_ntfs_uses_four_byte_volume_serial(tmp_path):
         tool_name="EvtxECmd",
         path=evtx_csv,
     )
-    row = db.conn.execute("SELECT volume_serial_number, file_system FROM usb_devices").fetchone()
-    assert dict(row) == {"volume_serial_number": "8ED8-EA30", "file_system": "NTFS"}
+    row = db.conn.execute(
+        """
+        SELECT volume_serial_number, file_system, vbr_volume_serial_number,
+               vbr_volume_serial_number_full, vbr_file_system, vbr_parse_status
+        FROM usb_devices
+        """
+    ).fetchone()
+    assert dict(row) == {
+        "volume_serial_number": "8ED8-EA30",
+        "file_system": "NTFS",
+        "vbr_volume_serial_number": "8ED8-EA30",
+        "vbr_volume_serial_number_full": "988ED912-8ED8EA30",
+        "vbr_file_system": "NTFS",
+        "vbr_parse_status": "parsed",
+    }
 
 
 def test_partition_diagnostic_uses_mbr_partition_type_when_vbr_is_absent(tmp_path):
@@ -814,11 +904,23 @@ def test_partition_diagnostic_uses_mbr_partition_type_when_vbr_is_absent(tmp_pat
         tool_name="EvtxECmd",
         path=evtx_csv,
     )
-    row = db.conn.execute("SELECT serial, alternate_scsi_serial, file_system FROM usb_devices").fetchone()
+    row = db.conn.execute(
+        """
+        SELECT serial, alternate_scsi_serial, file_system, vbr_parse_status,
+               vbr_file_system, mbr_partition_type, partition_start_lba,
+               partition_sector_count
+        FROM usb_devices
+        """
+    ).fetchone()
     assert dict(row) == {
         "serial": "29B1109550240002",
         "alternate_scsi_serial": "AA00000000000489",
         "file_system": "FAT32",
+        "vbr_parse_status": "mbr_fallback",
+        "vbr_file_system": "FAT32",
+        "mbr_partition_type": "0x0C",
+        "partition_start_lba": "240",
+        "partition_sector_count": "30310160",
     }
 
 
@@ -1120,6 +1222,59 @@ def test_lnk_and_prefetch_rows_correlate_to_mft_entries(tmp_path):
     assert rows[1]["mft_path"] == "Windows/System32/notepad.exe"
 
 
+def test_shortcut_droid_fields_correlate_to_mft_object_ids(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    object_id = "{33333333-3333-3333-3333-333333333333}"
+    mft_csv = tmp_path / "MFTECmd.csv"
+    mft_csv.write_text(
+        "EntryNumber,SequenceNumber,ParentPath,FileName,ObjectId,BirthVolumeId,BirthObjectId,BirthDomainId\n"
+        f"42,5,C:\\Docs,report.docx,{object_id},"
+        "{22222222-2222-2222-2222-222222222222},"
+        "{44444444-4444-4444-4444-444444444444},"
+        "{00000000-0000-0000-0000-000000000000}\n"
+    )
+    ingest_csv_output(
+        db=db,
+        case_id=case.id,
+        computer_id="computer-1",
+        image_id="image-1",
+        tool_output_id="mft-output",
+        tool_name="MFTECmd",
+        path=mft_csv,
+    )
+    lnk_csv = tmp_path / "LECmd.csv"
+    lnk_csv.write_text(
+        "SourceFile,LocalPath,DroidFileId,BirthDroidFileId\n"
+        f"/artifacts/recent/report.lnk,C:\\Docs\\report.docx,{object_id},"
+        "{44444444-4444-4444-4444-444444444444}\n"
+    )
+    ingest_csv_output(
+        db=db,
+        case_id=case.id,
+        computer_id="computer-1",
+        image_id="image-1",
+        tool_output_id="lnk-output",
+        tool_name="LECmd",
+        path=lnk_csv,
+    )
+
+    mft = db.conn.execute("SELECT object_id, birth_volume_id, birth_object_id, birth_domain_id FROM mft_entries").fetchone()
+    assert dict(mft) == {
+        "object_id": object_id,
+        "birth_volume_id": "{22222222-2222-2222-2222-222222222222}",
+        "birth_object_id": "{44444444-4444-4444-4444-444444444444}",
+        "birth_domain_id": "{00000000-0000-0000-0000-000000000000}",
+    }
+    report = shortcut_object_tracking_report(db, case.id)
+    assert report["total_returned"] == 1
+    match = report["matches"][0]
+    assert match["match_basis"] == "current_droid_file_id_to_mft_object_id"
+    assert match["mft_full_path"] == "C:\\Docs\\report.docx"
+
+
 def test_lecmd_rows_are_normalized_to_shortcut_items(tmp_path):
     db = Database(tmp_path / "orchestrator.sqlite3")
     case = db.create_case("case-1", tmp_path / "cases" / "case-1")
@@ -1128,10 +1283,21 @@ def test_lecmd_rows_are_normalized_to_shortcut_items(tmp_path):
     csv_path = tmp_path / "LECmd.csv"
     csv_path.write_text(
         "SourceFile,SourceCreated,SourceModified,TargetCreated,TargetModified,TargetAccessed,"
-        "DriveType,VolumeSerialNumber,VolumeLabel,LocalPath,Arguments,WorkingDirectory,MachineID\n"
+        "DriveType,VolumeSerialNumber,VolumeLabel,LocalPath,CommonPath,TargetPath,RelativePath,"
+        "NetworkPath,TargetIDAbsolutePath,TargetMFTEntryNumber,TargetMFTSequenceNumber,"
+        "Arguments,WorkingDirectory,IconLocation,HotKey,WindowStyle,HeaderFlags,LinkFlags,"
+        "MachineID,MachineMACAddress,TrackerCreatedOn,TrackerID,"
+        "DroidVolumeId,DroidFileId,BirthDroidVolumeId,BirthDroidFileId\n"
         "/artifacts/lnk_files/Desktop/app.lnk,2026-05-13 10:00:00,2026-05-13 10:01:00,"
         "2026-05-11 09:00:00,2026-05-11 09:01:00,2026-05-11 09:02:00,"
-        "Fixed storage media (Hard drive),744FC21F,OS,C:\\Windows\\System32\\cmd.exe,/c whoami,C:\\Windows,WORKSTATION01\n"
+        "Fixed storage media (Hard drive),744FC21F,OS,C:\\Windows\\System32\\cmd.exe,"
+        "C:\\Windows\\System32\\cmd.exe,C:\\Windows\\System32\\cmd.exe,..\\System32\\cmd.exe,"
+        "\\\\server\\share\\cmd.exe,C:\\Windows\\System32\\cmd.exe,123,4,"
+        "/c whoami,C:\\Windows,C:\\Windows\\System32\\cmd.exe,0,SW_SHOWMINNOACTIVE,"
+        "HasLinkInfo|HasArguments,0x000000A5,WORKSTATION01,00-11-22-33-44-55,2026-05-10 08:00:00,"
+        "{11111111-1111-1111-1111-111111111111},{22222222-2222-2222-2222-222222222222},"
+        "{33333333-3333-3333-3333-333333333333},{22222222-2222-2222-2222-222222222222},"
+        "{44444444-4444-4444-4444-444444444444}\n"
     )
 
     ingest_csv_output(
@@ -1157,11 +1323,35 @@ def test_lecmd_rows_are_normalized_to_shortcut_items(tmp_path):
     assert row["device_type"] == "Fixed storage media (Hard drive)"
     assert row["volume_serial_number"] == "744FC21F"
     assert row["volume_name"] == "OS"
+    assert row["local_path"] == "C:\\Windows\\System32\\cmd.exe"
+    assert row["common_path"] == "C:\\Windows\\System32\\cmd.exe"
+    assert row["target_path"] == "C:\\Windows\\System32\\cmd.exe"
+    assert row["relative_path"] == "..\\System32\\cmd.exe"
+    assert row["network_path"] == "\\\\server\\share\\cmd.exe"
+    assert row["icon_location"] == "C:\\Windows\\System32\\cmd.exe"
+    assert row["hot_key"] == "0"
+    assert row["window_style"] == "SW_SHOWMINNOACTIVE"
+    assert row["header_flags"] == "HasLinkInfo|HasArguments"
+    assert row["link_flags"] == "0x000000A5"
+    assert row["target_id_absolute_path"] == "C:\\Windows\\System32\\cmd.exe"
+    assert row["target_mft_entry_number"] == "123"
+    assert row["target_mft_sequence_number"] == "4"
     assert row["command_line_arguments"] == "/c whoami"
     assert row["working_directory"] == "C:\\Windows"
     assert row["machine_name"] == "WORKSTATION01"
+    assert row["machine_mac_address"] == "00-11-22-33-44-55"
+    assert row["tracker_created_on"] == "2026-05-10 08:00:00"
+    assert row["tracker_id"] == "{11111111-1111-1111-1111-111111111111}"
+    assert row["droid_volume_id"] == "{22222222-2222-2222-2222-222222222222}"
+    assert row["droid_file_id"] == "{33333333-3333-3333-3333-333333333333}"
+    assert row["birth_droid_volume_id"] == "{22222222-2222-2222-2222-222222222222}"
+    assert row["birth_droid_file_id"] == "{44444444-4444-4444-4444-444444444444}"
     assert row["lnk_created"] == "2026-05-13 10:00:00"
     assert row["lnk_modified"] == "2026-05-13 10:01:00"
+    droid_report = shortcut_droid_changes_report(db, case.id)
+    assert droid_report["total_returned"] == 1
+    assert droid_report["droid_changes"][0]["droid_change_basis"] == "file_id_changed"
+    assert "moved" in droid_report["droid_changes"][0]["interpretation"]
 
 
 def test_lecmd_rows_use_artifact_manifest_for_lnk_mft_timestamps(tmp_path):

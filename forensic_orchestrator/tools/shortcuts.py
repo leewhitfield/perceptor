@@ -21,6 +21,7 @@ def normalized_shortcut_rows(
     if tool_name == "LECmd":
         source_file = _first(row, "SourceFile", "Source File")
         mft_metadata = manifest.get(source_file or "", {})
+        identity_values = _shortcut_identity_values(row)
         return [
             {
                 **_base_values(case_id, computer_id, image_id, tool_output_id, tool_name, source_csv, row_number),
@@ -35,6 +36,7 @@ def normalized_shortcut_rows(
                 "device_type": _first(row, "DriveType", "Drive Type"),
                 "volume_serial_number": _first(row, "VolumeSerialNumber", "Volume Serial Number"),
                 "volume_name": _first(row, "VolumeLabel", "Volume Label", "VolumeName", "Volume Name"),
+                **identity_values,
                 "command_line_arguments": _first(
                     row,
                     "Arguments",
@@ -44,8 +46,8 @@ def normalized_shortcut_rows(
                     "Command Line",
                 ),
                 "working_directory": _first(row, "WorkingDirectory", "Working Directory"),
-                "network_path": _first(row, "NetworkPath", "Network Path"),
-                "machine_name": _first(row, "MachineID", "Machine ID", "MachineName", "Machine Name"),
+                "network_path": identity_values.get("network_path"),
+                "machine_name": identity_values.get("machine_name"),
                 "app_id": None,
                 "app_id_description": None,
                 "entry_id": None,
@@ -57,6 +59,7 @@ def normalized_shortcut_rows(
             }
         ]
     if tool_name == "JLECmd":
+        identity_values = _shortcut_identity_values(row)
         return [
             {
                 **_base_values(case_id, computer_id, image_id, tool_output_id, tool_name, source_csv, row_number),
@@ -71,6 +74,7 @@ def normalized_shortcut_rows(
                 "device_type": _first(row, "DriveType", "Drive Type"),
                 "volume_serial_number": _first(row, "VolumeSerialNumber", "Volume Serial Number"),
                 "volume_name": _first(row, "VolumeLabel", "Volume Label", "VolumeName", "Volume Name"),
+                **identity_values,
                 "command_line_arguments": _first(
                     row,
                     "Arguments",
@@ -80,8 +84,8 @@ def normalized_shortcut_rows(
                     "Command Line",
                 ),
                 "working_directory": _first(row, "WorkingDirectory", "Working Directory"),
-                "network_path": _first(row, "NetworkPath", "Network Path"),
-                "machine_name": _first(row, "MachineID", "Machine ID", "MachineName", "Machine Name"),
+                "network_path": identity_values.get("network_path"),
+                "machine_name": identity_values.get("machine_name"),
                 "app_id": _first(row, "AppId", "AppID", "App Id", "SourceAppId", "Source AppId"),
                 "app_id_description": _first(
                     row,
@@ -108,6 +112,38 @@ def normalized_shortcut_rows(
             }
         ]
     return []
+
+
+def _shortcut_identity_values(row: dict[str, Any]) -> dict[str, str | None]:
+    return {
+        "local_path": _first(row, "LocalPath", "Local Path"),
+        "common_path": _first(row, "CommonPath", "Common Path"),
+        "target_path": _first(row, "TargetPath", "Target Path", "Path"),
+        "relative_path": _first(row, "RelativePath", "Relative Path"),
+        "network_path": _first(row, "NetworkPath", "Network Path"),
+        "icon_location": _first(row, "IconLocation", "Icon Location", "IconPath", "Icon Path"),
+        "hot_key": _first(row, "HotKey", "Hot Key"),
+        "window_style": _first(row, "WindowStyle", "Window Style", "ShowCommand", "Show Command"),
+        "header_flags": _first(row, "HeaderFlags", "Header Flags"),
+        "link_flags": _first(row, "LinkFlags", "Link Flags"),
+        "target_id_absolute_path": _first(row, "TargetIDAbsolutePath", "Target ID Absolute Path"),
+        "target_mft_entry_number": _first(row, "TargetMFTEntryNumber", "Target MFT Entry Number"),
+        "target_mft_sequence_number": _first(row, "TargetMFTSequenceNumber", "Target MFT Sequence Number"),
+        "machine_name": _first(row, "MachineID", "Machine ID", "MachineName", "Machine Name"),
+        "machine_mac_address": _first(row, "MachineMACAddress", "Machine MAC Address"),
+        "tracker_created_on": _first(row, "TrackerCreatedOn", "Tracker Created On"),
+        "tracker_id": _first(row, "TrackerID", "Tracker ID", "TrackerId"),
+        "droid_volume_id": _first(row, "DroidVolumeId", "Droid Volume Id", "DroidVolumeID", "Droid Volume ID"),
+        "droid_file_id": _first(row, "DroidFileId", "Droid File Id", "DroidFileID", "Droid File ID"),
+        "birth_droid_volume_id": _first(
+            row,
+            "BirthDroidVolumeId",
+            "Birth Droid Volume Id",
+            "BirthDroidVolumeID",
+            "Birth Droid Volume ID",
+        ),
+        "birth_droid_file_id": _first(row, "BirthDroidFileId", "Birth Droid File Id", "BirthDroidFileID", "Birth Droid File ID"),
+    }
 
 
 def _base_values(

@@ -48,6 +48,7 @@ from forensic_orchestrator.reports import (
     evidence_gaps_markdown,
     evidence_gaps_report,
     encrypted_volume_indicators_report,
+    derived_timeline_events,
     event_interpretation_report,
     evidence_quality_report,
     external_storage_export_rows,
@@ -65,6 +66,7 @@ from forensic_orchestrator.reports import (
     file_intelligence_report,
     file_name_drilldown_report,
     file_names_report,
+    file_movement_identity_report,
     filesystem_review_report,
     files_report,
     issues_report,
@@ -100,9 +102,11 @@ from forensic_orchestrator.reports import (
     suspicious_timeline_windows_markdown,
     suspicious_timeline_windows_report,
     shortcuts_report,
+    shellbag_external_storage_report,
     usn_path_report,
     usn_reasons_report,
     usn_bursts_report,
+    usn_file_lifecycle_report,
     usn_rename_pairs_report,
     usn_summary_report,
     usn_suspicious_report,
@@ -143,6 +147,7 @@ from forensic_orchestrator.reports import (
     ual_report,
     uninstalled_application_artifacts_report,
     user_activity_report,
+    user_intent_artifacts_report,
     virtualization_indicators_report,
     web_cloud_correlations_report,
     windows_search_report,
@@ -2138,6 +2143,29 @@ def test_external_storage_report_combines_devices_activity_and_event_logs(tmp_pa
                 "capacity_bytes": "32000000000",
                 "file_system": "FAT32",
                 "alternate_scsi_serial": "",
+                "partition_disk_number": "1",
+                "partition_bus_type": "USB",
+                "partition_bus_type_code": "7",
+                "partition_user_removal_policy": "True",
+                "partition_bytes_per_sector": "512",
+                "partition_bytes_per_logical_sector": "512",
+                "partition_bytes_per_physical_sector": "512",
+                "partition_style": "GPT",
+                "partition_style_code": "1",
+                "partition_count": "2",
+                "partition_table_summary": "style=GPT count=2 bytes=24 disk_guid=00112233-4455-6677-8899-aabbccddeeff",
+                "partition_table_disk_guid": "00112233-4455-6677-8899-aabbccddeeff",
+                "storage_id_ascii": "ABCD",
+                "storage_id_sha256": "e12e115acf4552b2568b55e93cbd39394c4ef81c82447fafc997882a02d23677",
+                "partition_registry_id": "4dbf10e4-1305-11eb-aa08-985fd34317f9",
+                "partition_adapter_id": "00000000-0000-0000-0000-000000000001",
+                "vbr_oem_name": "MSDOS5.0",
+                "vbr_file_system": "FAT32",
+                "vbr_volume_serial_number": "A1B2-C3D4",
+                "vbr_volume_serial_number_full": "A1B2-C3D4",
+                "vbr_volume_name": "EVIDENCE",
+                "vbr_parse_status": "parsed",
+                "vbr_serial_match": "matches_direct",
                 "user_profiles": "fredr",
                 "first_install_date_utc": "2020-11-10T10:00:00Z",
                 "last_arrival_utc": "2020-11-14T10:00:00Z",
@@ -2374,8 +2402,14 @@ def test_external_storage_report_combines_devices_activity_and_event_logs(tmp_pa
     assert "serial A1B2-C3D4" in sandisk["volume_identity"]
     assert "drive E:" in sandisk["mount_identity"]
     assert "FAT/exFAT" in sandisk["volume_serial_format_time_assessment"]
+    assert "bus USB" in sandisk["partition_log_metadata"]
+    assert "storage_id ABCD" in sandisk["partition_log_metadata"]
+    assert sandisk["vbr_parse_status"] == "parsed"
+    assert sandisk["vbr_volume_serial_number"] == "A1B2-C3D4"
     assert "MountedDevices" in sandisk["corroborating_artifacts"]
     assert "Partition/Diagnostic" in sandisk["corroborating_artifacts"]
+    assert "Partition VBR" in sandisk["corroborating_artifacts"]
+    assert "StorageId" in sandisk["corroborating_artifacts"]
     assert "USBSTOR" in sandisk["corroborating_artifacts"]
     assert sandisk["observed_drive_letters"] == "E:"
     assert sandisk["normalized_vendor_id"] == "0781"
@@ -2388,10 +2422,14 @@ def test_external_storage_report_combines_devices_activity_and_event_logs(tmp_pa
     assert all("usb_volume_serial_number" not in row for row in export_rows)
     assert all("source_artifact_types" not in row for row in export_rows)
     assert any(row["section"] == "device" and row["volume_serial_number"] == "A1B2-C3D4" for row in export_rows)
+    assert any(row["section"] == "device" and row["vbr_parse_status"] == "parsed" for row in export_rows)
+    assert any(row["section"] == "device" and row["partition_bus_type"] == "USB" for row in export_rows)
     assert any(row["section"] == "timeline" and row["attributable_computer"] == "Desktop" for row in export_rows)
     assert any(row["section"] == "event_log" and row["attributable_computer"] == "Desktop" for row in export_rows)
     assert "SanDisk Ultra" in markdown
     assert "Observed computers: `Desktop`" in markdown
+    assert "Partition/log metadata: `bus USB; disk 1" in markdown
+    assert "VBR metadata: `status parsed; fs FAT32; serial A1B2-C3D4" in markdown
     assert "First observed: `2020-11-10T10:00:00Z`" in markdown
     assert "Attributable file/folder activity: `detected" in markdown
 
@@ -8272,3 +8310,283 @@ def test_vpn_local_activity_report_summarizes_endpoint_activity_during_vpn(tmp_p
     assert "notepad.exe" in markdown
     assert "notes.txt" in markdown
     assert "tool.exe" in markdown
+
+
+def test_usn_file_lifecycle_report_groups_changes_by_file_reference(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    base = {
+        "case_id": case.id,
+        "computer_id": "computer-1",
+        "image_id": "image-1",
+        "tool_output_id": "output-usn",
+        "tool_name": "MFTECmd",
+        "source_csv": tmp_path / "usn.csv",
+        "source_file": "$UsnJrnl",
+        "file_reference_number": "12345",
+        "file_reference_sequence_number": "7",
+        "parent_file_reference_number": "100",
+        "parent_file_reference_sequence_number": "1",
+        "extension": "docx",
+    }
+    db.insert_usn_journal_entries(
+        [
+            {
+                **base,
+                "id": "usn-1",
+                "row_number": 1,
+                "update_sequence_number": "1000",
+                "update_timestamp": "2020-01-02T10:00:00Z",
+                "file_name": "old.docx",
+                "full_path": "C:/Users/Jane/Documents/old.docx",
+                "reason": "RenameOldName",
+            },
+            {
+                **base,
+                "id": "usn-2",
+                "row_number": 2,
+                "update_sequence_number": "1001",
+                "update_timestamp": "2020-01-02T10:00:01Z",
+                "file_name": "new.docx",
+                "full_path": "C:/Users/Jane/Documents/new.docx",
+                "reason": "RenameNewName|DataExtend|Close",
+            },
+        ]
+    )
+
+    report = usn_file_lifecycle_report(db, case.id, contains="docx")
+
+    assert report["total_returned"] == 1
+    item = report["items"][0]
+    assert item["computer_label"] == "Desktop"
+    assert item["rename_old_count"] == 1
+    assert item["rename_new_count"] == 1
+    assert item["data_change_seen"] is True
+    assert item["names_seen"] == ["old.docx", "new.docx"]
+
+
+def test_shellbag_external_storage_report_matches_volume_identity(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    db.insert_usb_storage_devices(
+        [
+            {
+                "id": "usb-1",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "serial": "070159BEEF123456",
+                "vendor": "SanDisk",
+                "product": "Ultra",
+                "drive_letter": "E:",
+                "volume_guid": "{11111111-2222-3333-4444-555555555555}",
+                "volume_serial_number": "A1B2-C3D4",
+                "source_artifacts": "USBSTOR,PartitionDiagnostic",
+                "evidence_row_count": 2,
+            }
+        ]
+    )
+    db.insert_shellbag_entries(
+        [
+            {
+                "id": "shellbag-1",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "output-shellbags",
+                "tool_name": "SBECmd",
+                "source_csv": tmp_path / "shellbags.csv",
+                "row_number": 1,
+                "source_file": "USRCLASS.DAT",
+                "hive_path": "C:/Users/Jane/NTUSER.DAT",
+                "user_profile": "Jane",
+                "absolute_path": "E:/Case Files",
+                "shell_type": "Directory",
+                "drive_letter": "E:",
+                "volume_guid": "{11111111-2222-3333-4444-555555555555}",
+                "volume_serial_number": "A1B2-C3D4",
+                "last_interacted": "2020-01-02T10:00:00Z",
+            }
+        ]
+    )
+
+    report = shellbag_external_storage_report(db, case.id)
+
+    assert report["total_returned"] == 1
+    item = report["shellbag_external_storage"][0]
+    assert item["computer_label"] == "Desktop"
+    assert item["match_count"] == 1
+    assert "volume_serial" in item["matched_devices"][0]["match_basis"]
+    assert "volume_guid" in item["matched_devices"][0]["match_basis"]
+
+
+def test_user_intent_report_combines_shellbags_and_filters_user(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    db.insert_shellbag_entries(
+        [
+            {
+                "id": "shellbag-1",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "output-shellbags",
+                "tool_name": "SBECmd",
+                "source_csv": tmp_path / "shellbags.csv",
+                "row_number": 1,
+                "source_file": "USRCLASS.DAT",
+                "hive_path": "C:/Users/Jane/NTUSER.DAT",
+                "user_profile": "Jane",
+                "absolute_path": "C:/Users/Jane/Documents/Contracts",
+                "shell_type": "Directory",
+                "last_interacted": "2020-01-02T10:00:00Z",
+            }
+        ]
+    )
+
+    report = user_intent_artifacts_report(db, case.id, user="Jane", contains="Contracts")
+
+    assert report["total_returned"] == 1
+    event = report["events"][0]
+    assert event["source"] == "shellbag"
+    assert event["computer_label"] == "Desktop"
+    assert event["activity"] == "folder_browsing_reference"
+
+
+def test_event_interpretation_report_classifies_provider_specific_events(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    base = {
+        "case_id": case.id,
+        "computer_id": "computer-1",
+        "image_id": "image-1",
+        "tool_output_id": "output-evtx",
+        "tool_name": "EvtxECmd",
+        "source_csv": tmp_path / "evtx.csv",
+        "level": "Information",
+        "process_id": None,
+        "thread_id": None,
+        "computer": "DESKTOP",
+        "user_id": None,
+        "user_name": None,
+        "remote_host": None,
+        "payload_data2": None,
+        "payload_data3": None,
+        "payload": None,
+    }
+    db.insert_evtx_events(
+        [
+            {
+                **base,
+                "id": "evtx-ps",
+                "row_number": 1,
+                "record_number": "1",
+                "event_record_id": "1",
+                "time_created": "2020-01-02T10:00:00Z",
+                "event_id": "4104",
+                "provider": "Microsoft-Windows-PowerShell",
+                "channel": "Microsoft-Windows-PowerShell/Operational",
+                "map_description": "Script block logging",
+                "payload_data1": "Invoke-WebRequest",
+                "executable_info": "powershell.exe",
+                "source_file": "PowerShell.evtx",
+            },
+            {
+                **base,
+                "id": "evtx-task",
+                "row_number": 2,
+                "record_number": "2",
+                "event_record_id": "2",
+                "time_created": "2020-01-02T10:01:00Z",
+                "event_id": "106",
+                "provider": "Microsoft-Windows-TaskScheduler",
+                "channel": "Microsoft-Windows-TaskScheduler/Operational",
+                "map_description": "Task registered",
+                "payload_data1": "\\Microsoft\\Windows\\Update",
+                "executable_info": None,
+                "source_file": "TaskScheduler.evtx",
+            },
+        ]
+    )
+
+    powershell = event_interpretation_report(db, case.id, category="powershell")
+    tasks = event_interpretation_report(db, case.id, category="scheduled_task")
+
+    assert powershell["events"][0]["evidence_tags"] == ["powershell_event", "script_block_logging"]
+    assert tasks["events"][0]["evidence_tags"] == ["task_definition_changed", "task_scheduler_event"]
+
+
+def test_file_movement_identity_report_and_derived_timeline_use_new_artifacts(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    db.insert_tool_output(
+        {
+            "id": "output-shellbags",
+            "case_id": case.id,
+            "computer_id": "computer-1",
+            "image_id": "image-1",
+            "job_id": "job-1",
+            "tool_name": "SBECmd",
+            "output_type": "csv",
+            "path": tmp_path / "shellbags.csv",
+            "content_sha256": None,
+            "row_count": 1,
+        }
+    )
+    db.insert_usb_storage_devices(
+        [
+            {
+                "id": "usb-1",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "serial": "070159BEEF123456",
+                "vendor": "SanDisk",
+                "product": "Ultra",
+                "drive_letter": "E:",
+                "volume_guid": "{11111111-2222-3333-4444-555555555555}",
+                "volume_serial_number": "A1B2-C3D4",
+                "source_artifacts": "USBSTOR,PartitionDiagnostic",
+                "evidence_row_count": 2,
+            }
+        ]
+    )
+    db.insert_shellbag_entries(
+        [
+            {
+                "id": "shellbag-1",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "output-shellbags",
+                "tool_name": "SBECmd",
+                "source_csv": tmp_path / "shellbags.csv",
+                "row_number": 1,
+                "source_file": "USRCLASS.DAT",
+                "hive_path": "C:/Users/Jane/NTUSER.DAT",
+                "user_profile": "Jane",
+                "absolute_path": "E:/Case Files",
+                "shell_type": "Directory",
+                "drive_letter": "E:",
+                "volume_guid": "{11111111-2222-3333-4444-555555555555}",
+                "volume_serial_number": "A1B2-C3D4",
+                "last_interacted": "2020-01-02T10:00:00Z",
+            }
+        ]
+    )
+
+    identity = file_movement_identity_report(db, case.id, contains="Case Files")
+    events = derived_timeline_events(db, case.id)
+
+    assert identity["summary"]["finding_counts"]["shellbag_external_storage_match"] == 1
+    assert any(event["event_type"] == "shellbag_external_storage_match" for event in events)

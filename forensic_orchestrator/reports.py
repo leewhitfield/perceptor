@@ -27,7 +27,7 @@ from .db import ANALYTICS_TABLES, Database, utc_now
 from .interesting_executables import load_interesting_executable_rules
 from .report_paths import display_evidence_path
 from .storage_policy import CONTENT_HEAVY_TABLES, storage_policy_items
-from .timestamps import parse_timestamp
+from .timestamps import normalize_timestamp, parse_timestamp
 from .tools.memory_strings import assess_hiberfil_source, memory_artifact_type as _classify_memory_artifact_type
 from .tools.usb_partition import usb_rows_from_partition_diagnostic_event
 from .usn_rules import load_usn_rules, match_usn_rules
@@ -1236,6 +1236,119 @@ def usn_rename_pairs_report(db: Database, case_id: str, *, limit: int = 100) -> 
         if len(pairs) >= limit:
             break
     return {"case_id": case_id, "rename_pairs": pairs, "total_returned": len(pairs)}
+
+
+def usn_file_lifecycle_report(
+    db: Database,
+    case_id: str,
+    *,
+    contains: str | None = None,
+    limit: int = 100,
+) -> dict[str, Any]:
+    db.get_case(case_id)
+    filters = ["case_id = ?", "COALESCE(file_reference_number, '') <> ''"]
+    params: list[Any] = [case_id]
+    if contains:
+        filters.append("(full_path LIKE ? OR file_name LIKE ? OR reason LIKE ?)")
+        params.extend([f"%{contains}%", f"%{contains}%", f"%{contains}%"])
+    rows = _query_report_rows(
+        db,
+        case_id,
+        "usn_journal_entries",
+        f"""
+        SELECT *
+        FROM usn_journal_entries
+        WHERE {' AND '.join(filters)}
+          AND (
+            LOWER(COALESCE(reason, '')) LIKE '%filecreate%'
+            OR LOWER(COALESCE(reason, '')) LIKE '%filedelete%'
+            OR LOWER(COALESCE(reason, '')) LIKE '%rename%'
+            OR LOWER(COALESCE(reason, '')) LIKE '%dataoverwrite%'
+            OR LOWER(COALESCE(reason, '')) LIKE '%dataextend%'
+            OR LOWER(COALESCE(reason, '')) LIKE '%datatruncation%'
+            OR LOWER(COALESCE(reason, '')) LIKE '%close%'
+          )
+        ORDER BY image_id,
+                 file_reference_number,
+                 file_reference_sequence_number,
+                 update_timestamp,
+                 TRY_CAST(NULLIF(update_sequence_number, '') AS BIGINT),
+                 row_number
+        """,
+        params,
+    )
+    _fill_computer_image_fields(db, case_id, rows)
+    groups: dict[tuple[str, str, str, str], list[dict[str, Any]]] = {}
+    for row in rows:
+        key = (
+            str(row.get("computer_id") or ""),
+            str(row.get("image_id") or ""),
+            str(row.get("file_reference_number") or ""),
+            str(row.get("file_reference_sequence_number") or ""),
+        )
+        groups.setdefault(key, []).append(row)
+
+    items = []
+    for group_rows in groups.values():
+        item = _usn_lifecycle_item(group_rows)
+        if item:
+            items.append(item)
+    items.sort(key=lambda item: (item.get("last_timestamp") or "", item.get("event_count") or 0), reverse=True)
+    items = items[:limit]
+    return {
+        "case_id": case_id,
+        "filters": {"contains": contains},
+        "items": items,
+        "total_returned": len(items),
+    }
+
+
+def _usn_lifecycle_item(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    if not rows:
+        return None
+    first = rows[0]
+    timestamps = [str(row.get("update_timestamp") or "") for row in rows if row.get("update_timestamp")]
+    names = _ordered_unique(row.get("file_name") for row in rows)
+    paths = _ordered_unique(row.get("full_path") for row in rows)
+    reasons = _ordered_unique(row.get("reason") for row in rows)
+    old_names = [row for row in rows if "renameoldname" in str(row.get("reason") or "").lower()]
+    new_names = [row for row in rows if "renamenewname" in str(row.get("reason") or "").lower()]
+    return {
+        "computer_id": first.get("computer_id"),
+        "computer_label": first.get("computer_label"),
+        "image_id": first.get("image_id"),
+        "image_path": first.get("image_path"),
+        "file_reference_number": first.get("file_reference_number"),
+        "file_reference_sequence_number": first.get("file_reference_sequence_number"),
+        "first_timestamp": min(timestamps) if timestamps else None,
+        "last_timestamp": max(timestamps) if timestamps else None,
+        "event_count": len(rows),
+        "names_seen": names,
+        "paths_seen": paths,
+        "reasons_seen": reasons,
+        "rename_old_count": len(old_names),
+        "rename_new_count": len(new_names),
+        "delete_seen": any("delete" in str(row.get("reason") or "").lower() for row in rows),
+        "create_seen": any("filecreate" in str(row.get("reason") or "").lower() for row in rows),
+        "data_change_seen": any(
+            token in str(row.get("reason") or "").lower()
+            for row in rows
+            for token in ("dataoverwrite", "dataextend", "datatruncation")
+        ),
+        "events": rows[:25],
+    }
+
+
+def _ordered_unique(values: Iterable[Any]) -> list[str]:
+    output: list[str] = []
+    seen = set()
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text.casefold() in seen:
+            continue
+        output.append(text)
+        seen.add(text.casefold())
+    return output
 
 
 SDELETE_WIPE_NAME_RE = re.compile(r"(?i)^O?([A-Z])\1{2,80}\.\1{2,16}$")
@@ -5181,7 +5294,26 @@ def _shortcut_select_sql(columns: set[str]) -> str:
         "command_line_arguments",
         "working_directory",
         "network_path",
+        "icon_location",
+        "hot_key",
+        "window_style",
+        "header_flags",
+        "link_flags",
+        "local_path",
+        "common_path",
+        "target_path",
+        "relative_path",
+        "target_id_absolute_path",
+        "target_mft_entry_number",
+        "target_mft_sequence_number",
         "machine_name",
+        "machine_mac_address",
+        "tracker_created_on",
+        "tracker_id",
+        "droid_volume_id",
+        "droid_file_id",
+        "birth_droid_volume_id",
+        "birth_droid_file_id",
         "app_id",
         "app_id_description",
         "entry_id",
@@ -11453,6 +11585,92 @@ def shellbags_report(db: Database, case_id: str, *, limit: int = 100) -> dict[st
     return _table_report(db, case_id, "shellbag_entries", "shellbag_entries", limit)
 
 
+def shellbag_external_storage_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str, Any]:
+    db.get_case(case_id)
+    rows = _query_report_rows(
+        db,
+        case_id,
+        "shellbag_entries",
+        """
+        SELECT shellbag_entries.*, NULL AS computer_label, NULL AS image_path
+        FROM shellbag_entries
+        WHERE shellbag_entries.case_id = ?
+          AND (
+            COALESCE(shellbag_entries.volume_serial_number, '') <> ''
+            OR COALESCE(shellbag_entries.volume_guid, '') <> ''
+            OR COALESCE(shellbag_entries.drive_letter, '') <> ''
+          )
+        ORDER BY COALESCE(last_interacted, first_interacted, modified_on, created_on, last_write_time, '') DESC,
+                 absolute_path
+        LIMIT ?
+        """,
+        (case_id, limit),
+    )
+    _fill_computer_image_fields(db, case_id, rows)
+    devices = _external_storage_devices(db, case_id, limit=10000)
+    _annotate_external_storage_devices(db, case_id, devices)
+    items = []
+    for row in rows:
+        item = dict(row)
+        matches = [
+            _shellbag_device_match(item, device)
+            for device in devices
+            if _shellbag_matches_external_device(item, device)
+        ]
+        item["matched_devices"] = matches
+        item["match_count"] = len(matches)
+        items.append(item)
+    items.sort(key=lambda item: (-int(item.get("match_count") or 0), str(item.get("absolute_path") or "")))
+    return {"case_id": case_id, "shellbag_external_storage": items, "total_returned": len(items)}
+
+
+def _shellbag_matches_external_device(shellbag: dict[str, Any], device: dict[str, Any]) -> bool:
+    shell_vsn = _norm_vsn(shellbag.get("volume_serial_number"))
+    device_vsns = {
+        _norm_vsn(value)
+        for value in _split_external_storage_values(device.get("observed_volume_serial_numbers") or device.get("volume_serial_number"))
+        if _norm_vsn(value)
+    }
+    if shell_vsn and shell_vsn in device_vsns:
+        return True
+    shell_guid = str(shellbag.get("volume_guid") or "").strip("{}").casefold()
+    device_guids = {
+        value.strip("{}").casefold()
+        for value in _split_external_storage_values(device.get("observed_volume_guids") or device.get("volume_guid"))
+        if value
+    }
+    if shell_guid and shell_guid in device_guids:
+        return True
+    shell_drive = _normalize_external_storage_drive_letters(shellbag.get("drive_letter"))
+    device_drives = _normalize_external_storage_drive_letters(device.get("observed_drive_letters") or device.get("drive_letter"))
+    return bool(shell_drive and device_drives and shell_drive in _split_external_storage_values(device_drives))
+
+
+def _shellbag_device_match(shellbag: dict[str, Any], device: dict[str, Any]) -> dict[str, Any]:
+    bases = []
+    if _norm_vsn(shellbag.get("volume_serial_number")) and _norm_vsn(shellbag.get("volume_serial_number")) in {
+        _norm_vsn(value)
+        for value in _split_external_storage_values(device.get("observed_volume_serial_numbers") or device.get("volume_serial_number"))
+    }:
+        bases.append("volume_serial")
+    if str(shellbag.get("volume_guid") or "").strip("{}").casefold() in {
+        value.strip("{}").casefold()
+        for value in _split_external_storage_values(device.get("observed_volume_guids") or device.get("volume_guid"))
+    }:
+        bases.append("volume_guid")
+    if _normalize_external_storage_drive_letters(shellbag.get("drive_letter")):
+        bases.append("drive_letter")
+    return {
+        "serial": device.get("serial"),
+        "device_identity": device.get("device_identity") or _external_storage_device_label(device),
+        "volume_serial_number": device.get("observed_volume_serial_numbers") or device.get("volume_serial_number"),
+        "volume_guid": device.get("observed_volume_guids") or device.get("volume_guid"),
+        "drive_letter": device.get("observed_drive_letters") or device.get("drive_letter"),
+        "match_basis": ", ".join(_ordered_unique(bases)),
+        "identity_confidence_tier": device.get("identity_confidence_tier"),
+    }
+
+
 def usb_report(db: Database, case_id: str, *, limit: int = 100, raw: bool = False) -> dict[str, Any]:
     if raw:
         return _table_report(db, case_id, "usb_devices", "usb_devices", limit)
@@ -13166,6 +13384,25 @@ EXTERNAL_STORAGE_EXPORT_COLUMNS = [
     "volume_identity",
     "mount_identity",
     "volume_serial_format_time_assessment",
+    "partition_log_metadata",
+    "partition_bus_type",
+    "partition_disk_number",
+    "partition_user_removal_policy",
+    "partition_style",
+    "partition_count",
+    "partition_table_summary",
+    "partition_table_disk_guid",
+    "storage_id_ascii",
+    "storage_id_sha256",
+    "partition_registry_id",
+    "partition_adapter_id",
+    "vbr_parse_status",
+    "vbr_serial_match",
+    "vbr_oem_name",
+    "vbr_file_system",
+    "vbr_volume_serial_number",
+    "vbr_volume_serial_number_full",
+    "vbr_volume_name",
     "alternate_serial",
     "volume_serial_number",
     "volume_name",
@@ -13199,6 +13436,36 @@ EXTERNAL_STORAGE_EXPORT_COLUMNS = [
     "notes",
 ]
 
+EXTERNAL_STORAGE_PARTITION_LOG_FIELDS = (
+    "partition_disk_number",
+    "partition_bus_type",
+    "partition_bus_type_code",
+    "partition_user_removal_policy",
+    "partition_bytes_per_sector",
+    "partition_bytes_per_logical_sector",
+    "partition_bytes_per_physical_sector",
+    "partition_style",
+    "partition_style_code",
+    "partition_count",
+    "partition_table_bytes",
+    "partition_table_sha256",
+    "partition_table_summary",
+    "partition_table_disk_guid",
+    "storage_id_code_set",
+    "storage_id_type",
+    "storage_id_association",
+    "storage_id_bytes",
+    "storage_id_hex",
+    "storage_id_ascii",
+    "storage_id_sha256",
+    "partition_registry_id",
+    "partition_adapter_id",
+    "partition_pool_id",
+    "partition_location",
+    "partition_flags",
+    "partition_characteristics",
+)
+
 
 def external_storage_export_rows(report: dict[str, Any]) -> list[dict[str, Any]]:
     case_id = str(report.get("case_id") or "")
@@ -13227,6 +13494,25 @@ def external_storage_export_rows(report: dict[str, Any]) -> list[dict[str, Any]]
                 volume_identity=device.get("volume_identity"),
                 mount_identity=device.get("mount_identity"),
                 volume_serial_format_time_assessment=device.get("volume_serial_format_time_assessment"),
+                partition_log_metadata=_external_storage_partition_log_summary(device),
+                partition_bus_type=device.get("partition_bus_type"),
+                partition_disk_number=device.get("partition_disk_number"),
+                partition_user_removal_policy=device.get("partition_user_removal_policy"),
+                partition_style=device.get("partition_style"),
+                partition_count=device.get("partition_count"),
+                partition_table_summary=device.get("partition_table_summary"),
+                partition_table_disk_guid=device.get("partition_table_disk_guid"),
+                storage_id_ascii=device.get("storage_id_ascii"),
+                storage_id_sha256=device.get("storage_id_sha256"),
+                partition_registry_id=device.get("partition_registry_id"),
+                partition_adapter_id=device.get("partition_adapter_id"),
+                vbr_parse_status=device.get("vbr_parse_status"),
+                vbr_serial_match=device.get("vbr_serial_match"),
+                vbr_oem_name=device.get("vbr_oem_name"),
+                vbr_file_system=device.get("vbr_file_system"),
+                vbr_volume_serial_number=device.get("vbr_volume_serial_number"),
+                vbr_volume_serial_number_full=device.get("vbr_volume_serial_number_full"),
+                vbr_volume_name=device.get("vbr_volume_name"),
                 alternate_serial=device.get("alternate_scsi_serial") or device.get("parent_device_serial"),
                 volume_serial_number=device.get("observed_volume_serial_numbers") or device.get("volume_serial_number"),
                 volume_name=device.get("volume_name"),
@@ -13464,6 +13750,8 @@ def external_storage_markdown(report: dict[str, Any]) -> str:
                     f"- VID/PID: `{device.get('normalized_vendor_id') or device.get('vendor_id') or ''}` / `{device.get('normalized_product_id') or device.get('product_id') or ''}`",
                     f"- Volume serial: `{device.get('observed_volume_serial_numbers') or device.get('volume_serial_number') or ''}`",
                     f"- Volume serial format-time assessment: `{device.get('volume_serial_format_time_assessment') or ''}`",
+                    f"- Partition/log metadata: `{_external_storage_partition_log_summary(device)}`",
+                    f"- VBR metadata: `{_external_storage_vbr_summary(device)}`",
                     f"- Volume name: `{device.get('volume_name') or ''}`",
                     f"- Volume GUID: `{device.get('observed_volume_guids') or device.get('volume_guid') or ''}`",
                     f"- Drive letter: `{device.get('observed_drive_letters') or device.get('drive_letter') or ''}`",
@@ -13737,6 +14025,7 @@ def _annotate_external_storage_devices(db: Database, case_id: str, devices: list
         device["volume_identity"] = _external_storage_volume_identity(device)
         device["mount_identity"] = _external_storage_mount_identity(device)
         device["volume_serial_format_time_assessment"] = _external_storage_volume_serial_format_assessment(device)
+        device["partition_log_metadata"] = _external_storage_partition_log_summary(device)
         device["observed_computers"] = _join_external_storage_values(computers)
         device["observed_computer_count"] = len(computers)
         device["first_observed_utc"] = _external_storage_min_timestamp(
@@ -13851,6 +14140,10 @@ def _external_storage_base_corroborating_artifacts(device: dict[str, Any]) -> se
         artifacts.add("MountedDevices")
     if "partition" in source_text or device.get("last_partition_event_utc") or device.get("first_volume_serial_event_utc") or device.get("alternate_scsi_serial"):
         artifacts.add("Partition/Diagnostic")
+    if device.get("vbr_parse_status") or device.get("vbr_volume_serial_number") or device.get("vbr_file_system"):
+        artifacts.add("Partition VBR")
+    if device.get("storage_id_ascii") or device.get("storage_id_sha256"):
+        artifacts.add("StorageId")
     if device.get("evidence_row_count"):
         artifacts.add("Registry Summary")
     return artifacts
@@ -14073,6 +14366,45 @@ def _external_storage_volume_serial_format_assessment(device: dict[str, Any]) ->
     return "Volume serials can link volume artifacts but are not treated as reliable standalone format timestamps."
 
 
+def _external_storage_vbr_summary(device: dict[str, Any]) -> str:
+    parts = []
+    for label, field in (
+        ("status", "vbr_parse_status"),
+        ("fs", "vbr_file_system"),
+        ("serial", "vbr_volume_serial_number"),
+        ("full serial", "vbr_volume_serial_number_full"),
+        ("name", "vbr_volume_name"),
+        ("match", "vbr_serial_match"),
+        ("oem", "vbr_oem_name"),
+    ):
+        value = str(device.get(field) or "").strip()
+        if value:
+            parts.append(f"{label} {value}")
+    return "; ".join(parts)
+
+
+def _external_storage_partition_log_summary(device: dict[str, Any]) -> str:
+    parts = []
+    for label, field in (
+        ("bus", "partition_bus_type"),
+        ("disk", "partition_disk_number"),
+        ("removal_policy", "partition_user_removal_policy"),
+        ("sector", "partition_bytes_per_sector"),
+        ("logical_sector", "partition_bytes_per_logical_sector"),
+        ("physical_sector", "partition_bytes_per_physical_sector"),
+        ("style", "partition_style"),
+        ("count", "partition_count"),
+        ("table", "partition_table_summary"),
+        ("storage_id", "storage_id_ascii"),
+        ("registry_id", "partition_registry_id"),
+        ("adapter_id", "partition_adapter_id"),
+    ):
+        value = str(device.get(field) or "").strip()
+        if value:
+            parts.append(f"{label} {value}")
+    return "; ".join(parts)
+
+
 def _external_storage_identity_tier_counts(devices: list[dict[str, Any]]) -> list[dict[str, Any]]:
     counts: dict[str, int] = {}
     for device in devices:
@@ -14205,6 +14537,17 @@ def _external_storage_devices_from_events(db: Database, case_id: str, *, limit: 
                 "capacity_bytes": item.get("capacity_bytes") or "",
                 "file_system": "",
                 "alternate_scsi_serial": "",
+                **{field: "" for field in EXTERNAL_STORAGE_PARTITION_LOG_FIELDS},
+                "vbr_oem_name": "",
+                "vbr_file_system": "",
+                "vbr_volume_serial_number": "",
+                "vbr_volume_serial_number_full": "",
+                "vbr_volume_name": "",
+                "vbr_parse_status": "",
+                "vbr_serial_match": "",
+                "mbr_partition_type": "",
+                "partition_start_lba": "",
+                "partition_sector_count": "",
                 "user_profiles": "",
                 "first_install_date_utc": "",
                 "last_arrival_utc": "",
@@ -14316,6 +14659,17 @@ def _merge_external_storage_raw_usb_devices(
                 "capacity_bytes": "",
                 "file_system": "",
                 "alternate_scsi_serial": "",
+                **{field: "" for field in EXTERNAL_STORAGE_PARTITION_LOG_FIELDS},
+                "vbr_oem_name": "",
+                "vbr_file_system": "",
+                "vbr_volume_serial_number": "",
+                "vbr_volume_serial_number_full": "",
+                "vbr_volume_name": "",
+                "vbr_parse_status": "",
+                "vbr_serial_match": "",
+                "mbr_partition_type": "",
+                "partition_start_lba": "",
+                "partition_sector_count": "",
                 "user_profiles": "",
                 "first_install_date_utc": "",
                 "last_arrival_utc": "",
@@ -14348,6 +14702,17 @@ def _merge_external_storage_raw_usb_devices(
             "capacity_bytes",
             "file_system",
             "alternate_scsi_serial",
+            *EXTERNAL_STORAGE_PARTITION_LOG_FIELDS,
+            "vbr_oem_name",
+            "vbr_file_system",
+            "vbr_volume_serial_number",
+            "vbr_volume_serial_number_full",
+            "vbr_volume_name",
+            "vbr_parse_status",
+            "vbr_serial_match",
+            "mbr_partition_type",
+            "partition_start_lba",
+            "partition_sector_count",
         ):
             if item.get(field) and not device.get(field):
                 device[field] = item[field]
@@ -14394,7 +14759,25 @@ def _merge_external_storage_partition_events(db: Database, case_id: str, devices
                 devices.append(device)
                 if serial:
                     by_serial[serial] = device
-            for field in ("capacity_bytes", "file_system", "volume_name", "volume_serial_number", "volume_guid", "alternate_scsi_serial"):
+            for field in (
+                "capacity_bytes",
+                "file_system",
+                "volume_name",
+                "volume_serial_number",
+                "volume_guid",
+                "alternate_scsi_serial",
+                *EXTERNAL_STORAGE_PARTITION_LOG_FIELDS,
+                "vbr_oem_name",
+                "vbr_file_system",
+                "vbr_volume_serial_number",
+                "vbr_volume_serial_number_full",
+                "vbr_volume_name",
+                "vbr_parse_status",
+                "vbr_serial_match",
+                "mbr_partition_type",
+                "partition_start_lba",
+                "partition_sector_count",
+            ):
                 if parsed.get(field) and str(parsed.get(field)) != "0":
                     _merge_csv_field(device, field, parsed[field])
             timestamp = str(parsed.get("key_last_write_utc") or "")
@@ -14430,6 +14813,17 @@ def _external_storage_device_from_partition_event(
         "capacity_bytes": parsed.get("capacity_bytes") or "",
         "file_system": parsed.get("file_system") or "",
         "alternate_scsi_serial": parsed.get("alternate_scsi_serial") or "",
+        **{field: parsed.get(field) or "" for field in EXTERNAL_STORAGE_PARTITION_LOG_FIELDS},
+        "vbr_oem_name": parsed.get("vbr_oem_name") or "",
+        "vbr_file_system": parsed.get("vbr_file_system") or "",
+        "vbr_volume_serial_number": parsed.get("vbr_volume_serial_number") or "",
+        "vbr_volume_serial_number_full": parsed.get("vbr_volume_serial_number_full") or "",
+        "vbr_volume_name": parsed.get("vbr_volume_name") or "",
+        "vbr_parse_status": parsed.get("vbr_parse_status") or "",
+        "vbr_serial_match": parsed.get("vbr_serial_match") or "",
+        "mbr_partition_type": parsed.get("mbr_partition_type") or "",
+        "partition_start_lba": parsed.get("partition_start_lba") or "",
+        "partition_sector_count": parsed.get("partition_sector_count") or "",
         "parent_device_serial": "",
         "user_profiles": "",
         "first_install_date_utc": timestamp,
@@ -15466,6 +15860,300 @@ def common_dialog_items_report(db: Database, case_id: str, *, limit: int = 100) 
         item["raw_fat_times"] = json.loads(item.pop("raw_fat_times_json") or "[]")
         items.append(item)
     return {"case_id": case_id, "common_dialog_items": items, "total_returned": len(items)}
+
+
+def user_intent_artifacts_report(
+    db: Database,
+    case_id: str,
+    *,
+    user: str | None = None,
+    contains: str | None = None,
+    limit: int = 250,
+) -> dict[str, Any]:
+    db.get_case(case_id)
+    events: list[dict[str, Any]] = []
+    per_source_limit = max(limit, 100)
+
+    def include(item: dict[str, Any]) -> bool:
+        haystack = " ".join(str(value or "") for value in item.values()).casefold()
+        if user and user.casefold() not in haystack:
+            return False
+        if contains and contains.casefold() not in haystack:
+            return False
+        return True
+
+    def add(source: str, row: dict[str, Any], *, timestamp: Any, activity: str, path: Any = None, user_profile: Any = None) -> None:
+        item = {
+            "timestamp": timestamp,
+            "source": source,
+            "activity": activity,
+            "user_profile": user_profile or row.get("user_profile"),
+            "path": path,
+            "computer_id": row.get("computer_id"),
+            "computer_label": row.get("computer_label"),
+            "image_id": row.get("image_id"),
+            "image_path": row.get("image_path"),
+            "source_id": row.get("id"),
+            "details": row,
+        }
+        if include(item):
+            events.append(item)
+
+    for row in _query_report_rows(
+        db,
+        case_id,
+        "registry_office_mru",
+        """
+        SELECT registry_office_mru.*, NULL AS computer_label, NULL AS image_path
+        FROM registry_office_mru
+        WHERE case_id = ?
+        ORDER BY COALESCE(last_opened, key_last_write_timestamp, '') DESC
+        LIMIT ?
+        """,
+        (case_id, per_source_limit),
+    ):
+        add("office_mru", row, timestamp=row.get("last_opened") or row.get("key_last_write_timestamp"), activity="office_recent_file", path=row.get("file_name"))
+
+    for row in _query_report_rows(
+        db,
+        case_id,
+        "registry_common_dialog_mru",
+        """
+        SELECT registry_common_dialog_mru.*, NULL AS computer_label, NULL AS image_path
+        FROM registry_common_dialog_mru
+        WHERE case_id = ?
+        ORDER BY COALESCE(opened_on, key_last_write_timestamp, '') DESC
+        LIMIT ?
+        """,
+        (case_id, per_source_limit),
+    ):
+        add("common_dialog_mru", row, timestamp=row.get("opened_on") or row.get("key_last_write_timestamp"), activity="file_picker_or_dialog_reference", path=row.get("absolute_path") or row.get("executable"))
+
+    for row in _query_report_rows(
+        db,
+        case_id,
+        "registry_recentdocs",
+        """
+        SELECT registry_recentdocs.*, NULL AS computer_label, NULL AS image_path
+        FROM registry_recentdocs
+        WHERE case_id = ?
+        ORDER BY COALESCE(opened_on, extension_last_opened, key_last_write_timestamp, '') DESC
+        LIMIT ?
+        """,
+        (case_id, per_source_limit),
+    ):
+        add("recentdocs", row, timestamp=row.get("opened_on") or row.get("extension_last_opened") or row.get("key_last_write_timestamp"), activity="recent_document_reference", path=row.get("target_name") or row.get("lnk_name"))
+
+    for row in _query_report_rows(
+        db,
+        case_id,
+        "registry_typedpaths",
+        """
+        SELECT registry_typedpaths.*, NULL AS computer_label, NULL AS image_path
+        FROM registry_typedpaths
+        WHERE case_id = ?
+        ORDER BY COALESCE(opened_on, key_last_write_timestamp, '') DESC
+        LIMIT ?
+        """,
+        (case_id, per_source_limit),
+    ):
+        add("typedpaths", row, timestamp=row.get("opened_on") or row.get("key_last_write_timestamp"), activity="explorer_typed_path", path=row.get("path"))
+
+    for row in _query_report_rows(
+        db,
+        case_id,
+        "registry_wordwheel_query",
+        """
+        SELECT registry_wordwheel_query.*, NULL AS computer_label, NULL AS image_path
+        FROM registry_wordwheel_query
+        WHERE case_id = ?
+        ORDER BY COALESCE(last_write_timestamp, key_last_write_timestamp, '') DESC
+        LIMIT ?
+        """,
+        (case_id, per_source_limit),
+    ):
+        add("wordwheel_query", row, timestamp=row.get("last_write_timestamp") or row.get("key_last_write_timestamp"), activity="explorer_search_term", path=row.get("search_term"))
+
+    for row in _query_report_rows(
+        db,
+        case_id,
+        "shellbag_entries",
+        """
+        SELECT shellbag_entries.*, NULL AS computer_label, NULL AS image_path
+        FROM shellbag_entries
+        WHERE case_id = ?
+        ORDER BY COALESCE(last_interacted, first_interacted, modified_on, created_on, last_write_time, '') DESC
+        LIMIT ?
+        """,
+        (case_id, per_source_limit),
+    ):
+        add("shellbag", row, timestamp=row.get("last_interacted") or row.get("first_interacted") or row.get("modified_on") or row.get("last_write_time"), activity="folder_browsing_reference", path=row.get("absolute_path"))
+
+    _fill_computer_image_fields(db, case_id, [event["details"] for event in events if isinstance(event.get("details"), dict)])
+    for event in events:
+        details = event.get("details") if isinstance(event.get("details"), dict) else {}
+        event["computer_label"] = details.get("computer_label") or event.get("computer_label")
+        event["image_path"] = details.get("image_path") or event.get("image_path")
+    events.sort(key=lambda item: str(item.get("timestamp") or ""), reverse=True)
+    events = events[:limit]
+    counts: dict[str, int] = {}
+    for event in events:
+        counts[str(event.get("source") or "unknown")] = counts.get(str(event.get("source") or "unknown"), 0) + 1
+    return {
+        "case_id": case_id,
+        "filters": {"user": user, "contains": contains},
+        "summary": {"source_counts": counts},
+        "events": events,
+        "total_returned": len(events),
+    }
+
+
+def usn_file_lifecycle_markdown(report: dict[str, Any]) -> str:
+    lines = ["# USN File Lifecycle Report", "", f"Case: `{report.get('case_id')}`", ""]
+    lines.extend(["## Summary", "", f"- Lifecycle groups: `{report.get('total_returned', 0)}`", ""])
+    items = report.get("items") or []
+    if not items:
+        lines.append("No USN lifecycle groups matched the filters.")
+        return "\n".join(lines).rstrip() + "\n"
+    lines.extend(["## Lifecycle Groups", ""])
+    for index, item in enumerate(items[:100], start=1):
+        lines.extend(
+            [
+                f"### {index}. `{(item.get('paths_seen') or item.get('names_seen') or [''])[0]}`",
+                "",
+                f"- Computer: `{item.get('computer_label') or item.get('computer_id') or ''}`",
+                f"- First/last: `{item.get('first_timestamp') or ''}` / `{item.get('last_timestamp') or ''}`",
+                f"- File reference: `{item.get('file_reference_number') or ''}:{item.get('file_reference_sequence_number') or ''}`",
+                f"- Event count: `{item.get('event_count') or 0}`",
+                f"- Rename old/new counts: `{item.get('rename_old_count') or 0}` / `{item.get('rename_new_count') or 0}`",
+                f"- Create/delete/data-change seen: `{item.get('create_seen')}` / `{item.get('delete_seen')}` / `{item.get('data_change_seen')}`",
+                f"- Names seen: `{'; '.join(item.get('names_seen') or [])}`",
+                f"- Reasons seen: `{'; '.join(item.get('reasons_seen') or [])}`",
+                "",
+            ]
+        )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def usn_file_lifecycle_export_rows(report: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = []
+    for item in report.get("items") or []:
+        rows.append(
+            {
+                "case_id": report.get("case_id"),
+                "computer_id": item.get("computer_id"),
+                "computer_label": item.get("computer_label"),
+                "image_id": item.get("image_id"),
+                "file_reference_number": item.get("file_reference_number"),
+                "file_reference_sequence_number": item.get("file_reference_sequence_number"),
+                "first_timestamp": item.get("first_timestamp"),
+                "last_timestamp": item.get("last_timestamp"),
+                "event_count": item.get("event_count"),
+                "rename_old_count": item.get("rename_old_count"),
+                "rename_new_count": item.get("rename_new_count"),
+                "create_seen": item.get("create_seen"),
+                "delete_seen": item.get("delete_seen"),
+                "data_change_seen": item.get("data_change_seen"),
+                "names_seen": "; ".join(item.get("names_seen") or []),
+                "paths_seen": "; ".join(item.get("paths_seen") or []),
+                "reasons_seen": "; ".join(item.get("reasons_seen") or []),
+            }
+        )
+    return rows
+
+
+def shellbag_external_storage_markdown(report: dict[str, Any]) -> str:
+    lines = ["# Shellbag External Storage Report", "", f"Case: `{report.get('case_id')}`", ""]
+    lines.extend(["## Summary", "", f"- Shellbag rows with external-storage metadata: `{report.get('total_returned', 0)}`", ""])
+    items = report.get("shellbag_external_storage") or []
+    if not items:
+        lines.append("No Shellbag rows with volume or drive metadata were found.")
+        return "\n".join(lines).rstrip() + "\n"
+    lines.extend(["## Matches", ""])
+    for item in items[:100]:
+        matches = item.get("matched_devices") or []
+        lines.append(
+            "- "
+            f"`{item.get('last_interacted') or item.get('first_interacted') or item.get('modified_on') or item.get('last_write_time') or ''}` "
+            f"computer `{item.get('computer_label') or item.get('computer_id') or ''}` "
+            f"path `{item.get('absolute_path') or ''}` "
+            f"volume `{item.get('volume_serial_number') or item.get('volume_guid') or item.get('drive_letter') or ''}` "
+            f"matches `{len(matches)}` device(s)"
+        )
+        for match in matches[:5]:
+            lines.append(
+                f"  - `{match.get('device_identity') or match.get('serial') or ''}` "
+                f"basis `{match.get('match_basis') or ''}` confidence `{match.get('identity_confidence_tier') or ''}`"
+            )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def shellbag_external_storage_export_rows(report: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = []
+    for item in report.get("shellbag_external_storage") or []:
+        matches = item.get("matched_devices") or []
+        rows.append(
+            {
+                "case_id": report.get("case_id"),
+                "computer_id": item.get("computer_id"),
+                "computer_label": item.get("computer_label"),
+                "image_id": item.get("image_id"),
+                "user_profile": item.get("user_profile"),
+                "absolute_path": item.get("absolute_path"),
+                "last_interacted": item.get("last_interacted"),
+                "volume_serial_number": item.get("volume_serial_number"),
+                "volume_guid": item.get("volume_guid"),
+                "drive_letter": item.get("drive_letter"),
+                "match_count": len(matches),
+                "matched_devices": "; ".join(str(match.get("device_identity") or match.get("serial") or "") for match in matches),
+                "match_basis": "; ".join(str(match.get("match_basis") or "") for match in matches),
+            }
+        )
+    return rows
+
+
+def user_intent_artifacts_markdown(report: dict[str, Any]) -> str:
+    lines = ["# User Intent Artifacts Report", "", f"Case: `{report.get('case_id')}`", ""]
+    lines.extend(["## Summary", "", f"- Events: `{report.get('total_returned', 0)}`", ""])
+    counts = ((report.get("summary") or {}).get("source_counts") or {})
+    if counts:
+        for source, count in sorted(counts.items()):
+            lines.append(f"- `{source}`: `{count}`")
+        lines.append("")
+    events = report.get("events") or []
+    if not events:
+        lines.append("No user-intent artifacts matched the filters.")
+        return "\n".join(lines).rstrip() + "\n"
+    lines.extend(["## Events", ""])
+    for event in events[:150]:
+        lines.append(
+            "- "
+            f"`{event.get('timestamp') or ''}` "
+            f"`{event.get('source') or ''}` "
+            f"`{event.get('activity') or ''}` "
+            f"computer `{event.get('computer_label') or event.get('computer_id') or ''}` "
+            f"user `{event.get('user_profile') or ''}` "
+            f"path `{event.get('path') or ''}`"
+        )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def user_intent_artifacts_export_rows(report: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "case_id": report.get("case_id"),
+            "timestamp": event.get("timestamp"),
+            "source": event.get("source"),
+            "activity": event.get("activity"),
+            "computer_id": event.get("computer_id"),
+            "computer_label": event.get("computer_label"),
+            "image_id": event.get("image_id"),
+            "user_profile": event.get("user_profile"),
+            "path": event.get("path"),
+            "source_id": event.get("source_id"),
+        }
+        for event in report.get("events") or []
+    ]
 
 
 def activity_summary_report(db: Database, case_id: str, *, user: str | None = None, limit: int = 25) -> dict[str, Any]:
@@ -22119,6 +22807,15 @@ def usb_dossier_report(
         if event.get("usb_serial") == device.get("serial")
         or _norm_vsn(event.get("usb_volume_serial_number")) == _norm_vsn(device.get("volume_serial_number"))
     ]
+    shellbag_matches = [
+        item for item in shellbag_external_storage_report(db, case_id, limit=limit * 2)["shellbag_external_storage"]
+        if any(
+            match.get("serial") == device.get("serial")
+            or _norm_vsn(match.get("volume_serial_number")) == _norm_vsn(device.get("volume_serial_number"))
+            or str(match.get("volume_guid") or "").strip("{}").casefold() == str(device.get("volume_guid") or "").strip("{}").casefold()
+            for match in item.get("matched_devices") or []
+        )
+    ][:limit]
     return {
         "case_id": case_id,
         "device": device,
@@ -22128,12 +22825,14 @@ def usb_dossier_report(
         "mbr_vbr_details": verbose["mbr_vbr_details"],
         "copied_files": copied_groups,
         "file_activity": verbose["files_opened_accessed"],
+        "shellbag_external_storage": shellbag_matches,
         "timeline": device_timeline,
         "raw_evidence_counts": verbose["raw_evidence_counts"],
         "raw_evidence_rows": verbose["raw_evidence_rows"],
         "totals": {
             "copied_file_groups": len(copied_groups),
             "file_activity_rows": len(verbose["files_opened_accessed"]),
+            "shellbag_external_storage_rows": len(shellbag_matches),
             "timeline_events": len(device_timeline),
             "raw_evidence_rows": len(verbose["raw_evidence_rows"]),
         },
@@ -23122,9 +23821,89 @@ def _interpret_evtx_row(row: Any) -> dict[str, Any] | None:
         for key in ("map_description", "payload_data1", "payload_data2", "payload_data3", "payload", "executable_info")
     )
     text = f"{channel} {source_file} {payload}".lower()
+    provider = str(row["provider"] or "").lower()
     category = None
     tags: list[str] = []
-    if "partition%4diagnostic" in text or "usbstor" in text or event_id in {"1006", "20001", "20003", "2100", "2102"}:
+    if (
+        "powershell" in provider
+        or "powershell" in text
+        or event_id in {"400", "403", "600", "800", "4103", "4104", "4105", "4106"}
+    ):
+        category = "powershell"
+        tags.append("powershell_event")
+        if event_id == "4104":
+            tags.append("script_block_logging")
+        elif event_id == "4103":
+            tags.append("module_logging")
+        elif event_id in {"400", "403", "600"}:
+            tags.append("powershell_engine_lifecycle")
+    elif (
+        "windows defender" in provider
+        or "windefend" in provider
+        or "microsoft-windows-windows defender" in text
+        or "defender" in text
+        or (
+            event_id in {"1006", "1007", "1015", "1116", "1117", "1118", "1119", "5007"}
+            and any(token in text for token in ("defender", "malware", "threat", "antivirus"))
+        )
+    ):
+        category = "defender"
+        tags.append("defender_event")
+        if event_id in {"1116", "1006"}:
+            tags.append("malware_detected")
+        elif event_id in {"1117", "1007"}:
+            tags.append("remediation_action")
+        elif event_id == "5007":
+            tags.append("defender_configuration_changed")
+    elif (
+        "taskscheduler" in provider
+        or "task scheduler" in text
+        or "microsoft-windows-taskscheduler" in text
+        or (event_id in {"106", "129", "140", "141", "200", "201"} and "task" in text)
+    ):
+        category = "scheduled_task"
+        tags.append("task_scheduler_event")
+        if event_id in {"106", "140", "141"}:
+            tags.append("task_definition_changed")
+        elif event_id in {"200", "201"}:
+            tags.append("task_action_execution")
+    elif (
+        "terminalservices" in provider
+        or "terminalservices" in text
+        or "remoteconnectionmanager" in text
+        or "rdp" in text
+        or (
+            event_id in {"21", "22", "24", "25", "1024", "1149"}
+            and any(token in text for token in ("terminal", "remote desktop", "rdp", "rdp-tcp"))
+        )
+    ):
+        category = "remote_access"
+        tags.append("remote_access_event")
+        if event_id == "1149":
+            tags.append("rdp_authentication")
+        elif event_id in {"21", "22", "24", "25"}:
+            tags.append("rdp_session_lifecycle")
+    elif (
+        "smbclient" in provider
+        or "smbclient" in text
+        or "smb client" in text
+        or "\\\\" in payload
+    ):
+        category = "network_share"
+        tags.append("smb_client_event")
+    elif "bitlocker" in provider or "bitlocker" in text or "fve" in provider:
+        category = "bitlocker"
+        tags.append("bitlocker_event")
+    elif (
+        "printservice" in provider
+        or "printservice" in text
+        or (event_id in {"307", "805", "842"} and any(token in text for token in ("print", "printer", "spool")))
+    ):
+        category = "print"
+        tags.append("print_event")
+        if event_id == "307":
+            tags.append("document_printed")
+    elif "partition%4diagnostic" in text or "usbstor" in text or event_id in {"1006", "20001", "20003", "2100", "2102"}:
         category = "usb"
         tags.append("usb_event")
     elif (
@@ -23183,6 +23962,7 @@ def _interpret_evtx_row(row: Any) -> dict[str, Any] | None:
         "computer_id": row["computer_id"],
         "computer_label": row["computer_label"] if "computer_label" in row.keys() else None,
         "image_id": row["image_id"],
+        "tool_output_id": row["tool_output_id"],
         "category": category,
         "event_id": event_id,
         "time_created": row["time_created"],
@@ -27429,6 +28209,606 @@ def shortcuts_report(db: Database, case_id: str, *, artifact_type: str | None = 
     return {"case_id": case_id, "shortcuts": items, "total_returned": len(rows)}
 
 
+def shortcut_droid_changes_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str, Any]:
+    db.get_case(case_id)
+    columns = _report_table_columns(db, case_id, "shortcut_items")
+    if not {"droid_volume_id", "droid_file_id", "birth_droid_volume_id", "birth_droid_file_id"} & columns:
+        return {"case_id": case_id, "droid_changes": [], "total_returned": 0}
+    rows = _query_report_rows(
+        db,
+        case_id,
+        "shortcut_items",
+        f"""
+        SELECT {_shortcut_select_sql(columns)},
+               case_id,
+               source_scope,
+               snapshot_id,
+               snapshot_ids,
+               snapshot_count,
+               snapshot_index,
+               snapshot_created_utc
+        FROM shortcut_items
+        WHERE case_id = ?
+          AND (
+            ({_droid_column_sql(columns, 'droid_volume_id')} <> '' AND {_droid_column_sql(columns, 'birth_droid_volume_id')} <> ''
+             AND lower({_droid_column_sql(columns, 'droid_volume_id')}) <> lower({_droid_column_sql(columns, 'birth_droid_volume_id')}))
+            OR
+            ({_droid_column_sql(columns, 'droid_file_id')} <> '' AND {_droid_column_sql(columns, 'birth_droid_file_id')} <> ''
+             AND lower({_droid_column_sql(columns, 'droid_file_id')}) <> lower({_droid_column_sql(columns, 'birth_droid_file_id')}))
+          )
+        ORDER BY COALESCE(NULLIF(target_accessed, ''), NULLIF(target_modified, ''), NULLIF(target_created, ''), NULLIF(lnk_modified, ''), NULLIF(lnk_created, '')) DESC,
+                 artifact_type,
+                 artifact_path
+        LIMIT ?
+        """,
+        (case_id, limit),
+    )
+    computer_labels = _computer_labels(db, case_id)
+    image_paths = _image_paths(db, case_id)
+    items = []
+    for row in rows:
+        item = dict(row)
+        item["computer_label"] = computer_labels.get(str(item.get("computer_id"))) if item.get("computer_id") else None
+        item["image_path"] = image_paths.get(str(item.get("image_id"))) if item.get("image_id") else None
+        item["droid_change_basis"] = _shortcut_droid_change_basis(item)
+        item["interpretation"] = (
+            "Current Droid and Birth Droid values differ. This can indicate the linked target was moved, "
+            "renamed, copied, or otherwise resolved as a different tracked file/volume object after tracking began."
+        )
+        items.append(item)
+    return {"case_id": case_id, "droid_changes": items, "total_returned": len(items)}
+
+
+def shortcut_object_tracking_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str, Any]:
+    db.get_case(case_id)
+    shortcut_columns = _report_table_columns(db, case_id, "shortcut_items")
+    mft_columns = _report_table_columns(db, case_id, "mft_entries")
+    if "object_id" not in mft_columns:
+        return {"case_id": case_id, "matches": [], "total_returned": 0}
+    rows = _query_report_rows(
+        db,
+        case_id,
+        "shortcut_items",
+        f"""
+        WITH shortcuts AS (
+          SELECT {_shortcut_select_sql(shortcut_columns)}
+          FROM shortcut_items
+          WHERE case_id = ?
+        ),
+        mft AS (
+          SELECT id AS mft_id, computer_id AS mft_computer_id, image_id AS mft_image_id,
+                 entry_number AS mft_entry_number, sequence_number AS mft_sequence_number,
+                 parent_path AS mft_parent_path, file_name AS mft_file_name,
+                 object_id, birth_volume_id, birth_object_id, birth_domain_id,
+                 created_si AS mft_created_si, modified_si AS mft_modified_si,
+                 record_changed_si AS mft_record_changed_si, accessed_si AS mft_accessed_si,
+                 source_file AS mft_source_file
+          FROM mft_entries
+          WHERE case_id = ?
+            AND COALESCE(object_id, '') <> ''
+        )
+        SELECT shortcuts.*,
+               mft.*,
+               CASE
+                 WHEN {_droid_column_sql(shortcut_columns, 'droid_file_id')} <> ''
+                      AND {_normalized_guid_sql(_droid_column_sql(shortcut_columns, 'droid_file_id'))} = {_normalized_guid_sql('mft.object_id')}
+                   THEN 'current_droid_file_id_to_mft_object_id'
+                 WHEN {_droid_column_sql(shortcut_columns, 'birth_droid_file_id')} <> ''
+                      AND {_normalized_guid_sql(_droid_column_sql(shortcut_columns, 'birth_droid_file_id'))} = {_normalized_guid_sql('mft.object_id')}
+                   THEN 'birth_droid_file_id_to_mft_object_id'
+                 WHEN {_droid_column_sql(shortcut_columns, 'birth_droid_file_id')} <> ''
+                      AND COALESCE(mft.birth_object_id, '') <> ''
+                      AND {_normalized_guid_sql(_droid_column_sql(shortcut_columns, 'birth_droid_file_id'))} = {_normalized_guid_sql('mft.birth_object_id')}
+                   THEN 'birth_droid_file_id_to_mft_birth_object_id'
+                 ELSE 'unknown'
+               END AS match_basis
+        FROM shortcuts
+        JOIN mft
+          ON (
+            ({_droid_column_sql(shortcut_columns, 'droid_file_id')} <> ''
+             AND {_normalized_guid_sql(_droid_column_sql(shortcut_columns, 'droid_file_id'))} = {_normalized_guid_sql('mft.object_id')})
+            OR
+            ({_droid_column_sql(shortcut_columns, 'birth_droid_file_id')} <> ''
+             AND {_normalized_guid_sql(_droid_column_sql(shortcut_columns, 'birth_droid_file_id'))} = {_normalized_guid_sql('mft.object_id')})
+            OR
+            ({_droid_column_sql(shortcut_columns, 'birth_droid_file_id')} <> ''
+             AND COALESCE(mft.birth_object_id, '') <> ''
+             AND {_normalized_guid_sql(_droid_column_sql(shortcut_columns, 'birth_droid_file_id'))} = {_normalized_guid_sql('mft.birth_object_id')})
+          )
+        ORDER BY COALESCE(NULLIF(target_accessed, ''), NULLIF(target_modified, ''), NULLIF(target_created, ''), NULLIF(lnk_modified, ''), NULLIF(lnk_created, '')) DESC,
+                 artifact_path,
+                 mft_parent_path,
+                 mft_file_name
+        LIMIT ?
+        """,
+        (case_id, case_id, limit),
+    )
+    computer_labels = _computer_labels(db, case_id)
+    image_paths = _image_paths(db, case_id)
+    matches = []
+    for row in rows:
+        item = dict(row)
+        item["computer_label"] = computer_labels.get(str(item.get("computer_id"))) if item.get("computer_id") else None
+        item["image_path"] = image_paths.get(str(item.get("image_id"))) if item.get("image_id") else None
+        item["mft_computer_label"] = computer_labels.get(str(item.get("mft_computer_id"))) if item.get("mft_computer_id") else None
+        item["mft_image_path"] = image_paths.get(str(item.get("mft_image_id"))) if item.get("mft_image_id") else None
+        item["mft_full_path"] = _join_report_path(item.get("mft_parent_path"), item.get("mft_file_name"))
+        matches.append(item)
+    return {"case_id": case_id, "matches": matches, "total_returned": len(matches)}
+
+
+def shortcut_droid_changes_export_rows(report: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "case_id": report.get("case_id"),
+            "computer_id": item.get("computer_id"),
+            "computer_label": item.get("computer_label"),
+            "image_id": item.get("image_id"),
+            "artifact_type": item.get("artifact_type"),
+            "artifact_path": item.get("artifact_path"),
+            "file_name": item.get("file_name"),
+            "file_location": item.get("file_location"),
+            "target_accessed": item.get("target_accessed"),
+            "target_modified": item.get("target_modified"),
+            "droid_volume_id": item.get("droid_volume_id"),
+            "birth_droid_volume_id": item.get("birth_droid_volume_id"),
+            "droid_file_id": item.get("droid_file_id"),
+            "birth_droid_file_id": item.get("birth_droid_file_id"),
+            "droid_change_basis": item.get("droid_change_basis"),
+        }
+        for item in report.get("droid_changes") or []
+    ]
+
+
+def shortcut_droid_changes_markdown(report: dict[str, Any]) -> str:
+    lines = ["# Shortcut Droid Change Report", "", f"Case: `{report.get('case_id')}`", ""]
+    lines.extend(["## Summary", "", f"- Droid change candidates: `{report.get('total_returned', 0)}`", ""])
+    for item in report.get("droid_changes") or []:
+        lines.append(
+            "- "
+            f"`{item.get('target_accessed') or item.get('target_modified') or item.get('target_created') or item.get('lnk_modified') or ''}` "
+            f"computer `{item.get('computer_label') or item.get('computer_id') or ''}` "
+            f"target `{item.get('file_location') or item.get('file_name') or ''}` "
+            f"basis `{item.get('droid_change_basis') or ''}`"
+        )
+    if report.get("total_returned", 0) == 0:
+        lines.append("No shortcut Droid/BirthDroid changes were found.")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def shortcut_object_tracking_export_rows(report: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "case_id": report.get("case_id"),
+            "computer_id": item.get("computer_id"),
+            "computer_label": item.get("computer_label"),
+            "image_id": item.get("image_id"),
+            "artifact_type": item.get("artifact_type"),
+            "artifact_path": item.get("artifact_path"),
+            "file_name": item.get("file_name"),
+            "file_location": item.get("file_location"),
+            "target_accessed": item.get("target_accessed"),
+            "match_basis": item.get("match_basis"),
+            "droid_file_id": item.get("droid_file_id"),
+            "birth_droid_file_id": item.get("birth_droid_file_id"),
+            "mft_full_path": item.get("mft_full_path"),
+            "mft_object_id": item.get("object_id"),
+            "mft_birth_object_id": item.get("birth_object_id"),
+            "mft_computer_label": item.get("mft_computer_label"),
+        }
+        for item in report.get("matches") or []
+    ]
+
+
+def shortcut_object_tracking_markdown(report: dict[str, Any]) -> str:
+    lines = ["# Shortcut Object Tracking Report", "", f"Case: `{report.get('case_id')}`", ""]
+    lines.extend(["## Summary", "", f"- Object ID matches: `{report.get('total_returned', 0)}`", ""])
+    for item in report.get("matches") or []:
+        lines.append(
+            "- "
+            f"`{item.get('target_accessed') or item.get('target_modified') or item.get('target_created') or item.get('lnk_modified') or ''}` "
+            f"shortcut computer `{item.get('computer_label') or item.get('computer_id') or ''}` "
+            f"target `{item.get('file_location') or item.get('file_name') or ''}` "
+            f"matched MFT `{item.get('mft_full_path') or ''}` "
+            f"basis `{item.get('match_basis') or ''}`"
+        )
+    if report.get("total_returned", 0) == 0:
+        lines.append("No shortcut Droid/Object ID matches were found.")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def file_movement_identity_report(
+    db: Database,
+    case_id: str,
+    *,
+    contains: str | None = None,
+    limit: int = 100,
+) -> dict[str, Any]:
+    object_tracking = shortcut_object_tracking_report(db, case_id, limit=limit)
+    droid_changes = shortcut_droid_changes_report(db, case_id, limit=limit)
+    usn_lifecycle = usn_file_lifecycle_report(db, case_id, contains=contains, limit=limit)
+    user_intent = user_intent_artifacts_report(db, case_id, contains=contains, limit=limit)
+    shellbag_storage = shellbag_external_storage_report(db, case_id, limit=limit)
+    findings: list[dict[str, Any]] = []
+
+    for item in object_tracking.get("matches") or []:
+        findings.append(
+            {
+                "finding_type": "shortcut_object_id_match",
+                "confidence": "high",
+                "timestamp": item.get("target_accessed") or item.get("target_modified") or item.get("target_created"),
+                "computer_label": item.get("computer_label"),
+                "path": item.get("file_location") or item.get("file_name"),
+                "correlation_basis": item.get("match_basis"),
+                "summary": f"Shortcut/Jumplist Droid matched NTFS Object ID for {item.get('mft_full_path') or 'MFT entry'}.",
+                "details": item,
+            }
+        )
+    for item in droid_changes.get("droid_changes") or []:
+        findings.append(
+            {
+                "finding_type": "shortcut_droid_changed",
+                "confidence": "medium",
+                "timestamp": item.get("target_accessed") or item.get("target_modified") or item.get("target_created"),
+                "computer_label": item.get("computer_label"),
+                "path": item.get("file_location") or item.get("file_name"),
+                "correlation_basis": item.get("droid_change_basis"),
+                "summary": "Shortcut current Droid and BirthDroid differ, suggesting tracked file or volume identity changed.",
+                "details": item,
+            }
+        )
+    for item in usn_lifecycle.get("items") or []:
+        if item.get("rename_old_count") or item.get("rename_new_count") or item.get("data_change_seen"):
+            findings.append(
+                {
+                    "finding_type": "usn_lifecycle_chain",
+                    "confidence": "high",
+                    "timestamp": item.get("last_timestamp"),
+                    "computer_label": item.get("computer_label"),
+                    "path": "; ".join((item.get("paths_seen") or [])[:3]),
+                    "correlation_basis": "file_reference_number",
+                    "summary": "USN records show a lifecycle chain for the same file reference.",
+                    "details": item,
+                }
+            )
+    for item in shellbag_storage.get("shellbag_external_storage") or []:
+        if item.get("matched_devices"):
+            findings.append(
+                {
+                    "finding_type": "shellbag_external_storage_match",
+                    "confidence": "medium",
+                    "timestamp": item.get("last_interacted") or item.get("first_interacted") or item.get("modified_on"),
+                    "computer_label": item.get("computer_label"),
+                    "path": item.get("absolute_path"),
+                    "correlation_basis": "; ".join(match.get("match_basis") or "" for match in item.get("matched_devices") or []),
+                    "summary": "Shellbag folder interaction matched external-storage volume/device metadata.",
+                    "details": item,
+                }
+            )
+    for event in user_intent.get("events") or []:
+        findings.append(
+            {
+                "finding_type": "user_intent_reference",
+                "confidence": "context",
+                "timestamp": event.get("timestamp"),
+                "computer_label": event.get("computer_label"),
+                "path": event.get("path"),
+                "correlation_basis": event.get("source"),
+                "summary": f"User-intent artifact indicates {event.get('activity') or 'file/folder interaction'}.",
+                "details": event,
+            }
+        )
+
+    if contains:
+        needle = contains.casefold()
+        findings = [
+            finding for finding in findings
+            if needle in " ".join(str(value or "") for value in finding.values()).casefold()
+        ]
+    findings.sort(key=lambda row: str(row.get("timestamp") or ""), reverse=True)
+    findings = findings[:limit]
+    counts: dict[str, int] = {}
+    for finding in findings:
+        counts[finding["finding_type"]] = counts.get(finding["finding_type"], 0) + 1
+    return {
+        "case_id": case_id,
+        "filters": {"contains": contains},
+        "summary": {"finding_counts": counts, "finding_count": len(findings)},
+        "findings": findings,
+        "source_reports": {
+            "shortcut_object_tracking": object_tracking.get("total_returned", 0),
+            "shortcut_droid_changes": droid_changes.get("total_returned", 0),
+            "usn_lifecycle": usn_lifecycle.get("total_returned", 0),
+            "shellbag_external_storage": shellbag_storage.get("total_returned", 0),
+            "user_intent": user_intent.get("total_returned", 0),
+        },
+        "total_returned": len(findings),
+    }
+
+
+def file_movement_identity_markdown(report: dict[str, Any]) -> str:
+    lines = ["# File Movement And Identity Report", "", f"Case: `{report.get('case_id')}`", ""]
+    summary = report.get("summary") or {}
+    lines.extend(["## Summary", "", f"- Findings: `{summary.get('finding_count', report.get('total_returned', 0))}`"])
+    for key, value in sorted((summary.get("finding_counts") or {}).items()):
+        lines.append(f"- `{key}`: `{value}`")
+    lines.append("")
+    for finding in report.get("findings") or []:
+        lines.append(
+            "- "
+            f"`{finding.get('timestamp') or ''}` "
+            f"`{finding.get('finding_type') or ''}` "
+            f"confidence `{finding.get('confidence') or ''}` "
+            f"computer `{finding.get('computer_label') or ''}` "
+            f"path `{finding.get('path') or ''}` "
+            f"basis `{finding.get('correlation_basis') or ''}`"
+        )
+    if not report.get("findings"):
+        lines.append("No file movement or identity findings matched the filters.")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def file_movement_identity_export_rows(report: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "case_id": report.get("case_id"),
+            "timestamp": finding.get("timestamp"),
+            "finding_type": finding.get("finding_type"),
+            "confidence": finding.get("confidence"),
+            "computer_label": finding.get("computer_label"),
+            "path": finding.get("path"),
+            "correlation_basis": finding.get("correlation_basis"),
+            "summary": finding.get("summary"),
+        }
+        for finding in report.get("findings") or []
+    ]
+
+
+DERIVED_TIMELINE_TOOL = "RelicDerived"
+
+
+def derived_timeline_events_report(db: Database, case_id: str, *, limit: int = 1000) -> dict[str, Any]:
+    events = derived_timeline_events(db, case_id, limit=limit)
+    counts: dict[str, int] = {}
+    for event in events:
+        counts[event["event_type"]] = counts.get(event["event_type"], 0) + 1
+    return {"case_id": case_id, "summary": {"event_counts": counts}, "events": events, "total_returned": len(events)}
+
+
+def rebuild_derived_timeline_events(
+    db: Database,
+    *,
+    case_id: str,
+    image_id: str | None = None,
+    limit: int = 5000,
+) -> dict[str, Any]:
+    db.get_case(case_id)
+    if image_id:
+        db.get_image(image_id, case_id)
+    where = ["case_id = ?", "source_tool = ?"]
+    params: list[Any] = [case_id, DERIVED_TIMELINE_TOOL]
+    if image_id:
+        where.append("image_id = ?")
+        params.append(image_id)
+    db.conn.execute(f"DELETE FROM timeline_events WHERE {' AND '.join(where)}", params)
+    if db.analytics is not None:
+        db.analytics.delete_where("timeline_events", " AND ".join(where), params)
+    events = [
+        event for event in derived_timeline_events(db, case_id, limit=limit)
+        if image_id is None or event.get("image_id") == image_id
+    ]
+    db.insert_timeline_events(events)
+    return {"case_id": case_id, "image_id": image_id, "deleted_source_tool": DERIVED_TIMELINE_TOOL, "inserted": len(events)}
+
+
+def derived_timeline_events(db: Database, case_id: str, *, limit: int = 5000) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+
+    for item in user_intent_artifacts_report(db, case_id, limit=min(limit, 1000)).get("events") or []:
+        details = item.get("details") if isinstance(item.get("details"), dict) else {}
+        rows.extend(
+            _derived_event(
+                case_id=case_id,
+                item=details,
+                source_table=str(item.get("source") or "user_intent"),
+                source_row_id=str(item.get("source_id") or details.get("id") or uuid.uuid4()),
+                event_type=f"user_intent_{item.get('source') or 'artifact'}",
+                timestamp=item.get("timestamp"),
+                description=item.get("path") or item.get("activity"),
+                details={
+                    "activity": item.get("activity"),
+                    "path": item.get("path"),
+                    "user_profile": item.get("user_profile"),
+                    "source": item.get("source"),
+                    "evidence_strength": "context",
+                },
+            )
+        )
+    for item in shellbag_external_storage_report(db, case_id, limit=min(limit, 1000)).get("shellbag_external_storage") or []:
+        if not item.get("matched_devices"):
+            continue
+        rows.extend(
+            _derived_event(
+                case_id=case_id,
+                item=item,
+                source_table="shellbag_entries",
+                source_row_id=str(item.get("id") or uuid.uuid4()),
+                event_type="shellbag_external_storage_match",
+                timestamp=item.get("last_interacted") or item.get("first_interacted") or item.get("modified_on") or item.get("last_write_time"),
+                description=item.get("absolute_path"),
+                details={
+                    "path": item.get("absolute_path"),
+                    "volume_serial_number": item.get("volume_serial_number"),
+                    "volume_guid": item.get("volume_guid"),
+                    "drive_letter": item.get("drive_letter"),
+                    "matched_devices": item.get("matched_devices"),
+                    "evidence_strength": "correlation",
+                },
+            )
+        )
+    for item in shortcut_droid_changes_report(db, case_id, limit=min(limit, 1000)).get("droid_changes") or []:
+        rows.extend(
+            _derived_event(
+                case_id=case_id,
+                item=item,
+                source_table="shortcut_items",
+                source_row_id=str(item.get("id") or uuid.uuid4()),
+                event_type="shortcut_droid_changed",
+                timestamp=item.get("target_accessed") or item.get("target_modified") or item.get("target_created") or item.get("lnk_modified"),
+                description=item.get("file_location") or item.get("file_name"),
+                details={
+                    "artifact_path": item.get("artifact_path"),
+                    "target": item.get("file_location") or item.get("file_name"),
+                    "droid_change_basis": item.get("droid_change_basis"),
+                    "evidence_strength": "lead",
+                },
+            )
+        )
+    for item in shortcut_object_tracking_report(db, case_id, limit=min(limit, 1000)).get("matches") or []:
+        rows.extend(
+            _derived_event(
+                case_id=case_id,
+                item=item,
+                source_table="shortcut_items",
+                source_row_id=str(item.get("id") or uuid.uuid4()),
+                event_type="shortcut_object_id_match",
+                timestamp=item.get("target_accessed") or item.get("target_modified") or item.get("target_created") or item.get("lnk_modified"),
+                description=item.get("file_location") or item.get("file_name"),
+                details={
+                    "artifact_path": item.get("artifact_path"),
+                    "target": item.get("file_location") or item.get("file_name"),
+                    "mft_full_path": item.get("mft_full_path"),
+                    "match_basis": item.get("match_basis"),
+                    "evidence_strength": "strong_correlation",
+                },
+            )
+        )
+    for item in usn_file_lifecycle_report(db, case_id, limit=min(limit, 1000)).get("items") or []:
+        source = (item.get("events") or [{}])[0]
+        rows.extend(
+            _derived_event(
+                case_id=case_id,
+                item=source,
+                source_table="usn_journal_entries",
+                source_row_id=str(source.get("id") or uuid.uuid4()),
+                event_type="usn_file_lifecycle",
+                timestamp=item.get("last_timestamp") or item.get("first_timestamp"),
+                description="; ".join((item.get("paths_seen") or item.get("names_seen") or [])[:3]),
+                details={
+                    "file_reference_number": item.get("file_reference_number"),
+                    "file_reference_sequence_number": item.get("file_reference_sequence_number"),
+                    "names_seen": item.get("names_seen"),
+                    "paths_seen": item.get("paths_seen"),
+                    "reasons_seen": item.get("reasons_seen"),
+                    "rename_old_count": item.get("rename_old_count"),
+                    "rename_new_count": item.get("rename_new_count"),
+                    "data_change_seen": item.get("data_change_seen"),
+                    "evidence_strength": "filesystem_sequence",
+                },
+            )
+        )
+    interpreted = event_interpretation_report(db, case_id, limit=min(limit, 1000)).get("events") or []
+    for item in interpreted:
+        rows.extend(
+            _derived_event(
+                case_id=case_id,
+                item=item,
+                source_table="evtx_events",
+                source_row_id=str(item.get("id") or uuid.uuid4()),
+                event_type=f"evtx_{item.get('category') or 'interpreted'}",
+                timestamp=item.get("time_created"),
+                description=item.get("summary") or item.get("payload_data1"),
+                details={
+                    "category": item.get("category"),
+                    "event_id": item.get("event_id"),
+                    "provider": item.get("provider"),
+                    "channel": item.get("channel"),
+                    "evidence_tags": item.get("evidence_tags"),
+                    "evidence_strength": "interpreted_event_log",
+                },
+            )
+        )
+    rows = [event for event in rows if event]
+    rows.sort(key=lambda event: str(event.get("timestamp_utc") or ""), reverse=True)
+    return rows[:limit]
+
+
+def _derived_event(
+    *,
+    case_id: str,
+    item: dict[str, Any],
+    source_table: str,
+    source_row_id: str,
+    event_type: str,
+    timestamp: Any,
+    description: Any,
+    details: dict[str, Any],
+) -> list[dict[str, Any]]:
+    timestamp_utc = normalize_timestamp(timestamp)
+    if not timestamp_utc:
+        return []
+    tool_output_id = item.get("tool_output_id")
+    computer_id = item.get("computer_id")
+    image_id = item.get("image_id")
+    if not (tool_output_id and computer_id and image_id):
+        return []
+    return [
+        {
+            "id": str(uuid.uuid4()),
+            "case_id": case_id,
+            "computer_id": computer_id,
+            "image_id": image_id,
+            "tool_output_id": tool_output_id,
+            "source_tool": DERIVED_TIMELINE_TOOL,
+            "source_table": source_table,
+            "source_row_id": source_row_id,
+            "event_type": event_type,
+            "raw_timestamp": str(timestamp or ""),
+            "timestamp_utc": timestamp_utc,
+            "description": str(description or ""),
+            "details": details,
+        }
+    ]
+
+
+def _droid_column_sql(columns: set[str], name: str) -> str:
+    return f"COALESCE({name}, '')" if name in columns else "''"
+
+
+def _normalized_guid_sql(expression: str) -> str:
+    return (
+        "lower(replace(replace(replace("
+        f"{expression}"
+        ", '{', ''), '}', ''), '-', ''))"
+    )
+
+
+def _join_report_path(parent: Any, name: Any) -> str:
+    parent_text = str(parent or "").rstrip("\\/")
+    name_text = str(name or "").strip("\\/")
+    if not parent_text:
+        return name_text
+    if not name_text:
+        return parent_text
+    separator = "\\" if "\\" in parent_text else "/"
+    return f"{parent_text}{separator}{name_text}"
+
+
+def _shortcut_droid_change_basis(item: dict[str, Any]) -> str:
+    changes = []
+    if _norm_droid(item.get("droid_volume_id")) and _norm_droid(item.get("birth_droid_volume_id")):
+        if _norm_droid(item.get("droid_volume_id")) != _norm_droid(item.get("birth_droid_volume_id")):
+            changes.append("volume_id_changed")
+    if _norm_droid(item.get("droid_file_id")) and _norm_droid(item.get("birth_droid_file_id")):
+        if _norm_droid(item.get("droid_file_id")) != _norm_droid(item.get("birth_droid_file_id")):
+            changes.append("file_id_changed")
+    return ", ".join(changes)
+
+
+def _norm_droid(value: Any) -> str:
+    return re.sub(r"[^0-9a-f]", "", str(value or "").casefold())
+
+
 def _artifact_counts(artifacts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     counts: dict[tuple[str, str], int] = {}
     for artifact in artifacts:
@@ -28670,8 +30050,10 @@ def _fill_computer_image_fields(db: Database, case_id: str, rows: list[dict[str,
     labels = _computer_labels(db, case_id)
     paths = _image_paths(db, case_id)
     for row in rows:
-        row.setdefault("computer_label", labels.get(str(row.get("computer_id"))))
-        row.setdefault("image_path", paths.get(str(row.get("image_id"))))
+        if not row.get("computer_label"):
+            row["computer_label"] = labels.get(str(row.get("computer_id")))
+        if not row.get("image_path"):
+            row["image_path"] = paths.get(str(row.get("image_id")))
 
 
 def _artifact_duplicate_filter(table: str) -> str:

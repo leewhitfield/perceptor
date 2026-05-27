@@ -76,6 +76,13 @@ from .reports import (
     copied_file_indicators_report,
     copied_usb_files_report,
     common_dialog_items_report,
+    derived_timeline_events_report,
+    file_movement_identity_export_rows,
+    file_movement_identity_markdown,
+    file_movement_identity_report,
+    user_intent_artifacts_report,
+    user_intent_artifacts_export_rows,
+    user_intent_artifacts_markdown,
     combined_artifact_family_markdown,
     combined_artifact_family_report,
     communication_groups_report,
@@ -190,6 +197,7 @@ from .reports import (
     remote_access_attribution_report,
     rdp_remote_access_markdown,
     regression_smoke_report,
+    rebuild_derived_timeline_events,
     rdp_visual_observations_report,
     registry_artifacts_report,
     registry_activity_report,
@@ -209,7 +217,16 @@ from .reports import (
     srum_app_network_usage_report,
     srum_context_report,
     srum_networks_report,
+    shellbag_external_storage_report,
+    shellbag_external_storage_export_rows,
+    shellbag_external_storage_markdown,
     shellbags_report,
+    shortcut_droid_changes_report,
+    shortcut_droid_changes_export_rows,
+    shortcut_droid_changes_markdown,
+    shortcut_object_tracking_report,
+    shortcut_object_tracking_export_rows,
+    shortcut_object_tracking_markdown,
     shortcuts_report,
     shimcache_report,
     taskbar_pins_report,
@@ -235,6 +252,9 @@ from .reports import (
     usn_path_report,
     usn_reasons_report,
     usn_bursts_report,
+    usn_file_lifecycle_report,
+    usn_file_lifecycle_export_rows,
+    usn_file_lifecycle_markdown,
     usn_rename_pairs_report,
     usn_summary_report,
     usn_suspicious_report,
@@ -665,6 +685,7 @@ def rebuild_case_postprocess(
     run_step("derived_sessions", lambda: rebuild_sessions(db, case_id=case_id, image_id=image_id))
     run_step("correlation_framework", lambda: rebuild_correlation_framework(db, case_id=case_id, image_id=image_id))
     run_step("user_file_references", lambda: rebuild_user_controlled_file_references(db, case_id=case_id, image_id=image_id))
+    run_step("derived_timeline_events", lambda: rebuild_derived_timeline_events(db, case_id=case_id, image_id=image_id))
     db.log_activity(
         case_id=case_id,
         image_id=image_id,
@@ -780,6 +801,9 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
     gaps = evidence_gaps_report(db, case_id, limit=limit)
     suspicious = suspicious_executions_report(db, case_id, limit=limit)
     deep_recovery = deep_recovery_status_report(db, case_id, limit=limit)
+    user_intent = user_intent_artifacts_report(db, case_id, limit=limit)
+    shellbag_storage = shellbag_external_storage_report(db, case_id, limit=limit)
+    file_identity = file_movement_identity_report(db, case_id, limit=limit)
     specs: list[tuple[str, str, str, object]] = [
         ("executive-summary", "md", "Executive summary", case_executive_summary_markdown(case_executive_summary_report(db, case_id, limit=limit, memory_disk_report=memory_disk))),
         ("case-overview", "md", "Case overview", case_overview_markdown(overview)),
@@ -793,6 +817,12 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
         ("suspicious-executions", "md", "Suspicious executions", suspicious_executions_markdown(suspicious)),
         ("memory-artifacts", "md", "Memory artifact inventory", memory_artifacts_markdown(memory_artifacts_report(db, case_id, limit=limit))),
         ("deep-recovery-status", "md", "Deep recovery status", deep_recovery_status_markdown(deep_recovery)),
+        ("user-intent", "md", "User intent artifacts", user_intent_artifacts_markdown(user_intent)),
+        ("shellbag-external-storage", "md", "Shellbag external storage", shellbag_external_storage_markdown(shellbag_storage)),
+        ("file-movement-identity", "md", "File movement and identity", file_movement_identity_markdown(file_identity)),
+        ("shortcut-droid-changes", "md", "Shortcut Droid changes", shortcut_droid_changes_markdown(shortcut_droid_changes_report(db, case_id, limit=limit))),
+        ("shortcut-object-tracking", "md", "Shortcut Object ID tracking", shortcut_object_tracking_markdown(shortcut_object_tracking_report(db, case_id, limit=limit))),
+        ("usn-lifecycle", "md", "USN file lifecycle", usn_file_lifecycle_markdown(usn_file_lifecycle_report(db, case_id, limit=limit))),
         ("recovery-coverage", "json", "Recovery coverage", recovery_coverage_report(db, case_id, limit=max(limit, 250))),
         ("carve-coverage", "md", "Carve coverage", carve_coverage_markdown(carve_coverage_report(db, case_id, limit=max(limit, 250)))),
         ("sqlite-inventory", "md", "SQLite carve inventory", sqlite_inventory_markdown(sqlite_inventory_report(db, case_id, limit=limit))),
@@ -819,6 +849,7 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
     readiness_summary = readiness.get("summary") if isinstance(readiness.get("summary"), dict) else {}
     gaps_summary = gaps.get("summary") if isinstance(gaps.get("summary"), dict) else {}
     suspicious_summary = suspicious.get("summary") if isinstance(suspicious.get("summary"), dict) else {}
+    file_identity_summary = file_identity.get("summary") if isinstance(file_identity.get("summary"), dict) else {}
     index_lines = [
         "# Case Report Bundle",
         "",
@@ -827,6 +858,8 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
         "## At-a-Glance",
         "",
         f"- Suspicious executions: `{suspicious_summary.get('finding_count', overview_summary.get('suspicious_executions', 0))}`",
+        f"- File movement/identity findings: `{file_identity_summary.get('finding_count', 0)}`",
+        f"- User-intent artifacts: `{user_intent.get('total_returned', 0)}`",
         f"- Memory support files processed: `{support_summary.get('processed_count', 0)}` / `{support_summary.get('support_file_count', 0)}`",
         f"- Memory string hits: `{support_summary.get('hit_count', overview_summary.get('memory_string_hits', 0))}`",
         f"- High-value credential candidates: `{credential_summary.get('high_value_candidate_count', 0)}`",
@@ -1275,6 +1308,10 @@ def build_parser() -> argparse.ArgumentParser:
     case_rebuild_sessions = case_sub.add_parser("rebuild-sessions")
     case_rebuild_sessions.add_argument("case_id")
     case_rebuild_sessions.add_argument("--image", dest="image_id")
+    case_rebuild_derived_timeline = case_sub.add_parser("rebuild-derived-timeline")
+    case_rebuild_derived_timeline.add_argument("case_id")
+    case_rebuild_derived_timeline.add_argument("--image", dest="image_id")
+    case_rebuild_derived_timeline.add_argument("--limit", type=int, default=5000)
     case_rebuild_postprocess = case_sub.add_parser("rebuild-postprocess")
     case_rebuild_postprocess.add_argument("case_id")
     case_rebuild_postprocess.add_argument("--image", dest="image_id")
@@ -1310,6 +1347,10 @@ def build_parser() -> argparse.ArgumentParser:
     project_rebuild_sessions = project_sub.add_parser("rebuild-sessions")
     project_rebuild_sessions.add_argument("case_id")
     project_rebuild_sessions.add_argument("--image", dest="image_id")
+    project_rebuild_derived_timeline = project_sub.add_parser("rebuild-derived-timeline")
+    project_rebuild_derived_timeline.add_argument("case_id")
+    project_rebuild_derived_timeline.add_argument("--image", dest="image_id")
+    project_rebuild_derived_timeline.add_argument("--limit", type=int, default=5000)
     project_rebuild_postprocess = project_sub.add_parser("rebuild-postprocess")
     project_rebuild_postprocess.add_argument("case_id")
     project_rebuild_postprocess.add_argument("--image", dest="image_id")
@@ -2356,6 +2397,12 @@ def build_parser() -> argparse.ArgumentParser:
     report_usn_renames = report_sub.add_parser("usn-renames")
     report_usn_renames.add_argument("--case", required=True, dest="case_id")
     report_usn_renames.add_argument("--limit", type=int, default=100)
+    report_usn_lifecycle = report_sub.add_parser("usn-lifecycle")
+    report_usn_lifecycle.add_argument("--case", required=True, dest="case_id")
+    report_usn_lifecycle.add_argument("--contains")
+    report_usn_lifecycle.add_argument("--limit", type=int, default=100)
+    report_usn_lifecycle.add_argument("--format", choices=["md", "json", "table", "csv"], default="json")
+    report_usn_lifecycle.add_argument("--output")
     report_usn_bursts = report_sub.add_parser("usn-bursts")
     report_usn_bursts.add_argument("--case", required=True, dest="case_id")
     report_usn_bursts.add_argument("--minutes", type=int, default=5)
@@ -2826,6 +2873,39 @@ def build_parser() -> argparse.ArgumentParser:
     report_shortcuts.add_argument("--case", required=True, dest="case_id")
     report_shortcuts.add_argument("--type", choices=["lnk", "jumplist"], dest="artifact_type")
     report_shortcuts.add_argument("--limit", type=int, default=100)
+    report_shellbag_external_storage = report_sub.add_parser("shellbag-external-storage")
+    report_shellbag_external_storage.add_argument("--case", required=True, dest="case_id")
+    report_shellbag_external_storage.add_argument("--limit", type=int, default=100)
+    report_shellbag_external_storage.add_argument("--format", choices=["md", "json", "table", "csv"], default="json")
+    report_shellbag_external_storage.add_argument("--output")
+    report_user_intent = report_sub.add_parser("user-intent")
+    report_user_intent.add_argument("--case", required=True, dest="case_id")
+    report_user_intent.add_argument("--user")
+    report_user_intent.add_argument("--contains")
+    report_user_intent.add_argument("--limit", type=int, default=250)
+    report_user_intent.add_argument("--format", choices=["md", "json", "table", "csv"], default="json")
+    report_user_intent.add_argument("--output")
+    report_file_movement_identity = report_sub.add_parser("file-movement-identity")
+    report_file_movement_identity.add_argument("--case", required=True, dest="case_id")
+    report_file_movement_identity.add_argument("--contains")
+    report_file_movement_identity.add_argument("--limit", type=int, default=100)
+    report_file_movement_identity.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
+    report_file_movement_identity.add_argument("--output")
+    report_derived_timeline = report_sub.add_parser("derived-timeline-events")
+    report_derived_timeline.add_argument("--case", required=True, dest="case_id")
+    report_derived_timeline.add_argument("--limit", type=int, default=1000)
+    report_derived_timeline.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    report_derived_timeline.add_argument("--output")
+    report_shortcut_droid_changes = report_sub.add_parser("shortcut-droid-changes")
+    report_shortcut_droid_changes.add_argument("--case", required=True, dest="case_id")
+    report_shortcut_droid_changes.add_argument("--limit", type=int, default=100)
+    report_shortcut_droid_changes.add_argument("--format", choices=["md", "json", "table", "csv"], default="json")
+    report_shortcut_droid_changes.add_argument("--output")
+    report_shortcut_object_tracking = report_sub.add_parser("shortcut-object-tracking")
+    report_shortcut_object_tracking.add_argument("--case", required=True, dest="case_id")
+    report_shortcut_object_tracking.add_argument("--limit", type=int, default=100)
+    report_shortcut_object_tracking.add_argument("--format", choices=["md", "json", "table", "csv"], default="json")
+    report_shortcut_object_tracking.add_argument("--output")
 
     search = subparsers.add_parser("search")
     search_sub = search.add_subparsers(dest="action", required=True)
@@ -3331,6 +3411,16 @@ def run(args: argparse.Namespace) -> int:
 
         if args.resource in {"case", "project"} and args.action == "rebuild-sessions":
             stats = rebuild_sessions(db, case_id=args.case_id, image_id=args.image_id)
+            print_json(stats)
+            return 0
+
+        if args.resource in {"case", "project"} and args.action == "rebuild-derived-timeline":
+            stats = rebuild_derived_timeline_events(
+                db,
+                case_id=args.case_id,
+                image_id=args.image_id,
+                limit=args.limit,
+            )
             print_json(stats)
             return 0
 
@@ -5789,6 +5879,24 @@ def run(args: argparse.Namespace) -> int:
             print_json(usn_rename_pairs_report(db, args.case_id, limit=args.limit))
             return 0
 
+        if args.resource == "report" and args.action == "usn-lifecycle":
+            report = usn_file_lifecycle_report(db, args.case_id, contains=args.contains, limit=args.limit)
+            rows = usn_file_lifecycle_export_rows(report)
+            if args.format == "md":
+                write_text_output(usn_file_lifecycle_markdown(report), args.output)
+            elif args.format == "json":
+                write_text_output(json.dumps(report, indent=2, default=str), args.output)
+            else:
+                write_report_output(
+                    report,
+                    rows,
+                    args.format,
+                    args.output,
+                    title=f"USN file lifecycle for case {args.case_id}",
+                    columns=["last_timestamp", "computer_label", "file_reference_number", "event_count", "names_seen", "reasons_seen"],
+                )
+            return 0
+
         if args.resource == "report" and args.action == "usn-bursts":
             print_json(usn_bursts_report(db, args.case_id, minutes=args.minutes, limit=args.limit))
             return 0
@@ -7496,6 +7604,24 @@ def run(args: argparse.Namespace) -> int:
             print_json(shellbags_report(db, args.case_id, limit=args.limit))
             return 0
 
+        if args.resource == "report" and args.action == "shellbag-external-storage":
+            report = shellbag_external_storage_report(db, args.case_id, limit=args.limit)
+            rows = shellbag_external_storage_export_rows(report)
+            if args.format == "md":
+                write_text_output(shellbag_external_storage_markdown(report), args.output)
+            elif args.format == "json":
+                write_text_output(json.dumps(report, indent=2, default=str), args.output)
+            else:
+                write_report_output(
+                    report,
+                    rows,
+                    args.format,
+                    args.output,
+                    title=f"Shellbag external storage for case {args.case_id}",
+                    columns=["last_interacted", "computer_label", "user_profile", "absolute_path", "volume_serial_number", "volume_guid", "match_count", "matched_devices", "match_basis"],
+                )
+            return 0
+
         if args.resource == "report" and args.action == "usb":
             if args.breakdown:
                 print_json(usb_breakdown_report(db, args.case_id))
@@ -7708,6 +7834,60 @@ def run(args: argparse.Namespace) -> int:
             print_json(common_dialog_items_report(db, args.case_id, limit=args.limit))
             return 0
 
+        if args.resource == "report" and args.action == "user-intent":
+            report = user_intent_artifacts_report(
+                db,
+                args.case_id,
+                user=args.user,
+                contains=args.contains,
+                limit=args.limit,
+            )
+            rows = user_intent_artifacts_export_rows(report)
+            if args.format == "md":
+                write_text_output(user_intent_artifacts_markdown(report), args.output)
+            elif args.format == "json":
+                write_text_output(json.dumps(report, indent=2, default=str), args.output)
+            else:
+                write_report_output(
+                    report,
+                    rows,
+                    args.format,
+                    args.output,
+                    title=f"User intent artifacts for case {args.case_id}",
+                    columns=["timestamp", "source", "activity", "computer_label", "user_profile", "path"],
+                )
+            return 0
+
+        if args.resource == "report" and args.action == "file-movement-identity":
+            report = file_movement_identity_report(db, args.case_id, contains=args.contains, limit=args.limit)
+            rows = file_movement_identity_export_rows(report)
+            if args.format == "md":
+                write_text_output(file_movement_identity_markdown(report), args.output)
+            elif args.format == "json":
+                write_text_output(json.dumps(report, indent=2, default=str), args.output)
+            else:
+                write_report_output(
+                    report,
+                    rows,
+                    args.format,
+                    args.output,
+                    title=f"File movement and identity for case {args.case_id}",
+                    columns=["timestamp", "finding_type", "confidence", "computer_label", "path", "correlation_basis", "summary"],
+                )
+            return 0
+
+        if args.resource == "report" and args.action == "derived-timeline-events":
+            report = derived_timeline_events_report(db, args.case_id, limit=args.limit)
+            write_report_output(
+                report,
+                report["events"],
+                args.format,
+                args.output,
+                title=f"Derived timeline events for case {args.case_id}",
+                columns=["timestamp_utc", "event_type", "source_table", "description", "computer_id", "image_id"],
+            )
+            return 0
+
         if args.resource == "report" and args.action == "activity-summary":
             print_json(activity_summary_report(db, args.case_id, user=args.user, limit=args.limit))
             return 0
@@ -7733,6 +7913,42 @@ def run(args: argparse.Namespace) -> int:
 
         if args.resource == "report" and args.action == "shortcuts":
             print_json(shortcuts_report(db, args.case_id, artifact_type=args.artifact_type, limit=args.limit))
+            return 0
+
+        if args.resource == "report" and args.action == "shortcut-droid-changes":
+            report = shortcut_droid_changes_report(db, args.case_id, limit=args.limit)
+            rows = shortcut_droid_changes_export_rows(report)
+            if args.format == "md":
+                write_text_output(shortcut_droid_changes_markdown(report), args.output)
+            elif args.format == "json":
+                write_text_output(json.dumps(report, indent=2, default=str), args.output)
+            else:
+                write_report_output(
+                    report,
+                    rows,
+                    args.format,
+                    args.output,
+                    title=f"Shortcut Droid changes for case {args.case_id}",
+                    columns=["target_accessed", "computer_label", "artifact_type", "file_location", "droid_change_basis", "droid_file_id", "birth_droid_file_id"],
+                )
+            return 0
+
+        if args.resource == "report" and args.action == "shortcut-object-tracking":
+            report = shortcut_object_tracking_report(db, args.case_id, limit=args.limit)
+            rows = shortcut_object_tracking_export_rows(report)
+            if args.format == "md":
+                write_text_output(shortcut_object_tracking_markdown(report), args.output)
+            elif args.format == "json":
+                write_text_output(json.dumps(report, indent=2, default=str), args.output)
+            else:
+                write_report_output(
+                    report,
+                    rows,
+                    args.format,
+                    args.output,
+                    title=f"Shortcut Object ID tracking for case {args.case_id}",
+                    columns=["target_accessed", "computer_label", "file_location", "match_basis", "mft_full_path", "mft_computer_label"],
+                )
             return 0
 
         raise OrchestratorError("Unsupported command")
