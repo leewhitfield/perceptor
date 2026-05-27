@@ -45,6 +45,26 @@ ARTIFACT_TOKENS = {
     "lnk_files_lp",
 }
 
+PARSER_ROUTE_SUMMARY = [
+    {"tool_name": "EvtxECmd", "match": "EvtxECmd_Output.csv or event-log header"},
+    {"tool_name": "RecycleParser", "match": "RBCmd_Output.csv or recycle-bin header"},
+    {"tool_name": "PrefetchParser", "match": "PECmd_Output.csv or prefetch header"},
+    {"tool_name": "LECmd", "match": "LECmd_Output.csv or TZWorks lp header"},
+    {"tool_name": "JLECmd", "match": "AutomaticDestinations.csv, CustomDestinations.csv, or jump-list header"},
+    {"tool_name": "WindowsActivitiesParser", "match": "Windows Activities SQLECmd/activity CSVs"},
+    {"tool_name": "SBECmd", "match": "*_NTUSER.csv, *_UsrClass.csv, or shellbags header"},
+    {"tool_name": "MFTECmd", "match": "MFTECmd_$MFT_Output.csv or MFT header"},
+    {"tool_name": "MFTECmdUSN", "match": "MFTECmd_$J_Output.csv"},
+    {"tool_name": "AmcacheParser", "match": "Amcache_*.csv"},
+    {"tool_name": "AppCompatCacheParser", "match": "ShimCache header"},
+    {"tool_name": "RECmd", "match": "RECmd detail exports"},
+    {"tool_name": "RegistryArtifactParser", "match": "RECmd batch/plugin exports"},
+    {"tool_name": "ChromiumParser", "match": "ChromiumBrowser_* SQLECmd exports"},
+    {"tool_name": "FirefoxParser", "match": "Firefox_* SQLECmd exports"},
+    {"tool_name": "CloudSyncParser", "match": "GoogleDrive_* SQLECmd exports"},
+    {"tool_name": "USPParser", "match": "TZWorks USP header"},
+]
+
 
 @dataclass(frozen=True)
 class ReportCandidate:
@@ -80,6 +100,7 @@ class ReportBundleImportResult:
     image_id: str
     report_root: str
     markdown_path: str
+    computer_label: str = ""
     imported_files: int = 0
     imported_rows: int = 0
     skipped_files: int = 0
@@ -176,6 +197,7 @@ def import_report_bundle(
         image_id=image_id,
         report_root=str(report_root),
         markdown_path="",
+        computer_label=computer_label or report_root.name or "",
     )
     transformed_dir = paths.outputs_dir(case_id) / "report-bundle-import" / image_id / "transformed"
     transformed_dir.mkdir(parents=True, exist_ok=True)
@@ -187,6 +209,15 @@ def import_report_bundle(
             candidate = infer_report_candidate(csv_path)
             if candidate is None:
                 result.skipped_files += 1
+                db.log_activity(
+                    case_id=case_id,
+                    computer_id=computer_id,
+                    image_id=image_id,
+                    level="warning",
+                    event="report_bundle.csv_unsupported",
+                    message="Unsupported report bundle CSV",
+                    details={"path": str(csv_path), "relative_path": _display_path(csv_path, report_root)},
+                )
                 result.items.append(
                     ReportImportItem(
                         path=str(csv_path),
@@ -371,10 +402,14 @@ def import_report_bundle_many(
     report_root: Path,
     case_id: str | None = None,
     accept_duplicate: bool = False,
+    resume_manifest: Path | None = None,
     progress: ProgressFn | None = None,
 ) -> ReportBundleBulkImportResult:
     started = datetime.now(timezone.utc)
     report_root = report_root.resolve()
+    resume_state = _load_resume_state(resume_manifest)
+    if case_id is None and resume_state.get("case_id"):
+        case_id = str(resume_state["case_id"])
     _progress(progress, f"report-bundle-many start root={report_root}")
     if report_root.is_file() and report_root.suffix.lower() == ".zip":
         return _import_report_bundle_many_zip(
@@ -383,6 +418,7 @@ def import_report_bundle_many(
             report_root=report_root,
             case_id=case_id,
             accept_duplicate=accept_duplicate,
+            resume_state=resume_state,
             progress=progress,
             started=started,
         )
@@ -396,6 +432,9 @@ def import_report_bundle_many(
         bulk = ReportBundleBulkImportResult(case_id=case_id or "", report_root=str(report_root.resolve()))
         for index, computer_root in enumerate(computer_roots, 1):
             label = _computer_label_for_folder(computer_root)
+            if _resume_completed(resume_state, label):
+                _progress(progress, f"report-bundle-many computer {index}/{len(computer_roots)} skipped_completed label={label}")
+                continue
             _progress(progress, f"report-bundle-many computer {index}/{len(computer_roots)} start label={label} path={computer_root}")
             result = import_report_bundle(
                 db=db,
@@ -456,6 +495,7 @@ def _import_report_bundle_many_zip(
     report_root: Path,
     case_id: str | None,
     accept_duplicate: bool,
+    resume_state: dict[str, Any],
     progress: ProgressFn | None,
     started: datetime,
 ) -> ReportBundleBulkImportResult:
@@ -469,6 +509,9 @@ def _import_report_bundle_many_zip(
     staging_parent.mkdir(parents=True, exist_ok=True)
     try:
         for index, root in enumerate(roots, 1):
+            if _resume_completed(resume_state, root.label):
+                _progress(progress, f"report-bundle-many zip computer {index}/{len(roots)} skipped_completed label={root.label}")
+                continue
             staging_root = staging_parent / f"{index:04d}-{_safe_stage_name(root.label)}"
             _progress(
                 progress,
@@ -618,6 +661,101 @@ def infer_report_candidate(path: Path) -> ReportCandidate | None:
     return None
 
 
+def parser_coverage_report(report_root: Path | None = None) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    if report_root is not None:
+        root = report_root.resolve()
+        if root.is_file() and root.suffix.lower() == ".zip":
+            rows = _zip_parser_coverage(root)
+        else:
+            rows = _dir_parser_coverage(root)
+    mapped = [row for row in rows if row.get("status") == "mapped"]
+    unmapped = [row for row in rows if row.get("status") == "unmapped"]
+    tool_counts: dict[str, int] = {}
+    for row in mapped:
+        tool = str(row.get("tool_name") or "")
+        tool_counts[tool] = tool_counts.get(tool, 0) + 1
+    return {
+        "report_root": str(report_root) if report_root else "",
+        "summary": {
+            "route_count": len(PARSER_ROUTE_SUMMARY),
+            "csv_count": len(rows),
+            "mapped_count": len(mapped),
+            "unmapped_count": len(unmapped),
+            "tool_counts": [{"tool_name": key, "count": value} for key, value in sorted(tool_counts.items())],
+        },
+        "routes": PARSER_ROUTE_SUMMARY,
+        "files": rows,
+        "unmapped": unmapped,
+    }
+
+
+def _dir_parser_coverage(root: Path) -> list[dict[str, Any]]:
+    if not root.exists():
+        raise ValueError(f"Report path does not exist: {root}")
+    if not root.is_dir():
+        raise ValueError(f"Report path is not a directory or zip: {root}")
+    rows = []
+    for path in sorted(root.rglob("*.csv")):
+        candidate = infer_report_candidate(path)
+        rows.append(_coverage_row(path=str(path), relative_path=_display_path(path, root), candidate=candidate))
+    return rows
+
+
+def _zip_parser_coverage(zip_path: Path) -> list[dict[str, Any]]:
+    rows = []
+    with zipfile.ZipFile(zip_path) as archive:
+        for info in archive.infolist():
+            if info.is_dir() or not info.filename.casefold().endswith(".csv"):
+                continue
+            candidate = infer_report_candidate(Path(info.filename))
+            if candidate is None:
+                header = _zip_csv_header(archive, info)
+                candidate = _candidate_from_header(Path(info.filename), header)
+            rows.append(_coverage_row(path=f"{zip_path}!{info.filename}", relative_path=info.filename, candidate=candidate))
+    return rows
+
+
+def _candidate_from_header(path: Path, header: set[str]) -> ReportCandidate | None:
+    if not header:
+        return None
+    if _header_has(header, "recordnumber", "eventrecordid", "timecreated", "eventid", "provider", "channel"):
+        return ReportCandidate(path, "EvtxECmd", note="Event log CSV detected by header")
+    if _header_has(header, "entrynumber", "sequencenumber", "parentpath", "filename", "created0x10"):
+        return ReportCandidate(path, "MFTECmd", note="MFT CSV detected by header")
+    if _header_has(header, "sourcefilename", "executablename", "hash", "runcount", "lastrun"):
+        return ReportCandidate(path, "PrefetchParser", note="PECmd prefetch output detected by header")
+    if _header_has(header, "sourcefile", "appid", "appiddescription"):
+        return ReportCandidate(path, "JLECmd", note="JLECmd jump list output detected by header")
+    if _header_has(header, "bagpath", "absolutepath", "lastwritetime"):
+        return ReportCandidate(path, "SBECmd", note="Shellbags output detected by header")
+    if _header_has(header, "source path/filename", "target name", "local path", "vol serial"):
+        return ReportCandidate(path, "LECmd", note="TZWorks lp output detected by header")
+    if _header_has(header, "device name", "instance/serial#", "volume guid", "vol name/details"):
+        return ReportCandidate(path, "USPParser", note="TZWorks USP output detected by header")
+    return None
+
+
+def _zip_csv_header(archive: zipfile.ZipFile, info: zipfile.ZipInfo) -> set[str]:
+    with archive.open(info) as handle:
+        sample = handle.read(65536).decode("utf-8-sig", errors="replace")
+    for line in sample.splitlines():
+        if "," not in line:
+            continue
+        return {part.strip().lower() for part in next(csv.reader([line])) if part.strip()}
+    return set()
+
+
+def _coverage_row(*, path: str, relative_path: str, candidate: ReportCandidate | None) -> dict[str, Any]:
+    return {
+        "path": path,
+        "relative_path": relative_path,
+        "status": "mapped" if candidate else "unmapped",
+        "tool_name": candidate.tool_name if candidate else "",
+        "note": candidate.note if candidate else "No safe importer mapping for this CSV",
+    }
+
+
 def _run_post_import_rebuilds(db: Database, *, case_id: str, image_id: str) -> list[str]:
     warnings: list[str] = []
     rebuild_common_dialog_items(db, case_id=case_id, image_id=image_id)
@@ -741,6 +879,7 @@ def _result_dict(result: ReportBundleImportResult) -> dict[str, Any]:
     return {
         "case_id": result.case_id,
         "computer_id": result.computer_id,
+        "computer_label": result.computer_label,
         "image_id": result.image_id,
         "report_root": result.report_root,
         "markdown_path": result.markdown_path,
@@ -833,6 +972,23 @@ def _write_bulk_import_manifest(paths: WorkspacePaths, result: ReportBundleBulkI
     }
     manifest_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
     return manifest_path
+
+
+def _load_resume_state(manifest_path: Path | None) -> dict[str, Any]:
+    if manifest_path is None:
+        return {}
+    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    completed: set[str] = set()
+    for item in data.get("computers") or []:
+        if int(item.get("failed_files") or 0) == 0:
+            label = str(item.get("computer_label") or Path(str(item.get("report_root") or "")).name)
+            completed.add(_safe_stage_name(label).casefold())
+    return {"case_id": data.get("case_id"), "completed_labels": completed, "manifest_path": str(manifest_path)}
+
+
+def _resume_completed(resume_state: dict[str, Any], label: str) -> bool:
+    completed = resume_state.get("completed_labels")
+    return bool(completed and _safe_stage_name(label).casefold() in completed)
 
 
 def _zip_report_roots(zip_path: Path) -> list[ZipReportRoot]:

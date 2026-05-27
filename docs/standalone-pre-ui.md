@@ -34,11 +34,14 @@ Command-line `--root` and `--plugin` values override the file.
 ```bash
 uv run forensic-orchestrator --config config.yaml standalone doctor
 uv run forensic-orchestrator --config config.yaml standalone doctor --case CASE_ID --profile windows-full
+uv run forensic-orchestrator --config config.yaml standalone doctor --smoke
 ```
 
 The doctor checks Python/OS support, workspace availability, schema migration,
 external dependencies, loaded tools/profiles, optional case readiness, and
-unfinished jobs.
+unfinished jobs. `--smoke` also creates a tiny isolated temporary workspace,
+case, computer, image record, and summary report to verify basic database and
+report operations without touching case data.
 
 Use repair mode when the dependency check is missing tools that can be safely
 installed or configured without interactive system package management:
@@ -121,6 +124,30 @@ per-computer import reports. If the run is interrupted, use:
 uv run relic --root /analysis/case-root report progress --case CASE_ID
 uv run relic --root /analysis/case-root report resume-plan --case CASE_ID
 uv run relic --root /analysis/case-root report workspace-health --case CASE_ID
+```
+
+Then resume from the bulk import manifest. Completed computer folders from the
+manifest are skipped:
+
+```bash
+uv run relic --root /analysis/case-root ingest triage-zip \
+  --path /evidence/live-case.zip \
+  --resume-from-manifest /analysis/case-root/cases/CASE_ID/outputs/reports/report-bundle-bulk-import-CASE_ID.manifest.json
+```
+
+Before importing unfamiliar export sets, check parser coverage:
+
+```bash
+uv run relic --root /analysis/case-root report-bundle coverage \
+  --path /evidence/live-case.zip \
+  --format table
+```
+
+After import, unsupported CSVs are also stored as case activity and can be
+reported later:
+
+```bash
+uv run relic --root /analysis/case-root report unmapped-imports --case CASE_ID --format table
 ```
 
 Purpose bundles keep review output focused:

@@ -19639,6 +19639,35 @@ def workspace_health_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def unmapped_imports_report(db: Database, case_id: str, *, limit: int = 250) -> dict[str, Any]:
+    db.get_case(case_id)
+    rows = []
+    for row in db.conn.execute(
+        """
+        SELECT activity_log.*, computers.label AS computer_label
+        FROM activity_log
+        LEFT JOIN computers ON computers.id = activity_log.computer_id
+        WHERE activity_log.case_id = ?
+          AND activity_log.event = 'report_bundle.csv_unsupported'
+        ORDER BY activity_log.created_at DESC
+        LIMIT ?
+        """,
+        (case_id, limit),
+    ).fetchall():
+        item = dict(row)
+        details = json.loads(item.pop("details_json") or "{}")
+        rows.append({**item, **details})
+    return {
+        "case_id": case_id,
+        "summary": {
+            "unmapped_count": len(rows),
+            "computer_counts": _count_by_key(rows, "computer_label"),
+        },
+        "unmapped": rows,
+        "total_returned": len(rows),
+    }
+
+
 def processing_progress_report(db: Database, case_id: str, *, limit: int = 50) -> dict[str, Any]:
     db.get_case(case_id)
     summary = case_summary_report(db, case_id)

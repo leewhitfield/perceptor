@@ -253,6 +253,7 @@ from .reports import (
     timeline_report,
     timeline_review_report,
     timeline_sources_report,
+    unmapped_imports_report,
     workspace_health_markdown,
     workspace_health_report,
     tor_usage_report,
@@ -306,7 +307,7 @@ from .search.opensearch import (
     search_result_drilldown,
 )
 from .report_specs import list_report_specs, run_report_spec
-from .report_bundle import import_report_bundle, import_report_bundle_many
+from .report_bundle import import_report_bundle, import_report_bundle_many, parser_coverage_report
 from .safety import OrchestratorError
 from .artifact_dedupe import rebuild_artifact_windows_old_dedupe
 from .artifact_distinct import rebuild_distinct_artifact_tables
@@ -1856,6 +1857,7 @@ def build_parser() -> argparse.ArgumentParser:
     report_bundle_many = report_bundle_sub.add_parser("import-many")
     report_bundle_many.add_argument("--case", dest="case_id", help="Existing case/project ID; creates one when omitted")
     report_bundle_many.add_argument("--path", required=True, help="Directory or zip containing one top-level folder per computer")
+    report_bundle_many.add_argument("--resume-from-manifest", help="Bulk import manifest from an interrupted or previous import; completed computer folders are skipped")
     report_bundle_many.add_argument(
         "--accept-duplicate",
         action="store_true",
@@ -1869,12 +1871,17 @@ def build_parser() -> argparse.ArgumentParser:
     report_bundle_many.add_argument("--write-reports", action="store_true", help="Write a purpose report bundle after import")
     report_bundle_many.add_argument("--report-purpose", choices=["full", "usb", "cloud", "execution", "memory", "triage"], default="triage")
     report_bundle_many.add_argument("--report-output-dir")
+    report_bundle_coverage = report_bundle_sub.add_parser("coverage")
+    report_bundle_coverage.add_argument("--path", help="Directory or zip to scan for supported and unmapped CSVs")
+    report_bundle_coverage.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    report_bundle_coverage.add_argument("--output")
 
     ingest = subparsers.add_parser("ingest")
     ingest_sub = ingest.add_subparsers(dest="action", required=True)
     ingest_zip = ingest_sub.add_parser("triage-zip")
     ingest_zip.add_argument("--case", dest="case_id", help="Existing case/project ID; creates one when omitted")
     ingest_zip.add_argument("--path", required=True, help="Zip file containing one top-level folder per computer")
+    ingest_zip.add_argument("--resume-from-manifest", help="Bulk import manifest from an interrupted or previous import; completed computer folders are skipped")
     ingest_zip.add_argument("--accept-duplicate", action="store_true")
     ingest_zip.add_argument("--no-progress", action="store_true")
     ingest_zip.add_argument("--write-reports", action="store_true", default=True)
@@ -2818,6 +2825,11 @@ def build_parser() -> argparse.ArgumentParser:
     report_workspace_health.add_argument("--min-free-gb", type=float, default=10.0)
     report_workspace_health.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
     report_workspace_health.add_argument("--output")
+    report_unmapped_imports = report_sub.add_parser("unmapped-imports")
+    report_unmapped_imports.add_argument("--case", required=True, dest="case_id")
+    report_unmapped_imports.add_argument("--limit", type=int, default=250)
+    report_unmapped_imports.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    report_unmapped_imports.add_argument("--output")
     report_case_review = report_sub.add_parser("case-review")
     report_case_review.add_argument("--case", required=True, dest="case_id")
     report_case_review.add_argument("--limit", type=int, default=25)
@@ -3064,6 +3076,7 @@ def build_parser() -> argparse.ArgumentParser:
     standalone_doctor.add_argument("--repair-env-file", help="Write/read repaired tool environment variables from this file")
     standalone_doctor.add_argument("--tools-dir", help="Directory used for locally installed external tools")
     standalone_doctor.add_argument("--required-only", action="store_true", help="When repairing, skip optional dependencies")
+    standalone_doctor.add_argument("--smoke", action="store_true", help="Run a tiny isolated workspace smoke test as part of doctor")
     standalone_doctor.add_argument("--format", choices=["json", "table"], default="json")
     standalone_doctor.add_argument("--output")
     standalone_version = standalone_sub.add_parser("version")
@@ -3179,6 +3192,17 @@ def run(args: argparse.Namespace) -> int:
     config = load_config(root=args.root, plugins=args.plugin, config_path=args.config)
     paths = WorkspacePaths(config.root)
     registry = ToolRegistry.from_files(config.plugin_paths)
+    if args.resource == "report-bundle" and args.action == "coverage":
+        report = parser_coverage_report(Path(args.path) if args.path else None)
+        write_report_output(
+            report,
+            report["files"] if args.path else report["routes"],
+            args.format,
+            args.output,
+            title="Report bundle parser coverage",
+            columns=["status", "tool_name", "relative_path", "match", "note"],
+        )
+        return 0
     if args.resource == "standalone" and args.action in {
         "version",
         "dependencies",
@@ -3260,6 +3284,7 @@ def run(args: argparse.Namespace) -> int:
                 repair_env_file=Path(args.repair_env_file) if args.repair_env_file else None,
                 tools_dir=Path(args.tools_dir) if args.tools_dir else config.tools_root,
                 include_optional_repair=not args.required_only,
+                smoke=args.smoke,
             )
             if args.format == "table":
                 write_report_output(
@@ -3537,6 +3562,7 @@ def run(args: argparse.Namespace) -> int:
                 report_root=Path(args.path),
                 case_id=args.case_id,
                 accept_duplicate=args.accept_duplicate,
+                resume_manifest=Path(args.resume_from_manifest) if args.resume_from_manifest else None,
                 progress=None if args.no_progress else print_progress,
             )
             written_reports = None
@@ -3553,6 +3579,7 @@ def run(args: argparse.Namespace) -> int:
                 report_root=Path(args.path),
                 case_id=args.case_id,
                 accept_duplicate=args.accept_duplicate,
+                resume_manifest=Path(args.resume_from_manifest) if args.resume_from_manifest else None,
                 progress=None if args.no_progress else print_progress,
             )
             written_reports = None
@@ -5518,7 +5545,19 @@ def run(args: argparse.Namespace) -> int:
                     args.output,
                     title="Workspace health",
                     columns=["label", "status", "path", "free_gb", "total_gb", "used_pct", "min_free_gb"],
-                )
+            )
+            return 0
+
+        if args.resource == "report" and args.action == "unmapped-imports":
+            report = unmapped_imports_report(db, args.case_id, limit=args.limit)
+            write_report_output(
+                report,
+                report["unmapped"],
+                args.format,
+                args.output,
+                title=f"Unmapped report-bundle imports for case {args.case_id}",
+                columns=["created_at", "computer_label", "relative_path", "path", "message"],
+            )
             return 0
 
         if args.resource == "report" and args.action == "carve-coverage":

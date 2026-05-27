@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 import urllib.parse
 import urllib.request
 import zipfile
@@ -18,7 +19,7 @@ from typing import Any
 
 from .db import Database
 from .paths import WorkspacePaths
-from .reports import processing_readiness_report
+from .reports import case_summary_report, processing_readiness_report
 from .tools.registry import ToolRegistry, resolve_dotnet_runtime
 
 
@@ -338,6 +339,7 @@ def doctor_report(
     repair_env_file: Path | None = None,
     tools_dir: Path | None = None,
     include_optional_repair: bool = True,
+    smoke: bool = False,
 ) -> dict[str, Any]:
     repair_result = None
     if repair:
@@ -379,6 +381,10 @@ def doctor_report(
             checks.append(_check("unfinished_jobs", jobs["summary"]["unfinished"] == 0, jobs["summary"]))
         except Exception as exc:
             checks.append(_check("unfinished_jobs", False, {"error": str(exc)}))
+    smoke_result = None
+    if smoke:
+        smoke_result = standalone_smoke_report()
+        checks.append(_check("smoke_test", bool(smoke_result.get("passed")), smoke_result.get("summary")))
     return {
         "generated_at": _now(),
         "passed": all(row["passed"] for row in checks),
@@ -394,7 +400,32 @@ def doctor_report(
         "schema": schema,
         "readiness": readiness,
         "jobs": jobs,
+        "smoke": smoke_result,
     }
+
+
+def standalone_smoke_report() -> dict[str, Any]:
+    with tempfile.TemporaryDirectory(prefix="relic-smoke-") as tmp:
+        root = Path(tmp) / "workspace"
+        smoke_paths = WorkspacePaths(root)
+        smoke_paths.ensure_root()
+        smoke_db = Database(smoke_paths.db_path())
+        try:
+            case = smoke_db.create_case("smoke-case", smoke_paths.case_dir("smoke-case"))
+            smoke_db.create_computer(computer_id="smoke-computer", case_id=case.id, label="Smoke Computer")
+            smoke_db.add_image("smoke-image", case.id, root / "evidence" / "smoke.E01", computer_id="smoke-computer")
+            summary = case_summary_report(smoke_db, case.id)
+            checks = [
+                _check("smoke_case_created", summary["counts"]["computers"] == 1, summary["counts"]),
+                _check("smoke_image_registered", summary["counts"]["images"] == 1, summary["counts"]),
+            ]
+            return {
+                "passed": all(row["passed"] for row in checks),
+                "summary": {"check_count": len(checks), "passed": sum(1 for row in checks if row["passed"]), "failed": sum(1 for row in checks if not row["passed"])},
+                "checks": checks,
+            }
+        finally:
+            smoke_db.close()
 
 
 def standalone_backlog_report() -> dict[str, Any]:

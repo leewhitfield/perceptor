@@ -12,6 +12,8 @@ from forensic_orchestrator.db import Database
 from forensic_orchestrator.paths import WorkspacePaths
 from forensic_orchestrator.report_bundle import infer_report_candidate
 from forensic_orchestrator.report_bundle import import_report_bundle_many
+from forensic_orchestrator.report_bundle import parser_coverage_report
+from forensic_orchestrator.reports import unmapped_imports_report
 from forensic_orchestrator.tools.usp import normalized_usp_row
 
 
@@ -137,6 +139,18 @@ def test_report_bundle_import_many_zip_creates_one_computer_per_top_level_folder
     assert manifest["manifest_type"] == "report_bundle_bulk_import"
     assert len(manifest["computers"]) == 2
     assert all(item["manifest_path"] for item in manifest["computers"])
+    assert {item["computer_label"] for item in manifest["computers"]} == {"ComputerA", "ComputerB"}
+    resume_db = Database(paths.db_path())
+    resumed = import_report_bundle_many(
+        db=resume_db,
+        paths=paths,
+        report_root=zip_path,
+        accept_duplicate=True,
+        resume_manifest=Path(result.manifest_path),
+    )
+    resume_db.close()
+    assert resumed.case_id == result.case_id
+    assert resumed.imported_computers == 0
     conn = duckdb.connect(str(paths.analytics_db_path(result.case_id)), read_only=True)
     try:
         assert conn.execute("SELECT count(*) FROM mft_entries").fetchone()[0] == 2
@@ -180,6 +194,32 @@ def test_report_bundle_import_many_emits_progress(tmp_path, monkeypatch):
     assert any("csv 1/1 imported" in message for message in messages)
     assert any(message.startswith("report-bundle postprocess start") for message in messages)
     assert any(message.startswith("report-bundle-many completed") for message in messages)
+
+
+def test_parser_coverage_and_unmapped_import_report(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORENSIC_ANALYTICS_MODE", "duckdb")
+    input_root = tmp_path / "input" / "ComputerA" / "Reports"
+    input_root.mkdir(parents=True)
+    (input_root / "known_$MFT.csv").write_text(
+        "EntryNumber,SequenceNumber,ParentPath,FileName,Created0x10\n"
+        "42,3,C:/Users/ComputerA,note.txt,2023-01-01 00:00:00\n",
+        encoding="utf-8",
+    )
+    (input_root / "unknown.csv").write_text("alpha,beta\n1,2\n", encoding="utf-8")
+
+    coverage = parser_coverage_report(tmp_path / "input")
+    assert coverage["summary"]["csv_count"] == 2
+    assert coverage["summary"]["mapped_count"] == 1
+    assert coverage["summary"]["unmapped_count"] == 1
+
+    paths = WorkspacePaths(tmp_path / "analysis")
+    db = Database(paths.db_path())
+    result = import_report_bundle_many(db=db, paths=paths, report_root=tmp_path / "input", accept_duplicate=True)
+    unmapped = unmapped_imports_report(db, result.case_id)
+    db.close()
+
+    assert unmapped["summary"]["unmapped_count"] == 1
+    assert unmapped["unmapped"][0]["relative_path"].endswith("unknown.csv")
 
 
 def test_report_bundle_import_many_warns_when_distinct_rebuild_hits_disk_full(tmp_path, monkeypatch):
