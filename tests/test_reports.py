@@ -8627,7 +8627,7 @@ def test_file_movement_identity_report_and_derived_timeline_use_new_artifacts(tm
                     "value_name": "Item 2",
                     "batch_key_path": "Office",
                     "last_opened": "2020-01-02T10:03:00Z",
-                    "file_name": "G:\\My Drive\\cloud.docx",
+                    "file_name": "H:\\My Drive\\cloud.docx",
                     "created_at": "2020-01-02T11:00:00Z",
                 }
             ],
@@ -8672,7 +8672,10 @@ def test_file_movement_identity_report_and_derived_timeline_use_new_artifacts(tm
     assert identity["summary"]["finding_counts"]["opened_from_removable_media"] >= 1
     assert removable["summary"]["matched_device_count"] >= 1
     assert removable_all["summary"]["excluded_cloud_drive_path_count"] == 1
+    assert removable_all["summary"]["cloud_mount_count"] == 1
+    assert removable_all["cloud_mounts"][0]["drive_letter"] == "H:"
     assert removable_all["excluded_cloud_drive_paths"][0]["provider"] == "Google Drive"
+    assert removable_all["excluded_cloud_drive_paths"][0]["drive_letter"] == "H:"
     assert all("My Drive" not in (item.get("display_path") or "") for item in removable_all["items"])
     assert removable["items"][0]["confidence"] == "medium"
     assert "# USB Device Dossier" in dossier_markdown

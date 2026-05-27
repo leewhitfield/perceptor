@@ -16165,6 +16165,8 @@ def opened_from_removable_media_report(
     limit: int = 250,
 ) -> dict[str, Any]:
     intent = user_intent_artifacts_report(db, case_id, user=user, contains=contains, limit=max(limit * 2, 250))
+    cloud_intent = intent if contains is None else user_intent_artifacts_report(db, case_id, user=user, limit=5000)
+    cloud_mounts = _cloud_mounted_drive_roots(cloud_intent.get("events") or [])
     devices = _external_storage_devices(db, case_id, limit=10000)
     _annotate_external_storage_devices(db, case_id, devices)
     connection_rows = _query_report_rows(
@@ -16181,8 +16183,8 @@ def opened_from_removable_media_report(
         path = str(event.get("path") or "")
         if not _looks_like_removable_path(path):
             continue
-        cloud_provider = _cloud_mounted_drive_provider(path)
-        if cloud_provider:
+        cloud_match = _cloud_mounted_drive_match(path, event, cloud_mounts)
+        if cloud_match:
             excluded_cloud.append(
                 {
                     "timestamp": event.get("timestamp"),
@@ -16193,7 +16195,10 @@ def opened_from_removable_media_report(
                     "display_path": _display_drive_path(path),
                     "drive_letter": _path_drive_letter(path),
                     "top_folder": _drive_path_top_folder(path),
-                    "provider": cloud_provider,
+                    "provider": cloud_match.get("provider"),
+                    "cloud_root": cloud_match.get("cloud_root"),
+                    "mount_confidence": cloud_match.get("confidence"),
+                    "mount_basis": cloud_match.get("basis"),
                 }
             )
             continue
@@ -16230,8 +16235,10 @@ def opened_from_removable_media_report(
             "matched_device_count": sum(1 for row in rows if row.get("match_count")),
             "unmatched_removable_path_count": sum(1 for row in rows if not row.get("match_count")),
             "excluded_cloud_drive_path_count": len(excluded_cloud),
+            "cloud_mount_count": len(cloud_mounts),
             "group_count": len(group_rows),
         },
+        "cloud_mounts": cloud_mounts[:25],
         "excluded_cloud_drive_paths": excluded_cloud[:25],
         "groups": group_rows,
         "items": rows,
@@ -16322,6 +16329,92 @@ def _looks_like_removable_path(path: str) -> bool:
     return bool(drive and drive[0].upper() != "C")
 
 
+def _cloud_mounted_drive_roots(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    roots: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for event in events:
+        path = event.get("path")
+        drive = _path_drive_letter(path)
+        if not drive or drive.upper() == "C:":
+            continue
+        provider = _cloud_mounted_drive_provider(path)
+        if not provider:
+            continue
+        root = _cloud_mounted_drive_root(path, provider)
+        if not root:
+            continue
+        key = (event.get("computer_id"), event.get("user_profile"), provider, drive.upper(), root.casefold())
+        item = roots.setdefault(
+            key,
+            {
+                "computer_id": event.get("computer_id"),
+                "computer_label": event.get("computer_label"),
+                "user_profile": event.get("user_profile"),
+                "provider": provider,
+                "drive_letter": drive.upper(),
+                "cloud_root": root,
+                "top_folder": _drive_path_top_folder(path),
+                "evidence_count": 0,
+                "first_timestamp": event.get("timestamp"),
+                "last_timestamp": event.get("timestamp"),
+                "sources": set(),
+                "examples": [],
+                "confidence": "low",
+                "basis": "",
+            },
+        )
+        item["evidence_count"] += 1
+        timestamp = str(event.get("timestamp") or "")
+        if timestamp:
+            if not item.get("first_timestamp") or timestamp < str(item.get("first_timestamp")):
+                item["first_timestamp"] = timestamp
+            if not item.get("last_timestamp") or timestamp > str(item.get("last_timestamp")):
+                item["last_timestamp"] = timestamp
+        if event.get("source"):
+            item["sources"].add(str(event.get("source")))
+        if len(item["examples"]) < 5:
+            item["examples"].append(_display_drive_path(path))
+    output = []
+    for item in roots.values():
+        row = dict(item)
+        row["sources"] = ", ".join(sorted(row["sources"]))
+        source_count = len([source for source in row["sources"].split(", ") if source])
+        evidence_count = int(row.get("evidence_count") or 0)
+        row["confidence"] = "high" if evidence_count >= 3 and source_count >= 2 else "medium" if evidence_count >= 2 else "low"
+        row["basis"] = f"observed_cloud_root:{row['provider']}:{row['cloud_root']}; evidence_count:{evidence_count}; sources:{row['sources']}"
+        output.append(row)
+    output.sort(key=lambda row: (row.get("confidence") == "high", row.get("evidence_count") or 0, row.get("last_timestamp") or ""), reverse=True)
+    return output
+
+
+def _cloud_mounted_drive_match(path: Any, event: dict[str, Any], mounts: list[dict[str, Any]]) -> dict[str, Any] | None:
+    display = _display_drive_path(path)
+    drive = _path_drive_letter(display)
+    if not drive:
+        return None
+    folded = display.casefold()
+    for mount in mounts:
+        if drive.upper() != str(mount.get("drive_letter") or "").upper():
+            continue
+        if event.get("computer_id") and mount.get("computer_id") and event.get("computer_id") != mount.get("computer_id"):
+            continue
+        root = str(mount.get("cloud_root") or "")
+        if root and (folded == root.casefold() or folded.startswith(root.casefold().rstrip("\\") + "\\")):
+            return mount
+    provider = _cloud_mounted_drive_provider(display)
+    if not provider:
+        return None
+    root = _cloud_mounted_drive_root(display, provider)
+    if not root:
+        return None
+    return {
+        "provider": provider,
+        "drive_letter": drive.upper(),
+        "cloud_root": root,
+        "confidence": "low",
+        "basis": f"path_cloud_root_indicator:{provider}:{root}",
+    }
+
+
 def _cloud_mounted_drive_provider(path: Any) -> str:
     top = _drive_path_top_folder(path).casefold()
     text = str(path or "").casefold()
@@ -16333,6 +16426,22 @@ def _cloud_mounted_drive_provider(path: Any) -> str:
         return "Dropbox"
     if top in {"icloud drive", "icloud"} or "icloud drive" in text:
         return "iCloud Drive"
+    return ""
+
+
+def _cloud_mounted_drive_root(path: Any, provider: str) -> str:
+    display = _display_drive_path(path)
+    drive = _path_drive_letter(display)
+    top = _drive_path_top_folder(display)
+    if not drive or not top:
+        return ""
+    provider_lower = provider.casefold()
+    if provider_lower == "google drive" and top.casefold() == "my drive":
+        return f"{drive}\\{top}"
+    if provider_lower in {"onedrive", "dropbox", "icloud drive"}:
+        return f"{drive}\\{top}"
+    if any(token in display.casefold() for token in ("google drive", "drivefs", "drive file stream")):
+        return f"{drive}\\{top}"
     return ""
 
 
