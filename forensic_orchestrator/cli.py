@@ -12,7 +12,7 @@ import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .config import load_config
 from .analytics_query import query_one as analytics_query_one
@@ -307,7 +307,7 @@ from .search.opensearch import (
     search_result_drilldown,
 )
 from .report_specs import list_report_specs, run_report_spec
-from .report_bundle import import_report_bundle, import_report_bundle_many, parser_coverage_report
+from .report_bundle import import_report_bundle, import_report_bundle_many, parser_coverage_report, report_bundle_preflight_report
 from .safety import OrchestratorError
 from .artifact_dedupe import rebuild_artifact_windows_old_dedupe
 from .artifact_distinct import rebuild_distinct_artifact_tables
@@ -813,12 +813,20 @@ def _bundle_report_names_for_purpose(purpose: str) -> set[str] | None:
     purpose = (purpose or "full").casefold()
     if purpose == "full":
         return None
-    common = {"executive-summary", "case-overview", "evidence-gaps", "processing-decisions", "processing-readiness", "regression-smoke"}
+    common = {
+        "executive-summary",
+        "case-overview",
+        "evidence-gaps",
+        "processing-decisions",
+        "processing-readiness",
+        "regression-smoke",
+        "bundle-quality",
+    }
     groups = {
         "triage": common | {"suspicious-executions", "user-intent", "file-movement-identity", "opened-from-removable-media", "opened-from-cloud-storage", "cloud-mounts", "cloud-removable-overlap", "artifact-processing-status"},
         "usb": common | {"shellbag-external-storage", "file-movement-identity", "opened-from-removable-media", "cloud-removable-overlap", "shortcut-droid-changes", "shortcut-object-tracking", "usn-lifecycle"},
         "cloud": common | {"cloud-artifacts", "opened-from-cloud-storage", "cloud-mounts", "cloud-removable-overlap", "user-intent"},
-        "execution": common | {"suspicious-executions", "program-provenance", "remote-access", "user-intent"},
+        "execution": common | {"execution", "execution-correlation", "suspicious-executions", "program-provenance", "remote-access", "user-intent"},
         "memory": common | {"memory-analysis", "memory-credentials", "memory-disk-correlations", "memory-support-files", "combined-artifacts", "crash-dump-analysis", "memory-artifacts"},
     }
     return groups.get(purpose, groups["triage"])
@@ -827,88 +835,146 @@ def _bundle_report_names_for_purpose(purpose: str) -> set[str] | None:
 def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, limit: int = 100, purpose: str = "full") -> dict[str, object]:
     output_dir.mkdir(parents=True, exist_ok=True)
     selected = _bundle_report_names_for_purpose(purpose)
-    memory_disk = memory_disk_correlations_report(db, case_id, limit=max(limit * 10, 500))
-    overview = case_overview_report(db, case_id, limit=limit, memory_disk_report=memory_disk)
-    credentials = memory_credentials_report(db, case_id, limit=limit)
-    memory_support = memory_support_files_report(db, case_id, limit=limit)
-    readiness = processing_readiness_report(db, case_id, limit=limit)
-    gaps = evidence_gaps_report(db, case_id, limit=limit)
-    suspicious = suspicious_executions_report(db, case_id, limit=limit)
-    deep_recovery = deep_recovery_status_report(db, case_id, limit=limit)
-    user_intent = user_intent_artifacts_report(db, case_id, limit=limit)
-    shellbag_storage = shellbag_external_storage_report(db, case_id, limit=limit)
-    file_identity = file_movement_identity_report(db, case_id, limit=limit)
-    opened_removable = opened_from_removable_media_report(db, case_id, limit=limit)
-    opened_cloud = opened_from_cloud_storage_report(db, case_id, limit=limit)
-    cloud_mounts = cloud_mounts_report(db, case_id, limit=limit)
-    cloud_overlap = cloud_removable_overlap_report(db, case_id, limit=limit)
-    specs: list[tuple[str, str, str, object]] = [
-        ("executive-summary", "md", "Executive summary", case_executive_summary_markdown(case_executive_summary_report(db, case_id, limit=limit, memory_disk_report=memory_disk))),
-        ("case-overview", "md", "Case overview", case_overview_markdown(overview)),
-        ("evidence-gaps", "md", "Evidence gaps", evidence_gaps_markdown(gaps)),
-        ("memory-analysis", "md", "Memory analysis", memory_analysis_markdown(memory_analysis_report(db, case_id, limit=limit))),
-        ("memory-credentials", "md", "Memory credentials", memory_credentials_markdown(credentials)),
-        ("memory-disk-correlations", "md", "Memory/disk correlations", memory_disk_correlations_markdown(memory_disk)),
-        ("memory-support-files", "md", "Memory support files", memory_support_files_markdown(memory_support)),
-        ("combined-artifacts", "md", "Combined artifact families", combined_artifact_family_markdown(combined_artifact_family_report(db, case_id, limit=limit, memory_disk_report=memory_disk))),
-        ("crash-dump-analysis", "md", "Crash dump analysis", crash_dump_analysis_markdown(crash_dump_analysis_report(db, case_id, limit=limit))),
-        ("suspicious-executions", "md", "Suspicious executions", suspicious_executions_markdown(suspicious)),
-        ("memory-artifacts", "md", "Memory artifact inventory", memory_artifacts_markdown(memory_artifacts_report(db, case_id, limit=limit))),
-        ("deep-recovery-status", "md", "Deep recovery status", deep_recovery_status_markdown(deep_recovery)),
-        ("user-intent", "md", "User intent artifacts", user_intent_artifacts_markdown(user_intent)),
-        ("shellbag-external-storage", "md", "Shellbag external storage", shellbag_external_storage_markdown(shellbag_storage)),
-        ("file-movement-identity", "md", "File movement and identity", file_movement_identity_markdown(file_identity)),
-        ("opened-from-removable-media", "md", "Opened from removable media", opened_from_removable_media_markdown(opened_removable)),
-        ("opened-from-cloud-storage", "md", "Opened from cloud storage", opened_from_cloud_storage_markdown(opened_cloud)),
-        ("cloud-mounts", "md", "Cloud virtual mounts", cloud_mounts_markdown(cloud_mounts)),
-        ("cloud-removable-overlap", "md", "Cloud/removable overlap", cloud_removable_overlap_markdown(cloud_overlap)),
-        ("shortcut-droid-changes", "md", "Shortcut Droid changes", shortcut_droid_changes_markdown(shortcut_droid_changes_report(db, case_id, limit=limit))),
-        ("shortcut-object-tracking", "md", "Shortcut Object ID tracking", shortcut_object_tracking_markdown(shortcut_object_tracking_report(db, case_id, limit=limit))),
-        ("usn-lifecycle", "md", "USN file lifecycle", usn_file_lifecycle_markdown(usn_file_lifecycle_report(db, case_id, limit=limit))),
-        ("recovery-coverage", "json", "Recovery coverage", recovery_coverage_report(db, case_id, limit=max(limit, 250))),
-        ("carve-coverage", "md", "Carve coverage", carve_coverage_markdown(carve_coverage_report(db, case_id, limit=max(limit, 250)))),
-        ("sqlite-inventory", "md", "SQLite carve inventory", sqlite_inventory_markdown(sqlite_inventory_report(db, case_id, limit=limit))),
-        ("artifact-processing-status", "json", "Artifact processing status", artifact_processing_status_report(db, case_id, limit=limit)),
-        ("processing-decisions", "md", "Processing decisions", processing_decision_markdown(processing_decision_report(db, case_id, limit=limit))),
-        ("processing-readiness", "md", "Processing readiness", processing_readiness_markdown(readiness)),
-        ("browser-activity", "json", "Browser activity", browser_activity_report(db, case_id, limit=limit, memory_disk_report=memory_disk)),
-        ("cloud-artifacts", "json", "Cloud artifacts", cloud_artifacts_report(db, case_id, limit=limit, memory_disk_report=memory_disk)),
-        ("email-artifacts", "json", "Email artifacts", email_artifacts_report(db, case_id, limit=limit, memory_disk_report=memory_disk)),
-        ("remote-access", "json", "Remote access", remote_access_sessions_report(db, case_id, limit=limit, memory_disk_report=memory_disk)),
-        ("regression-smoke", "json", "Regression smoke", regression_smoke_report(db, case_id, limit=min(limit, 25))),
+    cache: dict[str, object] = {}
+
+    def wanted(name: str) -> bool:
+        return selected is None or name in selected
+
+    def cached(name: str, builder: Callable[[], object]) -> object:
+        if name not in cache:
+            cache[name] = builder()
+        return cache[name]
+
+    def memory_disk() -> dict[str, object]:
+        return cached("memory_disk", lambda: memory_disk_correlations_report(db, case_id, limit=max(limit * 10, 500)))  # type: ignore[return-value]
+
+    def overview() -> dict[str, object]:
+        return cached("overview", lambda: case_overview_report(db, case_id, limit=limit, memory_disk_report=memory_disk()))  # type: ignore[return-value]
+
+    def credentials() -> dict[str, object]:
+        return cached("credentials", lambda: memory_credentials_report(db, case_id, limit=limit))  # type: ignore[return-value]
+
+    def memory_support() -> dict[str, object]:
+        return cached("memory_support", lambda: memory_support_files_report(db, case_id, limit=limit))  # type: ignore[return-value]
+
+    def readiness() -> dict[str, object]:
+        return cached("readiness", lambda: processing_readiness_report(db, case_id, limit=limit))  # type: ignore[return-value]
+
+    def gaps() -> dict[str, object]:
+        return cached("gaps", lambda: evidence_gaps_report(db, case_id, limit=limit))  # type: ignore[return-value]
+
+    def suspicious() -> dict[str, object]:
+        return cached("suspicious", lambda: suspicious_executions_report(db, case_id, limit=limit))  # type: ignore[return-value]
+
+    def user_intent() -> dict[str, object]:
+        return cached("user_intent", lambda: user_intent_artifacts_report(db, case_id, limit=limit))  # type: ignore[return-value]
+
+    def shellbag_storage() -> dict[str, object]:
+        return cached("shellbag_storage", lambda: shellbag_external_storage_report(db, case_id, limit=limit))  # type: ignore[return-value]
+
+    def file_identity() -> dict[str, object]:
+        return cached("file_identity", lambda: file_movement_identity_report(db, case_id, limit=limit))  # type: ignore[return-value]
+
+    def opened_removable() -> dict[str, object]:
+        return cached("opened_removable", lambda: opened_from_removable_media_report(db, case_id, limit=limit))  # type: ignore[return-value]
+
+    def opened_cloud() -> dict[str, object]:
+        return cached("opened_cloud", lambda: opened_from_cloud_storage_report(db, case_id, limit=limit))  # type: ignore[return-value]
+
+    def cloud_mounts() -> dict[str, object]:
+        return cached("cloud_mounts", lambda: cloud_mounts_report(db, case_id, limit=limit))  # type: ignore[return-value]
+
+    def cloud_overlap() -> dict[str, object]:
+        return cached("cloud_overlap", lambda: cloud_removable_overlap_report(db, case_id, limit=limit))  # type: ignore[return-value]
+
+    report_builders: list[tuple[str, str, str, Callable[[], object]]] = [
+        ("executive-summary", "md", "Executive summary", lambda: case_executive_summary_markdown(case_executive_summary_report(db, case_id, limit=limit, memory_disk_report=memory_disk()))),
+        ("case-overview", "md", "Case overview", lambda: case_overview_markdown(overview())),
+        ("evidence-gaps", "md", "Evidence gaps", lambda: evidence_gaps_markdown(gaps())),
+        ("memory-analysis", "md", "Memory analysis", lambda: memory_analysis_markdown(memory_analysis_report(db, case_id, limit=limit))),
+        ("memory-credentials", "md", "Memory credentials", lambda: memory_credentials_markdown(credentials())),
+        ("memory-disk-correlations", "md", "Memory/disk correlations", lambda: memory_disk_correlations_markdown(memory_disk())),
+        ("memory-support-files", "md", "Memory support files", lambda: memory_support_files_markdown(memory_support())),
+        ("combined-artifacts", "md", "Combined artifact families", lambda: combined_artifact_family_markdown(combined_artifact_family_report(db, case_id, limit=limit, memory_disk_report=memory_disk()))),
+        ("crash-dump-analysis", "md", "Crash dump analysis", lambda: crash_dump_analysis_markdown(crash_dump_analysis_report(db, case_id, limit=limit))),
+        ("execution", "md", "Execution", lambda: execution_markdown(execution_report(db, case_id, limit=limit))),
+        ("execution-correlation", "json", "Execution correlation", lambda: execution_correlation_report(db, case_id, limit=limit)),
+        ("suspicious-executions", "md", "Suspicious executions", lambda: suspicious_executions_markdown(suspicious())),
+        ("program-provenance", "md", "Program provenance", lambda: program_provenance_markdown(program_provenance_report(db, case_id, limit=limit))),
+        ("memory-artifacts", "md", "Memory artifact inventory", lambda: memory_artifacts_markdown(memory_artifacts_report(db, case_id, limit=limit))),
+        ("deep-recovery-status", "md", "Deep recovery status", lambda: deep_recovery_status_markdown(deep_recovery_status_report(db, case_id, limit=limit))),
+        ("user-intent", "md", "User intent artifacts", lambda: user_intent_artifacts_markdown(user_intent())),
+        ("shellbag-external-storage", "md", "Shellbag external storage", lambda: shellbag_external_storage_markdown(shellbag_storage())),
+        ("file-movement-identity", "md", "File movement and identity", lambda: file_movement_identity_markdown(file_identity())),
+        ("opened-from-removable-media", "md", "Opened from removable media", lambda: opened_from_removable_media_markdown(opened_removable())),
+        ("opened-from-cloud-storage", "md", "Opened from cloud storage", lambda: opened_from_cloud_storage_markdown(opened_cloud())),
+        ("cloud-mounts", "md", "Cloud virtual mounts", lambda: cloud_mounts_markdown(cloud_mounts())),
+        ("cloud-removable-overlap", "md", "Cloud/removable overlap", lambda: cloud_removable_overlap_markdown(cloud_overlap())),
+        ("shortcut-droid-changes", "md", "Shortcut Droid changes", lambda: shortcut_droid_changes_markdown(shortcut_droid_changes_report(db, case_id, limit=limit))),
+        ("shortcut-object-tracking", "md", "Shortcut Object ID tracking", lambda: shortcut_object_tracking_markdown(shortcut_object_tracking_report(db, case_id, limit=limit))),
+        ("usn-lifecycle", "md", "USN file lifecycle", lambda: usn_file_lifecycle_markdown(usn_file_lifecycle_report(db, case_id, limit=limit))),
+        ("recovery-coverage", "json", "Recovery coverage", lambda: recovery_coverage_report(db, case_id, limit=max(limit, 250))),
+        ("carve-coverage", "md", "Carve coverage", lambda: carve_coverage_markdown(carve_coverage_report(db, case_id, limit=max(limit, 250)))),
+        ("sqlite-inventory", "md", "SQLite carve inventory", lambda: sqlite_inventory_markdown(sqlite_inventory_report(db, case_id, limit=limit))),
+        ("artifact-processing-status", "json", "Artifact processing status", lambda: artifact_processing_status_report(db, case_id, limit=limit)),
+        ("processing-decisions", "md", "Processing decisions", lambda: processing_decision_markdown(processing_decision_report(db, case_id, limit=limit))),
+        ("processing-readiness", "md", "Processing readiness", lambda: processing_readiness_markdown(readiness())),
+        ("browser-activity", "json", "Browser activity", lambda: browser_activity_report(db, case_id, limit=limit, memory_disk_report=memory_disk())),
+        ("cloud-artifacts", "json", "Cloud artifacts", lambda: cloud_artifacts_report(db, case_id, limit=limit, memory_disk_report=memory_disk())),
+        ("email-artifacts", "json", "Email artifacts", lambda: email_artifacts_report(db, case_id, limit=limit, memory_disk_report=memory_disk())),
+        ("remote-access", "json", "Remote access", lambda: remote_access_sessions_report(db, case_id, limit=limit, memory_disk_report=memory_disk())),
+        ("regression-smoke", "json", "Regression smoke", lambda: regression_smoke_report(db, case_id, limit=min(limit, 25))),
     ]
-    if selected is not None:
-        specs = [spec for spec in specs if spec[0] in selected]
     written: list[dict[str, object]] = []
-    for stem, extension, title, payload in specs:
+    for stem, extension, title, builder in report_builders:
+        if not wanted(stem):
+            continue
         path = output_dir / f"{stem}.{extension}"
+        payload = builder()
         if extension == "md":
             write_text_output(str(payload), str(path))
         else:
             write_text_output(json.dumps(sanitize_report_paths(payload), indent=2, default=str), str(path))
         written.append({"name": stem, "title": title, "path": str(path), "format": extension})
-    csv_specs: list[tuple[str, str, list[dict[str, object]]]] = [
-        ("user-intent", "User intent artifacts CSV", user_intent_artifacts_export_rows(user_intent)),
-        ("shellbag-external-storage", "Shellbag external storage CSV", shellbag_external_storage_export_rows(shellbag_storage)),
-        ("file-movement-identity", "File movement and identity CSV", file_movement_identity_export_rows(file_identity)),
-        ("opened-from-removable-media", "Opened from removable media CSV", opened_from_removable_media_export_rows(opened_removable)),
-        ("opened-from-cloud-storage", "Opened from cloud storage CSV", opened_from_cloud_storage_export_rows(opened_cloud)),
-        ("cloud-mounts", "Cloud virtual mounts CSV", cloud_mounts_export_rows(cloud_mounts)),
-        ("cloud-removable-overlap", "Cloud/removable overlap CSV", cloud_removable_overlap_export_rows(cloud_overlap)),
+    csv_builders: list[tuple[str, str, Callable[[], list[dict[str, object]]]]] = [
+        ("user-intent", "User intent artifacts CSV", lambda: user_intent_artifacts_export_rows(user_intent())),
+        ("shellbag-external-storage", "Shellbag external storage CSV", lambda: shellbag_external_storage_export_rows(shellbag_storage())),
+        ("file-movement-identity", "File movement and identity CSV", lambda: file_movement_identity_export_rows(file_identity())),
+        ("opened-from-removable-media", "Opened from removable media CSV", lambda: opened_from_removable_media_export_rows(opened_removable())),
+        ("opened-from-cloud-storage", "Opened from cloud storage CSV", lambda: opened_from_cloud_storage_export_rows(opened_cloud())),
+        ("cloud-mounts", "Cloud virtual mounts CSV", lambda: cloud_mounts_export_rows(cloud_mounts())),
+        ("cloud-removable-overlap", "Cloud/removable overlap CSV", lambda: cloud_removable_overlap_export_rows(cloud_overlap())),
     ]
-    if selected is not None:
-        csv_specs = [spec for spec in csv_specs if spec[0] in selected]
-    for stem, title, rows in csv_specs:
+    csv_quality_inputs: list[tuple[str, list[dict[str, object]]]] = []
+    for stem, title, rows_builder in csv_builders:
+        if not wanted(stem):
+            continue
         path = output_dir / f"{stem}.csv"
+        rows = rows_builder()
         write_csv_rows(rows, str(path))
+        csv_quality_inputs.append((stem, rows))
         written.append({"name": stem, "title": title, "path": str(path), "format": "csv"})
-    overview_summary = overview.get("summary") if isinstance(overview.get("summary"), dict) else {}
-    credential_summary = credentials.get("summary") if isinstance(credentials.get("summary"), dict) else {}
-    support_summary = memory_support.get("summary") if isinstance(memory_support.get("summary"), dict) else {}
-    readiness_summary = readiness.get("summary") if isinstance(readiness.get("summary"), dict) else {}
-    gaps_summary = gaps.get("summary") if isinstance(gaps.get("summary"), dict) else {}
-    suspicious_summary = suspicious.get("summary") if isinstance(suspicious.get("summary"), dict) else {}
-    file_identity_summary = file_identity.get("summary") if isinstance(file_identity.get("summary"), dict) else {}
+    if wanted("bundle-quality"):
+        quality_path = output_dir / "bundle-quality.json"
+        quality = _report_bundle_quality_report(case_id=case_id, purpose=purpose, csv_exports=csv_quality_inputs, reports=written)
+        write_text_output(json.dumps(quality, indent=2, default=str), str(quality_path))
+        written.append({"name": "bundle-quality", "title": "Bundle quality", "path": str(quality_path), "format": "json"})
+    overview_report = overview() if wanted("case-overview") or wanted("executive-summary") else {}
+    credentials_report = credentials() if wanted("memory-credentials") else {}
+    support_report = memory_support() if wanted("memory-support-files") else {}
+    readiness_report = readiness() if wanted("processing-readiness") else {}
+    gaps_report = gaps() if wanted("evidence-gaps") else {}
+    suspicious_report = suspicious() if wanted("suspicious-executions") else {}
+    file_identity_report_payload = file_identity() if wanted("file-movement-identity") else {}
+    user_intent_report_payload = user_intent() if wanted("user-intent") else {}
+    opened_removable_report_payload = opened_removable() if wanted("opened-from-removable-media") else {}
+    overview_summary = overview_report.get("summary") if isinstance(overview_report.get("summary"), dict) else {}
+    credential_summary = credentials_report.get("summary") if isinstance(credentials_report.get("summary"), dict) else {}
+    support_summary = support_report.get("summary") if isinstance(support_report.get("summary"), dict) else {}
+    readiness_summary = readiness_report.get("summary") if isinstance(readiness_report.get("summary"), dict) else {}
+    gaps_summary = gaps_report.get("summary") if isinstance(gaps_report.get("summary"), dict) else {}
+    suspicious_summary = suspicious_report.get("summary") if isinstance(suspicious_report.get("summary"), dict) else {}
+    file_identity_summary = file_identity_report_payload.get("summary") if isinstance(file_identity_report_payload.get("summary"), dict) else {}
     index_lines = [
         "# Case Report Bundle",
         "",
@@ -919,8 +985,8 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
         "",
         f"- Suspicious executions: `{suspicious_summary.get('finding_count', overview_summary.get('suspicious_executions', 0))}`",
         f"- File movement/identity findings: `{file_identity_summary.get('finding_count', 0)}`",
-        f"- User-intent artifacts: `{user_intent.get('total_returned', 0)}`",
-        f"- Opened-from-removable-media references: `{opened_removable.get('total_returned', 0)}`",
+        f"- User-intent artifacts: `{user_intent_report_payload.get('total_returned', 0)}`",
+        f"- Opened-from-removable-media references: `{opened_removable_report_payload.get('total_returned', 0)}`",
         f"- Memory support files processed: `{support_summary.get('processed_count', 0)}` / `{support_summary.get('support_file_count', 0)}`",
         f"- Memory string hits: `{support_summary.get('hit_count', overview_summary.get('memory_string_hits', 0))}`",
         f"- High-value credential candidates: `{credential_summary.get('high_value_candidate_count', 0)}`",
@@ -941,6 +1007,38 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
         "index": str(index_path),
         "reports": written,
         "total_written": len(written) + 1,
+    }
+
+
+def _report_bundle_quality_report(
+    *,
+    case_id: str,
+    purpose: str,
+    csv_exports: list[tuple[str, list[dict[str, object]]]],
+    reports: list[dict[str, object]],
+) -> dict[str, object]:
+    checks: list[dict[str, object]] = []
+    for name, rows in csv_exports:
+        fieldnames = _csv_fieldnames([_flatten_row(sanitize_report_paths(row)) for row in rows])
+        checks.append(
+            {
+                "name": name,
+                "row_count": len(rows),
+                "column_count": len(fieldnames),
+                "columns": fieldnames,
+                "status": "ok",
+            }
+        )
+    return {
+        "case_id": case_id,
+        "purpose": purpose,
+        "summary": {
+            "report_count": len(reports),
+            "csv_export_count": len(csv_exports),
+            "csv_row_count": sum(len(rows) for _, rows in csv_exports),
+            "empty_csv_export_count": sum(1 for _, rows in csv_exports if not rows),
+        },
+        "csv_exports": checks,
     }
 
 
@@ -1531,6 +1629,17 @@ def build_parser() -> argparse.ArgumentParser:
     memory_profile.add_argument("--workers", type=int, default=1, help="Run file scanning with this many workers; database ingest remains serialized")
     memory_profile.add_argument("--no-crash-dumps", action="store_true")
     memory_profile.add_argument("--no-extract-fallback", action="store_true", help="Do not extract MFT-discovered memory support files with icat when mounts are unavailable")
+    memory_workflow = memory_sub.add_parser("workflow")
+    memory_workflow.add_argument("--case", required=True, dest="case_id")
+    memory_workflow.add_argument("--computer", dest="computer_id")
+    memory_workflow.add_argument("--image", dest="image_id")
+    memory_workflow.add_argument("--min-length", type=int, default=6)
+    memory_workflow.add_argument("--workers", type=int, default=1, help="Run file scanning with this many workers; database ingest remains serialized")
+    memory_workflow.add_argument("--no-crash-dumps", action="store_true")
+    memory_workflow.add_argument("--no-extract-fallback", action="store_true", help="Do not extract MFT-discovered memory support files with icat when mounts are unavailable")
+    memory_workflow.add_argument("--write-reports", action="store_true", default=True)
+    memory_workflow.add_argument("--no-write-reports", action="store_false", dest="write_reports")
+    memory_workflow.add_argument("--report-output-dir")
     memory_search_carves = memory_sub.add_parser("windows-search-carves")
     memory_search_carves.add_argument("--case", required=True, dest="case_id")
     memory_search_carves.add_argument("--path", required=True, help="Directory or file containing SearchIndexer SQLite memory carves")
@@ -1881,6 +1990,9 @@ def build_parser() -> argparse.ArgumentParser:
     ingest_zip = ingest_sub.add_parser("triage-zip")
     ingest_zip.add_argument("--case", dest="case_id", help="Existing case/project ID; creates one when omitted")
     ingest_zip.add_argument("--path", required=True, help="Zip file containing one top-level folder per computer")
+    ingest_zip.add_argument("--preflight", action="store_true", help="Validate computer folders and parser coverage without importing")
+    ingest_zip.add_argument("--format", choices=["json", "table", "csv"], default="json", help="Output format for --preflight")
+    ingest_zip.add_argument("--output", help="Output path for --preflight")
     ingest_zip.add_argument("--resume-from-manifest", help="Bulk import manifest from an interrupted or previous import; completed computer folders are skipped")
     ingest_zip.add_argument("--accept-duplicate", action="store_true")
     ingest_zip.add_argument("--no-progress", action="store_true")
@@ -3203,6 +3315,17 @@ def run(args: argparse.Namespace) -> int:
             columns=["status", "tool_name", "relative_path", "match", "note"],
         )
         return 0
+    if args.resource == "ingest" and args.action == "triage-zip" and args.preflight:
+        report = report_bundle_preflight_report(Path(args.path))
+        write_report_output(
+            report,
+            report["computers"],
+            args.format,
+            args.output,
+            title="Triage zip preflight",
+            columns=["label", "prefix", "path", "csv_count", "mapped_count", "unmapped_count", "member_count"],
+        )
+        return 0
     if args.resource == "standalone" and args.action in {
         "version",
         "dependencies",
@@ -4240,6 +4363,26 @@ def run(args: argparse.Namespace) -> int:
                     workers=args.workers,
                 )
             )
+            return 0
+
+        if args.resource == "memory" and args.action == "workflow":
+            result = run_memory_processing_profile(
+                db,
+                paths,
+                case_id=args.case_id,
+                computer_id=args.computer_id,
+                image_id=args.image_id,
+                min_length=args.min_length,
+                include_crash_dumps=not args.no_crash_dumps,
+                extract_fallback=not args.no_extract_fallback,
+                workers=args.workers,
+            )
+            written_reports = None
+            if args.write_reports:
+                output_dir = Path(args.report_output_dir) if args.report_output_dir else paths.outputs_dir(args.case_id) / "reports" / "memory-workflow"
+                written_reports = write_case_report_bundle(db, args.case_id, output_dir, limit=100, purpose="memory")
+            result["written_reports"] = written_reports
+            print_json(result)
             return 0
 
         if args.resource == "memory" and args.action == "windows-search-carves":

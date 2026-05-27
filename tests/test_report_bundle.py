@@ -8,11 +8,14 @@ from pathlib import Path
 import duckdb
 
 import forensic_orchestrator.report_bundle as report_bundle
+from forensic_orchestrator.cli import write_case_report_bundle
 from forensic_orchestrator.db import Database
+from forensic_orchestrator.evidence import create_case
 from forensic_orchestrator.paths import WorkspacePaths
 from forensic_orchestrator.report_bundle import infer_report_candidate
 from forensic_orchestrator.report_bundle import import_report_bundle_many
 from forensic_orchestrator.report_bundle import parser_coverage_report
+from forensic_orchestrator.report_bundle import report_bundle_preflight_report
 from forensic_orchestrator.reports import unmapped_imports_report
 from forensic_orchestrator.tools.usp import normalized_usp_row
 
@@ -193,6 +196,7 @@ def test_report_bundle_import_many_emits_progress(tmp_path, monkeypatch):
     assert any("csv 1/1 import" in message for message in messages)
     assert any("csv 1/1 imported" in message for message in messages)
     assert any(message.startswith("report-bundle postprocess start") for message in messages)
+    assert any("report-bundle-many progress computers_done=1 computers_total=1" in message for message in messages)
     assert any(message.startswith("report-bundle-many completed") for message in messages)
 
 
@@ -206,11 +210,27 @@ def test_parser_coverage_and_unmapped_import_report(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     (input_root / "unknown.csv").write_text("alpha,beta\n1,2\n", encoding="utf-8")
+    (input_root / "UalRecords.csv").write_text(
+        "database_file,source_table,role_name,client_name,client_ip,first_seen,last_seen\n"
+        "SystemIdentity.mdb,RoleAccess,File Server,HOST01,10.0.0.5,2024-01-01,2024-01-02\n",
+        encoding="utf-8",
+    )
+    (input_root / "RdpVisualObservations.csv").write_text(
+        "user_profile,source_cache_path,contact_sheet_path,observation_type,certainty\n"
+        "user,C:/Cache/cache000.bin,/tmp/sheet.jpg,contact_sheet_available,visual_material_available\n",
+        encoding="utf-8",
+    )
 
     coverage = parser_coverage_report(tmp_path / "input")
-    assert coverage["summary"]["csv_count"] == 2
-    assert coverage["summary"]["mapped_count"] == 1
+    assert coverage["summary"]["csv_count"] == 4
+    assert coverage["summary"]["mapped_count"] == 3
     assert coverage["summary"]["unmapped_count"] == 1
+    assert {row["tool_name"] for row in coverage["files"] if row["status"] == "mapped"} >= {"MFTECmd", "UalParser", "RdpCacheParser"}
+    preflight = report_bundle_preflight_report(tmp_path / "input")
+    assert preflight["summary"]["ready"] is True
+    assert preflight["summary"]["computer_count"] == 1
+    assert preflight["computers"][0]["mapped_count"] == 3
+    assert preflight["computers"][0]["unmapped_count"] == 1
 
     paths = WorkspacePaths(tmp_path / "analysis")
     db = Database(paths.db_path())
@@ -220,6 +240,21 @@ def test_parser_coverage_and_unmapped_import_report(tmp_path, monkeypatch):
 
     assert unmapped["summary"]["unmapped_count"] == 1
     assert unmapped["unmapped"][0]["relative_path"].endswith("unknown.csv")
+
+
+def test_execution_purpose_bundle_writes_execution_reports_and_quality(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORENSIC_ANALYTICS_MODE", "duckdb")
+    paths = WorkspacePaths(tmp_path / "analysis")
+    db = Database(paths.db_path())
+    case_id = create_case(db, paths)
+
+    bundle = write_case_report_bundle(db, case_id, tmp_path / "execution-bundle", purpose="execution", limit=10)
+    db.close()
+
+    names = {item["name"] for item in bundle["reports"]}
+    assert {"execution", "execution-correlation", "program-provenance", "bundle-quality"} <= names
+    assert "memory-credentials" not in names
+    assert (tmp_path / "execution-bundle" / "bundle-quality.json").exists()
 
 
 def test_report_bundle_import_many_warns_when_distinct_rebuild_hits_disk_full(tmp_path, monkeypatch):

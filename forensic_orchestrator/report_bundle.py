@@ -63,6 +63,8 @@ PARSER_ROUTE_SUMMARY = [
     {"tool_name": "FirefoxParser", "match": "Firefox_* SQLECmd exports"},
     {"tool_name": "CloudSyncParser", "match": "GoogleDrive_* SQLECmd exports"},
     {"tool_name": "USPParser", "match": "TZWorks USP header"},
+    {"tool_name": "UalParser", "match": "UalRecords.csv or UAL/SUM header"},
+    {"tool_name": "RdpCacheParser", "match": "RdpCacheItems.csv, RdpVisualObservations.csv, or RDP cache header"},
 ]
 
 
@@ -460,6 +462,11 @@ def import_report_bundle_many(
                 f"report-bundle-many computer {index}/{len(computer_roots)} completed label={label} "
                 f"files={result.imported_files} rows={result.imported_rows} skipped={result.skipped_files} failed={result.failed_files}",
             )
+            _progress(
+                progress,
+                f"report-bundle-many progress computers_done={index} computers_total={len(computer_roots)} "
+                f"imported_computers={bulk.imported_computers} rows={bulk.imported_rows} elapsed={_format_elapsed(started)}",
+            )
         if active_case_id is None:
             raise ValueError("Bulk import did not create or use a case")
         bulk.case_id = active_case_id
@@ -545,6 +552,11 @@ def _import_report_bundle_many_zip(
                     f"report-bundle-many computer {index}/{len(roots)} completed label={root.label} "
                     f"files={result.imported_files} rows={result.imported_rows} skipped={result.skipped_files} failed={result.failed_files}",
                 )
+                _progress(
+                    progress,
+                    f"report-bundle-many progress computers_done={index} computers_total={len(roots)} "
+                    f"imported_computers={bulk.imported_computers} rows={bulk.imported_rows} elapsed={_format_elapsed(started)}",
+                )
             finally:
                 _progress(progress, f"report-bundle-many zip computer {index}/{len(roots)} cleanup staging={staging_root}")
                 shutil.rmtree(staging_root, ignore_errors=True)
@@ -586,6 +598,10 @@ def infer_report_candidate(path: Path) -> ReportCandidate | None:
         return ReportCandidate(path, "PrefetchParser")
     if lower == "lecmd_output.csv":
         return ReportCandidate(path, "LECmd")
+    if lower in {"ualrecords.csv", "ual_records.csv"}:
+        return ReportCandidate(path, "UalParser")
+    if lower in {"rdpcacheitems.csv", "rdpvisualobservations.csv"}:
+        return ReportCandidate(path, "RdpCacheParser")
     if lower in {"automaticdestinations.csv", "customdestinations.csv"}:
         return ReportCandidate(path, "JLECmd")
     if re.match(r".+_activity\.csv$", lower) or re.match(r".+_activityoperations\.csv$", lower):
@@ -658,6 +674,14 @@ def infer_report_candidate(path: Path) -> ReportCandidate | None:
         return ReportCandidate(path, "LECmd", _transform_tzworks_lnk, "TZWorks lp output normalized to LECmd columns")
     if _header_has(header, "device name", "instance/serial#", "volume guid", "vol name/details"):
         return ReportCandidate(path, "USPParser", _transform_tzworks_usp, "TZWorks USP output normalized")
+    if _header_has(header, "database_file", "source_table") and (
+        "client_name" in header or "client_ip" in header or "role_name" in header
+    ):
+        return ReportCandidate(path, "UalParser", note="UAL/SUM output detected by header")
+    if _header_has(header, "source_cache_path", "fragment_path", "contact_sheet_path"):
+        return ReportCandidate(path, "RdpCacheParser", note="RDP cache output detected by header")
+    if _header_has(header, "source_cache_path", "observation_type", "certainty"):
+        return ReportCandidate(path, "RdpCacheParser", note="RDP visual observation output detected by header")
     return None
 
 
@@ -687,6 +711,66 @@ def parser_coverage_report(report_root: Path | None = None) -> dict[str, Any]:
         "routes": PARSER_ROUTE_SUMMARY,
         "files": rows,
         "unmapped": unmapped,
+    }
+
+
+def report_bundle_preflight_report(report_root: Path) -> dict[str, Any]:
+    root = report_root.resolve()
+    coverage = parser_coverage_report(root)
+    coverage_rows = coverage.get("files") if isinstance(coverage.get("files"), list) else []
+    if root.is_file() and root.suffix.lower() == ".zip":
+        roots = [
+            {
+                "label": item.label,
+                "prefix": item.prefix,
+                "csv_count": item.csv_count,
+                "member_count": item.member_count,
+                **_coverage_counts_for_prefix(coverage_rows, item.prefix),
+            }
+            for item in _zip_report_roots(root)
+        ]
+    elif root.is_dir():
+        roots = [
+            {
+                "label": _computer_label_for_folder(path),
+                "path": str(path),
+                "csv_count": sum(1 for _ in path.rglob("*.csv")),
+                "member_count": sum(1 for item in path.rglob("*") if item.is_file()),
+                **_coverage_counts_for_prefix(coverage_rows, _display_path(path, root)),
+            }
+            for path in _top_level_report_roots(root)
+        ]
+    else:
+        raise ValueError(f"Report path must be a directory or .zip file: {root}")
+    summary = dict(coverage.get("summary") or {})
+    summary["computer_count"] = len(roots)
+    summary["ready"] = bool(roots) and int(summary.get("csv_count") or 0) > 0
+    return {
+        "report_root": str(root),
+        "summary": summary,
+        "computers": roots,
+        "routes": coverage["routes"],
+        "files": coverage["files"],
+        "unmapped": coverage["unmapped"],
+    }
+
+
+def _coverage_counts_for_prefix(rows: list[Any], prefix: str) -> dict[str, int]:
+    prefix = prefix.strip("/")
+    if prefix == ".":
+        prefix = ""
+    if prefix:
+        scoped = [
+            row
+            for row in rows
+            if isinstance(row, dict)
+            and str(row.get("relative_path") or "").strip("/").startswith(f"{prefix}/")
+        ]
+    else:
+        scoped = [row for row in rows if isinstance(row, dict)]
+    return {
+        "mapped_count": sum(1 for row in scoped if row.get("status") == "mapped"),
+        "unmapped_count": sum(1 for row in scoped if row.get("status") == "unmapped"),
     }
 
 
@@ -733,6 +817,14 @@ def _candidate_from_header(path: Path, header: set[str]) -> ReportCandidate | No
         return ReportCandidate(path, "LECmd", note="TZWorks lp output detected by header")
     if _header_has(header, "device name", "instance/serial#", "volume guid", "vol name/details"):
         return ReportCandidate(path, "USPParser", note="TZWorks USP output detected by header")
+    if _header_has(header, "database_file", "source_table") and (
+        "client_name" in header or "client_ip" in header or "role_name" in header
+    ):
+        return ReportCandidate(path, "UalParser", note="UAL/SUM output detected by header")
+    if _header_has(header, "source_cache_path", "fragment_path", "contact_sheet_path"):
+        return ReportCandidate(path, "RdpCacheParser", note="RDP cache output detected by header")
+    if _header_has(header, "source_cache_path", "observation_type", "certainty"):
+        return ReportCandidate(path, "RdpCacheParser", note="RDP visual observation output detected by header")
     return None
 
 
@@ -1232,6 +1324,10 @@ def _looks_like_supported_header(header: set[str]) -> bool:
         {"sourcename", "filetype", "filename", "deletedon"},
         {"source path/filename", "target name", "local path", "vol serial"},
         {"device name", "instance/serial#", "volume guid", "vol name/details"},
+        {"database_file", "source_table", "client_name"},
+        {"database_file", "source_table", "role_name"},
+        {"source_cache_path", "fragment_path", "contact_sheet_path"},
+        {"source_cache_path", "observation_type", "certainty"},
     )
     return any(signature <= header for signature in signatures)
 

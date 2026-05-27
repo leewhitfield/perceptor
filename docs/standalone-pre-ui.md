@@ -84,6 +84,11 @@ uv run forensic-orchestrator --config config.yaml standalone tool-status
   top-level folder per computer, create/reuse a case, create one computer record
   per folder, run post-import rebuilds, write durable import manifests, and
   generate a triage report bundle by default.
+- `ingest triage-zip --preflight --path evidence.zip`: validate computer-folder
+  detection and CSV parser coverage without creating case records or importing
+  data.
+- `memory workflow --case CASE_ID`: run memory support-file processing and write
+  the memory purpose bundle in one command.
 - `standalone version`: application, Python, OS, root, and plugin paths.
 - `standalone dependencies`: required and optional external tools.
 - `standalone repair-dependencies`: safe install/config repair for Python tools
@@ -138,6 +143,11 @@ uv run relic --root /analysis/case-root ingest triage-zip \
 Before importing unfamiliar export sets, check parser coverage:
 
 ```bash
+uv run relic --root /analysis/case-root ingest triage-zip \
+  --path /evidence/live-case.zip \
+  --preflight \
+  --format table
+
 uv run relic --root /analysis/case-root report-bundle coverage \
   --path /evidence/live-case.zip \
   --format table
@@ -160,7 +170,17 @@ uv run relic --root /analysis/case-root report write-bundle \
 ```
 
 Supported purposes are `triage`, `usb`, `cloud`, `execution`, `memory`, and
-`full`.
+`full`. Purpose bundles are computed lazily, so a narrow purpose avoids building
+reports outside that review lane. Each bundle also writes `bundle-quality.json`
+with report and CSV export row/column counts.
+
+Memory workflow shortcut:
+
+```bash
+uv run relic --root /analysis/case-root memory workflow \
+  --case CASE_ID \
+  --workers 4
+```
 
 Credential reports redact values by default. Use `report memory-credentials
 --reveal` only for controlled examiner output, and record analyst decisions with
