@@ -16167,18 +16167,33 @@ def opened_from_removable_media_report(
     intent = user_intent_artifacts_report(db, case_id, user=user, contains=contains, limit=max(limit * 2, 250))
     devices = _external_storage_devices(db, case_id, limit=10000)
     _annotate_external_storage_devices(db, case_id, devices)
+    connection_rows = _query_report_rows(
+        db,
+        case_id,
+        "usb_connection_events",
+        "SELECT * FROM usb_connection_events WHERE case_id = ? ORDER BY event_time_utc",
+        (case_id,),
+    )
+    connection_rows.extend(_usb_event_log_connection_observations(db, case_id))
     rows = []
     for event in intent.get("events") or []:
         path = str(event.get("path") or "")
         if not _looks_like_removable_path(path):
             continue
-        matches = [_removable_path_device_match(path, event, device) for device in devices]
+        drive_letter = _path_drive_letter(path)
+        matches = [_removable_path_device_match(path, event, device, connection_rows) for device in devices]
         matches = [match for match in matches if match]
+        status = _opened_removable_attribution_status(matches)
         rows.append(
             {
                 **{key: event.get(key) for key in ("timestamp", "source", "activity", "computer_id", "computer_label", "image_id", "user_profile", "path", "source_id")},
+                "shell_namespace_path": path,
+                "display_path": _display_drive_path(path),
+                "drive_letter": drive_letter,
+                "top_folder": _drive_path_top_folder(path),
                 "matched_devices": matches,
                 "match_count": len(matches),
+                "attribution_status": status,
                 "confidence": _opened_removable_confidence(matches, path),
                 "confidence_basis": _opened_removable_basis(matches, path),
                 "details": event.get("details"),
@@ -16186,14 +16201,20 @@ def opened_from_removable_media_report(
         )
     rows.sort(key=lambda row: (str(row.get("timestamp") or ""), int(row.get("match_count") or 0)), reverse=True)
     rows = rows[:limit]
+    group_rows = _opened_removable_groups(rows)
     return {
         "case_id": case_id,
         "filters": {"user": user, "contains": contains},
         "summary": {
             "opened_from_removable_count": len(rows),
+            "attributed_count": sum(1 for row in rows if row.get("attribution_status") == "attributed"),
+            "candidate_count": sum(1 for row in rows if row.get("attribution_status") == "candidate"),
+            "unattributed_count": sum(1 for row in rows if row.get("attribution_status") == "unattributed"),
             "matched_device_count": sum(1 for row in rows if row.get("match_count")),
             "unmatched_removable_path_count": sum(1 for row in rows if not row.get("match_count")),
+            "group_count": len(group_rows),
         },
+        "groups": group_rows,
         "items": rows,
         "total_returned": len(rows),
     }
@@ -16211,7 +16232,12 @@ def opened_from_removable_media_export_rows(report: dict[str, Any]) -> list[dict
                 "activity": item.get("activity"),
                 "computer_label": item.get("computer_label"),
                 "user_profile": item.get("user_profile"),
-                "path": item.get("path"),
+                "drive_letter": item.get("drive_letter"),
+                "top_folder": item.get("top_folder"),
+                "display_path": item.get("display_path"),
+                "shell_namespace_path": item.get("shell_namespace_path"),
+                "path": item.get("display_path") or item.get("path"),
+                "attribution_status": item.get("attribution_status"),
                 "confidence": item.get("confidence"),
                 "confidence_basis": item.get("confidence_basis"),
                 "match_count": item.get("match_count"),
@@ -16229,11 +16255,28 @@ def opened_from_removable_media_markdown(report: dict[str, Any]) -> str:
             "## Summary",
             "",
             f"- Removable-path user references: `{summary.get('opened_from_removable_count', 0)}`",
-            f"- References matched to a device: `{summary.get('matched_device_count', 0)}`",
-            f"- References not matched to a physical device: `{summary.get('unmatched_removable_path_count', 0)}`",
+            f"- Attributed references: `{summary.get('attributed_count', 0)}`",
+            f"- Candidate references: `{summary.get('candidate_count', 0)}`",
+            f"- Unattributed references: `{summary.get('unattributed_count', 0)}`",
+            f"- Groups: `{summary.get('group_count', 0)}`",
             "",
         ]
     )
+    groups = report.get("groups") or []
+    if groups:
+        lines.extend(["## Groups", ""])
+        for group in groups[:25]:
+            lines.append(
+                "- "
+                f"computer `{group.get('computer_label') or group.get('computer_id') or ''}` "
+                f"drive `{group.get('drive_letter') or ''}` "
+                f"top folder `{group.get('top_folder') or ''}` "
+                f"status `{group.get('attribution_status') or ''}` "
+                f"items `{group.get('item_count') or 0}` "
+                f"first/last `{group.get('first_timestamp') or ''}` / `{group.get('last_timestamp') or ''}`"
+            )
+        lines.append("")
+    lines.extend(["## Items", ""])
     for item in report.get("items") or []:
         lines.append(
             "- "
@@ -16241,12 +16284,13 @@ def opened_from_removable_media_markdown(report: dict[str, Any]) -> str:
             f"`{item.get('source') or ''}` "
             f"computer `{item.get('computer_label') or item.get('computer_id') or ''}` "
             f"user `{item.get('user_profile') or ''}` "
+            f"status `{item.get('attribution_status') or ''}` "
             f"confidence `{item.get('confidence') or ''}` "
-            f"path `{item.get('path') or ''}`"
+            f"path `{item.get('display_path') or item.get('path') or ''}`"
         )
         for match in (item.get("matched_devices") or [])[:3]:
             lines.append(
-                f"  - `{match.get('device_identity') or ''}` basis `{match.get('match_basis') or ''}` tier `{match.get('identity_confidence_tier') or ''}`"
+                f"  - `{match.get('device_identity') or ''}` status `{match.get('attribution_status') or ''}` basis `{match.get('match_basis') or ''}` tier `{match.get('identity_confidence_tier') or ''}`"
             )
     if not report.get("items"):
         lines.append("No removable-media user references matched the filters.")
@@ -16258,7 +16302,12 @@ def _looks_like_removable_path(path: str) -> bool:
     return bool(drive and drive[0].upper() != "C")
 
 
-def _removable_path_device_match(path: str, event: dict[str, Any], device: dict[str, Any]) -> dict[str, Any] | None:
+def _removable_path_device_match(
+    path: str,
+    event: dict[str, Any],
+    device: dict[str, Any],
+    connection_rows: list[dict[str, Any]],
+) -> dict[str, Any] | None:
     drive = _normalize_external_storage_drive_letters(_path_drive_letter(path))
     device_drives = _normalize_external_storage_drive_letters(device.get("observed_drive_letters") or device.get("drive_letter"))
     bases = []
@@ -16266,8 +16315,12 @@ def _removable_path_device_match(path: str, event: dict[str, Any], device: dict[
         bases.append("drive_letter")
     if event.get("computer_id") and device.get("computer_id") and event.get("computer_id") == device.get("computer_id"):
         bases.append("same_computer")
+    temporal_status = _removable_device_temporal_status(event.get("timestamp"), device, connection_rows)
+    if temporal_status == "within_known_connection":
+        bases.append("time_overlap")
     if not bases:
         return None
+    attribution_status = "attributed" if any(basis in bases for basis in ("drive_letter", "time_overlap")) else "candidate"
     return {
         "serial": device.get("serial"),
         "device_identity": device.get("device_identity") or _external_storage_device_label(device),
@@ -16275,12 +16328,16 @@ def _removable_path_device_match(path: str, event: dict[str, Any], device: dict[
         "volume_guid": device.get("observed_volume_guids") or device.get("volume_guid"),
         "drive_letter": device.get("observed_drive_letters") or device.get("drive_letter"),
         "match_basis": ", ".join(_ordered_unique(bases)),
+        "attribution_status": attribution_status,
+        "temporal_status": temporal_status,
         "identity_confidence_tier": device.get("identity_confidence_tier"),
     }
 
 
 def _opened_removable_confidence(matches: list[dict[str, Any]], path: str) -> str:
-    if any("same_computer" in str(match.get("match_basis") or "") and "drive_letter" in str(match.get("match_basis") or "") for match in matches):
+    if any("time_overlap" in str(match.get("match_basis") or "") and "drive_letter" in str(match.get("match_basis") or "") for match in matches):
+        return "high"
+    if any(str(match.get("attribution_status") or "") == "attributed" for match in matches):
         return "medium"
     if matches:
         return "low"
@@ -16291,14 +16348,145 @@ def _opened_removable_confidence(matches: list[dict[str, Any]], path: str) -> st
 
 def _opened_removable_basis(matches: list[dict[str, Any]], path: str) -> str:
     if matches:
-        return "; ".join(match.get("match_basis") or "" for match in matches)
+        return "; ".join(
+            f"{match.get('attribution_status') or 'unknown'}:{match.get('match_basis') or ''}"
+            for match in matches
+        )
     drive = _path_drive_letter(path)
     return f"removable_style_drive_path:{drive}" if drive else ""
+
+
+def _opened_removable_attribution_status(matches: list[dict[str, Any]]) -> str:
+    if any(match.get("attribution_status") == "attributed" for match in matches):
+        return "attributed"
+    if matches:
+        return "candidate"
+    return "unattributed"
 
 
 def _path_drive_letter(path: Any) -> str:
     match = re.search(r"(?<![A-Za-z])([A-Za-z]):[\\/]", str(path or ""))
     return f"{match.group(1).upper()}:" if match else ""
+
+
+def _display_drive_path(path: Any) -> str:
+    text = str(path or "")
+    match = re.search(r"(?<![A-Za-z])([A-Za-z]):[\\/]+(.+)$", text)
+    if not match:
+        return text
+    rest = re.sub(r"[\\/]+", r"\\", match.group(2)).strip("\\")
+    return f"{match.group(1).upper()}:\\{rest}" if rest else f"{match.group(1).upper()}:\\"
+
+
+def _drive_path_top_folder(path: Any) -> str:
+    display = _display_drive_path(path)
+    match = re.match(r"^[A-Za-z]:\\([^\\]+)", display)
+    return match.group(1) if match else ""
+
+
+def _opened_removable_groups(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for row in rows:
+        key = (
+            row.get("computer_id"),
+            row.get("drive_letter"),
+            row.get("top_folder"),
+            row.get("attribution_status"),
+        )
+        group = groups.setdefault(
+            key,
+            {
+                "computer_id": row.get("computer_id"),
+                "computer_label": row.get("computer_label"),
+                "drive_letter": row.get("drive_letter"),
+                "top_folder": row.get("top_folder"),
+                "attribution_status": row.get("attribution_status"),
+                "item_count": 0,
+                "first_timestamp": row.get("timestamp"),
+                "last_timestamp": row.get("timestamp"),
+                "sources": set(),
+                "confidence_values": set(),
+                "examples": [],
+            },
+        )
+        group["item_count"] += 1
+        timestamp = str(row.get("timestamp") or "")
+        if timestamp:
+            if not group.get("first_timestamp") or timestamp < str(group.get("first_timestamp")):
+                group["first_timestamp"] = timestamp
+            if not group.get("last_timestamp") or timestamp > str(group.get("last_timestamp")):
+                group["last_timestamp"] = timestamp
+        if row.get("source"):
+            group["sources"].add(str(row.get("source")))
+        if row.get("confidence"):
+            group["confidence_values"].add(str(row.get("confidence")))
+        if len(group["examples"]) < 5:
+            group["examples"].append(row.get("display_path") or row.get("path"))
+    output = []
+    for group in groups.values():
+        item = dict(group)
+        item["sources"] = ", ".join(sorted(item["sources"]))
+        item["confidence_values"] = ", ".join(sorted(item["confidence_values"]))
+        output.append(item)
+    output.sort(key=lambda row: (row.get("last_timestamp") or "", row.get("item_count") or 0), reverse=True)
+    return output
+
+
+def _removable_device_temporal_status(timestamp: Any, device: dict[str, Any], connection_rows: list[dict[str, Any]]) -> str:
+    event_time = _parse_report_timestamp(str(timestamp)) if timestamp else None
+    if not event_time:
+        return "no_event_timestamp"
+    sessions = _removable_device_sessions(device, connection_rows)
+    if not sessions:
+        fallback = _removable_device_fallback_session(device)
+        if fallback:
+            sessions = [fallback]
+        else:
+            return "no_connection_window_available"
+    if any(_timestamp_in_session(event_time, session) for session in sessions):
+        return "within_known_connection"
+    first_start = min(session["start"] for session in sessions if session.get("start"))
+    last_end = max(session["end"] for session in sessions if session.get("end"))
+    if event_time < first_start:
+        return "before_first_known_connection"
+    if event_time > last_end:
+        return "after_last_known_connection"
+    return "outside_known_connection"
+
+
+def _removable_device_sessions(device: dict[str, Any], connection_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    serial = str(device.get("serial") or "")
+    vsns = {
+        _normalize_usb_serial(value)
+        for value in _split_external_storage_values(device.get("observed_volume_serial_numbers") or device.get("volume_serial_number"))
+        if _normalize_usb_serial(value)
+    }
+    drives = set(_split_external_storage_values(device.get("observed_drive_letters") or device.get("drive_letter")))
+    computer_id = str(device.get("computer_id") or "")
+    matched = []
+    for row in connection_rows:
+        if computer_id and str(row.get("computer_id") or "") and str(row.get("computer_id") or "") != computer_id:
+            continue
+        row_serial = str(row.get("serial") or "")
+        row_vsn = _normalize_usb_serial(row.get("volume_serial_number"))
+        row_drive = _normalize_external_storage_drive_letters(row.get("drive_letter"))
+        if serial and row_serial and row_serial == serial:
+            matched.append(row)
+        elif vsns and row_vsn and row_vsn in vsns:
+            matched.append(row)
+        elif drives and row_drive and row_drive in drives:
+            matched.append(row)
+    return _usb_sessions_from_connection_rows(matched)
+
+
+def _removable_device_fallback_session(device: dict[str, Any]) -> dict[str, Any] | None:
+    start = _parse_report_timestamp(device.get("first_install_date_utc") or device.get("last_arrival_utc") or device.get("last_partition_event_utc"))
+    end = _parse_report_timestamp(device.get("last_removal_utc") or device.get("last_arrival_utc") or device.get("last_partition_event_utc") or device.get("first_install_date_utc"))
+    if not start or not end:
+        return None
+    if end < start:
+        end = start
+    return {"start": start, "end": end, "serial": str(device.get("serial") or ""), "volume_serial_number": _normalize_usb_serial(device.get("volume_serial_number"))}
 
 
 def activity_summary_report(db: Database, case_id: str, *, user: str | None = None, limit: int = 25) -> dict[str, Any]:
