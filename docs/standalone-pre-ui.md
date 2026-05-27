@@ -77,6 +77,10 @@ uv run forensic-orchestrator --config config.yaml standalone tool-status
 
 ## Standalone Commands
 
+- `ingest triage-zip --path evidence.zip`: import a zip containing one
+  top-level folder per computer, create/reuse a case, create one computer record
+  per folder, run post-import rebuilds, write durable import manifests, and
+  generate a triage report bundle by default.
 - `standalone version`: application, Python, OS, root, and plugin paths.
 - `standalone dependencies`: required and optional external tools.
 - `standalone repair-dependencies`: safe install/config repair for Python tools
@@ -99,6 +103,37 @@ uv run forensic-orchestrator --config config.yaml standalone tool-status
 Use `report write-bundle` for report bundle defaults, `report regression-smoke`
 for end-to-end report health checks, and `image cleanup-stale-mounts` when FUSE
 mount paths become inaccessible.
+
+Common pre-UI run:
+
+```bash
+uv run relic --root /analysis/case-root ingest triage-zip \
+  --path /evidence/live-case.zip \
+  --report-purpose triage
+```
+
+The import writes a markdown summary plus JSON manifest under the case reports
+folder. The manifest records the source zip/folder, computer folders,
+imported/skipped/failed CSVs, generated evidence IDs, row counts, warnings, and
+per-computer import reports. If the run is interrupted, use:
+
+```bash
+uv run relic --root /analysis/case-root report progress --case CASE_ID
+uv run relic --root /analysis/case-root report resume-plan --case CASE_ID
+uv run relic --root /analysis/case-root report workspace-health --case CASE_ID
+```
+
+Purpose bundles keep review output focused:
+
+```bash
+uv run relic --root /analysis/case-root report write-bundle \
+  --case CASE_ID \
+  --purpose usb \
+  --output-dir /analysis/case-root/cases/CASE_ID/outputs/reports/usb-bundle
+```
+
+Supported purposes are `triage`, `usb`, `cloud`, `execution`, `memory`, and
+`full`.
 
 Credential reports redact values by default. Use `report memory-credentials
 --reveal` only for controlled examiner output, and record analyst decisions with

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import csv
+import json
 import zipfile
+from pathlib import Path
 
 import duckdb
 
@@ -130,6 +132,11 @@ def test_report_bundle_import_many_zip_creates_one_computer_per_top_level_folder
     assert result.imported_files == 2
     assert result.imported_rows == 2
     assert result.failed_files == 0
+    assert result.manifest_path
+    manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
+    assert manifest["manifest_type"] == "report_bundle_bulk_import"
+    assert len(manifest["computers"]) == 2
+    assert all(item["manifest_path"] for item in manifest["computers"])
     conn = duckdb.connect(str(paths.analytics_db_path(result.case_id)), read_only=True)
     try:
         assert conn.execute("SELECT count(*) FROM mft_entries").fetchone()[0] == 2
@@ -166,6 +173,7 @@ def test_report_bundle_import_many_emits_progress(tmp_path, monkeypatch):
     db.close()
 
     assert result.imported_computers == 1
+    assert result.manifest_path
     assert any(message.startswith("report-bundle-many start") for message in messages)
     assert any("computer 1/1 start" in message for message in messages)
     assert any("csv 1/1 import" in message for message in messages)

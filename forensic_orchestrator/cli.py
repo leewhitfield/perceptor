@@ -808,8 +808,24 @@ def _sqlite_artifact_route(name: str):
     return None
 
 
-def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, limit: int = 100) -> dict[str, object]:
+def _bundle_report_names_for_purpose(purpose: str) -> set[str] | None:
+    purpose = (purpose or "full").casefold()
+    if purpose == "full":
+        return None
+    common = {"executive-summary", "case-overview", "evidence-gaps", "processing-decisions", "processing-readiness", "regression-smoke"}
+    groups = {
+        "triage": common | {"suspicious-executions", "user-intent", "file-movement-identity", "opened-from-removable-media", "opened-from-cloud-storage", "cloud-mounts", "cloud-removable-overlap", "artifact-processing-status"},
+        "usb": common | {"shellbag-external-storage", "file-movement-identity", "opened-from-removable-media", "cloud-removable-overlap", "shortcut-droid-changes", "shortcut-object-tracking", "usn-lifecycle"},
+        "cloud": common | {"cloud-artifacts", "opened-from-cloud-storage", "cloud-mounts", "cloud-removable-overlap", "user-intent"},
+        "execution": common | {"suspicious-executions", "program-provenance", "remote-access", "user-intent"},
+        "memory": common | {"memory-analysis", "memory-credentials", "memory-disk-correlations", "memory-support-files", "combined-artifacts", "crash-dump-analysis", "memory-artifacts"},
+    }
+    return groups.get(purpose, groups["triage"])
+
+
+def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, limit: int = 100, purpose: str = "full") -> dict[str, object]:
     output_dir.mkdir(parents=True, exist_ok=True)
+    selected = _bundle_report_names_for_purpose(purpose)
     memory_disk = memory_disk_correlations_report(db, case_id, limit=max(limit * 10, 500))
     overview = case_overview_report(db, case_id, limit=limit, memory_disk_report=memory_disk)
     credentials = memory_credentials_report(db, case_id, limit=limit)
@@ -860,6 +876,8 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
         ("remote-access", "json", "Remote access", remote_access_sessions_report(db, case_id, limit=limit, memory_disk_report=memory_disk)),
         ("regression-smoke", "json", "Regression smoke", regression_smoke_report(db, case_id, limit=min(limit, 25))),
     ]
+    if selected is not None:
+        specs = [spec for spec in specs if spec[0] in selected]
     written: list[dict[str, object]] = []
     for stem, extension, title, payload in specs:
         path = output_dir / f"{stem}.{extension}"
@@ -877,6 +895,8 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
         ("cloud-mounts", "Cloud virtual mounts CSV", cloud_mounts_export_rows(cloud_mounts)),
         ("cloud-removable-overlap", "Cloud/removable overlap CSV", cloud_removable_overlap_export_rows(cloud_overlap)),
     ]
+    if selected is not None:
+        csv_specs = [spec for spec in csv_specs if spec[0] in selected]
     for stem, title, rows in csv_specs:
         path = output_dir / f"{stem}.csv"
         write_csv_rows(rows, str(path))
@@ -892,6 +912,7 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
         "# Case Report Bundle",
         "",
         f"Case: `{case_id}`",
+        f"Purpose: `{purpose}`",
         "",
         "## At-a-Glance",
         "",
@@ -914,6 +935,7 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
     write_text_output("\n".join(index_lines).rstrip() + "\n", str(index_path))
     return {
         "case_id": case_id,
+        "purpose": purpose,
         "output_dir": str(output_dir),
         "index": str(index_path),
         "reports": written,
@@ -1844,6 +1866,21 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Suppress timestamped import progress messages on stderr",
     )
+    report_bundle_many.add_argument("--write-reports", action="store_true", help="Write a purpose report bundle after import")
+    report_bundle_many.add_argument("--report-purpose", choices=["full", "usb", "cloud", "execution", "memory", "triage"], default="triage")
+    report_bundle_many.add_argument("--report-output-dir")
+
+    ingest = subparsers.add_parser("ingest")
+    ingest_sub = ingest.add_subparsers(dest="action", required=True)
+    ingest_zip = ingest_sub.add_parser("triage-zip")
+    ingest_zip.add_argument("--case", dest="case_id", help="Existing case/project ID; creates one when omitted")
+    ingest_zip.add_argument("--path", required=True, help="Zip file containing one top-level folder per computer")
+    ingest_zip.add_argument("--accept-duplicate", action="store_true")
+    ingest_zip.add_argument("--no-progress", action="store_true")
+    ingest_zip.add_argument("--write-reports", action="store_true", default=True)
+    ingest_zip.add_argument("--no-write-reports", action="store_false", dest="write_reports")
+    ingest_zip.add_argument("--report-purpose", choices=["full", "usb", "cloud", "execution", "memory", "triage"], default="triage")
+    ingest_zip.add_argument("--report-output-dir")
 
     report = subparsers.add_parser("report")
     report_sub = report.add_subparsers(dest="action", required=True)
@@ -2807,6 +2844,7 @@ def build_parser() -> argparse.ArgumentParser:
     report_write_bundle.add_argument("--case", required=True, dest="case_id")
     report_write_bundle.add_argument("--limit", type=int, default=100)
     report_write_bundle.add_argument("--output-dir", required=True)
+    report_write_bundle.add_argument("--purpose", choices=["full", "usb", "cloud", "execution", "memory", "triage"], default="full")
     report_combined = report_sub.add_parser("combined-artifacts")
     report_combined.add_argument("--case", required=True, dest="case_id")
     report_combined.add_argument("--family", default="all")
@@ -3100,6 +3138,40 @@ def command_preview(db: Database, case_id: str) -> list[dict[str, object]]:
         }
         for row in rows
     ]
+
+
+def _bulk_import_payload(result, *, written_reports: dict[str, object] | None = None) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "case_id": result.case_id,
+        "project_id": result.case_id,
+        "report_root": result.report_root,
+        "imported_computers": result.imported_computers,
+        "imported_files": result.imported_files,
+        "imported_rows": result.imported_rows,
+        "skipped_files": result.skipped_files,
+        "failed_files": result.failed_files,
+        "warnings": result.warnings,
+        "markdown_path": result.markdown_path,
+        "manifest_path": result.manifest_path,
+        "computers": [
+            {
+                "computer_id": item.computer_id,
+                "image_id": item.image_id,
+                "report_root": item.report_root,
+                "imported_files": item.imported_files,
+                "imported_rows": item.imported_rows,
+                "skipped_files": item.skipped_files,
+                "failed_files": item.failed_files,
+                "warnings": item.warnings,
+                "markdown_path": item.markdown_path,
+                "manifest_path": item.manifest_path,
+            }
+            for item in result.items
+        ],
+    }
+    if written_reports is not None:
+        payload["written_reports"] = written_reports
+    return payload
 
 
 def run(args: argparse.Namespace) -> int:
@@ -3453,6 +3525,7 @@ def run(args: argparse.Namespace) -> int:
                     "failed_files": result.failed_files,
                     "warnings": result.warnings,
                     "markdown_path": result.markdown_path,
+                    "manifest_path": result.manifest_path,
                 }
             )
             return 0
@@ -3466,34 +3539,27 @@ def run(args: argparse.Namespace) -> int:
                 accept_duplicate=args.accept_duplicate,
                 progress=None if args.no_progress else print_progress,
             )
-            print_json(
-                {
-                    "case_id": result.case_id,
-                    "project_id": result.case_id,
-                    "report_root": result.report_root,
-                    "imported_computers": result.imported_computers,
-                    "imported_files": result.imported_files,
-                    "imported_rows": result.imported_rows,
-                    "skipped_files": result.skipped_files,
-                    "failed_files": result.failed_files,
-                    "warnings": result.warnings,
-                    "markdown_path": result.markdown_path,
-                    "computers": [
-                        {
-                            "computer_id": item.computer_id,
-                            "image_id": item.image_id,
-                            "report_root": item.report_root,
-                            "imported_files": item.imported_files,
-                            "imported_rows": item.imported_rows,
-                            "skipped_files": item.skipped_files,
-                            "failed_files": item.failed_files,
-                            "warnings": item.warnings,
-                            "markdown_path": item.markdown_path,
-                        }
-                        for item in result.items
-                    ],
-                }
+            written_reports = None
+            if args.write_reports:
+                output_dir = Path(args.report_output_dir) if args.report_output_dir else paths.outputs_dir(result.case_id) / "reports" / f"{args.report_purpose}-bundle"
+                written_reports = write_case_report_bundle(db, result.case_id, output_dir, limit=100, purpose=args.report_purpose)
+            print_json(_bulk_import_payload(result, written_reports=written_reports))
+            return 0
+
+        if args.resource == "ingest" and args.action == "triage-zip":
+            result = import_report_bundle_many(
+                db=db,
+                paths=paths,
+                report_root=Path(args.path),
+                case_id=args.case_id,
+                accept_duplicate=args.accept_duplicate,
+                progress=None if args.no_progress else print_progress,
             )
+            written_reports = None
+            if args.write_reports:
+                output_dir = Path(args.report_output_dir) if args.report_output_dir else paths.outputs_dir(result.case_id) / "reports" / f"{args.report_purpose}-bundle"
+                written_reports = write_case_report_bundle(db, result.case_id, output_dir, limit=100, purpose=args.report_purpose)
+            print_json(_bulk_import_payload(result, written_reports=written_reports))
             return 0
 
         if args.resource in {"case", "project"} and args.action == "create":
@@ -4718,7 +4784,7 @@ def run(args: argparse.Namespace) -> int:
             report = regression_smoke_report(db, args.case_id, limit=args.limit)
             if args.write_reports:
                 output_dir = Path(args.output_dir) if args.output_dir else paths.case_dir(args.case_id) / "reports" / "regression-smoke-bundle"
-                report["written_reports"] = write_case_report_bundle(db, args.case_id, output_dir, limit=max(args.limit, 100))
+                report["written_reports"] = write_case_report_bundle(db, args.case_id, output_dir, limit=max(args.limit, 100), purpose="triage")
             write_report_output(
                 report,
                 report["checks"],
@@ -4730,7 +4796,7 @@ def run(args: argparse.Namespace) -> int:
             return 0
 
         if args.resource == "report" and args.action == "write-bundle":
-            print_json(write_case_report_bundle(db, args.case_id, Path(args.output_dir), limit=args.limit))
+            print_json(write_case_report_bundle(db, args.case_id, Path(args.output_dir), limit=args.limit, purpose=args.purpose))
             return 0
 
         if args.resource == "report" and args.action == "combined-artifacts":

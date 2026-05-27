@@ -86,6 +86,7 @@ class ReportBundleImportResult:
     failed_files: int = 0
     warnings: list[str] = field(default_factory=list)
     items: list[ReportImportItem] = field(default_factory=list)
+    manifest_path: str = ""
 
 
 @dataclass
@@ -100,6 +101,7 @@ class ReportBundleBulkImportResult:
     warnings: list[str] = field(default_factory=list)
     items: list[ReportBundleImportResult] = field(default_factory=list)
     markdown_path: str = ""
+    manifest_path: str = ""
 
 
 def import_report_bundle(
@@ -318,6 +320,7 @@ def import_report_bundle(
         _progress(progress, "report-bundle postprocess completed")
         markdown_path = _write_markdown_report(paths, result)
         result.markdown_path = str(markdown_path)
+        result.manifest_path = str(_write_import_manifest(paths, result))
         db.log_activity(
             case_id=case_id,
             computer_id=computer_id,
@@ -333,6 +336,7 @@ def import_report_bundle(
                 "failed_files": result.failed_files,
                 "warnings": result.warnings,
                 "markdown_path": str(markdown_path),
+                "manifest_path": result.manifest_path,
             },
         )
         db.finish_process_timing(
@@ -345,6 +349,7 @@ def import_report_bundle(
                 "failed_files": result.failed_files,
                 "warnings": result.warnings,
                 "markdown_path": str(markdown_path),
+                "manifest_path": result.manifest_path,
             },
         )
         _progress(
@@ -430,11 +435,12 @@ def import_report_bundle_many(
             f"distinct_rows={distinct_stats.get('distinct_rows', 0)} duplicate_rows={distinct_stats.get('duplicate_rows', 0)}",
         )
         bulk.markdown_path = str(_write_bulk_markdown_report(paths, bulk, distinct_stats))
+        bulk.manifest_path = str(_write_bulk_import_manifest(paths, bulk, distinct_stats))
         _progress(
             progress,
             "report-bundle-many completed "
             f"elapsed={_format_elapsed(started)} computers={bulk.imported_computers} files={bulk.imported_files} "
-            f"rows={bulk.imported_rows} skipped={bulk.skipped_files} failed={bulk.failed_files} report={bulk.markdown_path}",
+            f"rows={bulk.imported_rows} skipped={bulk.skipped_files} failed={bulk.failed_files} report={bulk.markdown_path} manifest={bulk.manifest_path}",
         )
         return bulk
     finally:
@@ -513,11 +519,12 @@ def _import_report_bundle_many_zip(
             f"distinct_rows={distinct_stats.get('distinct_rows', 0)} duplicate_rows={distinct_stats.get('duplicate_rows', 0)}",
         )
         bulk.markdown_path = str(_write_bulk_markdown_report(paths, bulk, distinct_stats))
+        bulk.manifest_path = str(_write_bulk_import_manifest(paths, bulk, distinct_stats))
         _progress(
             progress,
             "report-bundle-many completed "
             f"elapsed={_format_elapsed(started)} computers={bulk.imported_computers} files={bulk.imported_files} "
-            f"rows={bulk.imported_rows} skipped={bulk.skipped_files} failed={bulk.failed_files} report={bulk.markdown_path}",
+            f"rows={bulk.imported_rows} skipped={bulk.skipped_files} failed={bulk.failed_files} report={bulk.markdown_path} manifest={bulk.manifest_path}",
         )
         return bulk
     finally:
@@ -718,6 +725,49 @@ def _write_markdown_report(paths: WorkspacePaths, result: ReportBundleImportResu
     return report_path
 
 
+def _item_dict(item: ReportImportItem) -> dict[str, Any]:
+    return {
+        "path": item.path,
+        "tool_name": item.tool_name,
+        "status": item.status,
+        "row_count": item.row_count,
+        "output_path": item.output_path,
+        "error": item.error,
+        "note": item.note,
+    }
+
+
+def _result_dict(result: ReportBundleImportResult) -> dict[str, Any]:
+    return {
+        "case_id": result.case_id,
+        "computer_id": result.computer_id,
+        "image_id": result.image_id,
+        "report_root": result.report_root,
+        "markdown_path": result.markdown_path,
+        "manifest_path": result.manifest_path,
+        "imported_files": result.imported_files,
+        "imported_rows": result.imported_rows,
+        "skipped_files": result.skipped_files,
+        "failed_files": result.failed_files,
+        "warnings": result.warnings,
+        "items": [_item_dict(item) for item in result.items],
+    }
+
+
+def _write_import_manifest(paths: WorkspacePaths, result: ReportBundleImportResult) -> Path:
+    report_dir = paths.outputs_dir(result.case_id) / "reports"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = report_dir / f"report-bundle-import-{result.image_id}.manifest.json"
+    result.manifest_path = str(manifest_path)
+    payload = {
+        "manifest_type": "report_bundle_import",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        **_result_dict(result),
+    }
+    manifest_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    return manifest_path
+
+
 def _write_bulk_markdown_report(paths: WorkspacePaths, result: ReportBundleBulkImportResult, distinct_stats: dict[str, Any]) -> Path:
     report_dir = paths.outputs_dir(result.case_id) / "reports"
     report_dir.mkdir(parents=True, exist_ok=True)
@@ -759,6 +809,30 @@ def _write_bulk_markdown_report(paths: WorkspacePaths, result: ReportBundleBulkI
         lines.append("- None")
     report_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return report_path
+
+
+def _write_bulk_import_manifest(paths: WorkspacePaths, result: ReportBundleBulkImportResult, distinct_stats: dict[str, Any]) -> Path:
+    report_dir = paths.outputs_dir(result.case_id) / "reports"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = report_dir / f"report-bundle-bulk-import-{result.case_id}.manifest.json"
+    payload = {
+        "manifest_type": "report_bundle_bulk_import",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "case_id": result.case_id,
+        "report_root": result.report_root,
+        "markdown_path": result.markdown_path,
+        "manifest_path": str(manifest_path),
+        "imported_computers": result.imported_computers,
+        "imported_files": result.imported_files,
+        "imported_rows": result.imported_rows,
+        "skipped_files": result.skipped_files,
+        "failed_files": result.failed_files,
+        "warnings": result.warnings,
+        "distinct_stats": distinct_stats,
+        "computers": [_result_dict(item) for item in result.items],
+    }
+    manifest_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    return manifest_path
 
 
 def _zip_report_roots(zip_path: Path) -> list[ZipReportRoot]:
