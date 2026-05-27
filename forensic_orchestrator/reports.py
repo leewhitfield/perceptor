@@ -216,6 +216,7 @@ def case_overview_report(
     credentials = memory_credentials_report(db, case_id, limit=limit)
     crash_dumps = crash_dump_analysis_report(db, case_id, limit=limit)
     suspicious = suspicious_executions_report(db, case_id, limit=limit)
+    cloud_mounts = cloud_mounts_report(db, case_id, limit=limit)
     memory_disk = memory_disk_report or memory_disk_correlations_report(db, case_id, limit=limit)
     return {
         "case_id": case_id,
@@ -233,7 +234,11 @@ def case_overview_report(
             "credential_likely_usable": (credentials.get("summary") or {}).get("likely_usable_count", 0),
             "crash_dumps": (crash_dumps.get("summary") or {}).get("dump_count", 0),
             "suspicious_executions": (suspicious.get("summary") or {}).get("finding_count", 0),
+            "cloud_virtual_mounts": (cloud_mounts.get("summary") or {}).get("cloud_mount_count", 0),
+            "cloud_mount_inference_note": "Cloud virtual mounts are inferred from path artifacts unless evidence_basis says explicit configuration.",
         },
+        "cloud_mount_summary": cloud_mounts.get("summary") or {},
+        "cloud_mounts": (cloud_mounts.get("cloud_mounts") or [])[:limit],
         "top_evidence_gaps": (gaps.get("gaps") or [])[:limit],
         "memory_findings": (memory.get("findings") or [])[:limit],
         "credential_summary": credentials.get("summary") or {},
@@ -247,6 +252,7 @@ def case_overview_report(
             "suspicious_executions": "report suspicious-executions",
             "evidence_gaps": "report evidence-gaps",
             "memory_disk_correlations": "report memory-disk-correlations",
+            "cloud_mounts": "report cloud-mounts",
         },
     }
 
@@ -274,8 +280,24 @@ def case_overview_markdown(report: dict[str, Any]) -> str:
         "credential_likely_usable",
         "crash_dumps",
         "suspicious_executions",
+        "cloud_virtual_mounts",
     ):
         lines.append(f"- {key.replace('_', ' ').title()}: `{summary.get(key, 0)}`")
+    if summary.get("cloud_mount_inference_note"):
+        lines.append(f"- Cloud mount caveat: {summary.get('cloud_mount_inference_note')}")
+    cloud_mounts = report.get("cloud_mounts") if isinstance(report.get("cloud_mounts"), list) else []
+    if cloud_mounts:
+        lines.extend(["", "## Cloud Virtual Mounts", ""])
+        for mount in cloud_mounts[:10]:
+            lines.append(
+                "- "
+                f"computer `{mount.get('computer_label') or mount.get('computer_id') or ''}` "
+                f"user `{mount.get('user_profile') or ''}` "
+                f"provider `{mount.get('provider') or ''}` "
+                f"root `{mount.get('cloud_root') or ''}` "
+                f"confidence `{mount.get('confidence') or ''}` "
+                f"basis `{mount.get('basis') or ''}`"
+            )
     lines.extend(["", "## High Priority", ""])
     suspicious = report.get("top_suspicious_executions") if isinstance(report.get("top_suspicious_executions"), list) else []
     if not suspicious:
@@ -16347,7 +16369,7 @@ def opened_from_cloud_storage_report(
     rows: list[dict[str, Any]] = []
     for event in intent.get("events") or []:
         path = str(event.get("path") or "")
-        match = _cloud_mounted_drive_match(path, event, mounts)
+        match = _cloud_storage_reference_match(path, event, mounts)
         if not match:
             continue
         if provider_filter and provider_filter not in str(match.get("provider") or "").casefold():
@@ -16360,6 +16382,7 @@ def opened_from_cloud_storage_report(
                 "top_folder": _drive_path_top_folder(path),
                 "provider": match.get("provider"),
                 "cloud_root": match.get("cloud_root"),
+                "storage_mode": match.get("storage_mode"),
                 "mount_confidence": match.get("confidence"),
                 "mount_basis": match.get("basis"),
                 "details": event.get("details"),
@@ -16369,11 +16392,14 @@ def opened_from_cloud_storage_report(
     rows = rows[:limit]
     provider_counts: dict[str, int] = {}
     confidence_counts: dict[str, int] = {}
+    storage_mode_counts: dict[str, int] = {}
     for row in rows:
         provider_name = str(row.get("provider") or "unknown")
         confidence = str(row.get("mount_confidence") or "unknown")
+        storage_mode = str(row.get("storage_mode") or "unknown")
         provider_counts[provider_name] = provider_counts.get(provider_name, 0) + 1
         confidence_counts[confidence] = confidence_counts.get(confidence, 0) + 1
+        storage_mode_counts[storage_mode] = storage_mode_counts.get(storage_mode, 0) + 1
     return {
         "case_id": case_id,
         "filters": {"user": user, "provider": provider, "contains": contains},
@@ -16382,6 +16408,7 @@ def opened_from_cloud_storage_report(
             "cloud_mount_count": len(mounts),
             "provider_counts": [{"provider": key, "count": value} for key, value in sorted(provider_counts.items())],
             "confidence_counts": [{"confidence": key, "count": value} for key, value in sorted(confidence_counts.items())],
+            "storage_mode_counts": [{"storage_mode": key, "count": value} for key, value in sorted(storage_mode_counts.items())],
         },
         "cloud_mounts": mounts[:25],
         "items": rows,
@@ -16401,6 +16428,7 @@ def opened_from_cloud_storage_export_rows(report: dict[str, Any]) -> list[dict[s
             "provider": item.get("provider"),
             "drive_letter": item.get("drive_letter"),
             "cloud_root": item.get("cloud_root"),
+            "storage_mode": item.get("storage_mode"),
             "top_folder": item.get("top_folder"),
             "display_path": item.get("display_path"),
             "path": item.get("display_path") or item.get("path"),
@@ -16450,11 +16478,224 @@ def opened_from_cloud_storage_markdown(report: dict[str, Any]) -> str:
                 f"computer `{item.get('computer_label') or item.get('computer_id') or ''}` "
                 f"user `{item.get('user_profile') or ''}` "
                 f"provider `{item.get('provider') or ''}` "
+                f"mode `{item.get('storage_mode') or ''}` "
                 f"confidence `{item.get('mount_confidence') or ''}` "
                 f"path `{item.get('display_path') or item.get('path') or ''}`"
             )
     else:
         lines.append("No cloud-storage user references matched the filters.")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def cloud_mounts_report(
+    db: Database,
+    case_id: str,
+    *,
+    provider: str | None = None,
+    user: str | None = None,
+    limit: int = 250,
+) -> dict[str, Any]:
+    intent = user_intent_artifacts_report(db, case_id, user=user, limit=5000)
+    mounts = _cloud_mounted_drive_roots(intent.get("events") or [])
+    provider_filter = provider.casefold() if provider else ""
+    if provider_filter:
+        mounts = [mount for mount in mounts if provider_filter in str(mount.get("provider") or "").casefold()]
+    mounts = mounts[:limit]
+    provider_counts: dict[str, int] = {}
+    basis_counts: dict[str, int] = {}
+    for mount in mounts:
+        provider_name = str(mount.get("provider") or "unknown")
+        evidence_basis = str(mount.get("evidence_basis") or "unknown")
+        provider_counts[provider_name] = provider_counts.get(provider_name, 0) + 1
+        basis_counts[evidence_basis] = basis_counts.get(evidence_basis, 0) + 1
+    return {
+        "case_id": case_id,
+        "filters": {"provider": provider, "user": user},
+        "summary": {
+            "cloud_mount_count": len(mounts),
+            "provider_counts": [{"provider": key, "count": value} for key, value in sorted(provider_counts.items())],
+            "evidence_basis_counts": [{"evidence_basis": key, "count": value} for key, value in sorted(basis_counts.items())],
+            "interpretation_note": "Virtual-drive roots are explicit only when backed by configuration evidence; otherwise they are inferred from user-facing path artifacts.",
+        },
+        "cloud_mounts": mounts,
+        "total_returned": len(mounts),
+    }
+
+
+def cloud_mounts_export_rows(report: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "case_id": report.get("case_id"),
+            "computer_label": item.get("computer_label"),
+            "user_profile": item.get("user_profile"),
+            "provider": item.get("provider"),
+            "drive_letter": item.get("drive_letter"),
+            "cloud_root": item.get("cloud_root"),
+            "top_folder": item.get("top_folder"),
+            "confidence": item.get("confidence"),
+            "evidence_basis": item.get("evidence_basis"),
+            "evidence_count": item.get("evidence_count"),
+            "first_timestamp": item.get("first_timestamp"),
+            "last_timestamp": item.get("last_timestamp"),
+            "sources": item.get("sources"),
+            "basis": item.get("basis"),
+        }
+        for item in report.get("cloud_mounts") or []
+    ]
+
+
+def cloud_mounts_markdown(report: dict[str, Any]) -> str:
+    lines = ["# Cloud Mounts Report", "", f"Case: `{report.get('case_id')}`", ""]
+    summary = report.get("summary") or {}
+    lines.extend(
+        [
+            "## Summary",
+            "",
+            f"- Cloud virtual mounts: `{summary.get('cloud_mount_count', 0)}`",
+            f"- Note: {summary.get('interpretation_note') or ''}",
+            "",
+            "## Mounts",
+            "",
+        ]
+    )
+    for item in report.get("cloud_mounts") or []:
+        lines.append(
+            "- "
+            f"computer `{item.get('computer_label') or item.get('computer_id') or ''}` "
+            f"user `{item.get('user_profile') or ''}` "
+            f"provider `{item.get('provider') or ''}` "
+            f"root `{item.get('cloud_root') or ''}` "
+            f"confidence `{item.get('confidence') or ''}` "
+            f"basis `{item.get('evidence_basis') or ''}` "
+            f"first/last `{item.get('first_timestamp') or ''}` / `{item.get('last_timestamp') or ''}`"
+        )
+        lines.append(f"  - evidence `{item.get('evidence_count') or 0}` sources `{item.get('sources') or ''}`")
+    if not report.get("cloud_mounts"):
+        lines.append("No cloud virtual-drive mounts were identified.")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def cloud_removable_overlap_report(
+    db: Database,
+    case_id: str,
+    *,
+    contains: str | None = None,
+    limit: int = 250,
+) -> dict[str, Any]:
+    cloud = opened_from_cloud_storage_report(db, case_id, contains=contains, limit=max(limit * 2, 250))
+    removable = opened_from_removable_media_report(db, case_id, contains=contains, limit=max(limit * 2, 250))
+    overlaps: list[dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
+    removable_items = removable.get("items") or []
+    for cloud_item in cloud.get("items") or []:
+        cloud_name = _path_basename(cloud_item.get("display_path") or cloud_item.get("path"))
+        cloud_time = _parse_report_timestamp(str(cloud_item.get("timestamp") or "")) if cloud_item.get("timestamp") else None
+        for removable_item in removable_items:
+            removable_name = _path_basename(removable_item.get("display_path") or removable_item.get("path"))
+            reasons = []
+            same_name = bool(cloud_name and removable_name and cloud_name.casefold() == removable_name.casefold())
+            if same_name:
+                reasons.append("same_file_or_folder_name")
+            time_delta_minutes = None
+            removable_time = _parse_report_timestamp(str(removable_item.get("timestamp") or "")) if removable_item.get("timestamp") else None
+            if cloud_time and removable_time:
+                time_delta_minutes = abs((cloud_time - removable_time).total_seconds()) / 60
+                if time_delta_minutes <= 60:
+                    reasons.append("within_60_minutes")
+            if cloud_item.get("computer_id") and removable_item.get("computer_id") and cloud_item.get("computer_id") == removable_item.get("computer_id"):
+                reasons.append("same_computer")
+            if not same_name or len(reasons) < 2:
+                continue
+            dedupe_key = (
+                cloud_item.get("computer_id"),
+                cloud_item.get("provider"),
+                cloud_item.get("display_path") or cloud_item.get("path"),
+                removable_item.get("display_path") or removable_item.get("path"),
+            )
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            overlaps.append(
+                {
+                    "computer_label": cloud_item.get("computer_label") or removable_item.get("computer_label"),
+                    "user_profile": cloud_item.get("user_profile") or removable_item.get("user_profile"),
+                    "cloud_timestamp": cloud_item.get("timestamp"),
+                    "removable_timestamp": removable_item.get("timestamp"),
+                    "time_delta_minutes": round(time_delta_minutes, 2) if time_delta_minutes is not None else None,
+                    "provider": cloud_item.get("provider"),
+                    "cloud_path": cloud_item.get("display_path") or cloud_item.get("path"),
+                    "removable_path": removable_item.get("display_path") or removable_item.get("path"),
+                    "cloud_source": cloud_item.get("source"),
+                    "removable_source": removable_item.get("source"),
+                    "overlap_basis": ", ".join(_ordered_unique(reasons)),
+                    "cloud_confidence": cloud_item.get("mount_confidence"),
+                    "removable_confidence": removable_item.get("confidence"),
+                    "matched_removable_devices": removable_item.get("matched_devices"),
+                }
+            )
+    overlaps.sort(key=lambda row: (str(row.get("cloud_timestamp") or ""), str(row.get("removable_timestamp") or "")), reverse=True)
+    overlaps = overlaps[:limit]
+    provider_counts: dict[str, int] = {}
+    for item in overlaps:
+        provider_name = str(item.get("provider") or "unknown")
+        provider_counts[provider_name] = provider_counts.get(provider_name, 0) + 1
+    return {
+        "case_id": case_id,
+        "filters": {"contains": contains},
+        "summary": {
+            "overlap_count": len(overlaps),
+            "provider_counts": [{"provider": key, "count": value} for key, value in sorted(provider_counts.items())],
+            "interpretation_note": "Overlap rows are leads based on shared names, timestamps, and computer context; corroborate with filesystem copy evidence before concluding transfer direction.",
+        },
+        "overlaps": overlaps,
+        "total_returned": len(overlaps),
+    }
+
+
+def cloud_removable_overlap_export_rows(report: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "case_id": report.get("case_id"),
+            "computer_label": item.get("computer_label"),
+            "user_profile": item.get("user_profile"),
+            "provider": item.get("provider"),
+            "cloud_timestamp": item.get("cloud_timestamp"),
+            "removable_timestamp": item.get("removable_timestamp"),
+            "time_delta_minutes": item.get("time_delta_minutes"),
+            "cloud_path": item.get("cloud_path"),
+            "removable_path": item.get("removable_path"),
+            "overlap_basis": item.get("overlap_basis"),
+            "cloud_confidence": item.get("cloud_confidence"),
+            "removable_confidence": item.get("removable_confidence"),
+        }
+        for item in report.get("overlaps") or []
+    ]
+
+
+def cloud_removable_overlap_markdown(report: dict[str, Any]) -> str:
+    lines = ["# Cloud And Removable Storage Overlap Report", "", f"Case: `{report.get('case_id')}`", ""]
+    summary = report.get("summary") or {}
+    lines.extend(
+        [
+            "## Summary",
+            "",
+            f"- Overlap leads: `{summary.get('overlap_count', 0)}`",
+            f"- Note: {summary.get('interpretation_note') or ''}",
+            "",
+        ]
+    )
+    for item in report.get("overlaps") or []:
+        lines.append(
+            "- "
+            f"computer `{item.get('computer_label') or ''}` "
+            f"user `{item.get('user_profile') or ''}` "
+            f"provider `{item.get('provider') or ''}` "
+            f"basis `{item.get('overlap_basis') or ''}` "
+            f"cloud `{item.get('cloud_path') or ''}` "
+            f"removable `{item.get('removable_path') or ''}`"
+        )
+    if not report.get("overlaps"):
+        lines.append("No cloud/removable overlap leads were identified.")
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -16493,6 +16734,7 @@ def _cloud_mounted_drive_roots(events: list[dict[str, Any]]) -> list[dict[str, A
                 "sources": set(),
                 "examples": [],
                 "confidence": "low",
+                "evidence_basis": "inferred_path_artifact",
                 "basis": "",
             },
         )
@@ -16533,7 +16775,85 @@ def _cloud_mounted_drive_match(path: Any, event: dict[str, Any], mounts: list[di
             continue
         root = str(mount.get("cloud_root") or "")
         if root and (folded == root.casefold() or folded.startswith(root.casefold().rstrip("\\") + "\\")):
-            return mount
+            result = dict(mount)
+            result["storage_mode"] = "virtual_drive"
+            return result
+    return None
+
+
+def _cloud_storage_reference_match(path: Any, event: dict[str, Any], mounts: list[dict[str, Any]]) -> dict[str, Any] | None:
+    mount = _cloud_mounted_drive_match(path, event, mounts)
+    if mount:
+        return mount
+    display = _display_drive_path(path)
+    provider = _cloud_mounted_drive_provider(display)
+    if not provider:
+        return None
+    root = _cloud_local_storage_root(display, provider)
+    return {
+        "provider": provider,
+        "drive_letter": _path_drive_letter(display),
+        "cloud_root": root,
+        "storage_mode": _cloud_storage_mode(display, provider),
+        "confidence": "low",
+        "basis": f"path_cloud_indicator:{provider}:{root or display}",
+        "evidence_basis": "path_indicator",
+    }
+
+
+def _cloud_storage_mode(path: Any, provider: str) -> str:
+    text = str(path or "").casefold()
+    drive = _path_drive_letter(path)
+    if "drivefs" in text or "\\appdata\\local\\google\\drive" in text or "/appdata/local/google/drive" in text:
+        return "cache_or_config_path"
+    if drive and drive.upper() != "C:" and _cloud_mounted_drive_root(path, provider):
+        return "virtual_drive_candidate"
+    if drive and drive.upper() == "C:":
+        return "local_sync_folder"
+    return "cloud_path_indicator"
+
+
+def _cloud_local_storage_root(path: Any, provider: str) -> str:
+    display = _display_drive_path(path)
+    drive = _path_drive_letter(display)
+    if not drive:
+        return ""
+    parts = re.split(r"[\\/]+", display)
+    lowered = [part.casefold() for part in parts]
+    provider_lower = provider.casefold()
+    if provider_lower == "onedrive":
+        for index, part in enumerate(lowered):
+            if part.startswith("onedrive"):
+                return "\\".join(parts[: index + 1])
+    if provider_lower == "google drive":
+        for marker in ("google drive", "drivefs"):
+            if marker in lowered:
+                return "\\".join(parts[: lowered.index(marker) + 1])
+    if provider_lower == "dropbox" and "dropbox" in lowered:
+        return "\\".join(parts[: lowered.index("dropbox") + 1])
+    if provider_lower == "icloud drive":
+        for index, part in enumerate(lowered):
+            if part in {"icloud drive", "icloud"}:
+                return "\\".join(parts[: index + 1])
+    return _cloud_mounted_drive_root(display, provider)
+
+
+def _cloud_virtual_top_folder(provider: str, top: str) -> bool:
+    top_lower = top.casefold()
+    provider_lower = provider.casefold()
+    if provider_lower == "google drive":
+        return top_lower in {"my drive", "shared drives", "computers"}
+    if provider_lower == "onedrive":
+        return top_lower.startswith("onedrive")
+    if provider_lower == "dropbox":
+        return top_lower == "dropbox"
+    if provider_lower == "icloud drive":
+        return top_lower in {"icloud drive", "icloud"}
+    return False
+
+
+def _cloud_mounted_drive_fallback(path: Any) -> dict[str, Any] | None:
+    display = _display_drive_path(path)
     provider = _cloud_mounted_drive_provider(display)
     if not provider:
         return None
@@ -16544,15 +16864,17 @@ def _cloud_mounted_drive_match(path: Any, event: dict[str, Any], mounts: list[di
         "provider": provider,
         "drive_letter": drive.upper(),
         "cloud_root": root,
+        "storage_mode": "virtual_drive_candidate",
         "confidence": "low",
         "basis": f"path_cloud_root_indicator:{provider}:{root}",
+        "evidence_basis": "path_indicator",
     }
 
 
 def _cloud_mounted_drive_provider(path: Any) -> str:
     top = _drive_path_top_folder(path).casefold()
     text = str(path or "").casefold()
-    if top == "my drive" or any(token in text for token in ("google drive", "drivefs", "drive file stream")):
+    if top in {"my drive", "shared drives"} or any(token in text for token in ("google drive", "drivefs", "drive file stream")):
         return "Google Drive"
     if top == "onedrive" or "onedrive" in text:
         return "OneDrive"
@@ -16570,9 +16892,7 @@ def _cloud_mounted_drive_root(path: Any, provider: str) -> str:
     if not drive or not top:
         return ""
     provider_lower = provider.casefold()
-    if provider_lower == "google drive" and top.casefold() == "my drive":
-        return f"{drive}\\{top}"
-    if provider_lower in {"onedrive", "dropbox", "icloud drive"}:
+    if _cloud_virtual_top_folder(provider, top):
         return f"{drive}\\{top}"
     if any(token in display.casefold() for token in ("google drive", "drivefs", "drive file stream")):
         return f"{drive}\\{top}"

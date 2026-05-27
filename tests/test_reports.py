@@ -39,6 +39,8 @@ from forensic_orchestrator.reports import (
     communication_review_report,
     combined_artifact_family_report,
     cloud_artifacts_report,
+    cloud_mounts_report,
+    cloud_removable_overlap_report,
     cloud_configuration_report,
     cloud_files_report,
     communications_report,
@@ -8657,6 +8659,31 @@ def test_file_movement_identity_report_and_derived_timeline_use_new_artifacts(tm
                     "absolute_path": "E:\\Case Files\\notes.docx",
                     "opened_on": "2020-01-02T10:02:00Z",
                     "created_at": "2020-01-02T11:00:00Z",
+                },
+                {
+                    "id": "dialog-cloud-removable-1",
+                    "case_id": case.id,
+                    "computer_id": "computer-1",
+                    "image_id": "image-1",
+                    "tool_output_id": "output-shellbags",
+                    "tool_name": "RECmd",
+                    "source_csv": str(tmp_path / "RECmd.csv"),
+                    "row_number": 4,
+                    "hive_path": "NTUSER.DAT",
+                    "hive_type": "ntuser",
+                    "user_profile": "Jane",
+                    "category": "user_activity",
+                    "key_path": "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ComDlg32",
+                    "artifact": "common_dialog",
+                    "extension": "docx",
+                    "value_name": "1",
+                    "batch_key_path": "ComDlg32",
+                    "mru_position": "1",
+                    "batch_value_name": "MRUListEx",
+                    "executable": "WINWORD.EXE",
+                    "absolute_path": "E:\\Case Files\\cloud.docx",
+                    "opened_on": "2020-01-02T10:03:30Z",
+                    "created_at": "2020-01-02T11:00:00Z",
                 }
             ],
         }
@@ -8666,6 +8693,8 @@ def test_file_movement_identity_report_and_derived_timeline_use_new_artifacts(tm
     removable = opened_from_removable_media_report(db, case.id, contains="Case Files")
     removable_all = opened_from_removable_media_report(db, case.id)
     cloud_opened = opened_from_cloud_storage_report(db, case.id)
+    cloud_mounts = cloud_mounts_report(db, case.id)
+    cloud_overlap = cloud_removable_overlap_report(db, case.id)
     dossier = usb_dossier_report(db, case.id, volume_serial_number="A1B2-C3D4")
     dossier_markdown = usb_dossier_markdown(dossier)
     events = derived_timeline_events(db, case.id)
@@ -8681,7 +8710,12 @@ def test_file_movement_identity_report_and_derived_timeline_use_new_artifacts(tm
     assert all("My Drive" not in (item.get("display_path") or "") for item in removable_all["items"])
     assert cloud_opened["summary"]["opened_from_cloud_storage_count"] == 1
     assert cloud_opened["items"][0]["provider"] == "Google Drive"
+    assert cloud_opened["items"][0]["storage_mode"] == "virtual_drive"
     assert cloud_opened["items"][0]["drive_letter"] == "H:"
+    assert cloud_mounts["summary"]["cloud_mount_count"] == 1
+    assert cloud_mounts["cloud_mounts"][0]["evidence_basis"] == "inferred_path_artifact"
+    assert cloud_overlap["summary"]["overlap_count"] >= 1
+    assert cloud_overlap["overlaps"][0]["provider"] == "Google Drive"
     assert removable["items"][0]["confidence"] == "medium"
     assert "# USB Device Dossier" in dossier_markdown
     assert "Shellbag external-storage rows" in dossier_markdown

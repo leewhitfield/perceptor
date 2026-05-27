@@ -69,6 +69,12 @@ from .reports import (
     cloud_artifacts_report,
     cloud_configuration_report,
     cloud_files_report,
+    cloud_mounts_export_rows,
+    cloud_mounts_markdown,
+    cloud_mounts_report,
+    cloud_removable_overlap_export_rows,
+    cloud_removable_overlap_markdown,
+    cloud_removable_overlap_report,
     cloud_server_events_report,
     copied_files_report,
     copied_file_drilldown_report,
@@ -813,6 +819,8 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
     file_identity = file_movement_identity_report(db, case_id, limit=limit)
     opened_removable = opened_from_removable_media_report(db, case_id, limit=limit)
     opened_cloud = opened_from_cloud_storage_report(db, case_id, limit=limit)
+    cloud_mounts = cloud_mounts_report(db, case_id, limit=limit)
+    cloud_overlap = cloud_removable_overlap_report(db, case_id, limit=limit)
     specs: list[tuple[str, str, str, object]] = [
         ("executive-summary", "md", "Executive summary", case_executive_summary_markdown(case_executive_summary_report(db, case_id, limit=limit, memory_disk_report=memory_disk))),
         ("case-overview", "md", "Case overview", case_overview_markdown(overview)),
@@ -831,6 +839,8 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
         ("file-movement-identity", "md", "File movement and identity", file_movement_identity_markdown(file_identity)),
         ("opened-from-removable-media", "md", "Opened from removable media", opened_from_removable_media_markdown(opened_removable)),
         ("opened-from-cloud-storage", "md", "Opened from cloud storage", opened_from_cloud_storage_markdown(opened_cloud)),
+        ("cloud-mounts", "md", "Cloud virtual mounts", cloud_mounts_markdown(cloud_mounts)),
+        ("cloud-removable-overlap", "md", "Cloud/removable overlap", cloud_removable_overlap_markdown(cloud_overlap)),
         ("shortcut-droid-changes", "md", "Shortcut Droid changes", shortcut_droid_changes_markdown(shortcut_droid_changes_report(db, case_id, limit=limit))),
         ("shortcut-object-tracking", "md", "Shortcut Object ID tracking", shortcut_object_tracking_markdown(shortcut_object_tracking_report(db, case_id, limit=limit))),
         ("usn-lifecycle", "md", "USN file lifecycle", usn_file_lifecycle_markdown(usn_file_lifecycle_report(db, case_id, limit=limit))),
@@ -860,6 +870,8 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
         ("file-movement-identity", "File movement and identity CSV", file_movement_identity_export_rows(file_identity)),
         ("opened-from-removable-media", "Opened from removable media CSV", opened_from_removable_media_export_rows(opened_removable)),
         ("opened-from-cloud-storage", "Opened from cloud storage CSV", opened_from_cloud_storage_export_rows(opened_cloud)),
+        ("cloud-mounts", "Cloud virtual mounts CSV", cloud_mounts_export_rows(cloud_mounts)),
+        ("cloud-removable-overlap", "Cloud/removable overlap CSV", cloud_removable_overlap_export_rows(cloud_overlap)),
     ]
     for stem, title, rows in csv_specs:
         path = output_dir / f"{stem}.csv"
@@ -2210,6 +2222,19 @@ def build_parser() -> argparse.ArgumentParser:
     report_cloud.add_argument("--limit", type=int, default=100)
     report_cloud.add_argument("--format", choices=["json", "table", "csv"], default="json")
     report_cloud.add_argument("--output")
+    report_cloud_mounts = report_sub.add_parser("cloud-mounts")
+    report_cloud_mounts.add_argument("--case", required=True, dest="case_id")
+    report_cloud_mounts.add_argument("--provider")
+    report_cloud_mounts.add_argument("--user")
+    report_cloud_mounts.add_argument("--limit", type=int, default=250)
+    report_cloud_mounts.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
+    report_cloud_mounts.add_argument("--output")
+    report_cloud_removable_overlap = report_sub.add_parser("cloud-removable-overlap")
+    report_cloud_removable_overlap.add_argument("--case", required=True, dest="case_id")
+    report_cloud_removable_overlap.add_argument("--contains")
+    report_cloud_removable_overlap.add_argument("--limit", type=int, default=250)
+    report_cloud_removable_overlap.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
+    report_cloud_removable_overlap.add_argument("--output")
     report_cloud_files = report_sub.add_parser("cloud-files")
     report_cloud_files.add_argument("--case", required=True, dest="case_id")
     report_cloud_files.add_argument("--provider")
@@ -7005,6 +7030,42 @@ def run(args: argparse.Namespace) -> int:
                 title=f"Cloud artifacts for case {args.case_id}",
                 columns=["provider", "source", "artifact_path", "file_name", "application", "accessed_utc", "modified_utc", "evidence_tags"],
             )
+            return 0
+
+        if args.resource == "report" and args.action == "cloud-mounts":
+            report = cloud_mounts_report(db, args.case_id, provider=args.provider, user=args.user, limit=args.limit)
+            rows = cloud_mounts_export_rows(report)
+            if args.format == "md":
+                write_text_output(cloud_mounts_markdown(report), args.output)
+            elif args.format == "json":
+                write_text_output(json.dumps(report, indent=2, default=str), args.output)
+            else:
+                write_report_output(
+                    report,
+                    rows,
+                    args.format,
+                    args.output,
+                    title=f"Cloud virtual mounts for case {args.case_id}",
+                    columns=["computer_label", "user_profile", "provider", "drive_letter", "cloud_root", "confidence", "evidence_basis", "evidence_count", "sources"],
+                )
+            return 0
+
+        if args.resource == "report" and args.action == "cloud-removable-overlap":
+            report = cloud_removable_overlap_report(db, args.case_id, contains=args.contains, limit=args.limit)
+            rows = cloud_removable_overlap_export_rows(report)
+            if args.format == "md":
+                write_text_output(cloud_removable_overlap_markdown(report), args.output)
+            elif args.format == "json":
+                write_text_output(json.dumps(report, indent=2, default=str), args.output)
+            else:
+                write_report_output(
+                    report,
+                    rows,
+                    args.format,
+                    args.output,
+                    title=f"Cloud/removable overlap for case {args.case_id}",
+                    columns=["computer_label", "user_profile", "provider", "cloud_timestamp", "removable_timestamp", "time_delta_minutes", "cloud_path", "removable_path", "overlap_basis"],
+                )
             return 0
 
         if args.resource == "report" and args.action == "cloud-files":
