@@ -2367,7 +2367,16 @@ def test_external_storage_report_combines_devices_activity_and_event_logs(tmp_pa
     assert sandisk["attributable_computer"] == "Desktop"
     assert sandisk["observed_computers"] == "Desktop"
     assert sandisk["identifier_type"] == "physical_serial"
+    assert sandisk["identity_confidence_tier"] == "physical_device_strong"
+    assert sandisk["identity_scope"] == "single_computer"
     assert sandisk["cross_computer_identity_basis"] == "physical_serial"
+    assert sandisk["physical_device_identity"] == "VID_0781/PID_5581 SER123"
+    assert "serial A1B2-C3D4" in sandisk["volume_identity"]
+    assert "drive E:" in sandisk["mount_identity"]
+    assert "FAT/exFAT" in sandisk["volume_serial_format_time_assessment"]
+    assert "MountedDevices" in sandisk["corroborating_artifacts"]
+    assert "Partition/Diagnostic" in sandisk["corroborating_artifacts"]
+    assert "USBSTOR" in sandisk["corroborating_artifacts"]
     assert sandisk["observed_drive_letters"] == "E:"
     assert sandisk["normalized_vendor_id"] == "0781"
     assert uasp["last_observed_utc"] == "2020-11-14T12:01:00Z"
@@ -2438,7 +2447,10 @@ def test_external_storage_report_attributes_same_device_to_multiple_computers(tm
     assert all(row["observed_computers"] == "Alpha, Beta" for row in rows)
     assert all(row["observed_computer_count"] == 2 for row in rows)
     assert all(row["identifier_type"] == "physical_serial" for row in rows)
+    assert all(row["identity_confidence_tier"] == "physical_device_strong" for row in rows)
+    assert all(row["identity_scope"] == "cross_computer" for row in rows)
     assert all(row["cross_computer_confidence"] == "high" for row in rows)
+    assert all(row["needs_review"] == "false" for row in rows)
     assert all(row["observed_drive_letters"] == "E:" for row in rows)
     assert all(row["normalized_vendor_id"] == "0781" for row in rows)
     assert all(row["normalized_product_id"] == "5581" for row in rows)
@@ -2497,12 +2509,17 @@ def test_external_storage_report_does_not_cross_host_match_windows_generated_usb
     assert {row["observed_computers"] for row in rows} == {"Alpha", "Beta"}
     assert all(row["observed_computer_count"] == 1 for row in rows)
     assert all(row["identifier_type"] == "windows_generated_instance_id" for row in rows)
+    assert all(row["identity_confidence_tier"] == "not_cross_host_safe" for row in rows)
+    assert all(row["identity_scope"] == "same_windows_installation" for row in rows)
     assert all(row["cross_computer_identity_basis"] == "windows_generated_instance_id_not_cross_host_safe" for row in rows)
     assert all(row["cross_computer_confidence"] == "low" for row in rows)
+    assert all(row["needs_review"] == "true" for row in rows)
+    assert all("Windows-generated" in row["review_reason"] for row in rows)
     assert all("should not be used by itself" in row["cross_computer_note"] for row in rows)
     assert any(
         row["section"] == "device"
         and row["identifier_type"] == "windows_generated_instance_id"
+        and row["identity_confidence_tier"] == "not_cross_host_safe"
         and row["cross_computer_confidence"] == "low"
         for row in export_rows
     )
@@ -2560,8 +2577,12 @@ def test_external_storage_report_treats_uasp_parent_id_prefix_as_same_system_ide
     assert {row["observed_computers"] for row in rows} == {"Alpha", "Beta"}
     assert all(row["observed_computer_count"] == 1 for row in rows)
     assert all(row["identifier_type"] == "uasp_parent_id_prefix" for row in rows)
+    assert all(row["identity_confidence_tier"] == "same_system_link" for row in rows)
+    assert all(row["identity_scope"] == "same_windows_installation" for row in rows)
     assert all(row["cross_computer_identity_basis"] == "uasp_parent_id_prefix_same_system_only" for row in rows)
     assert all(row["cross_computer_confidence"] == "same_system_only" for row in rows)
+    assert all(row["needs_review"] == "true" for row in rows)
+    assert all("SCSI/UASP" in row["corroborating_artifacts"] for row in rows)
     assert all("same Windows installation" in row["cross_computer_note"] for row in rows)
     assert any(
         row["section"] == "device"
@@ -2620,8 +2641,12 @@ def test_external_storage_report_normalizes_uasp_msft30_iserial_candidate(tmp_pa
     assert row["serial"] == "MSFT30NA97S0YP"
     assert row["normalized_serial"] == "NA97S0YP"
     assert row["identifier_type"] == "uasp_msft30_prefixed_iserial"
+    assert row["identity_confidence_tier"] == "physical_device_candidate"
+    assert row["identity_scope"] == "cross_computer_candidate"
     assert row["cross_computer_identity_basis"] == "uasp_iserial_candidate"
     assert row["cross_computer_confidence"] == "medium"
+    assert row["needs_review"] == "true"
+    assert row["physical_device_identity"] == "VID_0BC2/PID_AB24 NA97S0YP"
 
 
 

@@ -13078,6 +13078,13 @@ def external_storage_report(
     event_logs = _external_storage_event_log_rows(db, case_id, devices=devices, limit=limit)
     _annotate_external_storage_row_attribution(db, case_id, event_logs)
     registry_counts = _external_storage_registry_counts(db, case_id)
+    _annotate_external_storage_corroboration(
+        devices,
+        file_activity=file_activity,
+        timeline=timeline,
+        event_logs=event_logs,
+        setupapi_observations=setupapi_observations,
+    )
     source_counts: dict[str, int] = {}
     temporal_counts: dict[str, int] = {}
     for row in file_activity:
@@ -13102,6 +13109,7 @@ def external_storage_report(
             "event_log_observation_count": len(event_logs),
             "setupapi_observation_count": len(setupapi_observations),
             "registry_evidence_counts": registry_counts,
+            "identity_tier_counts": _external_storage_identity_tier_counts(devices),
             "file_activity_source_counts": [
                 {"source_artifact_type": key, "count": value}
                 for key, value in sorted(source_counts.items(), key=lambda item: (-item[1], item[0]))
@@ -13142,11 +13150,22 @@ EXTERNAL_STORAGE_EXPORT_COLUMNS = [
     "image_id",
     "image_path",
     "device_identity",
+    "raw_serial",
+    "normalized_serial",
     "serial",
     "identifier_type",
+    "identity_confidence_tier",
+    "identity_scope",
     "cross_computer_identity_basis",
     "cross_computer_confidence",
     "cross_computer_note",
+    "needs_review",
+    "review_reason",
+    "corroborating_artifacts",
+    "physical_device_identity",
+    "volume_identity",
+    "mount_identity",
+    "volume_serial_format_time_assessment",
     "alternate_serial",
     "volume_serial_number",
     "volume_name",
@@ -13192,11 +13211,22 @@ def external_storage_export_rows(report: dict[str, Any]) -> list[dict[str, Any]]
                 device,
                 id=device.get("id"),
                 device_identity=device.get("device_identity") or _external_storage_device_label(device),
+                raw_serial=device.get("raw_serial") or device.get("serial"),
+                normalized_serial=device.get("normalized_serial"),
                 serial=device.get("normalized_serial") or device.get("serial"),
                 identifier_type=device.get("identifier_type"),
+                identity_confidence_tier=device.get("identity_confidence_tier"),
+                identity_scope=device.get("identity_scope"),
                 cross_computer_identity_basis=device.get("cross_computer_identity_basis"),
                 cross_computer_confidence=device.get("cross_computer_confidence"),
                 cross_computer_note=device.get("cross_computer_note"),
+                needs_review=device.get("needs_review"),
+                review_reason=device.get("review_reason"),
+                corroborating_artifacts=device.get("corroborating_artifacts"),
+                physical_device_identity=device.get("physical_device_identity"),
+                volume_identity=device.get("volume_identity"),
+                mount_identity=device.get("mount_identity"),
+                volume_serial_format_time_assessment=device.get("volume_serial_format_time_assessment"),
                 alternate_serial=device.get("alternate_scsi_serial") or device.get("parent_device_serial"),
                 volume_serial_number=device.get("observed_volume_serial_numbers") or device.get("volume_serial_number"),
                 volume_name=device.get("volume_name"),
@@ -13341,10 +13371,21 @@ def _external_storage_export_row(case_id: str, section: str, source: dict[str, A
     row["case_id"] = case_id or _first_non_empty(source.get("case_id"))
     row["section"] = section
     row["attributable_computer"] = _first_non_empty(source.get("attributable_computer"), source.get("computer_label"), source.get("computer_id"))
+    row["raw_serial"] = _first_non_empty(source.get("raw_serial"), source.get("serial"))
+    row["normalized_serial"] = _first_non_empty(source.get("normalized_serial"))
     row["identifier_type"] = _first_non_empty(source.get("identifier_type"))
+    row["identity_confidence_tier"] = _first_non_empty(source.get("identity_confidence_tier"))
+    row["identity_scope"] = _first_non_empty(source.get("identity_scope"))
     row["cross_computer_identity_basis"] = _first_non_empty(source.get("cross_computer_identity_basis"))
     row["cross_computer_confidence"] = _first_non_empty(source.get("cross_computer_confidence"))
     row["cross_computer_note"] = _first_non_empty(source.get("cross_computer_note"))
+    row["needs_review"] = _first_non_empty(source.get("needs_review"))
+    row["review_reason"] = _first_non_empty(source.get("review_reason"))
+    row["corroborating_artifacts"] = _first_non_empty(source.get("corroborating_artifacts"))
+    row["physical_device_identity"] = _first_non_empty(source.get("physical_device_identity"))
+    row["volume_identity"] = _first_non_empty(source.get("volume_identity"))
+    row["mount_identity"] = _first_non_empty(source.get("mount_identity"))
+    row["volume_serial_format_time_assessment"] = _first_non_empty(source.get("volume_serial_format_time_assessment"))
     row["computer_id"] = _first_non_empty(source.get("computer_id"))
     row["image_id"] = _first_non_empty(source.get("image_id"))
     row["image_path"] = _first_non_empty(source.get("image_path"))
@@ -13389,6 +13430,12 @@ def external_storage_markdown(report: dict[str, Any]) -> str:
                 f"- `{row.get('artifact') or 'unknown'}` / `{row.get('device_type') or 'unknown'}`: `{row.get('row_count')}`"
             )
         lines.append("")
+    identity_counts = summary.get("identity_tier_counts") or []
+    if identity_counts:
+        lines.extend(["## Identity Confidence", ""])
+        for row in identity_counts:
+            lines.append(f"- `{row.get('identity_confidence_tier') or 'unknown'}`: `{row.get('count')}`")
+        lines.append("")
     lines.extend(["## Devices", ""])
     devices = report.get("devices") or []
     if devices:
@@ -13400,14 +13447,23 @@ def external_storage_markdown(report: dict[str, Any]) -> str:
                     "",
                     f"- Computer: `{device.get('computer_label') or device.get('computer_id') or ''}`",
                     f"- Observed computers: `{device.get('observed_computers') or ''}`",
-                    f"- Serial: `{device.get('normalized_serial') or device.get('serial') or ''}`",
+                    f"- Raw serial: `{device.get('raw_serial') or device.get('serial') or ''}`",
+                    f"- Normalized serial: `{device.get('normalized_serial') or ''}`",
                     f"- Identifier type: `{device.get('identifier_type') or ''}`",
+                    f"- Identity tier/scope: `{device.get('identity_confidence_tier') or ''}` / `{device.get('identity_scope') or ''}`",
                     f"- Cross-computer identity: `{device.get('cross_computer_identity_basis') or ''}` / `{device.get('cross_computer_confidence') or ''}`",
                     f"- Cross-computer note: `{device.get('cross_computer_note') or ''}`",
+                    f"- Needs examiner review: `{device.get('needs_review') or ''}`",
+                    f"- Review reason: `{device.get('review_reason') or ''}`",
+                    f"- Corroborating artifacts: `{device.get('corroborating_artifacts') or ''}`",
+                    f"- Physical identity: `{device.get('physical_device_identity') or ''}`",
+                    f"- Volume identity: `{device.get('volume_identity') or ''}`",
+                    f"- Mount identity: `{device.get('mount_identity') or ''}`",
                     f"- SCSI/event serial: `{device.get('alternate_scsi_serial') or ''}`",
                     f"- Parent/device serial: `{device.get('parent_device_serial') or ''}`",
                     f"- VID/PID: `{device.get('normalized_vendor_id') or device.get('vendor_id') or ''}` / `{device.get('normalized_product_id') or device.get('product_id') or ''}`",
                     f"- Volume serial: `{device.get('observed_volume_serial_numbers') or device.get('volume_serial_number') or ''}`",
+                    f"- Volume serial format-time assessment: `{device.get('volume_serial_format_time_assessment') or ''}`",
                     f"- Volume name: `{device.get('volume_name') or ''}`",
                     f"- Volume GUID: `{device.get('observed_volume_guids') or device.get('volume_guid') or ''}`",
                     f"- Drive letter: `{device.get('observed_drive_letters') or device.get('drive_letter') or ''}`",
@@ -13526,6 +13582,19 @@ def external_storage_markdown(report: dict[str, Any]) -> str:
         lines.append("")
     else:
         lines.extend(["No SetupAPI device-install observations were found.", ""])
+    lines.extend(
+        [
+            "## USB Identity Notes",
+            "",
+            "- `physical_device_strong`: non-generated USB serial evidence; safest basis for cross-computer physical-device attribution when corroborated.",
+            "- `physical_device_candidate`: UASP iSerial evidence such as an `MSFT30`-prefixed value; compare the stripped value with SCSI and Partition/Diagnostic data before a final cross-computer claim.",
+            "- `same_system_link`: identifiers such as UASP `ParentIdPrefix`; useful to join USB and SCSI registry artifacts on one Windows installation, not by itself across computers.",
+            "- `volume_only`: filesystem volume serial/GUID evidence; useful for volume activity, but it does not prove the same physical device.",
+            "- `not_cross_host_safe`: Windows-generated instance IDs such as many `6&...` or `7&...` values; do not use these alone for cross-computer tracking.",
+            "- Volume serial format time: older FAT-style volume IDs used date/time inputs, but the value is not treated here as a reliably reversible format timestamp. Use boot-sector metadata, `$Volume`, root directory creation, event logs, or partition artifacts when a defensible format time is needed.",
+            "",
+        ]
+    )
     return "\n".join(lines)
 
 
@@ -13557,9 +13626,9 @@ def _external_storage_setupapi_rows(
         (case_id, limit),
     )
     device_serials = {
-        _external_storage_serial_key(row.get("serial"))
+        _external_storage_serial_key(row.get("serial"), device=row)
         for row in devices
-        if _external_storage_serial_key(row.get("serial"))
+        if _external_storage_serial_key(row.get("serial"), device=row)
     }
     for row in rows:
         serial_key = _external_storage_serial_key(row.get("serial"))
@@ -13649,16 +13718,25 @@ def _annotate_external_storage_devices(db: Database, case_id: str, devices: list
             computers = [current_computer]
         identity = _external_storage_identity_assessment(device, identifier_type, len(computers))
         device["device_identity"] = _external_storage_device_label(device)
+        device["raw_serial"] = str(device.get("serial") or "").strip()
         device["normalized_serial"] = serial_key
         device["identifier_type"] = identifier_type
+        device["identity_confidence_tier"] = identity["tier"]
+        device["identity_scope"] = identity["scope"]
         device["cross_computer_identity_basis"] = identity["basis"]
         device["cross_computer_confidence"] = identity["confidence"]
         device["cross_computer_note"] = identity["note"]
+        device["needs_review"] = identity["needs_review"]
+        device["review_reason"] = identity["review_reason"]
         device["normalized_vendor_id"] = _normalize_external_storage_id_values(device.get("vendor_id"))
         device["normalized_product_id"] = _normalize_external_storage_id_values(device.get("product_id"))
         device["observed_drive_letters"] = _normalize_external_storage_drive_letters(device.get("drive_letter"))
         device["observed_volume_guids"] = _normalize_external_storage_guids(device.get("volume_guid"))
         device["observed_volume_serial_numbers"] = _normalize_external_storage_volume_serials(device.get("volume_serial_number"))
+        device["physical_device_identity"] = _external_storage_physical_identity(device, identifier_type, serial_key)
+        device["volume_identity"] = _external_storage_volume_identity(device)
+        device["mount_identity"] = _external_storage_mount_identity(device)
+        device["volume_serial_format_time_assessment"] = _external_storage_volume_serial_format_assessment(device)
         device["observed_computers"] = _join_external_storage_values(computers)
         device["observed_computer_count"] = len(computers)
         device["first_observed_utc"] = _external_storage_min_timestamp(
@@ -13720,6 +13798,119 @@ def _external_storage_observed_computers(db: Database, case_id: str) -> dict[str
     return observed
 
 
+def _annotate_external_storage_corroboration(
+    devices: list[dict[str, Any]],
+    *,
+    file_activity: list[dict[str, Any]],
+    timeline: list[dict[str, Any]],
+    event_logs: list[dict[str, Any]],
+    setupapi_observations: list[dict[str, Any]],
+) -> None:
+    for device in devices:
+        artifacts = _external_storage_base_corroborating_artifacts(device)
+        identifiers = _external_storage_device_identifier_values(device)
+        volume_serials = {
+            _norm_vsn(value)
+            for value in _split_external_storage_values(device.get("observed_volume_serial_numbers") or device.get("volume_serial_number"))
+            if _norm_vsn(value)
+        }
+        volume_guids = {
+            value.lower()
+            for value in _split_external_storage_values(device.get("observed_volume_guids") or device.get("volume_guid"))
+            if value
+        }
+        if device.get("file_activity_detected"):
+            for value in _split_external_storage_values(device.get("file_activity_sources")):
+                label = _external_storage_file_activity_artifact_label(value)
+                if label:
+                    artifacts.add(label)
+        if _external_storage_rows_match_device(timeline, identifiers, volume_serials, volume_guids):
+            artifacts.add("Timeline")
+        if _external_storage_rows_match_device(event_logs, identifiers, volume_serials, volume_guids):
+            artifacts.add("Event Logs")
+        if _external_storage_rows_match_device(setupapi_observations, identifiers, volume_serials, volume_guids):
+            artifacts.add("SetupAPI")
+        device["corroborating_artifacts"] = _join_external_storage_values(sorted(artifacts, key=str.casefold))
+        if device.get("needs_review") == "true" and device.get("identity_confidence_tier") == "physical_device_strong":
+            if len(artifacts) >= 2:
+                device["needs_review"] = "false"
+                device["review_reason"] = ""
+
+
+def _external_storage_base_corroborating_artifacts(device: dict[str, Any]) -> set[str]:
+    artifacts: set[str] = set()
+    source_text = str(device.get("source_artifacts") or "").casefold()
+    service_text = str(device.get("device_service") or "").casefold()
+    if "usb" in source_text or "usb" in service_text:
+        artifacts.add("USB Enum")
+    if "usbstor" in source_text or "usbstor" in service_text:
+        artifacts.add("USBSTOR")
+    if "scsi" in source_text or "uasp" in source_text or "scsi" in service_text or "uasp" in service_text:
+        artifacts.add("SCSI/UASP")
+    if "mounted" in source_text or device.get("drive_letter") or device.get("volume_guid"):
+        artifacts.add("MountedDevices")
+    if "partition" in source_text or device.get("last_partition_event_utc") or device.get("first_volume_serial_event_utc") or device.get("alternate_scsi_serial"):
+        artifacts.add("Partition/Diagnostic")
+    if device.get("evidence_row_count"):
+        artifacts.add("Registry Summary")
+    return artifacts
+
+
+def _external_storage_device_identifier_values(device: dict[str, Any]) -> set[str]:
+    values = {
+        _external_storage_serial_key(device.get("serial"), device=device).upper(),
+        _external_storage_serial_key(device.get("normalized_serial")).upper(),
+        _external_storage_serial_key(device.get("alternate_scsi_serial")).upper(),
+        _external_storage_serial_key(device.get("parent_device_serial")).upper(),
+        _external_storage_serial_key(device.get("parent_id_prefix")).upper(),
+    }
+    return {value for value in values if value}
+
+
+def _external_storage_rows_match_device(
+    rows: list[dict[str, Any]],
+    identifiers: set[str],
+    volume_serials: set[str],
+    volume_guids: set[str],
+) -> bool:
+    for row in rows:
+        row_values = [
+            row.get("serial"),
+            row.get("usb_serial"),
+            row.get("alternate_serial"),
+            row.get("parent_id_prefix"),
+            row.get("device_instance_id"),
+            row.get("description"),
+            row.get("payload_data1"),
+            row.get("payload_data2"),
+            row.get("payload_data3"),
+            row.get("payload_data4"),
+        ]
+        text = " ".join(str(value or "").upper() for value in row_values)
+        if identifiers and any(identifier in text for identifier in identifiers):
+            return True
+        row_vsn = _norm_vsn(row.get("volume_serial_number") or row.get("usb_volume_serial_number"))
+        if row_vsn and row_vsn in volume_serials:
+            return True
+        row_guid = str(row.get("volume_guid") or row.get("usb_volume_guid") or "").lower()
+        if row_guid and row_guid in volume_guids:
+            return True
+    return False
+
+
+def _external_storage_file_activity_artifact_label(value: Any) -> str:
+    text = str(value or "").strip().casefold()
+    if not text:
+        return ""
+    if "lnk" in text or "shortcut" in text:
+        return "LNK"
+    if "jump" in text or "destinations" in text:
+        return "Jump Lists"
+    if "shellbag" in text:
+        return "Shellbags"
+    return str(value).strip()
+
+
 def _external_storage_identifier_type(device: dict[str, Any], serial: Any) -> str:
     value = _external_storage_serial_key(serial)
     if not value:
@@ -13756,40 +13947,141 @@ def _external_storage_is_windows_generated_id(serial: Any) -> bool:
 def _external_storage_identity_assessment(device: dict[str, Any], identifier_type: str, observed_computer_count: int) -> dict[str, str]:
     volume_serial = _normalize_external_storage_volume_serials(device.get("volume_serial_number"))
     if identifier_type == "physical_serial":
+        needs_review = "false"
+        review_reason = ""
+        if observed_computer_count <= 1 and not _external_storage_has_secondary_identity(device):
+            needs_review = "true"
+            review_reason = "Only one computer or limited corroborating identity evidence is present."
         return {
+            "tier": "physical_device_strong",
+            "scope": "cross_computer" if observed_computer_count > 1 else "single_computer",
             "basis": "physical_serial",
             "confidence": "high" if observed_computer_count > 1 else "single_computer",
             "note": "Cross-computer attribution is based on a non-generated USB serial." if observed_computer_count > 1 else "Only one computer is represented for this physical serial in the current report.",
+            "needs_review": needs_review,
+            "review_reason": review_reason,
         }
     if identifier_type == "uasp_parent_id_prefix":
         return {
+            "tier": "same_system_link",
+            "scope": "same_windows_installation",
             "basis": "uasp_parent_id_prefix_same_system_only",
             "confidence": "same_system_only",
             "note": "UASP ParentIdPrefix is important for correlating USB and SCSI registry keys on the same Windows installation, but should not be used by itself to track a physical device across computers.",
+            "needs_review": "true",
+            "review_reason": "UASP ParentIdPrefix links same-system USB and SCSI artifacts but is not a physical serial.",
         }
     if identifier_type == "uasp_msft30_prefixed_iserial":
         return {
+            "tier": "physical_device_candidate",
+            "scope": "cross_computer_candidate",
             "basis": "uasp_iserial_candidate",
             "confidence": "medium",
             "note": "UASP identifier has an MSFT30 prefix; compare with the value after that prefix and with Partition/Diagnostic SCSI serial data before making cross-computer claims.",
+            "needs_review": "true",
+            "review_reason": "UASP iSerial candidate should be checked against SCSI, Partition/Diagnostic, capacity, and device descriptor evidence.",
         }
     if identifier_type == "windows_generated_instance_id":
         return {
+            "tier": "not_cross_host_safe",
+            "scope": "same_windows_installation",
             "basis": "windows_generated_instance_id_not_cross_host_safe",
             "confidence": "low",
             "note": "Identifier appears Windows-generated and should not be used by itself to track a physical USB device across computers.",
+            "needs_review": "true",
+            "review_reason": "Windows-generated USB instance IDs can differ across computers.",
         }
     if volume_serial:
         return {
+            "tier": "volume_only",
+            "scope": "volume_activity",
             "basis": "volume_serial_only",
             "confidence": "medium",
             "note": "Only a filesystem volume serial is available; this can link a volume but not prove the same physical USB device.",
+            "needs_review": "true",
+            "review_reason": "Volume identity does not prove physical-device identity.",
         }
     return {
+        "tier": "no_cross_host_identifier",
+        "scope": "none",
         "basis": "no_cross_host_identifier",
         "confidence": "none",
         "note": "No cross-host-safe USB identifier is available.",
+        "needs_review": "true",
+        "review_reason": "No usable physical or volume identity was found.",
     }
+
+
+def _external_storage_has_secondary_identity(device: dict[str, Any]) -> bool:
+    return any(
+        str(device.get(field) or "").strip()
+        for field in (
+            "vendor_id",
+            "product_id",
+            "alternate_scsi_serial",
+            "parent_id_prefix",
+            "volume_serial_number",
+            "volume_guid",
+            "capacity_bytes",
+        )
+    )
+
+
+def _external_storage_physical_identity(device: dict[str, Any], identifier_type: str, serial_key: str) -> str:
+    if identifier_type in {"physical_serial", "uasp_msft30_prefixed_iserial"} and serial_key:
+        vid = _normalize_external_storage_id_values(device.get("vendor_id"))
+        pid = _normalize_external_storage_id_values(device.get("product_id"))
+        prefix = f"VID_{vid}/PID_{pid} " if vid or pid else ""
+        return f"{prefix}{serial_key}".strip()
+    return ""
+
+
+def _external_storage_volume_identity(device: dict[str, Any]) -> str:
+    parts = []
+    serial = _normalize_external_storage_volume_serials(device.get("volume_serial_number"))
+    guid = _normalize_external_storage_guids(device.get("volume_guid"))
+    name = str(device.get("volume_name") or "").strip()
+    if serial:
+        parts.append(f"serial {serial}")
+    if guid:
+        parts.append(f"guid {guid}")
+    if name:
+        parts.append(f"name {name}")
+    return "; ".join(parts)
+
+
+def _external_storage_mount_identity(device: dict[str, Any]) -> str:
+    parts = []
+    drive = _normalize_external_storage_drive_letters(device.get("drive_letter"))
+    guid = _normalize_external_storage_guids(device.get("volume_guid"))
+    if drive:
+        parts.append(f"drive {drive}")
+    if guid:
+        parts.append(f"guid {guid}")
+    return "; ".join(parts)
+
+
+def _external_storage_volume_serial_format_assessment(device: dict[str, Any]) -> str:
+    serial = _normalize_external_storage_volume_serials(device.get("volume_serial_number"))
+    if not serial:
+        return ""
+    file_system = str(device.get("file_system") or "").upper()
+    if "FAT" in file_system or "EXFAT" in file_system:
+        return "FAT/exFAT volume serials may be date/time-derived, but this report does not infer a unique format timestamp from the serial alone."
+    if "NTFS" in file_system:
+        return "NTFS volume serials are not treated as reliably reversible format timestamps; use filesystem metadata or event artifacts instead."
+    return "Volume serials can link volume artifacts but are not treated as reliable standalone format timestamps."
+
+
+def _external_storage_identity_tier_counts(devices: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    counts: dict[str, int] = {}
+    for device in devices:
+        tier = str(device.get("identity_confidence_tier") or "unknown")
+        counts[tier] = counts.get(tier, 0) + 1
+    return [
+        {"identity_confidence_tier": key, "count": value}
+        for key, value in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    ]
 
 
 def _split_external_storage_values(value: Any) -> list[str]:
@@ -14503,7 +14795,8 @@ def _format_capacity(value: Any) -> str:
 def _annotate_external_storage_file_activity(devices: list[dict[str, Any]], file_activity: list[dict[str, Any]]) -> None:
     for device in devices:
         serials = {
-            _external_storage_serial_key(device.get("serial")).upper(),
+            _external_storage_serial_key(device.get("serial"), device=device).upper(),
+            _external_storage_serial_key(device.get("normalized_serial")).upper(),
             _external_storage_serial_key(device.get("alternate_scsi_serial")).upper(),
             _external_storage_serial_key(device.get("parent_device_serial")).upper(),
         }
