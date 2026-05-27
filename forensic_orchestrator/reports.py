@@ -16156,6 +16156,151 @@ def user_intent_artifacts_export_rows(report: dict[str, Any]) -> list[dict[str, 
     ]
 
 
+def opened_from_removable_media_report(
+    db: Database,
+    case_id: str,
+    *,
+    user: str | None = None,
+    contains: str | None = None,
+    limit: int = 250,
+) -> dict[str, Any]:
+    intent = user_intent_artifacts_report(db, case_id, user=user, contains=contains, limit=max(limit * 2, 250))
+    devices = _external_storage_devices(db, case_id, limit=10000)
+    _annotate_external_storage_devices(db, case_id, devices)
+    rows = []
+    for event in intent.get("events") or []:
+        path = str(event.get("path") or "")
+        if not _looks_like_removable_path(path):
+            continue
+        matches = [_removable_path_device_match(path, event, device) for device in devices]
+        matches = [match for match in matches if match]
+        rows.append(
+            {
+                **{key: event.get(key) for key in ("timestamp", "source", "activity", "computer_id", "computer_label", "image_id", "user_profile", "path", "source_id")},
+                "matched_devices": matches,
+                "match_count": len(matches),
+                "confidence": _opened_removable_confidence(matches, path),
+                "confidence_basis": _opened_removable_basis(matches, path),
+                "details": event.get("details"),
+            }
+        )
+    rows.sort(key=lambda row: (str(row.get("timestamp") or ""), int(row.get("match_count") or 0)), reverse=True)
+    rows = rows[:limit]
+    return {
+        "case_id": case_id,
+        "filters": {"user": user, "contains": contains},
+        "summary": {
+            "opened_from_removable_count": len(rows),
+            "matched_device_count": sum(1 for row in rows if row.get("match_count")),
+            "unmatched_removable_path_count": sum(1 for row in rows if not row.get("match_count")),
+        },
+        "items": rows,
+        "total_returned": len(rows),
+    }
+
+
+def opened_from_removable_media_export_rows(report: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = []
+    for item in report.get("items") or []:
+        matches = item.get("matched_devices") or []
+        rows.append(
+            {
+                "case_id": report.get("case_id"),
+                "timestamp": item.get("timestamp"),
+                "source": item.get("source"),
+                "activity": item.get("activity"),
+                "computer_label": item.get("computer_label"),
+                "user_profile": item.get("user_profile"),
+                "path": item.get("path"),
+                "confidence": item.get("confidence"),
+                "confidence_basis": item.get("confidence_basis"),
+                "match_count": item.get("match_count"),
+                "matched_devices": "; ".join(match.get("device_identity") or "" for match in matches),
+            }
+        )
+    return rows
+
+
+def opened_from_removable_media_markdown(report: dict[str, Any]) -> str:
+    lines = ["# Opened From Removable Media Report", "", f"Case: `{report.get('case_id')}`", ""]
+    summary = report.get("summary") or {}
+    lines.extend(
+        [
+            "## Summary",
+            "",
+            f"- Removable-path user references: `{summary.get('opened_from_removable_count', 0)}`",
+            f"- References matched to a device: `{summary.get('matched_device_count', 0)}`",
+            f"- References not matched to a physical device: `{summary.get('unmatched_removable_path_count', 0)}`",
+            "",
+        ]
+    )
+    for item in report.get("items") or []:
+        lines.append(
+            "- "
+            f"`{item.get('timestamp') or ''}` "
+            f"`{item.get('source') or ''}` "
+            f"computer `{item.get('computer_label') or item.get('computer_id') or ''}` "
+            f"user `{item.get('user_profile') or ''}` "
+            f"confidence `{item.get('confidence') or ''}` "
+            f"path `{item.get('path') or ''}`"
+        )
+        for match in (item.get("matched_devices") or [])[:3]:
+            lines.append(
+                f"  - `{match.get('device_identity') or ''}` basis `{match.get('match_basis') or ''}` tier `{match.get('identity_confidence_tier') or ''}`"
+            )
+    if not report.get("items"):
+        lines.append("No removable-media user references matched the filters.")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _looks_like_removable_path(path: str) -> bool:
+    drive = _path_drive_letter(path)
+    return bool(drive and drive[0].upper() != "C")
+
+
+def _removable_path_device_match(path: str, event: dict[str, Any], device: dict[str, Any]) -> dict[str, Any] | None:
+    drive = _normalize_external_storage_drive_letters(_path_drive_letter(path))
+    device_drives = _normalize_external_storage_drive_letters(device.get("observed_drive_letters") or device.get("drive_letter"))
+    bases = []
+    if drive and device_drives and drive in _split_external_storage_values(device_drives):
+        bases.append("drive_letter")
+    if event.get("computer_id") and device.get("computer_id") and event.get("computer_id") == device.get("computer_id"):
+        bases.append("same_computer")
+    if not bases:
+        return None
+    return {
+        "serial": device.get("serial"),
+        "device_identity": device.get("device_identity") or _external_storage_device_label(device),
+        "volume_serial_number": device.get("observed_volume_serial_numbers") or device.get("volume_serial_number"),
+        "volume_guid": device.get("observed_volume_guids") or device.get("volume_guid"),
+        "drive_letter": device.get("observed_drive_letters") or device.get("drive_letter"),
+        "match_basis": ", ".join(_ordered_unique(bases)),
+        "identity_confidence_tier": device.get("identity_confidence_tier"),
+    }
+
+
+def _opened_removable_confidence(matches: list[dict[str, Any]], path: str) -> str:
+    if any("same_computer" in str(match.get("match_basis") or "") and "drive_letter" in str(match.get("match_basis") or "") for match in matches):
+        return "medium"
+    if matches:
+        return "low"
+    if _looks_like_removable_path(path):
+        return "review"
+    return "low"
+
+
+def _opened_removable_basis(matches: list[dict[str, Any]], path: str) -> str:
+    if matches:
+        return "; ".join(match.get("match_basis") or "" for match in matches)
+    drive = _path_drive_letter(path)
+    return f"removable_style_drive_path:{drive}" if drive else ""
+
+
+def _path_drive_letter(path: Any) -> str:
+    match = re.search(r"(?<![A-Za-z])([A-Za-z]):[\\/]", str(path or ""))
+    return f"{match.group(1).upper()}:" if match else ""
+
+
 def activity_summary_report(db: Database, case_id: str, *, user: str | None = None, limit: int = 25) -> dict[str, Any]:
     db.get_case(case_id)
     user_like = f"%{user}%" if user else None
@@ -22839,6 +22984,59 @@ def usb_dossier_report(
     }
 
 
+def usb_dossier_markdown(report: dict[str, Any]) -> str:
+    device = report.get("device") or {}
+    totals = report.get("totals") or {}
+    lines = [
+        "# USB Device Dossier",
+        "",
+        f"Case: `{report.get('case_id')}`",
+        "",
+        "## Device",
+        "",
+        f"- Identity: `{device.get('device_identity') or device.get('friendly_name') or device.get('serial') or ''}`",
+        f"- Computer: `{device.get('computer_label') or device.get('computer_id') or ''}`",
+        f"- Serial: `{device.get('serial') or ''}`",
+        f"- VID/PID: `{device.get('vendor_id') or ''}` / `{device.get('product_id') or ''}`",
+        f"- Product: `{device.get('vendor') or ''}` `{device.get('product') or ''}` `{device.get('revision') or ''}`",
+        f"- Volume serial/name: `{device.get('volume_serial_number') or ''}` / `{device.get('volume_name') or ''}`",
+        f"- Volume GUID: `{device.get('volume_guid') or ''}`",
+        f"- Drive letter: `{device.get('drive_letter') or ''}`",
+        "",
+        "## Summary",
+        "",
+        f"- Copied-file groups: `{totals.get('copied_file_groups', 0)}`",
+        f"- File activity rows: `{totals.get('file_activity_rows', 0)}`",
+        f"- Shellbag external-storage rows: `{totals.get('shellbag_external_storage_rows', 0)}`",
+        f"- Timeline events: `{totals.get('timeline_events', 0)}`",
+        f"- Raw evidence rows: `{totals.get('raw_evidence_rows', 0)}`",
+        "",
+    ]
+    _usb_dossier_section(lines, "Connection Times", report.get("connection_times") or [], ("event_time_utc", "event_type", "source_artifact"))
+    _usb_dossier_section(lines, "Volume Attributes", report.get("volume_attributes") or [], ("volume_serial_number", "volume_name", "drive_letter"))
+    _usb_dossier_section(lines, "VBR / MBR Details", report.get("mbr_vbr_details") or [], ("vbr_file_system", "vbr_volume_serial_number", "vbr_volume_name"))
+    _usb_dossier_section(lines, "Copied Files", report.get("copied_files") or [], ("file_name", "file_location", "confidence"))
+    _usb_dossier_section(lines, "File Activity", report.get("file_activity") or [], ("timestamp", "source_artifact_type", "file_location"))
+    _usb_dossier_section(lines, "Shellbag External Storage", report.get("shellbag_external_storage") or [], ("last_interacted", "absolute_path", "match_count"))
+    _usb_dossier_section(lines, "Timeline", report.get("timeline") or [], ("timestamp", "event_type", "description"))
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _usb_dossier_section(lines: list[str], title: str, rows: Any, fields: tuple[str, ...]) -> None:
+    lines.extend([f"## {title}", ""])
+    if not rows:
+        lines.extend(["No rows.", ""])
+        return
+    if isinstance(rows, dict):
+        rows = [rows]
+    for row in list(rows)[:50]:
+        bits = [f"{field} `{row.get(field) or ''}`" for field in fields]
+        lines.append("- " + "; ".join(bits))
+    if len(rows) > 50:
+        lines.append(f"- Display limited to first 50 of `{len(rows)}` rows.")
+    lines.append("")
+
+
 def device_inventory_report(db: Database, case_id: str, *, limit: int = 250) -> dict[str, Any]:
     db.get_case(case_id)
     rows = _query_report_rows(
@@ -28429,6 +28627,7 @@ def file_movement_identity_report(
     usn_lifecycle = usn_file_lifecycle_report(db, case_id, contains=contains, limit=limit)
     user_intent = user_intent_artifacts_report(db, case_id, contains=contains, limit=limit)
     shellbag_storage = shellbag_external_storage_report(db, case_id, limit=limit)
+    removable_refs = opened_from_removable_media_report(db, case_id, contains=contains, limit=limit)
     findings: list[dict[str, Any]] = []
 
     for item in object_tracking.get("matches") or []:
@@ -28498,6 +28697,19 @@ def file_movement_identity_report(
                 "details": event,
             }
         )
+    for item in removable_refs.get("items") or []:
+        findings.append(
+            {
+                "finding_type": "opened_from_removable_media",
+                "confidence": item.get("confidence") or "review",
+                "timestamp": item.get("timestamp"),
+                "computer_label": item.get("computer_label"),
+                "path": item.get("path"),
+                "correlation_basis": item.get("confidence_basis"),
+                "summary": "User-facing artifact references a path on a non-system drive letter and may indicate removable-media access.",
+                "details": item,
+            }
+        )
 
     if contains:
         needle = contains.casefold()
@@ -28509,6 +28721,7 @@ def file_movement_identity_report(
     findings = findings[:limit]
     counts: dict[str, int] = {}
     for finding in findings:
+        _apply_file_identity_confidence(finding)
         counts[finding["finding_type"]] = counts.get(finding["finding_type"], 0) + 1
     return {
         "case_id": case_id,
@@ -28521,9 +28734,24 @@ def file_movement_identity_report(
             "usn_lifecycle": usn_lifecycle.get("total_returned", 0),
             "shellbag_external_storage": shellbag_storage.get("total_returned", 0),
             "user_intent": user_intent.get("total_returned", 0),
+            "opened_from_removable_media": removable_refs.get("total_returned", 0),
         },
         "total_returned": len(findings),
     }
+
+
+def _apply_file_identity_confidence(finding: dict[str, Any]) -> None:
+    confidence = str(finding.get("confidence") or "review")
+    rank = {"high": 90, "medium": 60, "context": 40, "low": 30, "review": 20}.get(confidence, 10)
+    reasons = {
+        "high": "Direct file-system identity or file-reference correlation.",
+        "medium": "Corroborated artifact metadata, but not a direct file-system identity match.",
+        "context": "User-facing reference useful for timeline and intent, not standalone proof of identity.",
+        "low": "Weak path or drive-letter relationship.",
+        "review": "Potential removable-media reference that needs examiner review.",
+    }
+    finding["confidence_rank"] = rank
+    finding["confidence_reason"] = reasons.get(confidence, "Unclassified confidence value.")
 
 
 def file_movement_identity_markdown(report: dict[str, Any]) -> str:
@@ -28555,6 +28783,8 @@ def file_movement_identity_export_rows(report: dict[str, Any]) -> list[dict[str,
             "timestamp": finding.get("timestamp"),
             "finding_type": finding.get("finding_type"),
             "confidence": finding.get("confidence"),
+            "confidence_rank": finding.get("confidence_rank"),
+            "confidence_reason": finding.get("confidence_reason"),
             "computer_label": finding.get("computer_label"),
             "path": finding.get("path"),
             "correlation_basis": finding.get("correlation_basis"),
@@ -28643,6 +28873,28 @@ def derived_timeline_events(db: Database, case_id: str, *, limit: int = 5000) ->
                     "drive_letter": item.get("drive_letter"),
                     "matched_devices": item.get("matched_devices"),
                     "evidence_strength": "correlation",
+                },
+            )
+        )
+    for item in opened_from_removable_media_report(db, case_id, limit=min(limit, 1000)).get("items") or []:
+        source = item.get("details") if isinstance(item.get("details"), dict) else item
+        rows.extend(
+            _derived_event(
+                case_id=case_id,
+                item=source,
+                source_table=str(item.get("source") or "user_intent"),
+                source_row_id=str(item.get("source_id") or source.get("id") or uuid.uuid4()),
+                event_type="opened_from_removable_media",
+                timestamp=item.get("timestamp"),
+                description=item.get("path"),
+                details={
+                    "path": item.get("path"),
+                    "source": item.get("source"),
+                    "activity": item.get("activity"),
+                    "confidence": item.get("confidence"),
+                    "confidence_basis": item.get("confidence_basis"),
+                    "matched_devices": item.get("matched_devices"),
+                    "evidence_strength": "removable_media_reference",
                 },
             )
         )

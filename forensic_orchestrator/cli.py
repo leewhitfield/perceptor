@@ -80,6 +80,9 @@ from .reports import (
     file_movement_identity_export_rows,
     file_movement_identity_markdown,
     file_movement_identity_report,
+    opened_from_removable_media_export_rows,
+    opened_from_removable_media_markdown,
+    opened_from_removable_media_report,
     user_intent_artifacts_report,
     user_intent_artifacts_export_rows,
     user_intent_artifacts_markdown,
@@ -247,6 +250,7 @@ from .reports import (
     user_file_references_report,
     user_timeline_report,
     usb_dossier_report,
+    usb_dossier_markdown,
     users_report,
     usn_report,
     usn_path_report,
@@ -804,6 +808,7 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
     user_intent = user_intent_artifacts_report(db, case_id, limit=limit)
     shellbag_storage = shellbag_external_storage_report(db, case_id, limit=limit)
     file_identity = file_movement_identity_report(db, case_id, limit=limit)
+    opened_removable = opened_from_removable_media_report(db, case_id, limit=limit)
     specs: list[tuple[str, str, str, object]] = [
         ("executive-summary", "md", "Executive summary", case_executive_summary_markdown(case_executive_summary_report(db, case_id, limit=limit, memory_disk_report=memory_disk))),
         ("case-overview", "md", "Case overview", case_overview_markdown(overview)),
@@ -820,6 +825,7 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
         ("user-intent", "md", "User intent artifacts", user_intent_artifacts_markdown(user_intent)),
         ("shellbag-external-storage", "md", "Shellbag external storage", shellbag_external_storage_markdown(shellbag_storage)),
         ("file-movement-identity", "md", "File movement and identity", file_movement_identity_markdown(file_identity)),
+        ("opened-from-removable-media", "md", "Opened from removable media", opened_from_removable_media_markdown(opened_removable)),
         ("shortcut-droid-changes", "md", "Shortcut Droid changes", shortcut_droid_changes_markdown(shortcut_droid_changes_report(db, case_id, limit=limit))),
         ("shortcut-object-tracking", "md", "Shortcut Object ID tracking", shortcut_object_tracking_markdown(shortcut_object_tracking_report(db, case_id, limit=limit))),
         ("usn-lifecycle", "md", "USN file lifecycle", usn_file_lifecycle_markdown(usn_file_lifecycle_report(db, case_id, limit=limit))),
@@ -843,6 +849,16 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
         else:
             write_text_output(json.dumps(sanitize_report_paths(payload), indent=2, default=str), str(path))
         written.append({"name": stem, "title": title, "path": str(path), "format": extension})
+    csv_specs: list[tuple[str, str, list[dict[str, object]]]] = [
+        ("user-intent", "User intent artifacts CSV", user_intent_artifacts_export_rows(user_intent)),
+        ("shellbag-external-storage", "Shellbag external storage CSV", shellbag_external_storage_export_rows(shellbag_storage)),
+        ("file-movement-identity", "File movement and identity CSV", file_movement_identity_export_rows(file_identity)),
+        ("opened-from-removable-media", "Opened from removable media CSV", opened_from_removable_media_export_rows(opened_removable)),
+    ]
+    for stem, title, rows in csv_specs:
+        path = output_dir / f"{stem}.csv"
+        write_csv_rows(rows, str(path))
+        written.append({"name": stem, "title": title, "path": str(path), "format": "csv"})
     overview_summary = overview.get("summary") if isinstance(overview.get("summary"), dict) else {}
     credential_summary = credentials.get("summary") if isinstance(credentials.get("summary"), dict) else {}
     support_summary = memory_support.get("summary") if isinstance(memory_support.get("summary"), dict) else {}
@@ -860,6 +876,7 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
         f"- Suspicious executions: `{suspicious_summary.get('finding_count', overview_summary.get('suspicious_executions', 0))}`",
         f"- File movement/identity findings: `{file_identity_summary.get('finding_count', 0)}`",
         f"- User-intent artifacts: `{user_intent.get('total_returned', 0)}`",
+        f"- Opened-from-removable-media references: `{opened_removable.get('total_returned', 0)}`",
         f"- Memory support files processed: `{support_summary.get('processed_count', 0)}` / `{support_summary.get('support_file_count', 0)}`",
         f"- Memory string hits: `{support_summary.get('hit_count', overview_summary.get('memory_string_hits', 0))}`",
         f"- High-value credential candidates: `{credential_summary.get('high_value_candidate_count', 0)}`",
@@ -2850,7 +2867,7 @@ def build_parser() -> argparse.ArgumentParser:
     report_usb_dossier.add_argument("--volume-serial-number")
     report_usb_dossier.add_argument("--volume-guid")
     report_usb_dossier.add_argument("--limit", type=int, default=250)
-    report_usb_dossier.add_argument("--format", choices=["json", "table"], default="json")
+    report_usb_dossier.add_argument("--format", choices=["md", "json", "table"], default="json")
     report_usb_dossier.add_argument("--output")
     report_correlations = report_sub.add_parser("correlations")
     report_correlations.add_argument("--case", required=True, dest="case_id")
@@ -2891,6 +2908,13 @@ def build_parser() -> argparse.ArgumentParser:
     report_file_movement_identity.add_argument("--limit", type=int, default=100)
     report_file_movement_identity.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
     report_file_movement_identity.add_argument("--output")
+    report_opened_removable = report_sub.add_parser("opened-from-removable-media")
+    report_opened_removable.add_argument("--case", required=True, dest="case_id")
+    report_opened_removable.add_argument("--user")
+    report_opened_removable.add_argument("--contains")
+    report_opened_removable.add_argument("--limit", type=int, default=250)
+    report_opened_removable.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
+    report_opened_removable.add_argument("--output")
     report_derived_timeline = report_sub.add_parser("derived-timeline-events")
     report_derived_timeline.add_argument("--case", required=True, dest="case_id")
     report_derived_timeline.add_argument("--limit", type=int, default=1000)
@@ -5598,7 +5622,9 @@ def run(args: argparse.Namespace) -> int:
                 volume_guid=args.volume_guid,
                 limit=args.limit,
             )
-            if args.format == "table":
+            if args.format == "md":
+                write_text_output(usb_dossier_markdown(report), args.output)
+            elif args.format == "table":
                 rows = [
                     {"section": "device", "item": key, "value": value}
                     for key, value in report["device"].items()
@@ -7873,6 +7899,30 @@ def run(args: argparse.Namespace) -> int:
                     args.output,
                     title=f"File movement and identity for case {args.case_id}",
                     columns=["timestamp", "finding_type", "confidence", "computer_label", "path", "correlation_basis", "summary"],
+                )
+            return 0
+
+        if args.resource == "report" and args.action == "opened-from-removable-media":
+            report = opened_from_removable_media_report(
+                db,
+                args.case_id,
+                user=args.user,
+                contains=args.contains,
+                limit=args.limit,
+            )
+            rows = opened_from_removable_media_export_rows(report)
+            if args.format == "md":
+                write_text_output(opened_from_removable_media_markdown(report), args.output)
+            elif args.format == "json":
+                write_text_output(json.dumps(report, indent=2, default=str), args.output)
+            else:
+                write_report_output(
+                    report,
+                    rows,
+                    args.format,
+                    args.output,
+                    title=f"Opened from removable media for case {args.case_id}",
+                    columns=["timestamp", "source", "computer_label", "user_profile", "path", "confidence", "confidence_basis", "match_count", "matched_devices"],
                 )
             return 0
 

@@ -91,6 +91,7 @@ from forensic_orchestrator.reports import (
     messaging_artifacts_report,
     mft_report,
     office_trust_report,
+    opened_from_removable_media_report,
     phone_link_report,
     sdelete_report,
     srum_app_network_usage_report,
@@ -115,6 +116,8 @@ from forensic_orchestrator.reports import (
     usn_user_files_report,
     usn_user_report,
     usb_file_correlation_report,
+    usb_dossier_markdown,
+    usb_dossier_report,
     usb_timeline_report,
     usb_verbose_report,
     browser_deep_storage_report,
@@ -8584,9 +8587,71 @@ def test_file_movement_identity_report_and_derived_timeline_use_new_artifacts(tm
             }
         ]
     )
+    db.insert_recmd_artifact_rows(
+        {
+            "registry_office_mru": [
+                {
+                    "id": "office-1",
+                    "case_id": case.id,
+                    "computer_id": "computer-1",
+                    "image_id": "image-1",
+                    "tool_output_id": "output-shellbags",
+                    "tool_name": "RECmd",
+                    "source_csv": str(tmp_path / "RECmd.csv"),
+                    "row_number": 1,
+                    "hive_path": "NTUSER.DAT",
+                    "hive_type": "ntuser",
+                    "user_profile": "Jane",
+                    "category": "user_activity",
+                    "key_path": "Software\\Microsoft\\Office",
+                    "value_name": "Item 1",
+                    "batch_key_path": "Office",
+                    "last_opened": "2020-01-02T10:01:00Z",
+                    "file_name": "E:\\Case Files\\notes.docx",
+                    "created_at": "2020-01-02T11:00:00Z",
+                }
+            ],
+            "registry_common_dialog_mru": [
+                {
+                    "id": "dialog-1",
+                    "case_id": case.id,
+                    "computer_id": "computer-1",
+                    "image_id": "image-1",
+                    "tool_output_id": "output-shellbags",
+                    "tool_name": "RECmd",
+                    "source_csv": str(tmp_path / "RECmd.csv"),
+                    "row_number": 2,
+                    "hive_path": "NTUSER.DAT",
+                    "hive_type": "ntuser",
+                    "user_profile": "Jane",
+                    "category": "user_activity",
+                    "key_path": "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ComDlg32",
+                    "artifact": "common_dialog",
+                    "extension": "docx",
+                    "value_name": "0",
+                    "batch_key_path": "ComDlg32",
+                    "mru_position": "0",
+                    "batch_value_name": "MRUListEx",
+                    "executable": "WINWORD.EXE",
+                    "absolute_path": "E:\\Case Files\\notes.docx",
+                    "opened_on": "2020-01-02T10:02:00Z",
+                    "created_at": "2020-01-02T11:00:00Z",
+                }
+            ],
+        }
+    )
 
     identity = file_movement_identity_report(db, case.id, contains="Case Files")
+    removable = opened_from_removable_media_report(db, case.id, contains="Case Files")
+    dossier = usb_dossier_report(db, case.id, volume_serial_number="A1B2-C3D4")
+    dossier_markdown = usb_dossier_markdown(dossier)
     events = derived_timeline_events(db, case.id)
 
     assert identity["summary"]["finding_counts"]["shellbag_external_storage_match"] == 1
+    assert identity["summary"]["finding_counts"]["opened_from_removable_media"] >= 1
+    assert removable["summary"]["matched_device_count"] >= 1
+    assert removable["items"][0]["confidence"] == "medium"
+    assert "# USB Device Dossier" in dossier_markdown
+    assert "Shellbag external-storage rows" in dossier_markdown
     assert any(event["event_type"] == "shellbag_external_storage_match" for event in events)
+    assert any(event["event_type"] == "opened_from_removable_media" for event in events)
