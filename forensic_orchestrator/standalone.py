@@ -109,7 +109,9 @@ STANDALONE_BACKLOG = [
 
 def version_report(root: Path, plugin_paths: list[Path]) -> dict[str, Any]:
     return {
-        "application": "forensic-orchestrator",
+        "application": "Relic",
+        "package": "forensic-orchestrator",
+        "cli_aliases": ["relic", "forensic-orchestrator"],
         "version": _package_version(),
         "python": sys.version.split()[0],
         "python_supported": sys.version_info >= (3, 11),

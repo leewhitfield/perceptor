@@ -51,6 +51,7 @@ from forensic_orchestrator.reports import (
     evidence_gaps_report,
     encrypted_volume_indicators_report,
     derived_timeline_events,
+    derived_timeline_events_report,
     event_interpretation_report,
     evidence_quality_report,
     external_storage_export_rows,
@@ -88,8 +89,10 @@ from forensic_orchestrator.reports import (
     memory_support_files_report,
     processing_decision_markdown,
     processing_decision_report,
+    processing_progress_report,
     processing_readiness_markdown,
     processing_readiness_report,
+    resume_plan_report,
     messaging_artifacts_report,
     mft_report,
     office_trust_report,
@@ -157,6 +160,7 @@ from forensic_orchestrator.reports import (
     virtualization_indicators_report,
     web_cloud_correlations_report,
     windows_search_report,
+    workspace_health_report,
 )
 from forensic_orchestrator.report_specs import list_report_specs, run_report_spec
 from forensic_orchestrator.tools.ingest import ingest_csv_output
@@ -528,6 +532,34 @@ def test_processing_decision_report_rolls_up_limits_memory_and_credentials(tmp_p
     assert any(row["decision_type"] == "recovery_limit" for row in report["decisions"])
     assert any(row["decision_type"] == "credential_review" for row in report["decisions"])
     assert "Processing Decision Report" in markdown
+
+
+def test_workspace_health_progress_and_resume_plan_reports(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    timing_id = db.start_process_timing(
+        case_id=case.id,
+        computer_id="computer-1",
+        image_id="image-1",
+        scope="artifact",
+        phase="extract",
+        name="prefetch",
+        tool_name="PECmd",
+        artifact_name="prefetch",
+    )
+    db.finish_process_timing(timing_id, status="failed", details={"error": "fixture failure"})
+
+    health = workspace_health_report(db, case.id, min_free_gb=0.01)
+    progress = processing_progress_report(db, case.id)
+    resume = resume_plan_report(db, case.id)
+
+    assert health["summary"]["path_count"] >= 3
+    assert any(row["label"] == "case_root" for row in health["paths"])
+    assert progress["summary"]["failed_timing_count"] == 1
+    assert resume["summary"]["failed_timing_count"] == 1
+    assert any("rebuild-postprocess" in command for command in resume["recommended_commands"])
 
 
 def test_crash_dump_analysis_report_combines_dump_inventory_wer_and_strings(tmp_path):
@@ -8690,17 +8722,21 @@ def test_file_movement_identity_report_and_derived_timeline_use_new_artifacts(tm
     )
 
     identity = file_movement_identity_report(db, case.id, contains="Case Files")
+    identity_high = file_movement_identity_report(db, case.id, contains="Case Files", high_confidence_only=True)
     removable = opened_from_removable_media_report(db, case.id, contains="Case Files")
     removable_all = opened_from_removable_media_report(db, case.id)
     cloud_opened = opened_from_cloud_storage_report(db, case.id)
     cloud_mounts = cloud_mounts_report(db, case.id)
     cloud_overlap = cloud_removable_overlap_report(db, case.id)
+    cloud_overlap_high = cloud_removable_overlap_report(db, case.id, high_confidence_only=True)
     dossier = usb_dossier_report(db, case.id, volume_serial_number="A1B2-C3D4")
     dossier_markdown = usb_dossier_markdown(dossier)
     events = derived_timeline_events(db, case.id)
+    cloud_events = derived_timeline_events_report(db, case.id, event_type="opened_from_cloud_storage")
 
     assert identity["summary"]["finding_counts"]["shellbag_external_storage_match"] == 1
     assert identity["summary"]["finding_counts"]["opened_from_removable_media"] >= 1
+    assert all(row["confidence"] == "high" for row in identity_high["findings"])
     assert removable["summary"]["matched_device_count"] >= 1
     assert removable_all["summary"]["excluded_cloud_drive_path_count"] == 1
     assert removable_all["summary"]["cloud_mount_count"] == 1
@@ -8716,9 +8752,12 @@ def test_file_movement_identity_report_and_derived_timeline_use_new_artifacts(tm
     assert cloud_mounts["cloud_mounts"][0]["evidence_basis"] == "inferred_path_artifact"
     assert cloud_overlap["summary"]["overlap_count"] >= 1
     assert cloud_overlap["overlaps"][0]["provider"] == "Google Drive"
+    assert cloud_overlap_high["summary"]["overlap_count"] >= 1
+    assert cloud_overlap_high["overlaps"][0]["overlap_confidence"] == "high"
     assert removable["items"][0]["confidence"] == "medium"
     assert "# USB Device Dossier" in dossier_markdown
     assert "Shellbag external-storage rows" in dossier_markdown
     assert any(event["event_type"] == "shellbag_external_storage_match" for event in events)
     assert any(event["event_type"] == "opened_from_removable_media" for event in events)
     assert any(event["event_type"] == "opened_from_cloud_storage" for event in events)
+    assert cloud_events["total_returned"] == 1

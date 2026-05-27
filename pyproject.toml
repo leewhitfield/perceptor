@@ -37,6 +37,7 @@ dev = [
 
 [project.scripts]
 forensic-orchestrator = "forensic_orchestrator.cli:main"
+relic = "forensic_orchestrator.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["forensic_orchestrator*"]

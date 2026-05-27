@@ -196,6 +196,8 @@ from .reports import (
     persistence_report,
     process_timing_markdown,
     process_timing_report,
+    processing_progress_report,
+    resume_plan_report,
     processing_decision_markdown,
     processing_decision_report,
     processing_readiness_markdown,
@@ -251,6 +253,8 @@ from .reports import (
     timeline_report,
     timeline_review_report,
     timeline_sources_report,
+    workspace_health_markdown,
+    workspace_health_report,
     tor_usage_report,
     ual_report,
     uninstalled_application_artifacts_report,
@@ -2232,6 +2236,8 @@ def build_parser() -> argparse.ArgumentParser:
     report_cloud_removable_overlap = report_sub.add_parser("cloud-removable-overlap")
     report_cloud_removable_overlap.add_argument("--case", required=True, dest="case_id")
     report_cloud_removable_overlap.add_argument("--contains")
+    report_cloud_removable_overlap.add_argument("--min-confidence", choices=["review", "low", "context", "medium", "high"])
+    report_cloud_removable_overlap.add_argument("--high-confidence-only", action="store_true")
     report_cloud_removable_overlap.add_argument("--limit", type=int, default=250)
     report_cloud_removable_overlap.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
     report_cloud_removable_overlap.add_argument("--output")
@@ -2385,7 +2391,7 @@ def build_parser() -> argparse.ArgumentParser:
     report_timeline_review.add_argument("--user")
     report_timeline_review.add_argument("--contains")
     report_timeline_review.add_argument("--source")
-    report_timeline_review.add_argument("--preset", choices=["memory", "suspicious", "cloud", "usb", "remote_access"])
+    report_timeline_review.add_argument("--preset", choices=["memory", "suspicious", "cloud", "usb", "remote_access", "execution", "file_identity"])
     report_timeline_review.add_argument("--format", choices=["json", "table", "csv"], default="json")
     report_timeline_review.add_argument("--output")
     report_user_timeline = report_sub.add_parser("user-timeline")
@@ -2760,6 +2766,21 @@ def build_parser() -> argparse.ArgumentParser:
     report_timings.add_argument("--limit", type=int, default=500)
     report_timings.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
     report_timings.add_argument("--output")
+    report_progress = report_sub.add_parser("progress")
+    report_progress.add_argument("--case", required=True, dest="case_id")
+    report_progress.add_argument("--limit", type=int, default=50)
+    report_progress.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    report_progress.add_argument("--output")
+    report_resume_plan = report_sub.add_parser("resume-plan")
+    report_resume_plan.add_argument("--case", required=True, dest="case_id")
+    report_resume_plan.add_argument("--limit", type=int, default=50)
+    report_resume_plan.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    report_resume_plan.add_argument("--output")
+    report_workspace_health = report_sub.add_parser("workspace-health")
+    report_workspace_health.add_argument("--case", dest="case_id")
+    report_workspace_health.add_argument("--min-free-gb", type=float, default=10.0)
+    report_workspace_health.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
+    report_workspace_health.add_argument("--output")
     report_case_review = report_sub.add_parser("case-review")
     report_case_review.add_argument("--case", required=True, dest="case_id")
     report_case_review.add_argument("--limit", type=int, default=25)
@@ -2936,6 +2957,8 @@ def build_parser() -> argparse.ArgumentParser:
     report_file_movement_identity = report_sub.add_parser("file-movement-identity")
     report_file_movement_identity.add_argument("--case", required=True, dest="case_id")
     report_file_movement_identity.add_argument("--contains")
+    report_file_movement_identity.add_argument("--min-confidence", choices=["review", "low", "context", "medium", "high"])
+    report_file_movement_identity.add_argument("--high-confidence-only", action="store_true")
     report_file_movement_identity.add_argument("--limit", type=int, default=100)
     report_file_movement_identity.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
     report_file_movement_identity.add_argument("--output")
@@ -2957,6 +2980,8 @@ def build_parser() -> argparse.ArgumentParser:
     report_derived_timeline = report_sub.add_parser("derived-timeline-events")
     report_derived_timeline.add_argument("--case", required=True, dest="case_id")
     report_derived_timeline.add_argument("--limit", type=int, default=1000)
+    report_derived_timeline.add_argument("--event-type")
+    report_derived_timeline.add_argument("--contains")
     report_derived_timeline.add_argument("--format", choices=["json", "table", "csv"], default="json")
     report_derived_timeline.add_argument("--output")
     report_shortcut_droid_changes = report_sub.add_parser("shortcut-droid-changes")
@@ -3081,9 +3106,75 @@ def run(args: argparse.Namespace) -> int:
     configure_logging()
     config = load_config(root=args.root, plugins=args.plugin, config_path=args.config)
     paths = WorkspacePaths(config.root)
+    registry = ToolRegistry.from_files(config.plugin_paths)
+    if args.resource == "standalone" and args.action in {
+        "version",
+        "dependencies",
+        "repair-dependencies",
+        "tool-status",
+        "install-tool",
+        "profile-catalog",
+        "artifact-capability",
+        "backlog",
+    }:
+        if args.action == "version":
+            report = version_report(paths.root, config.plugin_paths)
+            if args.format == "table":
+                write_report_output(report, [report], "table", args.output, title="Standalone version", columns=["application", "package", "version", "python", "platform", "root"])
+            else:
+                write_text_output(json.dumps(report, indent=2, default=str), args.output)
+            return 0
+        if args.action == "dependencies":
+            report = dependency_report(env_file=Path(args.env_file) if args.env_file else None)
+            rows = [*report["required"], *report["optional"]]
+            write_report_output(report, rows, args.format, args.output, title="Standalone dependencies", columns=["tool", "required", "available", "path", "purpose"])
+            return 1 if report["summary"]["required_missing"] else 0
+        if args.action == "repair-dependencies":
+            report = repair_dependencies(
+                tools_dir=Path(args.tools_dir) if args.tools_dir else config.tools_root,
+                env_file=Path(args.env_file) if args.env_file else None,
+                include_optional=not args.required_only,
+                apply=not args.dry_run,
+            )
+            if args.format == "table":
+                write_report_output(report, report["repairs"], "table", args.output, title="Standalone dependency repair", columns=["tool", "status", "command", "env_file", "reason"])
+            else:
+                write_text_output(json.dumps(report, indent=2, default=str), args.output)
+            return 0 if report["after"]["required_missing"] == 0 else 1
+        if args.action == "tool-status":
+            report = tool_status_report(
+                tools_dir=Path(args.tools_dir) if args.tools_dir else config.tools_root,
+                env_file=Path(args.env_file) if args.env_file else None,
+            )
+            write_report_output(report, report["tools"], args.format, args.output, title="Third-party tool status", columns=["tool", "available", "path", "managed_path", "installable", "purpose"])
+            return 0
+        if args.action == "install-tool":
+            report = install_third_party_tool(
+                args.tool,
+                tools_dir=Path(args.tools_dir) if args.tools_dir else config.tools_root,
+                env_file=Path(args.env_file) if args.env_file else None,
+                force=args.force,
+                apply=not args.dry_run,
+            )
+            if args.format == "table":
+                write_report_output(report, report["tools"], "table", args.output, title="Third-party tool install", columns=["tool", "status", "path", "url", "command", "reason", "prerequisite", "next_step"])
+            else:
+                write_text_output(json.dumps(report, indent=2, default=str), args.output)
+            return 0 if report["status"] == "completed" else 1
+        if args.action == "profile-catalog":
+            report = profile_catalog_report(registry)
+            write_report_output(report, report["profiles"], args.format, args.output, title="Profile catalog", columns=["profile", "tool_count", "extraction_policy", "recovery_tier", "carve_stage", "description"])
+            return 0
+        if args.action == "artifact-capability":
+            report = artifact_capability_report(registry, profile=args.profile)
+            write_report_output(report, report["artifacts"], args.format, args.output, title="Artifact capability matrix", columns=["profile", "tool_name", "artifact_name", "method", "optional", "recursive", "source", "destination"])
+            return 0
+        if args.action == "backlog":
+            report = standalone_backlog_report()
+            write_report_output(report, report["items"], args.format, args.output, title="Standalone pre-UI backlog", columns=["number", "status", "item"])
+            return 0
     paths.ensure_root()
     db = Database(paths.db_path())
-    registry = ToolRegistry.from_files(config.plugin_paths)
 
     try:
         if args.resource == "standalone" and args.action == "doctor":
@@ -5325,6 +5416,45 @@ def run(args: argparse.Namespace) -> int:
             )
             return 0
 
+        if args.resource == "report" and args.action == "progress":
+            report = processing_progress_report(db, args.case_id, limit=args.limit)
+            write_report_output(
+                report,
+                report["recent_timings"],
+                args.format,
+                args.output,
+                title=f"Processing progress for case {args.case_id}",
+                columns=["start_time", "end_time", "duration_seconds", "scope", "phase", "name", "status", "tool_name", "artifact_name"],
+            )
+            return 0
+
+        if args.resource == "report" and args.action == "resume-plan":
+            report = resume_plan_report(db, args.case_id, limit=args.limit)
+            write_report_output(
+                report,
+                report["decisions"],
+                args.format,
+                args.output,
+                title=f"Resume plan for case {args.case_id}",
+                columns=["severity", "decision_type", "status", "item", "summary", "followup"],
+            )
+            return 0
+
+        if args.resource == "report" and args.action == "workspace-health":
+            report = workspace_health_report(db, args.case_id, min_free_gb=args.min_free_gb)
+            if args.format == "md":
+                write_text_output(workspace_health_markdown(report), args.output)
+            else:
+                write_report_output(
+                    report,
+                    report["paths"],
+                    args.format,
+                    args.output,
+                    title="Workspace health",
+                    columns=["label", "status", "path", "free_gb", "total_gb", "used_pct", "min_free_gb"],
+                )
+            return 0
+
         if args.resource == "report" and args.action == "carve-coverage":
             report = carve_coverage_report(db, args.case_id, limit=args.limit)
             if args.format == "md":
@@ -7051,7 +7181,14 @@ def run(args: argparse.Namespace) -> int:
             return 0
 
         if args.resource == "report" and args.action == "cloud-removable-overlap":
-            report = cloud_removable_overlap_report(db, args.case_id, contains=args.contains, limit=args.limit)
+            report = cloud_removable_overlap_report(
+                db,
+                args.case_id,
+                contains=args.contains,
+                min_confidence=args.min_confidence,
+                high_confidence_only=args.high_confidence_only,
+                limit=args.limit,
+            )
             rows = cloud_removable_overlap_export_rows(report)
             if args.format == "md":
                 write_text_output(cloud_removable_overlap_markdown(report), args.output)
@@ -7064,7 +7201,7 @@ def run(args: argparse.Namespace) -> int:
                     args.format,
                     args.output,
                     title=f"Cloud/removable overlap for case {args.case_id}",
-                    columns=["computer_label", "user_profile", "provider", "cloud_timestamp", "removable_timestamp", "time_delta_minutes", "cloud_path", "removable_path", "overlap_basis"],
+                    columns=["computer_label", "user_profile", "provider", "overlap_confidence", "cloud_timestamp", "removable_timestamp", "time_delta_minutes", "cloud_path", "removable_path", "overlap_basis"],
                 )
             return 0
 
@@ -7960,7 +8097,14 @@ def run(args: argparse.Namespace) -> int:
             return 0
 
         if args.resource == "report" and args.action == "file-movement-identity":
-            report = file_movement_identity_report(db, args.case_id, contains=args.contains, limit=args.limit)
+            report = file_movement_identity_report(
+                db,
+                args.case_id,
+                contains=args.contains,
+                min_confidence=args.min_confidence,
+                high_confidence_only=args.high_confidence_only,
+                limit=args.limit,
+            )
             rows = file_movement_identity_export_rows(report)
             if args.format == "md":
                 write_text_output(file_movement_identity_markdown(report), args.output)
@@ -8027,7 +8171,13 @@ def run(args: argparse.Namespace) -> int:
             return 0
 
         if args.resource == "report" and args.action == "derived-timeline-events":
-            report = derived_timeline_events_report(db, args.case_id, limit=args.limit)
+            report = derived_timeline_events_report(
+                db,
+                args.case_id,
+                event_type=args.event_type,
+                contains=args.contains,
+                limit=args.limit,
+            )
             write_report_output(
                 report,
                 report["events"],

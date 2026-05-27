@@ -17,6 +17,7 @@ from forensic_orchestrator.standalone import (
     schema_status_report,
     standalone_backlog_report,
     tool_status_report,
+    version_report,
 )
 from forensic_orchestrator.tools.registry import ToolRegistry
 
@@ -66,6 +67,8 @@ def test_standalone_reports_cover_profiles_schema_jobs_and_backups(tmp_path):
     registry = ToolRegistry.from_files([Path("forensic_orchestrator/plugins/eztools.yaml")])
 
     assert profile_catalog_report(registry)["summary"]["profile_count"] > 0
+    assert version_report(paths.root, [])["application"] == "Relic"
+    assert "relic" in version_report(paths.root, [])["cli_aliases"]
     assert artifact_capability_report(registry, profile="windows-full")["summary"]["artifact_count"] > 0
     assert schema_status_report(db)["schema_version"]["version"] >= 4
     assert job_status_report(db, case_id=case.id)["summary"]["completed"] == 1

@@ -11456,6 +11456,10 @@ def _timeline_preset_matches(row: dict[str, Any], preset: str) -> bool:
         return any(token in text for token in ("usb", "removable", "setupapi", "volume serial"))
     if name == "remote_access":
         return any(token in text for token in ("rdp", "vpn", "remote", "mstsc", "terminal services"))
+    if name == "execution":
+        return any(token in text for token in ("prefetch", "bam", "dam", "runmru", "amcache", "shimcache", "execution", "process"))
+    if name == "file_identity":
+        return any(token in text for token in ("droid", "object_id", "object id", "file_reference", "usn_file_lifecycle", "shortcut_object_id_match"))
     return True
 
 
@@ -16575,11 +16579,17 @@ def cloud_mounts_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _confidence_value(value: Any) -> int:
+    return {"high": 90, "medium": 60, "context": 40, "low": 30, "review": 20}.get(str(value or "").casefold(), 10)
+
+
 def cloud_removable_overlap_report(
     db: Database,
     case_id: str,
     *,
     contains: str | None = None,
+    min_confidence: str | None = None,
+    high_confidence_only: bool = False,
     limit: int = 250,
 ) -> dict[str, Any]:
     cloud = opened_from_cloud_storage_report(db, case_id, contains=contains, limit=max(limit * 2, 250))
@@ -16614,6 +16624,12 @@ def cloud_removable_overlap_report(
             )
             if dedupe_key in seen:
                 continue
+            cloud_confidence = cloud_item.get("mount_confidence")
+            removable_confidence = removable_item.get("confidence")
+            overlap_confidence = "high" if {"same_file_or_folder_name", "within_60_minutes", "same_computer"}.issubset(set(reasons)) else "medium"
+            threshold = "high" if high_confidence_only else min_confidence
+            if threshold and _confidence_value(overlap_confidence) < _confidence_value(threshold):
+                continue
             seen.add(dedupe_key)
             overlaps.append(
                 {
@@ -16628,8 +16644,9 @@ def cloud_removable_overlap_report(
                     "cloud_source": cloud_item.get("source"),
                     "removable_source": removable_item.get("source"),
                     "overlap_basis": ", ".join(_ordered_unique(reasons)),
-                    "cloud_confidence": cloud_item.get("mount_confidence"),
-                    "removable_confidence": removable_item.get("confidence"),
+                    "overlap_confidence": overlap_confidence,
+                    "cloud_confidence": cloud_confidence,
+                    "removable_confidence": removable_confidence,
                     "matched_removable_devices": removable_item.get("matched_devices"),
                 }
             )
@@ -16641,7 +16658,7 @@ def cloud_removable_overlap_report(
         provider_counts[provider_name] = provider_counts.get(provider_name, 0) + 1
     return {
         "case_id": case_id,
-        "filters": {"contains": contains},
+        "filters": {"contains": contains, "min_confidence": "high" if high_confidence_only else min_confidence},
         "summary": {
             "overlap_count": len(overlaps),
             "provider_counts": [{"provider": key, "count": value} for key, value in sorted(provider_counts.items())],
@@ -16665,6 +16682,7 @@ def cloud_removable_overlap_export_rows(report: dict[str, Any]) -> list[dict[str
             "cloud_path": item.get("cloud_path"),
             "removable_path": item.get("removable_path"),
             "overlap_basis": item.get("overlap_basis"),
+            "overlap_confidence": item.get("overlap_confidence"),
             "cloud_confidence": item.get("cloud_confidence"),
             "removable_confidence": item.get("removable_confidence"),
         }
@@ -16690,6 +16708,7 @@ def cloud_removable_overlap_markdown(report: dict[str, Any]) -> str:
             f"computer `{item.get('computer_label') or ''}` "
             f"user `{item.get('user_profile') or ''}` "
             f"provider `{item.get('provider') or ''}` "
+            f"confidence `{item.get('overlap_confidence') or ''}` "
             f"basis `{item.get('overlap_basis') or ''}` "
             f"cloud `{item.get('cloud_path') or ''}` "
             f"removable `{item.get('removable_path') or ''}`"
@@ -19499,6 +19518,180 @@ def process_timing_report(db: Database, case_id: str, *, limit: int = 500) -> di
         "worker_requests": worker_requests,
         "timings": rows,
         "total_returned": len(rows),
+    }
+
+
+def _disk_usage_row(path: Path, *, label: str, min_free_gb: float) -> dict[str, Any]:
+    path = path.expanduser()
+    probe = path if path.exists() else path.parent
+    while not probe.exists() and probe.parent != probe:
+        probe = probe.parent
+    try:
+        usage = shutil.disk_usage(probe)
+    except OSError as exc:
+        return {"label": label, "path": str(path), "status": "error", "message": str(exc)}
+    free_gb = round(usage.free / (1024**3), 2)
+    total_gb = round(usage.total / (1024**3), 2)
+    used_pct = round((usage.used / usage.total) * 100, 1) if usage.total else 0
+    return {
+        "label": label,
+        "path": str(path),
+        "probe_path": str(probe),
+        "status": "ok" if free_gb >= min_free_gb else "low_space",
+        "free_gb": free_gb,
+        "total_gb": total_gb,
+        "used_pct": used_pct,
+        "min_free_gb": min_free_gb,
+    }
+
+
+def _report_mount_path_state(path: Path) -> tuple[str, str]:
+    try:
+        if not path.exists():
+            return "missing", "Path does not exist."
+        if path.is_dir():
+            next(path.iterdir(), None)
+        return "accessible", ""
+    except OSError as exc:
+        return "stale", str(exc)
+
+
+def workspace_health_report(db: Database, case_id: str | None = None, *, min_free_gb: float = 10.0) -> dict[str, Any]:
+    case = db.get_case(case_id) if case_id else None
+    db_path = Path(db.path)
+    workspace_root = db_path.parent
+    temp_root = Path(os.environ.get("RELIC_TMPDIR") or os.environ.get("DUCKDB_TMPDIR") or os.environ.get("TMPDIR") or "/tmp")
+    paths = [
+        _disk_usage_row(workspace_root, label="workspace", min_free_gb=min_free_gb),
+        _disk_usage_row(db_path, label="sqlite_database", min_free_gb=min_free_gb),
+        _disk_usage_row(temp_root, label="temporary_directory", min_free_gb=min_free_gb),
+    ]
+    if case:
+        paths.extend(
+            [
+                _disk_usage_row(case.root, label="case_root", min_free_gb=min_free_gb),
+                _disk_usage_row(case.root / "analytics", label="case_analytics", min_free_gb=min_free_gb),
+                _disk_usage_row(case.root / "outputs", label="case_outputs", min_free_gb=min_free_gb),
+            ]
+        )
+    mount_rows: list[dict[str, Any]] = []
+    if case_id:
+        for row in db.conn.execute(
+            """
+            SELECT id, image_id, volume_mount_path, ewf_mount_path, raw_path, created_at
+            FROM mounts
+            WHERE case_id = ?
+            ORDER BY created_at DESC
+            """,
+            (case_id,),
+        ).fetchall():
+            item = dict(row)
+            for field in ("volume_mount_path", "ewf_mount_path"):
+                value = item.get(field)
+                if not value:
+                    continue
+                status, message = _report_mount_path_state(Path(value))
+                mount_rows.append({**item, "mount_field": field, "mount_path": value, "status": status, "message": message})
+    warnings = [
+        f"{row.get('label')} has {row.get('free_gb')} GB free below requested {row.get('min_free_gb')} GB"
+        for row in paths
+        if row.get("status") == "low_space"
+    ]
+    warnings.extend(f"Mount path {row.get('mount_path')} is {row.get('status')}: {row.get('message')}" for row in mount_rows if row.get("status") != "accessible")
+    return {
+        "case_id": case_id,
+        "summary": {
+            "passed": not warnings,
+            "path_count": len(paths),
+            "mount_count": len(mount_rows),
+            "warning_count": len(warnings),
+        },
+        "environment": {
+            "tmpdir": os.environ.get("TMPDIR") or "",
+            "duckdb_tmpdir": os.environ.get("DUCKDB_TMPDIR") or "",
+            "relic_tmpdir": os.environ.get("RELIC_TMPDIR") or "",
+        },
+        "paths": paths,
+        "mounts": mount_rows,
+        "warnings": warnings,
+    }
+
+
+def workspace_health_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") or {}
+    lines = ["# Workspace Health Report", "", f"Case: `{report.get('case_id') or ''}`", ""]
+    lines.extend(
+        [
+            "## Summary",
+            "",
+            f"- Passed: `{summary.get('passed')}`",
+            f"- Warnings: `{summary.get('warning_count', 0)}`",
+            "",
+            "## Paths",
+            "",
+        ]
+    )
+    for row in report.get("paths") or []:
+        lines.append(f"- `{row.get('status')}` `{row.get('label')}` `{row.get('path')}` free `{row.get('free_gb')}` GB of `{row.get('total_gb')}` GB")
+    if report.get("warnings"):
+        lines.extend(["", "## Warnings", ""])
+        lines.extend(f"- {warning}" for warning in report.get("warnings") or [])
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def processing_progress_report(db: Database, case_id: str, *, limit: int = 50) -> dict[str, Any]:
+    db.get_case(case_id)
+    summary = case_summary_report(db, case_id)
+    timings = process_timing_report(db, case_id, limit=limit)
+    jobs = db.case_status(case_id).get("jobs") or []
+    job_counts: dict[str, int] = {}
+    for job in jobs:
+        status = "running" if job.get("exit_code") is None and not job.get("end_time") else ("completed" if job.get("exit_code") == 0 else "failed")
+        job_counts[status] = job_counts.get(status, 0) + 1
+    active_timings = [row for row in timings.get("timings") or [] if row.get("status") in {"running", "started"}]
+    failed_timings = [row for row in timings.get("timings") or [] if row.get("status") == "failed"]
+    return {
+        "case_id": case_id,
+        "summary": {
+            "computers": (summary.get("counts") or {}).get("computers", 0),
+            "images": (summary.get("counts") or {}).get("images", 0),
+            "tool_outputs": (summary.get("counts") or {}).get("outputs", 0),
+            "parsed_row_count": sum(int(row.get("count") or 0) for row in summary.get("parsed_row_counts") or []),
+            "job_counts": job_counts,
+            "active_timing_count": len(active_timings),
+            "failed_timing_count": len(failed_timings),
+        },
+        "recent_timings": (timings.get("timings") or [])[:limit],
+        "active_timings": active_timings[:limit],
+        "failed_timings": failed_timings[:limit],
+        "recent_jobs": jobs[:limit],
+    }
+
+
+def resume_plan_report(db: Database, case_id: str, *, limit: int = 50) -> dict[str, Any]:
+    progress = processing_progress_report(db, case_id, limit=limit)
+    health = workspace_health_report(db, case_id)
+    decisions = processing_decision_report(db, case_id, limit=limit)
+    failed = progress.get("failed_timings") or []
+    commands = [
+        f"relic --root <workspace> report workspace-health --case {case_id}",
+        f"relic --root <workspace> case rebuild-postprocess {case_id}",
+        f"relic --root <workspace> report processing-decisions --case {case_id}",
+        f"relic --root <workspace> report regression-smoke --case {case_id}",
+    ]
+    if failed:
+        commands.insert(1, f"relic --root <workspace> report process-timings --case {case_id} --format table")
+    return {
+        "case_id": case_id,
+        "summary": {
+            "workspace_passed": (health.get("summary") or {}).get("passed"),
+            "failed_timing_count": len(failed),
+            "decision_count": (decisions.get("summary") or {}).get("decision_count", 0),
+        },
+        "recommended_commands": commands,
+        "workspace_warnings": health.get("warnings") or [],
+        "failed_timings": failed[:limit],
+        "decisions": (decisions.get("decisions") or [])[:limit],
     }
 
 
@@ -29405,6 +29598,8 @@ def file_movement_identity_report(
     case_id: str,
     *,
     contains: str | None = None,
+    min_confidence: str | None = None,
+    high_confidence_only: bool = False,
     limit: int = 100,
 ) -> dict[str, Any]:
     object_tracking = shortcut_object_tracking_report(db, case_id, limit=limit)
@@ -29503,14 +29698,18 @@ def file_movement_identity_report(
             if needle in " ".join(str(value or "") for value in finding.values()).casefold()
         ]
     findings.sort(key=lambda row: str(row.get("timestamp") or ""), reverse=True)
-    findings = findings[:limit]
     counts: dict[str, int] = {}
     for finding in findings:
         _apply_file_identity_confidence(finding)
+    threshold = "high" if high_confidence_only else min_confidence
+    if threshold:
+        findings = [finding for finding in findings if _confidence_value(finding.get("confidence")) >= _confidence_value(threshold)]
+    findings = findings[:limit]
+    for finding in findings:
         counts[finding["finding_type"]] = counts.get(finding["finding_type"], 0) + 1
     return {
         "case_id": case_id,
-        "filters": {"contains": contains},
+        "filters": {"contains": contains, "min_confidence": threshold},
         "summary": {"finding_counts": counts, "finding_count": len(findings)},
         "findings": findings,
         "source_reports": {
@@ -29582,12 +29781,31 @@ def file_movement_identity_export_rows(report: dict[str, Any]) -> list[dict[str,
 DERIVED_TIMELINE_TOOL = "RelicDerived"
 
 
-def derived_timeline_events_report(db: Database, case_id: str, *, limit: int = 1000) -> dict[str, Any]:
-    events = derived_timeline_events(db, case_id, limit=limit)
+def derived_timeline_events_report(
+    db: Database,
+    case_id: str,
+    *,
+    event_type: str | None = None,
+    contains: str | None = None,
+    limit: int = 1000,
+) -> dict[str, Any]:
+    events = derived_timeline_events(db, case_id, limit=max(limit * 5, 1000))
+    if event_type:
+        events = [event for event in events if str(event.get("event_type") or "") == event_type]
+    if contains:
+        needle = contains.casefold()
+        events = [event for event in events if needle in json.dumps(event, default=str).casefold()]
+    events = events[:limit]
     counts: dict[str, int] = {}
     for event in events:
         counts[event["event_type"]] = counts.get(event["event_type"], 0) + 1
-    return {"case_id": case_id, "summary": {"event_counts": counts}, "events": events, "total_returned": len(events)}
+    return {
+        "case_id": case_id,
+        "filters": {"event_type": event_type, "contains": contains},
+        "summary": {"event_counts": counts},
+        "events": events,
+        "total_returned": len(events),
+    }
 
 
 def rebuild_derived_timeline_events(
