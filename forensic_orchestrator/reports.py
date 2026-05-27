@@ -13641,10 +13641,10 @@ def _annotate_external_storage_devices(db: Database, case_id: str, devices: list
     _annotate_external_storage_row_attribution(db, case_id, devices)
     observed = _external_storage_observed_computers(db, case_id)
     for device in devices:
-        serial_key = _external_storage_serial_key(device.get("serial"))
-        identifier_type = _external_storage_identifier_type(serial_key)
+        serial_key = _external_storage_serial_key(device.get("serial"), device=device)
+        identifier_type = _external_storage_identifier_type(device, device.get("serial"))
         current_computer = str(device.get("computer_label") or device.get("computer_id") or "").strip()
-        computers = observed.get(serial_key, []) if _external_storage_is_cross_host_serial(serial_key) else []
+        computers = observed.get(serial_key, []) if _external_storage_is_cross_host_identifier(device, device.get("serial")) else []
         if not computers and current_computer:
             computers = [current_computer]
         identity = _external_storage_identity_assessment(device, identifier_type, len(computers))
@@ -13695,7 +13695,7 @@ def _external_storage_observed_computers(db: Database, case_id: str) -> dict[str
         case_id,
         "usb_storage_devices",
         """
-        SELECT serial, computer_id
+        SELECT serial, parent_id_prefix, device_service, source_artifacts, computer_id
         FROM usb_storage_devices
         WHERE case_id = ?
           AND COALESCE(serial, '') <> ''
@@ -13705,8 +13705,8 @@ def _external_storage_observed_computers(db: Database, case_id: str) -> dict[str
     labels = _computer_labels(db, case_id)
     observed: dict[str, list[str]] = {}
     for row in rows:
-        serial_key = _external_storage_serial_key(row.get("serial"))
-        if not _external_storage_is_cross_host_serial(serial_key):
+        serial_key = _external_storage_serial_key(row.get("serial"), device=row)
+        if not _external_storage_is_cross_host_identifier(row, serial_key):
             continue
         computer_id = str(row.get("computer_id") or "").strip()
         label = str(labels.get(computer_id) or computer_id).strip()
@@ -13720,18 +13720,30 @@ def _external_storage_observed_computers(db: Database, case_id: str) -> dict[str
     return observed
 
 
-def _external_storage_identifier_type(serial: Any) -> str:
+def _external_storage_identifier_type(device: dict[str, Any], serial: Any) -> str:
     value = _external_storage_serial_key(serial)
     if not value:
         return "none"
     if _external_storage_is_windows_generated_id(value):
+        if _external_storage_is_uasp_device(device):
+            return "uasp_parent_id_prefix"
         return "windows_generated_instance_id"
+    if _external_storage_is_uasp_device(device) and value.upper().startswith("MSFT30"):
+        return "uasp_msft30_prefixed_iserial"
     return "physical_serial"
 
 
-def _external_storage_is_cross_host_serial(serial: Any) -> bool:
-    value = _external_storage_serial_key(serial)
+def _external_storage_is_cross_host_identifier(device: dict[str, Any], serial: Any) -> bool:
+    value = _external_storage_serial_key(serial, device=device)
     return bool(value and not _external_storage_is_windows_generated_id(value))
+
+
+def _external_storage_is_uasp_device(device: dict[str, Any]) -> bool:
+    text = " ".join(
+        str(device.get(field) or "")
+        for field in ("device_service", "source_device_types", "source_artifacts", "key_path", "friendly_name", "product")
+    ).casefold()
+    return any(token in text for token in ("uasp", "uaspstor", "scsi_storage", "\\enum\\scsi", "enum\\scsi"))
 
 
 def _external_storage_is_windows_generated_id(serial: Any) -> bool:
@@ -13748,6 +13760,18 @@ def _external_storage_identity_assessment(device: dict[str, Any], identifier_typ
             "basis": "physical_serial",
             "confidence": "high" if observed_computer_count > 1 else "single_computer",
             "note": "Cross-computer attribution is based on a non-generated USB serial." if observed_computer_count > 1 else "Only one computer is represented for this physical serial in the current report.",
+        }
+    if identifier_type == "uasp_parent_id_prefix":
+        return {
+            "basis": "uasp_parent_id_prefix_same_system_only",
+            "confidence": "same_system_only",
+            "note": "UASP ParentIdPrefix is important for correlating USB and SCSI registry keys on the same Windows installation, but should not be used by itself to track a physical device across computers.",
+        }
+    if identifier_type == "uasp_msft30_prefixed_iserial":
+        return {
+            "basis": "uasp_iserial_candidate",
+            "confidence": "medium",
+            "note": "UASP identifier has an MSFT30 prefix; compare with the value after that prefix and with Partition/Diagnostic SCSI serial data before making cross-computer claims.",
         }
     if identifier_type == "windows_generated_instance_id":
         return {
@@ -14259,10 +14283,12 @@ def _is_external_storage_usb_row(row: dict[str, Any]) -> bool:
     return False
 
 
-def _external_storage_serial_key(value: Any) -> str:
+def _external_storage_serial_key(value: Any, *, device: dict[str, Any] | None = None) -> str:
     text = str(value or "").strip()
     if text.upper().endswith("&0"):
-        return text[:-2]
+        text = text[:-2]
+    if device is not None and _external_storage_is_uasp_device(device) and text.upper().startswith("MSFT30"):
+        return text[6:]
     return text
 
 

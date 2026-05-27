@@ -2509,6 +2509,121 @@ def test_external_storage_report_does_not_cross_host_match_windows_generated_usb
     assert "windows_generated_instance_id_not_cross_host_safe" in markdown
 
 
+def test_external_storage_report_treats_uasp_parent_id_prefix_as_same_system_identifier(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-a", case_id=case.id, label="Alpha")
+    db.create_computer(computer_id="computer-b", case_id=case.id, label="Beta")
+    db.add_image("image-a", case.id, Path("/evidence/alpha.E01"), computer_id="computer-a")
+    db.add_image("image-b", case.id, Path("/evidence/beta.E01"), computer_id="computer-b")
+    base = {
+        "case_id": case.id,
+        "serial": "7&2abc123&0",
+        "vendor_id": "174C",
+        "product_id": "55AA",
+        "vendor": "ASMT",
+        "product": "2115",
+        "revision": "0",
+        "friendly_name": "ASMT 2115 SCSI Disk Device",
+        "parent_id_prefix": "7&2abc123&0",
+        "device_service": "UASPStor, disk",
+        "volume_guid": "",
+        "volume_serial_number": "",
+        "volume_name": "",
+        "capacity_bytes": "",
+        "file_system": "",
+        "alternate_scsi_serial": "",
+        "user_profiles": "",
+        "first_install_date_utc": "2020-01-01T00:00:00Z",
+        "last_arrival_utc": "",
+        "last_removal_utc": "",
+        "first_volume_serial_event_utc": "",
+        "last_partition_event_utc": "",
+        "last_migration_present_utc": "",
+        "evidence_row_count": 1,
+        "source_artifacts": "usb_device_migration, scsi_storage",
+        "created_at": "2026-01-01T00:00:00Z",
+    }
+    db.insert_usb_storage_devices(
+        [
+            {**base, "id": "uasp-a", "computer_id": "computer-a", "image_id": "image-a", "drive_letter": "E:"},
+            {**base, "id": "uasp-b", "computer_id": "computer-b", "image_id": "image-b", "drive_letter": "F:"},
+        ]
+    )
+
+    report = external_storage_report(db, case.id, limit=50)
+    markdown = external_storage_markdown(report)
+    export_rows = external_storage_export_rows(report)
+
+    rows = [device for device in report["devices"] if device["serial"] == "7&2abc123&0"]
+    assert len(rows) == 2
+    assert {row["observed_computers"] for row in rows} == {"Alpha", "Beta"}
+    assert all(row["observed_computer_count"] == 1 for row in rows)
+    assert all(row["identifier_type"] == "uasp_parent_id_prefix" for row in rows)
+    assert all(row["cross_computer_identity_basis"] == "uasp_parent_id_prefix_same_system_only" for row in rows)
+    assert all(row["cross_computer_confidence"] == "same_system_only" for row in rows)
+    assert all("same Windows installation" in row["cross_computer_note"] for row in rows)
+    assert any(
+        row["section"] == "device"
+        and row["identifier_type"] == "uasp_parent_id_prefix"
+        and row["cross_computer_confidence"] == "same_system_only"
+        for row in export_rows
+    )
+    assert "uasp_parent_id_prefix_same_system_only" in markdown
+
+
+def test_external_storage_report_normalizes_uasp_msft30_iserial_candidate(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-a", case_id=case.id, label="Alpha")
+    db.add_image("image-a", case.id, Path("/evidence/alpha.E01"), computer_id="computer-a")
+    db.insert_usb_storage_devices(
+        [
+            {
+                "id": "uasp-msft30",
+                "case_id": case.id,
+                "computer_id": "computer-a",
+                "image_id": "image-a",
+                "serial": "MSFT30NA97S0YP",
+                "vendor_id": "0BC2",
+                "product_id": "AB24",
+                "vendor": "Seagate",
+                "product": "BUP Slim",
+                "revision": "",
+                "friendly_name": "Seagate BUP Slim SCSI Disk Device",
+                "parent_id_prefix": "7&2abc123&0",
+                "device_service": "UASPStor, disk",
+                "drive_letter": "E:",
+                "volume_guid": "",
+                "volume_serial_number": "",
+                "volume_name": "",
+                "capacity_bytes": "",
+                "file_system": "",
+                "alternate_scsi_serial": "",
+                "user_profiles": "",
+                "first_install_date_utc": "2020-01-01T00:00:00Z",
+                "last_arrival_utc": "",
+                "last_removal_utc": "",
+                "first_volume_serial_event_utc": "",
+                "last_partition_event_utc": "",
+                "last_migration_present_utc": "",
+                "evidence_row_count": 1,
+                "source_artifacts": "usb_device_migration, scsi_storage",
+                "created_at": "2026-01-01T00:00:00Z",
+            }
+        ]
+    )
+
+    report = external_storage_report(db, case.id, limit=50)
+    row = report["devices"][0]
+
+    assert row["serial"] == "MSFT30NA97S0YP"
+    assert row["normalized_serial"] == "NA97S0YP"
+    assert row["identifier_type"] == "uasp_msft30_prefixed_iserial"
+    assert row["cross_computer_identity_basis"] == "uasp_iserial_candidate"
+    assert row["cross_computer_confidence"] == "medium"
+
+
 
 def test_external_storage_report_lists_unattributed_removable_volume_activity(tmp_path):
     db = Database(tmp_path / "orchestrator.sqlite3")
