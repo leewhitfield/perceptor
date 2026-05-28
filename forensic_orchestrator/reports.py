@@ -198,6 +198,15 @@ ARTIFACT_SEARCH_SPECS = [
     },
 ]
 
+ARTIFACT_LEAD_SEARCH_PRESETS = {
+    "execution": ["execution", "timeline"],
+    "usb": ["external_storage", "user_activity"],
+    "cloud": ["windows_search", "browser"],
+    "documents": ["filesystem", "windows_search", "user_activity"],
+    "browser": ["browser", "windows_search"],
+    "communications": ["windows_search", "browser"],
+}
+
 
 APPLICATION_INDICATORS = [
     {"application": "Tor Browser", "tokens": ("tor browser", "start tor browser", "torbrowser", "\\tor.exe", "/tor.exe")},
@@ -30574,6 +30583,102 @@ def artifact_search_report(
             "limit": limit,
         },
         "results": results,
+    }
+
+
+def artifact_lead_search_report(
+    db: Database,
+    case_id: str,
+    *,
+    preset: str,
+    query: str | None = None,
+    user: str | None = None,
+    computer: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    limit: int = 100,
+) -> dict[str, Any]:
+    preset_key = (preset or "").strip().casefold()
+    if preset_key not in ARTIFACT_LEAD_SEARCH_PRESETS:
+        raise ValueError(f"Unsupported lead search preset: {preset}")
+    categories = ARTIFACT_LEAD_SEARCH_PRESETS[preset_key]
+    per_category_limit = max(1, min(int(limit), 1000))
+    results: list[dict[str, Any]] = []
+    category_summaries: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for category in categories:
+        report = artifact_search_report(
+            db,
+            case_id,
+            query=query,
+            user=user,
+            computer=computer,
+            source_type=category,
+            start=start,
+            end=end,
+            limit=per_category_limit,
+        )
+        category_summaries.append({"category": category, **dict(report.get("summary") or {})})
+        for row in report.get("results") or []:
+            key = (str(row.get("table") or ""), str(row.get("id") or ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            item = dict(row)
+            item["lead_preset"] = preset_key
+            results.append(item)
+    results.sort(key=lambda row: str(row.get("timestamp") or ""), reverse=True)
+    returned = results[: max(1, min(int(limit), 1000))]
+    return {
+        "case_id": case_id,
+        "preset": preset_key,
+        "query": (query or "").strip(),
+        "filters": {
+            "user": (user or "").strip(),
+            "computer": (computer or "").strip(),
+            "start": start or "",
+            "end": end or "",
+        },
+        "summary": {
+            "result_count": len(returned),
+            "total_matching": len(results),
+            "limit": max(1, min(int(limit), 1000)),
+            "categories": categories,
+        },
+        "category_summaries": category_summaries,
+        "results": returned,
+    }
+
+
+def case_activity_digest_report(db: Database, case_id: str, *, limit: int = 25) -> dict[str, Any]:
+    limit = max(1, min(int(limit), 1000))
+    timeline = timeline_review_report(db, case_id, limit=limit)
+    suspicious = suspicious_executions_report(db, case_id, limit=limit)
+    storage = external_storage_report(db, case_id, limit=limit, rebuild_correlations=False, include_file_activity=False)
+    opened_removable = opened_from_removable_media_report(db, case_id, limit=limit)
+    opened_cloud = opened_from_cloud_storage_report(db, case_id, limit=limit)
+    gaps = evidence_gaps_report(db, case_id, limit=limit)
+    actions = case_next_actions_report(db, case_id, limit=limit)
+    timeline_rows = timeline.get("events") or timeline.get("timeline") or timeline.get("items") or []
+    return {
+        "case_id": case_id,
+        "summary": {
+            "timeline_count": len(timeline_rows),
+            "suspicious_execution_count": len(suspicious.get("findings") or suspicious.get("items") or []),
+            "external_storage_count": len(storage.get("devices") or storage.get("storage_devices") or []),
+            "opened_from_removable_count": len(opened_removable.get("items") or opened_removable.get("findings") or []),
+            "opened_from_cloud_count": len(opened_cloud.get("items") or opened_cloud.get("findings") or []),
+            "evidence_gap_count": len(gaps.get("gaps") or []),
+            "next_action_count": len(actions.get("actions") or []),
+            "limit": limit,
+        },
+        "recent_timeline": timeline_rows[:limit],
+        "suspicious_executions": (suspicious.get("findings") or suspicious.get("items") or [])[:limit],
+        "external_storage": (storage.get("devices") or storage.get("storage_devices") or [])[:limit],
+        "opened_from_removable_media": (opened_removable.get("items") or opened_removable.get("findings") or [])[:limit],
+        "opened_from_cloud_storage": (opened_cloud.get("items") or opened_cloud.get("findings") or [])[:limit],
+        "evidence_gaps": (gaps.get("gaps") or [])[:limit],
+        "next_actions": (actions.get("actions") or [])[:limit],
     }
 
 

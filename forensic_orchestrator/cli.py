@@ -49,6 +49,7 @@ from .reports import (
     account_compromise_markdown,
     account_compromise_report,
     amcache_report,
+    artifact_lead_search_report,
     artifact_search_report,
     artifact_sources_report,
     artifact_completeness_report,
@@ -66,6 +67,7 @@ from .reports import (
     browser_hosts_report,
     browser_report,
     case_review_report,
+    case_activity_digest_report,
     case_next_actions_report,
     carve_coverage_markdown,
     carve_coverage_report,
@@ -3160,6 +3162,22 @@ def build_parser() -> argparse.ArgumentParser:
     report_artifact_search.add_argument("--limit", type=int, default=100)
     report_artifact_search.add_argument("--format", choices=["json", "table", "csv"], default="json")
     report_artifact_search.add_argument("--output")
+    report_lead_search = report_sub.add_parser("lead-search")
+    report_lead_search.add_argument("--case", required=True, dest="case_id")
+    report_lead_search.add_argument("--preset", required=True, choices=["execution", "usb", "cloud", "documents", "browser", "communications"])
+    report_lead_search.add_argument("--query")
+    report_lead_search.add_argument("--user")
+    report_lead_search.add_argument("--computer")
+    report_lead_search.add_argument("--start")
+    report_lead_search.add_argument("--end")
+    report_lead_search.add_argument("--limit", type=int, default=100)
+    report_lead_search.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    report_lead_search.add_argument("--output")
+    report_activity_digest = report_sub.add_parser("activity-digest")
+    report_activity_digest.add_argument("--case", required=True, dest="case_id")
+    report_activity_digest.add_argument("--limit", type=int, default=25)
+    report_activity_digest.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    report_activity_digest.add_argument("--output")
     report_case_review = report_sub.add_parser("case-review")
     report_case_review.add_argument("--case", required=True, dest="case_id")
     report_case_review.add_argument("--limit", type=int, default=25)
@@ -6134,6 +6152,50 @@ def run(args: argparse.Namespace) -> int:
                 args.output,
                 title=f"Artifact search for case {args.case_id}",
                 columns=["timestamp", "category", "table", "computer_label", "summary", "matched_fields"],
+            )
+            return 0
+
+        if args.resource == "report" and args.action == "lead-search":
+            report = artifact_lead_search_report(
+                db,
+                args.case_id,
+                preset=args.preset,
+                query=args.query,
+                user=args.user,
+                computer=args.computer,
+                start=args.start,
+                end=args.end,
+                limit=args.limit,
+            )
+            write_report_output(
+                report,
+                report["results"],
+                args.format,
+                args.output,
+                title=f"{args.preset.title()} lead search for case {args.case_id}",
+                columns=["timestamp", "lead_preset", "category", "table", "computer_label", "summary", "matched_fields"],
+            )
+            return 0
+
+        if args.resource == "report" and args.action == "activity-digest":
+            report = case_activity_digest_report(db, args.case_id, limit=args.limit)
+            rows = [
+                {"section": "recent_timeline", **row}
+                for row in report.get("recent_timeline", [])
+                if isinstance(row, dict)
+            ]
+            rows.extend(
+                {"section": "next_actions", **row}
+                for row in report.get("next_actions", [])
+                if isinstance(row, dict)
+            )
+            write_report_output(
+                report,
+                rows,
+                args.format,
+                args.output,
+                title=f"Activity digest for case {args.case_id}",
+                columns=["section", "timestamp", "priority", "category", "event_type", "title", "summary", "detail"],
             )
             return 0
 

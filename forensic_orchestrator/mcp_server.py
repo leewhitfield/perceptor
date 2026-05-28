@@ -20,8 +20,10 @@ from .db import Database
 from .paths import WorkspacePaths
 from .report_bundle import parser_coverage_report, progress_manifest_report, report_bundle_preflight_report
 from .reports import (
+    artifact_lead_search_report,
     artifact_search_report,
     browser_activity_report,
+    case_activity_digest_report,
     case_next_actions_report,
     case_review_report,
     case_dashboard_report,
@@ -242,6 +244,22 @@ class RelicMcpServer:
                     required=["case_id"],
                 ),
                 handler=self.discover_reports,
+                annotations=read_only,
+            ),
+            McpTool(
+                name="relic_discover_report_exports",
+                title="Relic Discover Report Exports",
+                description="Discover report bundle exports by purpose and report-index tags.",
+                input_schema=_object_schema(
+                    {
+                        "case_id": _string_schema("Relic case ID."),
+                        "purpose": {"type": "string", "enum": ["full", "usb", "cloud", "execution", "memory", "triage"], "default": "full"},
+                        "tags": {"type": "array", "items": {"type": "string"}},
+                        "limit": _integer_schema("Maximum resources to return.", default=250, minimum=1, maximum=1000),
+                    },
+                    required=["case_id"],
+                ),
+                handler=self.discover_report_exports,
                 annotations=read_only,
             ),
             McpTool(
@@ -590,6 +608,34 @@ class RelicMcpServer:
                 annotations=read_only,
             ),
             McpTool(
+                name="relic_lead_search",
+                title="Relic Lead Search",
+                description="Run preset artifact searches for execution, USB, cloud, documents, browser, or communications leads.",
+                input_schema=_object_schema(
+                    {
+                        "case_id": _string_schema("Relic case ID."),
+                        "preset": {"type": "string", "enum": ["execution", "usb", "cloud", "documents", "browser", "communications"]},
+                        "query": _string_schema("Optional text to find in preset artifact fields."),
+                        "user": _string_schema("Optional user/profile filter."),
+                        "computer": _string_schema("Optional computer label or ID filter."),
+                        "start": _string_schema("Optional inclusive timestamp lower bound."),
+                        "end": _string_schema("Optional inclusive timestamp upper bound."),
+                        "limit": _integer_schema("Maximum rows to return.", default=100, minimum=1, maximum=1000),
+                    },
+                    required=["case_id", "preset"],
+                ),
+                handler=self.lead_search,
+                annotations=read_only,
+            ),
+            McpTool(
+                name="relic_case_activity_digest",
+                title="Relic Case Activity Digest",
+                description="Return a compact digest of recent activity, suspicious execution, storage, cloud/removable opens, gaps, and next actions.",
+                input_schema=_case_limit_schema(default=25),
+                handler=self.case_activity_digest,
+                annotations=read_only,
+            ),
+            McpTool(
                 name="relic_case_next_actions",
                 title="Relic Case Next Actions",
                 description="Return ranked next investigative actions from readiness, gaps, unmapped imports, suspicious execution, USB, and cloud findings.",
@@ -630,6 +676,45 @@ class RelicMcpServer:
                 description="Read a saved MCP review packet JSON or Markdown resource.",
                 input_schema=_object_schema({"uri": _string_schema("Review packet resource URI.")}, required=["uri"]),
                 handler=self.read_review_packet,
+                annotations=read_only,
+            ),
+            McpTool(
+                name="relic_write_search_packet",
+                title="Write Relic Search Packet",
+                description="Run and save an artifact or preset lead search packet with filters and result counts.",
+                input_schema=_object_schema(
+                    {
+                        "case_id": _string_schema("Relic case ID."),
+                        "title": _string_schema("Optional packet title."),
+                        "preset": {"type": "string", "enum": ["execution", "usb", "cloud", "documents", "browser", "communications"]},
+                        "query": _string_schema("Optional search text."),
+                        "user": _string_schema("Optional user/profile filter."),
+                        "computer": _string_schema("Optional computer label or ID filter."),
+                        "source_type": _string_schema("Optional artifact category or table name for general artifact search."),
+                        "start": _string_schema("Optional inclusive timestamp lower bound."),
+                        "end": _string_schema("Optional inclusive timestamp upper bound."),
+                        "limit": _integer_schema("Maximum rows to save.", default=100, minimum=1, maximum=1000),
+                    },
+                    required=["case_id"],
+                ),
+                handler=self.write_search_packet,
+                annotations=safe_write,
+                permission="safe_write",
+            ),
+            McpTool(
+                name="relic_list_search_packets",
+                title="List Relic Search Packets",
+                description="List MCP search packets previously written for a case.",
+                input_schema=_case_limit_schema(default=50),
+                handler=self.list_search_packets,
+                annotations=read_only,
+            ),
+            McpTool(
+                name="relic_read_search_packet",
+                title="Read Relic Search Packet",
+                description="Read a saved MCP search packet JSON or Markdown resource.",
+                input_schema=_object_schema({"uri": _string_schema("Search packet resource URI.")}, required=["uri"]),
+                handler=self.read_search_packet,
                 annotations=read_only,
             ),
             McpTool(
@@ -1101,6 +1186,28 @@ class RelicMcpServer:
             "indexes": indexes,
         }
 
+    def discover_report_exports(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        case_id = _required(arguments, "case_id")
+        purpose = str(arguments.get("purpose") or "full")
+        if purpose not in {"full", "usb", "cloud", "execution", "memory", "triage"}:
+            raise ValueError("purpose must be one of: full, usb, cloud, execution, memory, triage")
+        requested_tags = _string_list(arguments.get("tags"))
+        resources = _case_report_resources(self.paths.root, case_id, purpose=purpose, limit=_limit(arguments, default=250))
+        if requested_tags:
+            wanted = {tag.casefold() for tag in requested_tags}
+            resources = [
+                row
+                for row in resources
+                if wanted <= {str(tag).casefold() for tag in (row.get("tags") or [])}
+            ]
+        return {
+            "case_id": case_id,
+            "purpose": purpose,
+            "tags": requested_tags,
+            "summary": {"resource_count": len(resources), "tag_count": len(requested_tags)},
+            "resources": resources,
+        }
+
     def case_dashboard(self, arguments: dict[str, Any]) -> dict[str, Any]:
         db = self._db()
         try:
@@ -1444,6 +1551,30 @@ class RelicMcpServer:
         finally:
             db.close()
 
+    def lead_search(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        db = self._db()
+        try:
+            return artifact_lead_search_report(
+                db,
+                _required(arguments, "case_id"),
+                preset=_required(arguments, "preset"),
+                query=_optional_text(arguments, "query"),
+                user=_optional_text(arguments, "user"),
+                computer=_optional_text(arguments, "computer"),
+                start=_optional_text(arguments, "start"),
+                end=_optional_text(arguments, "end"),
+                limit=_limit(arguments, default=100),
+            )
+        finally:
+            db.close()
+
+    def case_activity_digest(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        db = self._db()
+        try:
+            return case_activity_digest_report(db, _required(arguments, "case_id"), limit=_limit(arguments, default=25))
+        finally:
+            db.close()
+
     def case_next_actions(self, arguments: dict[str, Any]) -> dict[str, Any]:
         case_id = _required(arguments, "case_id")
         limit = _limit(arguments, default=25)
@@ -1520,6 +1651,68 @@ class RelicMcpServer:
             "text": text,
             "packet": payload,
         }
+
+    def write_search_packet(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        case_id = _required(arguments, "case_id")
+        preset = _optional_text(arguments, "preset")
+        limit = _limit(arguments, default=100)
+        db = self._db()
+        try:
+            if preset:
+                search = artifact_lead_search_report(
+                    db,
+                    case_id,
+                    preset=preset,
+                    query=_optional_text(arguments, "query"),
+                    user=_optional_text(arguments, "user"),
+                    computer=_optional_text(arguments, "computer"),
+                    start=_optional_text(arguments, "start"),
+                    end=_optional_text(arguments, "end"),
+                    limit=limit,
+                )
+            else:
+                search = artifact_search_report(
+                    db,
+                    case_id,
+                    query=_optional_text(arguments, "query"),
+                    user=_optional_text(arguments, "user"),
+                    computer=_optional_text(arguments, "computer"),
+                    source_type=_optional_text(arguments, "source_type"),
+                    start=_optional_text(arguments, "start"),
+                    end=_optional_text(arguments, "end"),
+                    limit=limit,
+                )
+        finally:
+            db.close()
+        title = _optional_text(arguments, "title") or ("Lead Search Packet" if preset else "Artifact Search Packet")
+        packet_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + f"-{uuid.uuid4().hex[:8]}"
+        output_dir = self.paths.case_dir(case_id) / "reports" / "mcp-search-packets"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "case_id": case_id,
+            "title": title,
+            "created_at": _now(),
+            "search_type": "lead" if preset else "artifact",
+            "arguments": {key: value for key, value in arguments.items() if key not in {"findings", "timeline"}},
+            "search": search,
+        }
+        json_path = output_dir / f"{packet_id}-search-packet.json"
+        md_path = output_dir / f"{packet_id}-search-packet.md"
+        json_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+        md_path.write_text(_search_packet_markdown(payload), encoding="utf-8")
+        return {
+            "case_id": case_id,
+            "json_path": str(json_path),
+            "markdown_path": str(md_path),
+            "resource_uris": _resource_uris_for_path(self.paths.root, output_dir),
+            "summary": (search.get("summary") if isinstance(search, dict) else {}),
+        }
+
+    def list_search_packets(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return _list_packet_files(self.paths.root, self.paths.case_dir(_required(arguments, "case_id")) / "reports" / "mcp-search-packets", limit=_limit(arguments, default=50), suffix="-search-packet.json")
+
+    def read_search_packet(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return _read_packet_resource(self.paths.root, _required(arguments, "uri"), directory_name="mcp-search-packets", label="search")
 
     def ingest_triage_zip_preflight(self, arguments: dict[str, Any]) -> dict[str, Any]:
         report = report_bundle_preflight_report(Path(_required(arguments, "path")).expanduser())
@@ -2044,6 +2237,15 @@ def _optional_text(arguments: dict[str, Any], key: str) -> str | None:
     return value or None
 
 
+def _string_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    text = str(value or "").strip()
+    if not text:
+        return []
+    return [item.strip() for item in text.split(",") if item.strip()]
+
+
 def _limit(arguments: dict[str, Any], *, default: int) -> int:
     try:
         limit = int(arguments.get("limit") or default)
@@ -2086,6 +2288,14 @@ def _workspace_path(root: Path, value: str) -> Path:
     if resolved != root_resolved and root_resolved not in resolved.parents:
         raise ValueError(f"MCP output paths must stay under workspace root: {root_resolved}")
     return resolved
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
 
 
 def _resource_candidates(root: Path, *, case_id: str | None = None, kind: str | None = None) -> list[Path]:
@@ -2349,6 +2559,83 @@ def _review_packet_markdown(payload: dict[str, Any]) -> str:
             lines.append(f"- `{json.dumps(value, default=str) if isinstance(value, dict) else value}`")
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _search_packet_markdown(payload: dict[str, Any]) -> str:
+    search = payload.get("search") if isinstance(payload.get("search"), dict) else {}
+    summary = search.get("summary") if isinstance(search.get("summary"), dict) else {}
+    lines = [
+        f"# {payload.get('title') or 'Search Packet'}",
+        "",
+        f"Case: `{payload.get('case_id')}`",
+        f"Created: `{payload.get('created_at')}`",
+        f"Type: `{payload.get('search_type')}`",
+        "",
+        "## Summary",
+        "",
+    ]
+    if not summary:
+        lines.append("- None")
+    for key, value in summary.items():
+        lines.append(f"- {key}: `{value}`")
+    lines.extend(["", "## Filters", ""])
+    for key, value in (payload.get("arguments") or {}).items():
+        if value not in (None, "", [], {}):
+            lines.append(f"- {key}: `{value}`")
+    lines.extend(["", "## Results", ""])
+    results = search.get("results") if isinstance(search.get("results"), list) else []
+    if not results:
+        lines.append("- None")
+    for row in results[:100]:
+        if isinstance(row, dict):
+            lines.append(
+                f"- `{row.get('timestamp') or ''}` `{row.get('category') or row.get('table') or ''}` "
+                f"{row.get('summary') or row.get('description') or row.get('title') or row.get('id') or ''}"
+            )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _list_packet_files(root: Path, packet_dir: Path, *, limit: int, suffix: str) -> dict[str, Any]:
+    packets = []
+    root_resolved = root.resolve()
+    packet_dir_resolved = packet_dir.resolve()
+    case_id = _case_id_from_relative(packet_dir_resolved.relative_to(root_resolved)) if _is_relative_to(packet_dir_resolved, root_resolved) else ""
+    if packet_dir.exists():
+        for path in sorted(packet_dir.glob(f"*{suffix}"), key=lambda item: item.stat().st_mtime, reverse=True)[:limit]:
+            payload = _load_json_file(path)
+            stat = path.stat()
+            markdown_path = path.with_suffix(".md")
+            packets.append(
+                {
+                    "case_id": payload.get("case_id") or case_id,
+                    "title": payload.get("title") or path.stem,
+                    "created_at": payload.get("created_at") or "",
+                    "json_uri": _resource_uri(path.resolve().relative_to(root_resolved)),
+                    "markdown_uri": _resource_uri(markdown_path.resolve().relative_to(root_resolved)) if markdown_path.exists() else "",
+                    "relative_path": str(path.resolve().relative_to(root_resolved)),
+                    "size_bytes": stat.st_size,
+                    "modified_at": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
+                }
+            )
+    return {"case_id": case_id, "packets": packets, "summary": {"packet_count": len(packets), "limit": limit}}
+
+
+def _read_packet_resource(root: Path, uri: str, *, directory_name: str, label: str) -> dict[str, Any]:
+    path = _path_from_resource_uri(root, uri)
+    packet_dir_token = f"{os.sep}{directory_name}{os.sep}"
+    if packet_dir_token not in str(path) or path.suffix.casefold() not in {".json", ".md"}:
+        raise ValueError(f"URI is not a {label} packet resource")
+    if path.stat().st_size > MCP_RESOURCE_MAX_BYTES:
+        raise ValueError(f"{label.title()} packet is too large to read through MCP: {path}")
+    text = path.read_text(encoding="utf-8", errors="replace")
+    payload = json.loads(text) if path.suffix.casefold() == ".json" else None
+    return {
+        "uri": uri,
+        "path": str(path),
+        "format": path.suffix.casefold().lstrip("."),
+        "text": text,
+        "packet": payload,
+    }
 
 
 def _safe_resource_case_glob(case_id: str | None) -> str:

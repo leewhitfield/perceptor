@@ -38,15 +38,21 @@ def test_mcp_initialize_and_list_tools(tmp_path):
     assert "relic_case_evidence_map" in names
     assert "relic_case_readiness" in names
     assert "relic_discover_reports" in names
+    assert "relic_discover_report_exports" in names
     assert "relic_file_dossier" in names
     assert "relic_usb_dossier" in names
     assert "relic_user_activity" in names
     assert "relic_timeline_window" in names
+    assert "relic_lead_search" in names
+    assert "relic_case_activity_digest" in names
     assert "relic_case_next_actions" in names
     assert "relic_write_review_packet" in names
     assert "relic_search_artifacts" in names
     assert "relic_list_review_packets" in names
     assert "relic_read_review_packet" in names
+    assert "relic_write_search_packet" in names
+    assert "relic_list_search_packets" in names
+    assert "relic_read_search_packet" in names
     assert "relic_list_progress_manifests" in names
     assert "relic_list_mcp_jobs" in names
     assert "relic_get_mcp_job_progress" in names
@@ -277,14 +283,19 @@ def test_mcp_discover_reports_returns_resource_uris(tmp_path):
     report = tmp_path / "cases" / "case-1" / "reports" / "usb-bundle" / "opened-from-removable-media.md"
     report.parent.mkdir(parents=True)
     report.write_text("# Opened\n", encoding="utf-8")
-    (report.parent / "report-index.json").write_text('{"reports":[]}', encoding="utf-8")
+    (report.parent / "report-index.json").write_text(
+        '{"purpose":"usb","reports":[{"name":"opened-from-removable-media","filename":"opened-from-removable-media.md","tags":["usb","review"]}]}',
+        encoding="utf-8",
+    )
     server = RelicMcpServer(root=tmp_path)
 
     discovered = server.discover_reports({"case_id": "case-1", "purpose": "usb"})
+    exports = server.discover_report_exports({"case_id": "case-1", "purpose": "usb", "tags": ["usb"]})
 
     assert discovered["summary"]["resource_count"] >= 2
     assert any(item["uri"].startswith("relic://workspace/") for item in discovered["resources"])
     assert any(item["name"] == "opened-from-removable-media" for item in discovered["resources"])
+    assert any(item["name"] == "opened-from-removable-media" for item in exports["resources"])
 
 
 def test_mcp_write_review_packet_creates_resources(tmp_path):
@@ -362,6 +373,17 @@ def test_mcp_artifact_search_and_progress_manifests(tmp_path, monkeypatch):
     manifests = server.list_progress_manifests({})
     assert manifests["summary"]["manifest_count"] == 1
     assert manifests["manifests"][0]["imported_rows"] == 42
+
+    lead = server.lead_search({"case_id": "case-1", "preset": "usb", "query": "powershell"})
+    assert lead["summary"]["result_count"] == 1
+    digest = server.case_activity_digest({"case_id": "case-1"})
+    assert digest["case_id"] == "case-1"
+    packet = server.write_search_packet({"case_id": "case-1", "preset": "usb", "query": "powershell", "title": "USB lead"})
+    listed = server.list_search_packets({"case_id": "case-1"})
+    read = server.read_search_packet({"uri": listed["packets"][0]["json_uri"]})
+    assert Path(packet["json_path"]).exists()
+    assert listed["summary"]["packet_count"] == 1
+    assert read["packet"]["title"] == "USB lead"
 
 
 def test_mcp_tool_reference_and_audit_log(tmp_path):
