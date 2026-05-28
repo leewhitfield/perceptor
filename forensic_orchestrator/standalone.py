@@ -50,6 +50,10 @@ OPTIONAL_TOOLS = [
     ("vshadowinfo", "Volume Shadow Copy discovery"),
     ("vshadowmount", "Volume Shadow Copy mounting"),
     ("usnjrnl-forensic", "USN journal path reconstruction"),
+    ("cryptsetup", "BitLocker unlock primary path"),
+    ("losetup", "loop-device setup for partition-offset BitLocker unlock"),
+    ("dislocker", "BitLocker unlock fallback"),
+    ("bdemount", "libbde BitLocker unlock fallback"),
 ]
 
 PYTHON_TOOL_REPAIRS = {
@@ -67,12 +71,16 @@ SYSTEM_TOOL_REPAIRS = {
     "ewfmount": "sudo apt-get install -y ewf-tools",
     "qemu-img": "sudo apt-get install -y qemu-utils",
     "ntfs-3g": "sudo apt-get install -y ntfs-3g",
+    "cryptsetup": "sudo apt-get install -y cryptsetup",
+    "losetup": "sudo apt-get install -y util-linux",
     "esedbexport": "sudo apt-get install -y libesedb-utils",
     "exiftool": "sudo apt-get install -y exiftool",
     "pdftotext": "sudo apt-get install -y poppler-utils",
     "tesseract": "sudo apt-get install -y tesseract-ocr",
     "vshadowinfo": "sudo apt-get install -y libvshadow-utils",
     "vshadowmount": "sudo apt-get install -y libvshadow-utils",
+    "dislocker": "sudo apt-get install -y dislocker",
+    "bdemount": "sudo apt-get install -y libbde-utils",
 }
 
 LOCAL_ENV_TOOL_NAMES = {"bstrings", "sidr", "MemProcFS", "dotnet", "usnjrnl-forensic"}

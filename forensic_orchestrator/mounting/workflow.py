@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import time
 import uuid
@@ -10,6 +11,8 @@ from forensic_orchestrator.db import Database, utc_now
 from forensic_orchestrator.encryption_preflight import (
     assert_not_encrypted,
     build_fsstat_command,
+    encrypted_filesystem_evidence,
+    is_bitlocker_evidence,
     log_encryption_preflight_inconclusive,
 )
 from forensic_orchestrator.evidence_sources import prepare_mount_source
@@ -19,6 +22,7 @@ from forensic_orchestrator.paths import WorkspacePaths
 from forensic_orchestrator.safety import MountError, PartitionError, ToolError, require_dependency
 
 from .ewf import build_ewfmount_command, validate_ewfmount_available
+from .bitlocker import BitLockerUnlockOptions, cleanup_bitlocker_layers, unlock_bitlocker_volume
 from .partitions import (
     build_mmls_command,
     parse_mmls_output,
@@ -173,13 +177,16 @@ def _run_fsstat(
 def _run_encryption_preflight(
     *,
     db: Database,
+    paths: WorkspacePaths,
     case_id: str,
     image: EvidenceImage,
     source_path: Path,
     source_type: str,
     partition: Partition,
     output_folder: Path,
-) -> None:
+    mount_filesystem: bool,
+    bitlocker_options: BitLockerUnlockOptions | None,
+) -> tuple[Path, str, Partition] | None:
     fsstat_result = _run_fsstat(
         db=db,
         case_id=case_id,
@@ -189,6 +196,33 @@ def _run_encryption_preflight(
         output_folder=output_folder,
         offset_sectors=partition.start_sector,
     )
+    evidence = encrypted_filesystem_evidence(
+        stdout=fsstat_result.stdout,
+        stderr=fsstat_result.stderr,
+        partition_description=partition.description,
+    )
+    if is_bitlocker_evidence(evidence) and bitlocker_options and bitlocker_options.enabled and mount_filesystem:
+        _log_encryption_detected(
+            db=db,
+            case_id=case_id,
+            image=image,
+            source_path=source_path,
+            source_type=source_type,
+            partition=partition,
+            context="partition-preflight",
+            evidence=evidence or {},
+        )
+        unlock = unlock_bitlocker_volume(
+            db=db,
+            paths=paths,
+            case_id=case_id,
+            image=image,
+            source_path=source_path,
+            source_type=source_type,
+            partition=partition,
+            options=bitlocker_options,
+        )
+        return unlock.source_path, unlock.source_type, _unlocked_partition(partition)
     assert_not_encrypted(
         db=db,
         case_id=case_id,
@@ -209,6 +243,57 @@ def _run_encryption_preflight(
             partition=partition,
             fsstat_result=fsstat_result,
         )
+    return None
+
+
+def _log_encryption_detected(
+    *,
+    db: Database,
+    case_id: str,
+    image: EvidenceImage,
+    source_path: Path,
+    source_type: str,
+    partition: Partition | None,
+    context: str,
+    evidence: dict[str, str],
+) -> None:
+    details: dict[str, object] = {
+        **evidence,
+        "source": str(source_path),
+        "source_type": source_type,
+        "context": context,
+        "unlock_attempted": True,
+    }
+    if partition is not None:
+        details.update(
+            {
+                "partition_id": partition.id,
+                "partition_description": partition.description,
+                "offset_sectors": partition.start_sector,
+                "offset_bytes": partition.offset_bytes,
+            }
+        )
+    db.log_activity(
+        case_id=case_id,
+        image_id=image.id,
+        computer_id=image.computer_id,
+        event="image.encryption_detected",
+        level="warning",
+        message=f"Encrypted filesystem detected ({evidence.get('encryption_type', 'unknown')}); attempting configured unlock",
+        details=details,
+    )
+
+
+def _unlocked_partition(partition: Partition) -> Partition:
+    return Partition(
+        id=partition.id,
+        slot=partition.slot,
+        start_sector=0,
+        end_sector=partition.length,
+        length=partition.length,
+        description=f"Unlocked BitLocker volume from {partition.description}",
+        sector_size=partition.sector_size,
+    )
 
 
 def _ensure_ewf_raw_source(
@@ -221,7 +306,7 @@ def _ensure_ewf_raw_source(
     source_type: str,
     use_sudo_mount: bool,
 ) -> tuple[Path, str, bool]:
-    if "direct-e01" not in source_type:
+    if source_type != "direct-e01":
         return source_path, source_type, False
 
     ewf_dir = paths.ewf_mount_dir(case_id)
@@ -265,7 +350,7 @@ def _cleanup_ewfmount_after_failed_mount(
 ) -> None:
     if not cleanup_enabled:
         return
-    if source_type not in {"ewfmount", "ewfmount-volume"}:
+    if source_type not in {"ewfmount", "ewfmount-volume"} and not source_type.startswith(("ewfmount-", "zip-ewfmount-")):
         return
     ewf_dir = paths.ewf_mount_dir(case_id)
     if not ewf_dir.exists():
@@ -354,6 +439,16 @@ def _record_prepared_source(
                 dry_run=False,
             )
         except Exception:
+            if "bitlocker" in source_type:
+                cleanup_bitlocker_layers(
+                    db=db,
+                    paths=paths,
+                    case_id=case_id,
+                    image=image,
+                    cleanup=_latest_bitlocker_cleanup(db, case_id=case_id, image_id=image.id),
+                    use_sudo=use_sudo_mount,
+                    dry_run=False,
+                )
             _cleanup_ewfmount_after_failed_mount(
                 db=db,
                 paths=paths,
@@ -407,6 +502,7 @@ def mount_image(
     dry_run: bool,
     mount_filesystem: bool = False,
     use_sudo_mount: bool = False,
+    bitlocker_options: BitLockerUnlockOptions | None = None,
 ) -> Path | None:
     paths.ensure_case_tree(case_id)
     ewf_dir = paths.ewf_mount_dir(case_id)
@@ -507,6 +603,47 @@ def mount_image(
         source=source_path,
         output_folder=mount_jobs / "fsstat-direct",
     )
+    direct_evidence = encrypted_filesystem_evidence(stdout=fsstat_result.stdout, stderr=fsstat_result.stderr)
+    if is_bitlocker_evidence(direct_evidence) and bitlocker_options and bitlocker_options.enabled and mount_filesystem:
+        volume_partition = Partition(
+            id="volume-ntfs",
+            slot="volume",
+            start_sector=0,
+            end_sector=0,
+            length=0,
+            description="BitLocker volume image without partition table",
+        )
+        _log_encryption_detected(
+            db=db,
+            case_id=case_id,
+            image=image,
+            source_path=source_path,
+            source_type=source_type,
+            partition=volume_partition,
+            context="direct-volume-preflight",
+            evidence=direct_evidence or {},
+        )
+        unlock = unlock_bitlocker_volume(
+            db=db,
+            paths=paths,
+            case_id=case_id,
+            image=image,
+            source_path=source_path,
+            source_type=f"{source_type}-volume",
+            partition=volume_partition,
+            options=bitlocker_options,
+        )
+        return _record_prepared_source(
+            db=db,
+            paths=paths,
+            case_id=case_id,
+            image=image,
+            source_path=unlock.source_path,
+            source_type=unlock.source_type,
+            partition=_unlocked_partition(volume_partition),
+            mount_filesystem=mount_filesystem,
+            use_sudo_mount=use_sudo_mount,
+        )
     assert_not_encrypted(
         db=db,
         case_id=case_id,
@@ -608,6 +745,47 @@ def mount_image(
                 source=source_path,
                 output_folder=mount_jobs / "fsstat-ewfmount",
             )
+            ewf_volume_evidence = encrypted_filesystem_evidence(stdout=fsstat_result.stdout, stderr=fsstat_result.stderr)
+            if is_bitlocker_evidence(ewf_volume_evidence) and bitlocker_options and bitlocker_options.enabled and mount_filesystem:
+                volume_partition = Partition(
+                    id="volume-ntfs",
+                    slot="volume",
+                    start_sector=0,
+                    end_sector=0,
+                    length=0,
+                    description="BitLocker volume image without partition table",
+                )
+                _log_encryption_detected(
+                    db=db,
+                    case_id=case_id,
+                    image=image,
+                    source_path=source_path,
+                    source_type="ewfmount-volume",
+                    partition=volume_partition,
+                    context="ewfmount-volume-preflight",
+                    evidence=ewf_volume_evidence or {},
+                )
+                unlock = unlock_bitlocker_volume(
+                    db=db,
+                    paths=paths,
+                    case_id=case_id,
+                    image=image,
+                    source_path=source_path,
+                    source_type="ewfmount-volume",
+                    partition=volume_partition,
+                    options=bitlocker_options,
+                )
+                return _record_prepared_source(
+                    db=db,
+                    paths=paths,
+                    case_id=case_id,
+                    image=image,
+                    source_path=unlock.source_path,
+                    source_type=unlock.source_type,
+                    partition=_unlocked_partition(volume_partition),
+                    mount_filesystem=mount_filesystem,
+                    use_sudo_mount=use_sudo_mount,
+                )
             assert_not_encrypted(
                 db=db,
                 case_id=case_id,
@@ -648,6 +826,39 @@ def mount_image(
 
     partitions = parse_mmls_output(mmls_result.stdout)
     partition = select_windows_partition(partitions)
+    partition_evidence = encrypted_filesystem_evidence(partition_description=partition.description)
+    if is_bitlocker_evidence(partition_evidence) and bitlocker_options and bitlocker_options.enabled and mount_filesystem:
+        _log_encryption_detected(
+            db=db,
+            case_id=case_id,
+            image=image,
+            source_path=source_path,
+            source_type=source_type,
+            partition=partition,
+            context="partition-description-preflight",
+            evidence=partition_evidence or {},
+        )
+        unlock = unlock_bitlocker_volume(
+            db=db,
+            paths=paths,
+            case_id=case_id,
+            image=image,
+            source_path=source_path,
+            source_type=source_type,
+            partition=partition,
+            options=bitlocker_options,
+        )
+        return _record_prepared_source(
+            db=db,
+            paths=paths,
+            case_id=case_id,
+            image=image,
+            source_path=unlock.source_path,
+            source_type=unlock.source_type,
+            partition=_unlocked_partition(partition),
+            mount_filesystem=mount_filesystem,
+            use_sudo_mount=use_sudo_mount,
+        )
     assert_not_encrypted(
         db=db,
         case_id=case_id,
@@ -657,15 +868,20 @@ def mount_image(
         partition=partition,
         context="partition-description-preflight",
     )
-    _run_encryption_preflight(
+    unlocked = _run_encryption_preflight(
         db=db,
+        paths=paths,
         case_id=case_id,
         image=image,
         source_path=source_path,
         source_type=source_type,
         partition=partition,
         output_folder=mount_jobs / "fsstat-selected-partition",
+        mount_filesystem=mount_filesystem,
+        bitlocker_options=bitlocker_options,
     )
+    if unlocked is not None:
+        source_path, source_type, partition = unlocked
     return _record_prepared_source(
         db=db,
         paths=paths,
@@ -723,7 +939,19 @@ def unmount_image(
             message="Unmounted NTFS volume" if not dry_run else "Dry-run recorded NTFS volume unmount",
             details={"mount_path": str(mount_path), "use_sudo": use_sudo_mount},
         )
-    if mount_row["source_type"] in {"ewfmount", "ewfmount-volume"}:
+    source_type = mount_row["source_type"]
+    if "bitlocker" in source_type:
+        cleanup = _latest_bitlocker_cleanup(db, case_id=case_id, image_id=image.id)
+        cleanup_bitlocker_layers(
+            db=db,
+            paths=paths,
+            case_id=case_id,
+            image=image,
+            cleanup=cleanup,
+            use_sudo=use_sudo_mount,
+            dry_run=dry_run,
+        )
+    if source_type in {"ewfmount", "ewfmount-volume"} or source_type.startswith(("ewfmount-", "zip-ewfmount-")):
         ewf_mount_path = Path(mount_row["ewf_mount_path"])
         if not dry_run and not (ewf_mount_path.exists() and ewf_mount_path.is_mount()):
             db.log_activity(
@@ -762,3 +990,24 @@ def unmount_image(
             details={"mount_path": str(ewf_mount_path), "use_sudo": False},
         )
     return mount_path
+
+
+def _latest_bitlocker_cleanup(db: Database, *, case_id: str, image_id: str) -> list[dict[str, object]]:
+    row = db.conn.execute(
+        """
+        SELECT details_json
+        FROM activity_log
+        WHERE case_id = ? AND image_id = ? AND event = 'image.encryption_unlocked'
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (case_id, image_id),
+    ).fetchone()
+    if row is None:
+        return []
+    try:
+        details = json.loads(row["details_json"] or "{}")
+    except (TypeError, ValueError):
+        return []
+    cleanup = details.get("cleanup") if isinstance(details, dict) else None
+    return cleanup if isinstance(cleanup, list) else []

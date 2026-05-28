@@ -20,6 +20,7 @@ from .db import Database
 from .evidence import add_image, create_case, create_computer
 from .logging_config import configure_logging
 from .mounting.workflow import mount_image, unmount_image
+from .mounting.bitlocker import BitLockerUnlockOptions
 from .mounting.vshadow import discover_vsc_snapshots, extract_vsc_artifact, mount_vsc_snapshot, unmount_vsc
 from .mounting.vsc_prefetch import run_vsc_prefetch_scan
 from .mounting.vsc_registry import run_vsc_registry_scan
@@ -624,6 +625,42 @@ def cleanup_stale_mounts(
         "failed_count": sum(1 for row in results if row.get("status") == "failed"),
         "results": results,
     }
+
+
+def _add_bitlocker_unlock_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--unlock-bitlocker",
+        action="store_true",
+        help="Attempt to unlock BitLocker volumes during read-only filesystem mounting",
+    )
+    parser.add_argument(
+        "--bitlocker-tool",
+        choices=["auto", "cryptsetup", "dislocker", "bdemount"],
+        default="auto",
+        help="BitLocker unlock tool preference; auto tries cryptsetup, then dislocker, then bdemount",
+    )
+    parser.add_argument(
+        "--bitlocker-method",
+        choices=["recovery-key", "password", "bek", "fvek"],
+        default="recovery-key",
+        help="BitLocker protector type to use when the selected tool supports it",
+    )
+    parser.add_argument(
+        "--bitlocker-key-file",
+        help="File containing the recovery key/password/FVEK material. The value is supplied via stdin where supported and is not logged.",
+    )
+
+
+def _bitlocker_options_from_args(args: argparse.Namespace) -> BitLockerUnlockOptions:
+    method = getattr(args, "bitlocker_method", "recovery-key") or "recovery-key"
+    key_file = Path(args.bitlocker_key_file).expanduser() if getattr(args, "bitlocker_key_file", None) else None
+    return BitLockerUnlockOptions(
+        enabled=bool(getattr(args, "unlock_bitlocker", False)),
+        tool=getattr(args, "bitlocker_tool", "auto") or "auto",
+        method=method,
+        key_file=key_file,
+        use_sudo=bool(getattr(args, "use_sudo_mount", False)),
+    )
 
 
 def _readiness_gate_summary(report: dict[str, object], failed: list[dict[str, object]]) -> dict[str, object]:
@@ -1662,6 +1699,7 @@ def build_parser() -> argparse.ArgumentParser:
         dest="use_sudo_mount",
         help="Use non-interactive sudo for the read-only NTFS mount command",
     )
+    _add_bitlocker_unlock_args(image_mount)
     image_unmount = image_sub.add_parser("unmount")
     image_unmount.add_argument("--case", required=True, dest="case_id")
     image_unmount.add_argument("--image", required=True, dest="image_id")
@@ -1992,6 +2030,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Leave the read-only filesystem mount active after processing",
     )
+    _add_bitlocker_unlock_args(process)
     process.add_argument(
         "--include-start-menu-lnk",
         action="store_true",
@@ -3662,6 +3701,7 @@ def run(args: argparse.Namespace) -> int:
                 dry_run=args.dry_run,
                 mount_filesystem=args.filesystem,
                 use_sudo_mount=args.use_sudo_mount,
+                bitlocker_options=_bitlocker_options_from_args(args),
             )
             run_error: Exception | None = None
             memory_profile_result: dict[str, object] | None = None
@@ -4690,6 +4730,7 @@ def run(args: argparse.Namespace) -> int:
                 dry_run=args.dry_run,
                 mount_filesystem=args.filesystem,
                 use_sudo_mount=args.use_sudo_mount,
+                bitlocker_options=_bitlocker_options_from_args(args),
             )
             payload = {
                 "case_id": case.id,

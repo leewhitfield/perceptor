@@ -31,6 +31,9 @@ These should be installed on Linux workers that process Windows E01 evidence:
 - `ewf-tools`: `ewfinfo`, `ewfmount`
 - `qemu-utils`: `qemu-img` for VHD, VHDX, and VMDK conversion into case-local raw images
 - `ntfs-3g`: optional read-only NTFS filesystem mounting
+- `cryptsetup`: preferred BitLocker unlock backend for `--unlock-bitlocker`
+- `util-linux`: provides `losetup`, used to expose partition-offset BitLocker
+  volumes to `cryptsetup`
 - `.NET runtime 9`: required for Eric Zimmerman .NET tools
 - `libesedb-utils`: `esedbexport` for internal WebCache parsing
 - `exiftool`: embedded/internal document, media, and executable metadata
@@ -45,7 +48,7 @@ Ubuntu/Debian example:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y sleuthkit ewf-tools qemu-utils ntfs-3g libesedb-utils exiftool tesseract-ocr
+sudo apt-get install -y sleuthkit ewf-tools qemu-utils ntfs-3g cryptsetup util-linux libesedb-utils exiftool tesseract-ocr
 ```
 
 ## Optional System Tools
@@ -58,6 +61,9 @@ These improve coverage but are not required for every case:
   mounts, manifests, intermediate databases, and comparison reports stay under
   `cases/<case>/vsc-work/`, while supported parsed rows are promoted into the
   main case DuckDB after dedupe.
+- `dislocker`: BitLocker unlock fallback when `cryptsetup --type bitlk` is not
+  available or fails for the evidence.
+- `libbde-utils`: provides `bdemount`, a forensic BitLocker unlock fallback.
 - `sidr`: Windows Search index parsing for supported Windows Search formats. On
   Linux, use a native Rust build (`cargo build --release`) and set
   `SIDR_BIN=/path/to/sidr` when not on `PATH`; do not use the upstream

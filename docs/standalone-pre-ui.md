@@ -62,9 +62,9 @@ uv run forensic-orchestrator --config config.yaml standalone doctor
 Volatility with `uv tool install`, discovers local tool installs under
 `~/tools`, and writes a sourceable env file for values such as `BSTRINGS_BIN`,
 `SIDR_BIN`, `MEMPROCFS_BIN`, and `FORENSIC_ORCHESTRATOR_DOTNET`.
-System packages such as Sleuth Kit, libewf, ntfs-3g, poppler, or tesseract are
-reported with apt commands because they require an interactive privileged
-install on most workstations.
+System packages such as Sleuth Kit, libewf, ntfs-3g, cryptsetup, dislocker,
+libbde-utils, poppler, or tesseract are reported with apt commands because they
+require an interactive privileged install on most workstations.
 
 `install-tool` gives the app a managed way to place third-party tools where the
 resolver expects them. It supports `eztools`, `bstrings`, `sidr`, `memprocfs`,

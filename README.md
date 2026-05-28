@@ -77,10 +77,11 @@ with a separate nested-evidence workflow.
 Before mounting or running a profile, image preparation performs an encryption
 preflight. It checks `fsstat` output for volume images, then checks the selected
 partition description and runs `fsstat -o <offset>` against the selected
-partition for full-disk images. If BitLocker, VeraCrypt, TrueCrypt, LUKS,
-FileVault/APFS encryption, or a similar encrypted filesystem signal is detected,
-processing stops and logs `image.encryption_detected`. Encrypted filesystem
-support is intentionally fail-closed for now.
+partition for full-disk images. If BitLocker is detected and
+`--filesystem --unlock-bitlocker` is supplied, Relic attempts a read-only unlock
+with `cryptsetup`, then `dislocker`, then `bdemount`. Other encrypted filesystem
+signals, or BitLocker without an explicit unlock request, stop processing and
+log `image.encryption_detected`.
 
 When `ewfmount` fallback is used, the app invokes `ewfmount -X allow_other` so
 the mounted `ewf1` raw image remains readable by the worker process. On systems
@@ -199,6 +200,13 @@ forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator process \
 Use `--keep-mounted` when you intentionally want to leave the read-only volume
 mounted for manual inspection. Without it, `process --filesystem` unmounts the
 volume after the profile finishes.
+
+For BitLocker volumes, add `--unlock-bitlocker` to a filesystem mount. The
+default tool mode is `--bitlocker-tool auto`, which tries `cryptsetup`, then
+`dislocker`, then `bdemount`. Use `--bitlocker-method recovery-key|password|bek|fvek`
+and `--bitlocker-key-file PATH` when you want to supply unlock material from a
+file; otherwise Relic prompts after BitLocker detection. Secrets are not written
+to job commands or activity details.
 
 ## Mount Namespace
 
@@ -1340,7 +1348,7 @@ test clusters with self-signed TLS, pass `--insecure`.
 - Direct E01 processing is preferred when the local Sleuth Kit build supports EWF.
 - E01 fallback uses `ewfmount -X allow_other`; the exposed raw image is expected at `mounts/ewf/ewf1`.
 - NTFS volume images are detected with `fsstat`; partition offsets are discovered with `mmls`.
-- Encrypted filesystem indicators stop processing before filesystem mounting or tool execution.
+- Encrypted filesystem indicators stop processing before filesystem mounting or tool execution unless BitLocker unlock is explicitly requested with `--filesystem --unlock-bitlocker`.
 - Files are extracted read-only with Sleuth Kit `fls` and `icat`.
 - Optional filesystem mounts invoke `ntfs-3g` directly with read-only options.
 - Dry-run records jobs and writes command previews, but does not execute mounts or tools.

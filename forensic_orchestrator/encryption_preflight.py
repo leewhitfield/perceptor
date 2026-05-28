@@ -50,6 +50,10 @@ def encrypted_filesystem_evidence(
     return None
 
 
+def is_bitlocker_evidence(evidence: dict[str, str] | None) -> bool:
+    return bool(evidence and evidence.get("encryption_type") == "BitLocker")
+
+
 def assert_not_encrypted(
     *,
     db: Database,
@@ -94,7 +98,7 @@ def assert_not_encrypted(
     )
     raise EncryptedImageError(
         f"Encrypted filesystem detected ({evidence['encryption_type']}) for image {image.id}; "
-        "processing is not supported yet"
+        "processing requires an unlock workflow"
     )
 
 
@@ -142,11 +146,30 @@ def assert_image_not_previously_marked_encrypted(db: Database, *, case_id: str, 
     ).fetchone()
     if row is None:
         return
+    unlocked = db.conn.execute(
+        """
+        SELECT 1
+        FROM activity_log
+        WHERE case_id = ? AND image_id = ? AND event = 'image.encryption_unlocked'
+          AND created_at >= (
+            SELECT created_at
+            FROM activity_log
+            WHERE case_id = ? AND image_id = ? AND event = 'image.encryption_detected'
+            ORDER BY created_at DESC
+            LIMIT 1
+          )
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (case_id, image_id, case_id, image_id),
+    ).fetchone()
+    if unlocked is not None:
+        return
     details = _json_dict(row["details_json"])
     encryption_type = details.get("encryption_type") or "encrypted filesystem"
     raise EncryptedImageError(
         f"Encrypted filesystem previously detected ({encryption_type}) for image {image_id}; "
-        "processing is not supported yet"
+        "processing requires an unlock workflow"
     )
 
 

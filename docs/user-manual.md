@@ -186,6 +186,16 @@ Common processing switches:
 - `--filesystem`: mount the selected NTFS volume read-only before parsing.
 - `--sudo`: use non-interactive sudo for mount/unmount commands.
 - `--keep-mounted`: leave read-only mount active for manual review.
+- `--unlock-bitlocker`: when BitLocker is detected, try a read-only unlock
+  before mounting NTFS. The default tool chain is `cryptsetup`, `dislocker`,
+  then `bdemount`.
+- `--bitlocker-tool auto|cryptsetup|dislocker|bdemount`: choose the unlock tool
+  or fallback chain.
+- `--bitlocker-method recovery-key|password|bek|fvek`: choose the protector
+  type for tools that support it.
+- `--bitlocker-key-file PATH`: read unlock material from a file. Relic supplies
+  the value through stdin where supported and does not log the secret. If no
+  file is supplied, Relic prompts after BitLocker detection.
 - `--workers N`: parallel external tool/output generation slots. Database ingest
   and internal parser writes remain serialized.
 - `--include-memory-profile`: run memory support-file processing after the
@@ -254,6 +264,7 @@ uv run relic --root ROOT computer list --case CASE_ID
 uv run relic --root ROOT image add --case CASE_ID --path /evidence/host.E01 --computer COMPUTER_ID
 uv run relic --root ROOT image mount --case CASE_ID --image IMAGE_ID --filesystem
 uv run relic --root ROOT image mount --case CASE_ID --image IMAGE_ID --filesystem --sudo
+uv run relic --root ROOT image mount --case CASE_ID --image IMAGE_ID --filesystem --unlock-bitlocker --bitlocker-key-file /secure/recovery-key.txt
 uv run relic --root ROOT image unmount --case CASE_ID --image IMAGE_ID
 uv run relic --root ROOT image cleanup-stale-mounts --case CASE_ID
 uv run relic --root ROOT image cleanup-stale-mounts --case CASE_ID --apply --sudo
@@ -263,6 +274,11 @@ Mounting nuances:
 
 - Mounts are read-only.
 - Use `--sudo` only when non-interactive sudo is configured.
+- BitLocker unlock is opt-in and only applies to `--filesystem` mounts. `auto`
+  tries `cryptsetup`, then `dislocker`, then `bdemount`. Use a recovery key,
+  BEK/startup key, password protector, or FVEK material as appropriate for the
+  evidence; a normal Windows login password only works when the volume has a
+  BitLocker password protector.
 - `--keep-mounted` on `process` is useful for manual review.
 - If a session crashes while mounted, use `image cleanup-stale-mounts` first as
   a dry-run, then add `--apply`.
