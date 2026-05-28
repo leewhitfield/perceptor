@@ -166,6 +166,17 @@ forensic-orchestrator --root /path/to/workspace report process-timings \
   --output /path/to/timing-report.md
 ```
 
+Relic can also expose a read-only local MCP stdio server for MCP-capable clients:
+
+```bash
+forensic-orchestrator --root /path/to/workspace mcp serve
+```
+
+The initial MCP surface is intentionally limited to workspace, case, computer,
+image, job, dashboard, progress, health, resume-plan, and timeline inspection.
+Processing, sensitive credential reveal, external AI, and destructive actions
+are not exposed by default.
+
 Report plugins can add read-only SQL reports without changing the built-in
 Python report functions. Specs can be embedded in the YAML passed to `--plugin`,
 placed in a `report_specs/` directory beside that plugin file, or installed

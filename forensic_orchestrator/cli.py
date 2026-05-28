@@ -33,6 +33,7 @@ from .mounting.vsc_recycle import run_vsc_recycle_scan
 from .mounting.vsc_search import run_vsc_windows_search_scan
 from .mounting.vsc_file_history import build_vsc_file_history_report
 from .mounting.vsc_profile import VSC_PROFILES, run_vsc_profile_scan
+from .mcp_server import run_mcp_server
 from .paths import WorkspacePaths
 from .processing_scheduler import ProcessingTask, run_processing_tasks
 from .report_paths import sanitize_report_paths, sanitize_report_text
@@ -1557,6 +1558,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dry-run", action="store_true", help="Record and print commands without executing")
 
     subparsers = parser.add_subparsers(dest="resource", required=True)
+
+    mcp = subparsers.add_parser("mcp")
+    mcp_sub = mcp.add_subparsers(dest="action", required=True)
+    mcp_serve = mcp_sub.add_parser("serve")
+    mcp_serve.add_argument("--allow-processing", action="store_true", help="Expose processing tools when implemented")
+    mcp_serve.add_argument("--allow-sensitive", action="store_true", help="Expose sensitive tools when implemented")
+    mcp_serve.add_argument("--allow-external-ai", action="store_true", help="Expose external-AI tools when implemented")
 
     case = subparsers.add_parser("case")
     case_sub = case.add_subparsers(dest="action", required=True)
@@ -3438,6 +3446,13 @@ def run(args: argparse.Namespace) -> int:
     config = load_config(root=args.root, plugins=args.plugin, config_path=args.config)
     paths = WorkspacePaths(config.root)
     registry = ToolRegistry.from_files(config.plugin_paths)
+    if args.resource == "mcp" and args.action == "serve":
+        return run_mcp_server(
+            root=paths.root,
+            allow_processing=args.allow_processing,
+            allow_sensitive=args.allow_sensitive,
+            allow_external_ai=args.allow_external_ai,
+        )
     if args.resource == "report-bundle" and args.action == "coverage":
         report = parser_coverage_report(Path(args.path) if args.path else None)
         write_report_output(

@@ -604,6 +604,52 @@ Key standalone switches:
 - `benchmark --baseline PATH`: compare current timing report to a saved
   baseline.
 
+## MCP Server
+
+Relic can run as a local MCP stdio server so an MCP-capable client can inspect a
+workspace and call approved Relic tools.
+
+Start the server against one workspace root:
+
+```bash
+uv run relic --root ROOT mcp serve
+```
+
+For clients that use a JSON command configuration, use the same command and args:
+
+```json
+{
+  "command": "uv",
+  "args": ["run", "relic", "--root", "ROOT", "mcp", "serve"]
+}
+```
+
+The initial MCP surface is read-only. It exposes workspace, case, computer,
+image, job, progress, health, resume-plan, dashboard, and timeline inspection.
+Processing, sensitive credential reveal, external AI, and destructive actions
+are intentionally not exposed by default.
+
+Reserved opt-in switches:
+
+- `--allow-processing`: permits processing tools when they are added.
+- `--allow-sensitive`: permits sensitive tools when they are added.
+- `--allow-external-ai`: permits external-AI tools when they are added.
+
+Initial read-only MCP tools:
+
+- `relic_workspace_summary`
+- `relic_list_cases`
+- `relic_case_summary`
+- `relic_case_dashboard`
+- `relic_processing_progress`
+- `relic_resume_plan`
+- `relic_workspace_health`
+- `relic_list_computers`
+- `relic_list_images`
+- `relic_list_jobs`
+- `relic_get_job`
+- `relic_timeline`
+
 ## Report Commands
 
 Reports usually share these switches:
