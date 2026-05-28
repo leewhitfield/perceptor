@@ -34,6 +34,8 @@ def test_mcp_initialize_and_list_tools(tmp_path):
     assert "relic_query_suspicious_executions" in names
     assert "relic_query_external_storage" in names
     assert "relic_case_review" in names
+    assert "relic_list_mcp_jobs" in names
+    assert "relic_mcp_tool_reference" in names
     assert any(tool["annotations"]["readOnlyHint"] is False for tool in tools)
 
 
@@ -183,6 +185,8 @@ def test_mcp_job_persists_and_output_can_be_read(tmp_path):
     assert persisted["mcp_job_id"] == job_id
     output = reloaded.get_mcp_job_output({"mcp_job_id": job_id})
     assert output["json"] == {"ok": True}
+    listed = reloaded.list_mcp_jobs({})
+    assert listed["jobs"][0]["mcp_job_id"] == job_id
 
 
 def test_mcp_cancel_job_requires_processing_and_records_cancelled(tmp_path):
@@ -209,10 +213,45 @@ def test_mcp_resources_list_and_read_workspace_reports(tmp_path):
     report.write_text("# Summary\n", encoding="utf-8")
     server = RelicMcpServer(root=tmp_path)
 
-    listed = server.handle_message({"jsonrpc": "2.0", "id": 1, "method": "resources/list", "params": {}})
+    listed = server.handle_message({"jsonrpc": "2.0", "id": 1, "method": "resources/list", "params": {"case_id": "case-1", "kind": "report"}})
     resources = listed["result"]["resources"]
     uri = resources[0]["uri"]
     assert uri.startswith("relic://workspace/")
 
     read = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "resources/read", "params": {"uri": uri}})
     assert read["result"]["contents"][0]["text"] == "# Summary\n"
+
+
+def test_mcp_tool_reference_and_audit_log(tmp_path):
+    server = RelicMcpServer(root=tmp_path)
+    response = server.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "relic_mcp_tool_reference", "arguments": {}},
+        }
+    )
+
+    tools = response["result"]["structuredContent"]["tools"]
+    assert any(tool["name"] == "relic_process_image" and tool["permission"] == "processing" for tool in tools)
+    audit = tmp_path / "mcp-jobs" / "audit.jsonl"
+    assert audit.exists()
+    row = json.loads(audit.read_text(encoding="utf-8").splitlines()[0])
+    assert row["tool"] == "relic_mcp_tool_reference"
+
+
+def test_mcp_process_image_dry_run_command(tmp_path):
+    server = RelicMcpServer(root=tmp_path, allow_processing=True)
+    captured = {}
+
+    def fake_start(name, command):
+        captured["name"] = name
+        captured["command"] = command
+        return {"mcp_job_id": "job-1", "name": name, "command": command}
+
+    server._start_mcp_process = fake_start
+    started = server.process_image({"path": str(tmp_path / "disk.E01"), "dry_run": True, "profile": "windows-basic"})
+
+    assert "--dry-run" in started["command"]
+    assert captured["name"] == "process_image"

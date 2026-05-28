@@ -669,7 +669,9 @@ Read-only MCP tools:
 - `relic_query_communications`
 - `relic_case_review`
 - `relic_get_mcp_job`
+- `relic_list_mcp_jobs`
 - `relic_get_mcp_job_output`
+- `relic_mcp_tool_reference`
 
 Safe-write MCP tools:
 
@@ -688,14 +690,24 @@ Processing tools start background subprocesses and return an `mcp_job_id`, PID,
 command, and stdout/stderr paths under `ROOT/mcp-jobs/`. MCP job metadata is
 persisted in `ROOT/mcp-jobs/index.json`, so a new MCP server process can still
 inspect jobs launched earlier.
+Add `dry_run: true` to `relic_process_image` arguments to launch the normal
+Relic process command in CLI dry-run mode before real processing.
 
 Operational MCP tools:
 
 - `relic_get_mcp_job`: poll persisted MCP subprocess state.
+- `relic_list_mcp_jobs`: list persisted MCP subprocess jobs, optionally filtered
+  by status.
 - `relic_get_mcp_job_output`: read stdout/stderr tails and parsed JSON stdout
   when available.
 - `relic_cancel_mcp_job`: terminate a running MCP-launched subprocess; requires
   `--allow-processing`.
+- `relic_mcp_tool_reference`: export MCP tool names, permissions, schemas, and
+  annotations.
+
+MCP audit entries are written to `ROOT/mcp-jobs/audit.jsonl`. Each entry records
+the tool name, permission tier, status, timestamp, argument keys, and bounded
+case/path context.
 
 Use `relic_list_jobs` or `relic_processing_progress` for Relic's internal
 parser/tool job records created by the subprocess itself.
@@ -704,6 +716,8 @@ MCP resources:
 
 - `resources/list` exposes text report, manifest, log, and MCP job files under
   the workspace root.
+- `resources/list` accepts optional `case_id`, `kind`, and `limit` parameters.
+  Supported kinds are `report`, `manifest`, `log`, and `mcp-job`.
 - `resources/read` reads those files through `relic://workspace/...` URIs.
 - Individual resource reads are limited to 1 MB to avoid accidentally returning
   large evidence or bulk artifact files.

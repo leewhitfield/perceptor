@@ -63,6 +63,7 @@ SUPPORTED_MCP_REPORTS = {
     "usb-timeline",
 }
 MCP_JOB_INDEX = "index.json"
+MCP_AUDIT_LOG = "audit.jsonl"
 MCP_RESOURCE_MAX_BYTES = 1_000_000
 
 
@@ -160,8 +161,10 @@ class RelicMcpServer:
         self._require_permission(tool.permission)
         try:
             result = tool.handler(arguments)
+            self._audit_tool_call(tool, arguments, status="ok", error=None)
             return _tool_result(result)
         except Exception as exc:
+            self._audit_tool_call(tool, arguments, status="error", error=str(exc))
             return _tool_result({"error": str(exc), "tool": name}, is_error=True)
 
     def _build_tools(self) -> list[McpTool]:
@@ -505,6 +508,14 @@ class RelicMcpServer:
                 annotations=read_only,
             ),
             McpTool(
+                name="relic_mcp_tool_reference",
+                title="Relic MCP Tool Reference",
+                description="Return MCP tool names, permission tiers, annotations, and schemas.",
+                input_schema=_object_schema({}),
+                handler=self.mcp_tool_reference,
+                annotations=read_only,
+            ),
+            McpTool(
                 name="relic_generate_report",
                 title="Relic Generate Report",
                 description="Generate a supported report through the Relic CLI and return stdout/stderr metadata.",
@@ -545,6 +556,19 @@ class RelicMcpServer:
                 description="Return persisted status for a long-running process launched by MCP.",
                 input_schema=_object_schema({"mcp_job_id": _string_schema("MCP job ID returned by a processing tool.")}, required=["mcp_job_id"]),
                 handler=self.get_mcp_job,
+                annotations=read_only,
+            ),
+            McpTool(
+                name="relic_list_mcp_jobs",
+                title="List Relic MCP Jobs",
+                description="List persisted MCP-launched subprocess jobs.",
+                input_schema=_object_schema(
+                    {
+                        "limit": _integer_schema("Maximum jobs to return.", default=100, minimum=1, maximum=1000),
+                        "status": _string_schema("Optional status filter."),
+                    }
+                ),
+                handler=self.list_mcp_jobs,
                 annotations=read_only,
             ),
             McpTool(
@@ -627,6 +651,7 @@ class RelicMcpServer:
                         "accept_duplicate": {"type": "boolean", "default": False},
                         "replace_existing": {"type": "boolean", "default": False},
                         "workers": _integer_schema("Worker slots.", default=1, minimum=1, maximum=64),
+                        "dry_run": {"type": "boolean", "default": False},
                     },
                     required=["path"],
                 ),
@@ -659,18 +684,24 @@ class RelicMcpServer:
 
     def _list_resources(self, params: dict[str, Any]) -> dict[str, Any]:
         limit = _bounded_int(params, "limit", default=200, minimum=1, maximum=1000)
+        case_id = _optional_text(params, "case_id")
+        kind = _optional_text(params, "kind")
         resources = []
-        for path in _resource_candidates(self.paths.root):
+        root_resolved = self.paths.root.resolve()
+        for path in _resource_candidates(self.paths.root, case_id=case_id, kind=kind):
             if len(resources) >= limit:
                 break
-            stat = path.stat()
-            relative = path.relative_to(self.paths.root)
-            mime_type = mimetypes.guess_type(path.name)[0] or "text/plain"
+            resolved = path.resolve()
+            if resolved != root_resolved and root_resolved not in resolved.parents:
+                continue
+            stat = resolved.stat()
+            relative = resolved.relative_to(root_resolved)
+            mime_type = mimetypes.guess_type(resolved.name)[0] or "text/plain"
             resources.append(
                 {
                     "uri": _resource_uri(relative),
                     "name": str(relative),
-                    "title": path.name,
+                    "title": resolved.name,
                     "mimeType": mime_type,
                     "description": f"Relic workspace file ({stat.st_size} bytes)",
                 }
@@ -1040,6 +1071,21 @@ class RelicMcpServer:
         ]
         return {"reports": reports, "total_returned": len(reports)}
 
+    def mcp_tool_reference(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        tools = []
+        for tool in self.tools.values():
+            tools.append(
+                {
+                    "name": tool.name,
+                    "title": tool.title,
+                    "description": tool.description,
+                    "permission": tool.permission,
+                    "annotations": tool.annotations,
+                    "input_schema": tool.input_schema,
+                }
+            )
+        return {"tools": tools, "total_returned": len(tools), "permissions": self._permissions()}
+
     def generate_report(self, arguments: dict[str, Any]) -> dict[str, Any]:
         report_name = _required(arguments, "report_name")
         if report_name not in SUPPORTED_MCP_REPORTS:
@@ -1071,15 +1117,31 @@ class RelicMcpServer:
             purpose = str(arguments.get("purpose") or "full")
             if purpose not in {"full", "usb", "cloud", "execution", "memory", "triage"}:
                 raise ValueError("purpose must be one of: full, usb, cloud, execution, memory, triage")
-            return write_case_report_bundle(
+            result = write_case_report_bundle(
                 db,
                 _required(arguments, "case_id"),
                 output_dir,
                 limit=_limit(arguments, default=100),
                 purpose=purpose,
             )
+            result["resource_uris"] = _resource_uris_for_path(self.paths.root, output_dir)
+            return result
         finally:
             db.close()
+
+    def list_mcp_jobs(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        rows = []
+        status_filter = _optional_text(arguments, "status")
+        for job in self._mcp_jobs.values():
+            self._refresh_mcp_job(job)
+            public = _public_job(job)
+            if status_filter and public.get("status") != status_filter:
+                continue
+            rows.append(public)
+        rows.sort(key=lambda row: str(row.get("started_at") or ""), reverse=True)
+        self._save_mcp_job_index()
+        limit = _limit(arguments, default=100)
+        return {"jobs": rows[:limit], "total_returned": min(len(rows), limit), "total_matching": len(rows)}
 
     def get_mcp_job(self, arguments: dict[str, Any]) -> dict[str, Any]:
         mcp_job_id = _required(arguments, "mcp_job_id")
@@ -1156,7 +1218,7 @@ class RelicMcpServer:
         return self._start_mcp_process("import_report_bundle", command)
 
     def process_image(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        command = self._base_cli_command() + [
+        command = self._base_cli_command(dry_run=bool(arguments.get("dry_run") or False)) + [
             "process",
             "--path",
             str(Path(_required(arguments, "path")).expanduser()),
@@ -1198,10 +1260,12 @@ class RelicMcpServer:
     def _registry(self) -> ToolRegistry:
         return ToolRegistry.from_files(self.plugin_paths)
 
-    def _base_cli_command(self) -> list[str]:
+    def _base_cli_command(self, *, dry_run: bool = False) -> list[str]:
         command = [sys.executable, "-m", "forensic_orchestrator.cli", "--root", str(self.paths.root)]
         for plugin_path in self.plugin_paths:
             command.extend(["--plugin", str(plugin_path)])
+        if dry_run:
+            command.append("--dry-run")
         return command
 
     def _run_cli_capture(self, command: list[str]) -> dict[str, Any]:
@@ -1252,6 +1316,25 @@ class RelicMcpServer:
         self._mcp_jobs[job_id] = job
         self._save_mcp_job_index()
         return _public_job(job)
+
+    def _audit_tool_call(self, tool: McpTool, arguments: dict[str, Any], *, status: str, error: str | None) -> None:
+        row = {
+            "timestamp": _now(),
+            "tool": tool.name,
+            "permission": tool.permission,
+            "status": status,
+            "error": error,
+            "argument_keys": sorted(arguments.keys()),
+            "case_id": arguments.get("case_id"),
+            "image_id": arguments.get("image_id"),
+            "path": _summarize_path(arguments.get("path")),
+        }
+        audit_path = self._mcp_jobs_dir() / MCP_AUDIT_LOG
+        try:
+            with audit_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(row, default=str, separators=(",", ":")) + "\n")
+        except OSError:
+            return
 
     def _refresh_mcp_job(self, job: dict[str, Any]) -> None:
         process = job.get("process")
@@ -1493,24 +1576,56 @@ def _workspace_path(root: Path, value: str) -> Path:
     return resolved
 
 
-def _resource_candidates(root: Path) -> list[Path]:
+def _resource_candidates(root: Path, *, case_id: str | None = None, kind: str | None = None) -> list[Path]:
     candidates: list[Path] = []
     if not root.exists():
         return candidates
-    patterns = (
-        "cases/*/reports/**/*",
-        "cases/*/outputs/reports/**/*",
-        "cases/*/outputs/**/*manifest*.json",
-        "cases/*/outputs/**/*manifest*.csv",
-        "cases/*/logs/**/*",
-        "mcp-jobs/**/*",
-    )
+    case_glob = _safe_resource_case_glob(case_id)
+    kind_patterns = {
+        "report": (f"cases/{case_glob}/reports/**/*", f"cases/{case_glob}/outputs/reports/**/*"),
+        "manifest": (f"cases/{case_glob}/outputs/**/*manifest*.json", f"cases/{case_glob}/outputs/**/*manifest*.csv"),
+        "log": (f"cases/{case_glob}/logs/**/*",),
+        "mcp-job": ("mcp-jobs/**/*",),
+    }
+    if kind:
+        if kind not in kind_patterns:
+            raise ValueError(f"Unsupported resource kind: {kind}")
+        patterns = kind_patterns[kind]
+    else:
+        patterns = tuple(pattern for values in kind_patterns.values() for pattern in values)
     for pattern in patterns:
         for path in root.glob(pattern):
             if path.is_file() and _is_text_resource(path):
                 candidates.append(path)
     candidates.sort(key=lambda item: item.stat().st_mtime, reverse=True)
     return candidates
+
+
+def _safe_resource_case_glob(case_id: str | None) -> str:
+    if not case_id:
+        return "*"
+    if case_id in {".", ".."} or any(char in case_id for char in "\\/[]{}*?"):
+        raise ValueError("case_id is not a valid resource filter")
+    return case_id
+
+
+def _resource_uris_for_path(root: Path, path: Path) -> list[str]:
+    if not path.exists():
+        return []
+    if path.is_file():
+        files = [path]
+    else:
+        files = [item for item in path.rglob("*") if item.is_file()]
+    uris = []
+    root_resolved = root.resolve()
+    for file_path in files:
+        if not _is_text_resource(file_path):
+            continue
+        resolved = file_path.resolve()
+        if resolved != root_resolved and root_resolved not in resolved.parents:
+            continue
+        uris.append(_resource_uri(resolved.relative_to(root_resolved)))
+    return sorted(uris)
 
 
 def _is_text_resource(path: Path) -> bool:
@@ -1539,6 +1654,13 @@ def _extend_optional(command: list[str], option: str, value: object) -> None:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _summarize_path(value: object) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    return text if len(text) <= 500 else "..." + text[-497:]
 
 
 def _case_rows(db: Database, limit: int) -> list[dict[str, Any]]:
