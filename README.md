@@ -2,6 +2,9 @@
 
 CLI-first starter repo for lawful forensic processing orchestration.
 
+Operator manual: see `docs/user-manual.md` for setup, workflows, command
+switches, and reporting guidance.
+
 This MVP proves the initial workflow:
 
 1. Register a Windows E01 forensic image.

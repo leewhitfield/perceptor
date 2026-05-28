@@ -3,6 +3,9 @@
 This is the pre-UI operator surface for running the project as a standalone CLI
 tool.
 
+For the full operator manual, including common workflows, command switches, and
+report families, see [Relic User Manual](user-manual.md).
+
 ## Install
 
 ```bash
