@@ -181,7 +181,9 @@ MCP tool calls are audited in `ROOT/mcp-jobs/audit.jsonl`, and MCP resources
 expose generated text reports, manifests, logs, and job output through
 `relic://workspace/...` URIs. Processing calls can be launched with
 `dry_run: true` to exercise the same command path without starting the actual
-processing work.
+processing work. MCP also exposes case evidence-map, readiness, report
+discovery, and job-progress tools so clients can navigate cases without knowing
+Relic's internal folder layout.
 
 Report plugins can add read-only SQL reports without changing the built-in
 Python report functions. Specs can be embedded in the YAML passed to `--plugin`,

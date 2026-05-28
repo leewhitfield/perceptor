@@ -703,9 +703,17 @@ def parser_coverage_report(report_root: Path | None = None) -> dict[str, Any]:
     mapped = [row for row in rows if row.get("status") == "mapped"]
     unmapped = [row for row in rows if row.get("status") == "unmapped"]
     tool_counts: dict[str, int] = {}
+    computer_counts: dict[str, dict[str, int]] = {}
     for row in mapped:
         tool = str(row.get("tool_name") or "")
         tool_counts[tool] = tool_counts.get(tool, 0) + 1
+    for row in rows:
+        label = str(row.get("computer_label") or "")
+        bucket = computer_counts.setdefault(label, {"csv_count": 0, "mapped_count": 0, "unmapped_count": 0, "row_count": 0})
+        bucket["csv_count"] += 1
+        bucket["mapped_count"] += 1 if row.get("status") == "mapped" else 0
+        bucket["unmapped_count"] += 1 if row.get("status") == "unmapped" else 0
+        bucket["row_count"] += int(row.get("row_count") or 0)
     return {
         "report_root": str(report_root) if report_root else "",
         "summary": {
@@ -713,7 +721,13 @@ def parser_coverage_report(report_root: Path | None = None) -> dict[str, Any]:
             "csv_count": len(rows),
             "mapped_count": len(mapped),
             "unmapped_count": len(unmapped),
+            "mapped_row_count": sum(int(row.get("row_count") or 0) for row in mapped),
+            "unmapped_row_count": sum(int(row.get("row_count") or 0) for row in unmapped),
             "tool_counts": [{"tool_name": key, "count": value} for key, value in sorted(tool_counts.items())],
+            "computer_counts": [
+                {"computer_label": key, **value}
+                for key, value in sorted(computer_counts.items())
+            ],
         },
         "routes": PARSER_ROUTE_SUMMARY,
         "files": rows,
@@ -811,7 +825,14 @@ def _dir_parser_coverage(root: Path) -> list[dict[str, Any]]:
     rows = []
     for path in sorted(root.rglob("*.csv")):
         candidate = infer_report_candidate(path)
-        rows.append(_coverage_row(path=str(path), relative_path=_display_path(path, root), candidate=candidate))
+        rows.append(
+            _coverage_row(
+                path=str(path),
+                relative_path=_display_path(path, root),
+                candidate=candidate,
+                row_count=_csv_data_row_count(path),
+            )
+        )
     return rows
 
 
@@ -825,7 +846,14 @@ def _zip_parser_coverage(zip_path: Path) -> list[dict[str, Any]]:
             if candidate is None:
                 header = _zip_csv_header(archive, info)
                 candidate = _candidate_from_header(Path(info.filename), header)
-            rows.append(_coverage_row(path=f"{zip_path}!{info.filename}", relative_path=info.filename, candidate=candidate))
+            rows.append(
+                _coverage_row(
+                    path=f"{zip_path}!{info.filename}",
+                    relative_path=info.filename,
+                    candidate=candidate,
+                    row_count=_zip_csv_data_row_count(archive, info),
+                )
+            )
     return rows
 
 
@@ -871,14 +899,66 @@ def _zip_csv_header(archive: zipfile.ZipFile, info: zipfile.ZipInfo) -> set[str]
     return set()
 
 
-def _coverage_row(*, path: str, relative_path: str, candidate: ReportCandidate | None) -> dict[str, Any]:
+def _coverage_row(*, path: str, relative_path: str, candidate: ReportCandidate | None, row_count: int | None = None) -> dict[str, Any]:
+    first_part = relative_path.replace("\\", "/").split("/", 1)[0] if relative_path else ""
     return {
         "path": path,
         "relative_path": relative_path,
+        "computer_label": first_part,
         "status": "mapped" if candidate else "unmapped",
         "tool_name": candidate.tool_name if candidate else "",
+        "row_count": row_count,
         "note": candidate.note if candidate else "No safe importer mapping for this CSV",
+        "recommendation": _coverage_recommendation(relative_path, candidate),
     }
+
+
+def _csv_data_row_count(path: Path) -> int | None:
+    try:
+        with path.open("r", encoding="utf-8-sig", errors="replace", newline="") as handle:
+            return _data_row_count_from_lines(handle)
+    except OSError:
+        return None
+
+
+def _zip_csv_data_row_count(archive: zipfile.ZipFile, info: zipfile.ZipInfo) -> int | None:
+    try:
+        with archive.open(info) as handle:
+            text = handle.read().decode("utf-8-sig", errors="replace")
+        return _data_row_count_from_lines(text.splitlines())
+    except (OSError, UnicodeDecodeError, zipfile.BadZipFile):
+        return None
+
+
+def _data_row_count_from_lines(lines: Any) -> int:
+    reader = csv.reader(line for line in lines if str(line).strip())
+    header_seen = False
+    count = 0
+    for row in reader:
+        if not row:
+            continue
+        if not header_seen:
+            if len(row) < 2:
+                continue
+            header_seen = True
+            continue
+        count += 1
+    return count
+
+
+def _coverage_recommendation(relative_path: str, candidate: ReportCandidate | None) -> str:
+    if candidate:
+        return f"Import with {candidate.tool_name}."
+    lower = relative_path.casefold()
+    if "usb" in lower or "usp" in lower:
+        return "Review as a USB/storage export and add a parser route if headers are stable."
+    if "lnk" in lower or "jumplist" in lower:
+        return "Review as shortcut activity and map to LECmd/JLECmd if fields align."
+    if "event" in lower or "evtx" in lower:
+        return "Review as event-log output and map to EvtxECmd if event fields are present."
+    if "registry" in lower or "recmd" in lower:
+        return "Review as registry output and map to RECmd or RegistryArtifactParser."
+    return "Review manually; no safe importer mapping is configured yet."
 
 
 def _run_post_import_rebuilds(db: Database, *, case_id: str, image_id: str) -> list[str]:

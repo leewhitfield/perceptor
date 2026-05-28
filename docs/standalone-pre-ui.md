@@ -38,6 +38,7 @@ Command-line `--root` and `--plugin` values override the file.
 uv run forensic-orchestrator --config config.yaml standalone doctor
 uv run forensic-orchestrator --config config.yaml standalone doctor --case CASE_ID --profile windows-full
 uv run forensic-orchestrator --config config.yaml standalone doctor --smoke
+uv run forensic-orchestrator --config config.yaml standalone smoke-regression
 ```
 
 The doctor checks Python/OS support, workspace availability, schema migration,
@@ -111,6 +112,9 @@ uv run forensic-orchestrator --config config.yaml standalone tool-status
   a timing baseline; use `--baseline benchmark.json` on a later run to compare.
 - `standalone sample-fixture --output sample-live-case.zip`: create a tiny
   multi-computer report bundle for smoke tests and demonstrations.
+- `standalone smoke-regression`: run doctor smoke, generate/import the sample
+  live-case fixture, write a triage report bundle, validate report output, and
+  verify MCP tool listing in an isolated temporary workspace.
 - `standalone backlog`: the pre-UI standalone hardening checklist.
 
 ## Operational Defaults

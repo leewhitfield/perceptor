@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,7 +34,7 @@ from .mounting.vsc_recycle import run_vsc_recycle_scan
 from .mounting.vsc_search import run_vsc_windows_search_scan
 from .mounting.vsc_file_history import build_vsc_file_history_report
 from .mounting.vsc_profile import VSC_PROFILES, run_vsc_profile_scan
-from .mcp_server import run_mcp_server
+from .mcp_server import RelicMcpServer, run_mcp_server
 from .paths import WorkspacePaths
 from .processing_scheduler import ProcessingTask, run_processing_tasks
 from .report_paths import sanitize_report_paths, sanitize_report_text
@@ -1118,13 +1119,35 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
         index_lines.append(f"- [{item['title']}]({Path(str(item['path'])).name})")
     index_path = output_dir / "index.md"
     write_text_output("\n".join(index_lines).rstrip() + "\n", str(index_path))
+    report_index_path = output_dir / "report-index.json"
+    report_index = {
+        "case_id": case_id,
+        "purpose": purpose,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "output_dir": str(output_dir),
+        "index_markdown": str(index_path),
+        "reports": [
+            {
+                **item,
+                "filename": Path(str(item["path"])).name,
+                "relative_path": Path(str(item["path"])).name,
+            }
+            for item in written
+        ],
+        "summary": {
+            "report_count": len(written),
+            "total_written": len(written) + 2,
+        },
+    }
+    write_text_output(json.dumps(sanitize_report_paths(report_index), indent=2, default=str), str(report_index_path))
     return {
         "case_id": case_id,
         "purpose": purpose,
         "output_dir": str(output_dir),
         "index": str(index_path),
+        "report_index": str(report_index_path),
         "reports": written,
-        "total_written": len(written) + 1,
+        "total_written": len(written) + 2,
     }
 
 
@@ -3381,6 +3404,9 @@ def build_parser() -> argparse.ArgumentParser:
     standalone_fixture = standalone_sub.add_parser("sample-fixture")
     standalone_fixture.add_argument("--output", required=True, help="Write a tiny multi-computer report bundle zip")
     standalone_fixture.add_argument("--format", choices=["json", "table"], default="json")
+    standalone_smoke_regression = standalone_sub.add_parser("smoke-regression")
+    standalone_smoke_regression.add_argument("--format", choices=["json", "table"], default="json")
+    standalone_smoke_regression.add_argument("--output")
     standalone_backlog = standalone_sub.add_parser("backlog")
     standalone_backlog.add_argument("--format", choices=["json", "table", "csv"], default="json")
     standalone_backlog.add_argument("--output")
@@ -3441,6 +3467,73 @@ def _bulk_import_payload(result, *, written_reports: dict[str, object] | None = 
     return payload
 
 
+def standalone_smoke_regression_report(registry: ToolRegistry, plugin_paths: list[Path]) -> dict[str, object]:
+    with tempfile.TemporaryDirectory(prefix="relic-standalone-smoke-") as tmp:
+        root = Path(tmp) / "workspace"
+        paths = WorkspacePaths(root)
+        paths.ensure_root()
+        db = Database(paths.db_path())
+        checks: list[dict[str, object]] = []
+        details: dict[str, object] = {}
+        try:
+            doctor = doctor_report(db, paths, registry, smoke=True)
+            checks.append({"name": "doctor_smoke", "passed": bool((doctor.get("smoke") or {}).get("passed")), "details": (doctor.get("smoke") or {}).get("summary")})
+            details["doctor_summary"] = doctor.get("summary")
+
+            fixture_path = Path(tmp) / "sample-live-case.zip"
+            fixture = create_sample_report_bundle_fixture(fixture_path)
+            checks.append({"name": "sample_fixture_created", "passed": fixture_path.exists(), "details": fixture})
+
+            messages: list[str] = []
+            imported = import_report_bundle_many(
+                db=db,
+                paths=paths,
+                report_root=fixture_path,
+                accept_duplicate=True,
+                progress=messages.append,
+            )
+            checks.append(
+                {
+                    "name": "sample_fixture_imported",
+                    "passed": imported.imported_computers == 2 and imported.failed_files == 0,
+                    "details": {
+                        "case_id": imported.case_id,
+                        "imported_computers": imported.imported_computers,
+                        "imported_files": imported.imported_files,
+                        "imported_rows": imported.imported_rows,
+                        "failed_files": imported.failed_files,
+                    },
+                }
+            )
+
+            bundle_dir = paths.case_dir(imported.case_id) / "reports" / "standalone-smoke-bundle"
+            bundle = write_case_report_bundle(db, imported.case_id, bundle_dir, limit=25, purpose="triage")
+            checks.append({"name": "report_bundle_written", "passed": Path(str(bundle["index"])).exists() and Path(str(bundle["report_index"])).exists(), "details": {"total_written": bundle["total_written"]}})
+
+            validation = report_output_quality_report(bundle_dir)
+            failed_outputs = [row for row in validation.get("files", []) if row.get("status") != "ok"]
+            checks.append({"name": "report_bundle_validated", "passed": not failed_outputs, "details": validation.get("summary")})
+
+            mcp_tools = RelicMcpServer(root=paths.root, plugin_paths=plugin_paths).handle_message({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+            tool_count = len((((mcp_tools or {}).get("result") or {}).get("tools") or []))
+            checks.append({"name": "mcp_tool_listing", "passed": tool_count > 0, "details": {"tool_count": tool_count}})
+
+            return {
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "passed": all(bool(row["passed"]) for row in checks),
+                "summary": {
+                    "check_count": len(checks),
+                    "passed": sum(1 for row in checks if row["passed"]),
+                    "failed": sum(1 for row in checks if not row["passed"]),
+                },
+                "checks": checks,
+                "details": details,
+                "progress_messages": messages[-25:],
+            }
+        finally:
+            db.close()
+
+
 def run(args: argparse.Namespace) -> int:
     configure_logging()
     config = load_config(root=args.root, plugins=args.plugin, config_path=args.config)
@@ -3462,7 +3555,7 @@ def run(args: argparse.Namespace) -> int:
             args.format,
             args.output,
             title="Report bundle parser coverage",
-            columns=["status", "tool_name", "relative_path", "match", "note"],
+            columns=["status", "computer_label", "tool_name", "row_count", "relative_path", "note", "recommendation"],
         )
         return 0
     if args.resource == "ingest" and args.action == "triage-zip" and args.preflight:
@@ -3486,6 +3579,7 @@ def run(args: argparse.Namespace) -> int:
         "profile-catalog",
         "artifact-capability",
         "sample-fixture",
+        "smoke-regression",
         "backlog",
     }:
         if args.action == "version":
@@ -3544,6 +3638,13 @@ def run(args: argparse.Namespace) -> int:
             report = create_sample_report_bundle_fixture(Path(args.output))
             write_report_output(report, [report], args.format, None, title="Sample report bundle fixture", columns=["path", "computer_count", "csv_count", "member_count"])
             return 0
+        if args.action == "smoke-regression":
+            report = standalone_smoke_regression_report(registry, config.plugin_paths)
+            if args.format == "table":
+                write_report_output(report, report["checks"], "table", args.output, title="Standalone smoke regression", columns=["name", "passed", "details"])
+            else:
+                write_text_output(json.dumps(report, indent=2, default=str), args.output)
+            return 0 if report["passed"] else 1
         if args.action == "backlog":
             report = standalone_backlog_report()
             write_report_output(report, report["items"], args.format, args.output, title="Standalone pre-UI backlog", columns=["number", "status", "item"])

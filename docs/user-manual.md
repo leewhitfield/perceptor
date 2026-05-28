@@ -81,6 +81,7 @@ uv sync
 uv run relic standalone version
 uv run relic standalone dependencies --format table
 uv run relic standalone doctor --smoke --format table
+uv run relic standalone smoke-regression --format table
 ```
 
 Repair or install managed third-party tools:
@@ -596,6 +597,9 @@ Key standalone switches:
 - `doctor --case CASE_ID --profile PROFILE`: include case/profile readiness.
 - `doctor --repair`: attempt safe dependency repairs before checking.
 - `doctor --smoke`: run a tiny isolated DB/report smoke test.
+- `smoke-regression`: run the standalone proof path: doctor smoke, sample
+  live-case fixture import, report bundle generation, output validation, and
+  MCP tool listing.
 - `dependencies --env-file PATH`: load tool env vars before checking.
 - `repair-dependencies --required-only`: skip optional dependencies.
 - `install-tool TOOL --force`: force reinstall/rebuild.
@@ -641,6 +645,9 @@ Read-only MCP tools:
 - `relic_workspace_summary`
 - `relic_list_cases`
 - `relic_case_summary`
+- `relic_case_evidence_map`
+- `relic_case_readiness`
+- `relic_discover_reports`
 - `relic_case_dashboard`
 - `relic_processing_progress`
 - `relic_resume_plan`
@@ -671,6 +678,7 @@ Read-only MCP tools:
 - `relic_get_mcp_job`
 - `relic_list_mcp_jobs`
 - `relic_get_mcp_job_output`
+- `relic_get_mcp_job_progress`
 - `relic_mcp_tool_reference`
 
 Safe-write MCP tools:
@@ -700,10 +708,22 @@ Operational MCP tools:
   by status.
 - `relic_get_mcp_job_output`: read stdout/stderr tails and parsed JSON stdout
   when available.
+- `relic_get_mcp_job_progress`: parse structured progress from MCP-launched
+  job output, including bulk report ZIP computer counts where available.
 - `relic_cancel_mcp_job`: terminate a running MCP-launched subprocess; requires
   `--allow-processing`.
 - `relic_mcp_tool_reference`: export MCP tool names, permissions, schemas, and
   annotations.
+
+Case-navigation MCP tools:
+
+- `relic_case_evidence_map`: returns computers, images, image metadata, report
+  resources, memory-source activity, job status, and processing progress in one
+  response.
+- `relic_case_readiness`: combines doctor, workspace health, processing
+  readiness, processing progress, and resume-plan signals.
+- `relic_discover_reports`: returns report bundle files as
+  `relic://workspace/...` resource URIs, optionally filtered by bundle purpose.
 
 MCP audit entries are written to `ROOT/mcp-jobs/audit.jsonl`. Each entry records
 the tool name, permission tier, status, timestamp, argument keys, and bounded
@@ -737,6 +757,10 @@ Not every report supports every format or filter. Use:
 uv run relic report REPORT_NAME --help
 ```
 
+`report-bundle coverage --path PATH` reports parser coverage for live-response
+CSV folders/zips with computer attribution, mapped parser, row count, and a
+recommendation for unmapped files.
+
 Operational reports:
 
 ```bash
@@ -759,6 +783,10 @@ Purpose bundles:
 - `memory`: memory artifacts, credentials, memory/disk correlations, crash
   dumps.
 - `full`: all bundle reports.
+
+Each bundle writes `index.md` for human navigation, `report-index.json` for
+programmatic/UI/MCP navigation, and `bundle-quality.json` with report and CSV
+export row/column counts.
 
 High-value report families:
 

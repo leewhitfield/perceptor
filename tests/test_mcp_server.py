@@ -34,7 +34,11 @@ def test_mcp_initialize_and_list_tools(tmp_path):
     assert "relic_query_suspicious_executions" in names
     assert "relic_query_external_storage" in names
     assert "relic_case_review" in names
+    assert "relic_case_evidence_map" in names
+    assert "relic_case_readiness" in names
+    assert "relic_discover_reports" in names
     assert "relic_list_mcp_jobs" in names
+    assert "relic_get_mcp_job_progress" in names
     assert "relic_mcp_tool_reference" in names
     assert any(tool["annotations"]["readOnlyHint"] is False for tool in tools)
 
@@ -71,6 +75,18 @@ def test_mcp_workspace_and_case_summary_tools(tmp_path):
     case_summary = summary["result"]["structuredContent"]
     assert case_summary["counts"]["computers"] == 1
     assert case_summary["images"][0]["id"] == "image-1"
+
+    evidence_map = server.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {"name": "relic_case_evidence_map", "arguments": {"case_id": "case-1"}},
+        }
+    )
+    mapped = evidence_map["result"]["structuredContent"]
+    assert mapped["summary"]["computer_count"] == 1
+    assert mapped["images"][0]["computer_label"] == "HOST01"
 
 
 def test_mcp_stdio_server_roundtrip(tmp_path):
@@ -189,6 +205,30 @@ def test_mcp_job_persists_and_output_can_be_read(tmp_path):
     assert listed["jobs"][0]["mcp_job_id"] == job_id
 
 
+def test_mcp_job_progress_parses_report_bundle_many_lines(tmp_path):
+    server = RelicMcpServer(root=tmp_path)
+    started = server._start_mcp_process(
+        "progress",
+        [
+            sys.executable,
+            "-c",
+            "import sys; print('report-bundle-many progress computers_done=2 computers_total=3 imported_computers=2 rows=42 elapsed=1s', file=sys.stderr)",
+        ],
+    )
+    job_id = started["mcp_job_id"]
+    for _ in range(50):
+        status = server.get_mcp_job({"mcp_job_id": job_id})
+        if status["status"] != "running":
+            break
+        time.sleep(0.05)
+
+    progress = server.get_mcp_job_progress({"mcp_job_id": job_id})
+
+    assert progress["summary"]["computers_done"] == 2
+    assert progress["summary"]["computer_count"] == 3
+    assert progress["summary"]["rows"] == 42
+
+
 def test_mcp_cancel_job_requires_processing_and_records_cancelled(tmp_path):
     server = RelicMcpServer(root=tmp_path, allow_processing=True)
     started = server._start_mcp_process("sleep", [sys.executable, "-c", "import time; time.sleep(30)"])
@@ -220,6 +260,20 @@ def test_mcp_resources_list_and_read_workspace_reports(tmp_path):
 
     read = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "resources/read", "params": {"uri": uri}})
     assert read["result"]["contents"][0]["text"] == "# Summary\n"
+
+
+def test_mcp_discover_reports_returns_resource_uris(tmp_path):
+    report = tmp_path / "cases" / "case-1" / "reports" / "usb-bundle" / "opened-from-removable-media.md"
+    report.parent.mkdir(parents=True)
+    report.write_text("# Opened\n", encoding="utf-8")
+    (report.parent / "report-index.json").write_text('{"reports":[]}', encoding="utf-8")
+    server = RelicMcpServer(root=tmp_path)
+
+    discovered = server.discover_reports({"case_id": "case-1", "purpose": "usb"})
+
+    assert discovered["summary"]["resource_count"] >= 2
+    assert any(item["uri"].startswith("relic://workspace/") for item in discovered["resources"])
+    assert any(item["name"] == "opened-from-removable-media" for item in discovered["resources"])
 
 
 def test_mcp_tool_reference_and_audit_log(tmp_path):

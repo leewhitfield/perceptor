@@ -230,7 +230,13 @@ def test_parser_coverage_and_unmapped_import_report(tmp_path, monkeypatch):
     assert coverage["summary"]["csv_count"] == 5
     assert coverage["summary"]["mapped_count"] == 4
     assert coverage["summary"]["unmapped_count"] == 1
+    assert coverage["summary"]["computer_counts"][0]["computer_label"] == "ComputerA"
+    assert coverage["summary"]["computer_counts"][0]["row_count"] == 5
     assert {row["tool_name"] for row in coverage["files"] if row["status"] == "mapped"} >= {"MFTECmd", "UalParser", "RdpCacheParser", "SrumECmd"}
+    unknown = next(row for row in coverage["files"] if row["status"] == "unmapped")
+    assert unknown["computer_label"] == "ComputerA"
+    assert unknown["row_count"] == 1
+    assert "Review manually" in unknown["recommendation"]
     preflight = report_bundle_preflight_report(tmp_path / "input")
     assert preflight["summary"]["ready"] is True
     assert preflight["summary"]["computer_count"] == 1
@@ -261,6 +267,9 @@ def test_execution_purpose_bundle_writes_execution_reports_and_quality(tmp_path,
     assert {"execution", "execution-correlation", "program-provenance", "bundle-quality"} <= names
     assert "memory-credentials" not in names
     assert (tmp_path / "execution-bundle" / "bundle-quality.json").exists()
+    report_index = tmp_path / "execution-bundle" / "report-index.json"
+    assert report_index.exists()
+    assert json.loads(report_index.read_text(encoding="utf-8"))["summary"]["report_count"] == len(bundle["reports"])
 
 
 def test_report_bundle_import_many_warns_when_distinct_rebuild_hits_disk_full(tmp_path, monkeypatch):

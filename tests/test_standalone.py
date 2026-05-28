@@ -4,6 +4,7 @@ import zipfile
 
 from forensic_orchestrator import standalone as standalone_module
 from forensic_orchestrator.config import load_config
+from forensic_orchestrator.cli import standalone_smoke_regression_report
 from forensic_orchestrator.db import Database
 from forensic_orchestrator.paths import WorkspacePaths
 from forensic_orchestrator.standalone import (
@@ -96,6 +97,9 @@ def test_standalone_reports_cover_profiles_schema_jobs_and_backups(tmp_path):
     assert Path(fixture["path"]).exists()
     assert fixture["computer_count"] == 2
     assert standalone_backlog_report()["summary"]["item_count"] == 28
+    smoke_regression = standalone_smoke_regression_report(registry, [Path("forensic_orchestrator/plugins/eztools.yaml")])
+    assert smoke_regression["passed"] is True
+    assert {row["name"] for row in smoke_regression["checks"]} >= {"sample_fixture_imported", "report_bundle_written", "mcp_tool_listing"}
 
 
 def test_repair_dependencies_writes_local_tool_env(monkeypatch, tmp_path):

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import mimetypes
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -34,6 +35,7 @@ from .reports import (
     processing_progress_report,
     registry_activity_report,
     resume_plan_report,
+    processing_readiness_report,
     shortcuts_report,
     suspicious_executions_report,
     timeline_report,
@@ -194,6 +196,44 @@ class RelicMcpServer:
                 description="Return computers, images, parsed row counts, artifacts, jobs, warnings, and errors for a case.",
                 input_schema=_object_schema({"case_id": _string_schema("Relic case ID.")}, required=["case_id"]),
                 handler=self.case_summary,
+                annotations=read_only,
+            ),
+            McpTool(
+                name="relic_case_evidence_map",
+                title="Relic Case Evidence Map",
+                description="Return case computers, images, report resources, memory sources, jobs, and processing state in one response.",
+                input_schema=_case_limit_schema(default=100),
+                handler=self.case_evidence_map,
+                annotations=read_only,
+            ),
+            McpTool(
+                name="relic_case_readiness",
+                title="Relic Case Readiness",
+                description="Return MCP-friendly doctor, workspace health, processing readiness, progress, and resume signals.",
+                input_schema=_object_schema(
+                    {
+                        "case_id": _string_schema("Optional Relic case ID."),
+                        "profile": _string_schema("Optional profile name."),
+                        "limit": _integer_schema("Maximum rows to return.", default=50, minimum=1, maximum=1000),
+                        "smoke": {"type": "boolean", "default": False},
+                    }
+                ),
+                handler=self.case_readiness,
+                annotations=read_only,
+            ),
+            McpTool(
+                name="relic_discover_reports",
+                title="Relic Discover Reports",
+                description="Discover report bundle files and resource URIs for a case, optionally narrowed by purpose.",
+                input_schema=_object_schema(
+                    {
+                        "case_id": _string_schema("Relic case ID."),
+                        "purpose": {"type": "string", "enum": ["full", "usb", "cloud", "execution", "memory", "triage"], "default": "full"},
+                        "limit": _integer_schema("Maximum resources to return.", default=250, minimum=1, maximum=1000),
+                    },
+                    required=["case_id"],
+                ),
+                handler=self.discover_reports,
                 annotations=read_only,
             ),
             McpTool(
@@ -586,6 +626,20 @@ class RelicMcpServer:
                 annotations=read_only,
             ),
             McpTool(
+                name="relic_get_mcp_job_progress",
+                title="Get Relic MCP Job Progress",
+                description="Return structured progress signals parsed from MCP-launched job output.",
+                input_schema=_object_schema(
+                    {
+                        "mcp_job_id": _string_schema("MCP job ID returned by a processing tool."),
+                        "max_bytes": _integer_schema("Maximum bytes to scan from stderr/stdout.", default=50000, minimum=1000, maximum=200000),
+                    },
+                    required=["mcp_job_id"],
+                ),
+                handler=self.get_mcp_job_progress,
+                annotations=read_only,
+            ),
+            McpTool(
                 name="relic_cancel_mcp_job",
                 title="Cancel Relic MCP Job",
                 description="Cancel a running MCP-launched subprocess. Requires --allow-processing.",
@@ -764,6 +818,135 @@ class RelicMcpServer:
             return case_summary_report(db, _required(arguments, "case_id"))
         finally:
             db.close()
+
+    def case_evidence_map(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        case_id = _required(arguments, "case_id")
+        limit = _limit(arguments, default=100)
+        db = self._db()
+        try:
+            case = db.get_case(case_id)
+            computers = [
+                dict(row)
+                for row in db.conn.execute(
+                    "SELECT id, label, hostname, notes, created_at FROM computers WHERE case_id = ? ORDER BY label, created_at",
+                    (case_id,),
+                ).fetchall()
+            ]
+            images = [
+                dict(row)
+                for row in db.conn.execute(
+                    """
+                    SELECT images.id, images.computer_id, computers.label AS computer_label,
+                           images.path, images.created_at
+                    FROM images
+                    LEFT JOIN computers ON computers.id = images.computer_id
+                    WHERE images.case_id = ?
+                    ORDER BY computers.label, images.created_at
+                    """,
+                    (case_id,),
+                ).fetchall()
+            ]
+            for image in images:
+                image["metadata"] = [
+                    dict(row)
+                    for row in db.conn.execute(
+                        """
+                        SELECT source, key, value
+                        FROM image_metadata
+                        WHERE case_id = ? AND image_id = ?
+                        ORDER BY source, key
+                        LIMIT ?
+                        """,
+                        (case_id, image["id"], limit),
+                    ).fetchall()
+                ]
+            jobs = job_status_report(db, case_id=case_id, limit=limit)
+            progress = processing_progress_report(db, case_id, limit=min(limit, 100))
+            memory_sources = _memory_source_rows(db, case_id, limit=limit)
+            report_resources = _case_report_resources(self.paths.root, case_id, purpose=None, limit=limit)
+            return {
+                "case_id": case_id,
+                "case": {"id": case.id, "root": str(case.root), "created_at": case.created_at},
+                "summary": {
+                    "computer_count": len(computers),
+                    "image_count": len(images),
+                    "job_count_returned": len(jobs.get("jobs") or []),
+                    "report_resource_count": len(report_resources),
+                    "memory_source_count": len(memory_sources),
+                    "active_timing_count": (progress.get("summary") or {}).get("active_timing_count", 0),
+                    "failed_timing_count": (progress.get("summary") or {}).get("failed_timing_count", 0),
+                },
+                "computers": computers,
+                "images": images,
+                "jobs": jobs,
+                "processing": progress,
+                "memory_sources": memory_sources,
+                "report_resources": report_resources,
+            }
+        finally:
+            db.close()
+
+    def case_readiness(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        case_id = str(arguments.get("case_id") or "").strip() or None
+        profile = str(arguments.get("profile") or "").strip() or None
+        limit = _limit(arguments, default=50)
+        db = self._db()
+        try:
+            doctor = doctor_report(
+                db,
+                self.paths,
+                self._registry(),
+                case_id=case_id,
+                profile=profile,
+                smoke=bool(arguments.get("smoke") or False),
+                repair=False,
+            )
+            health = workspace_health_report(db, case_id, min_free_gb=10.0)
+            readiness = processing_readiness_report(db, case_id, limit=limit, profile=profile) if case_id else None
+            progress = processing_progress_report(db, case_id, limit=limit) if case_id else None
+            resume = resume_plan_report(db, case_id, limit=limit) if case_id else None
+            failed_checks = [row for row in doctor.get("checks", []) if not row.get("passed")]
+            decisions = (resume or {}).get("decisions") or []
+            return {
+                "case_id": case_id,
+                "profile": profile,
+                "ready": bool(doctor.get("passed")) and not _has_required_action(readiness) and not failed_checks,
+                "summary": {
+                    "doctor_passed": bool(doctor.get("passed")),
+                    "failed_check_count": len(failed_checks),
+                    "required_needs_action_count": ((readiness or {}).get("summary") or {}).get("required_needs_action_count", 0),
+                    "active_timing_count": ((progress or {}).get("summary") or {}).get("active_timing_count", 0),
+                    "failed_timing_count": ((progress or {}).get("summary") or {}).get("failed_timing_count", 0),
+                    "resume_decision_count": len(decisions),
+                },
+                "doctor": doctor,
+                "workspace_health": health,
+                "processing_readiness": readiness,
+                "processing_progress": progress,
+                "resume_plan": resume,
+            }
+        finally:
+            db.close()
+
+    def discover_reports(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        case_id = _required(arguments, "case_id")
+        purpose = str(arguments.get("purpose") or "full")
+        if purpose not in {"full", "usb", "cloud", "execution", "memory", "triage"}:
+            raise ValueError("purpose must be one of: full, usb, cloud, execution, memory, triage")
+        limit = _limit(arguments, default=250)
+        resources = _case_report_resources(self.paths.root, case_id, purpose=purpose, limit=limit)
+        indexes = [item for item in resources if Path(str(item.get("relative_path") or "")).name in {"index.md", "report-index.json"}]
+        return {
+            "case_id": case_id,
+            "purpose": purpose,
+            "summary": {
+                "resource_count": len(resources),
+                "index_count": len(indexes),
+                "expected_report_names": sorted(_expected_report_names(purpose)),
+            },
+            "resources": resources,
+            "indexes": indexes,
+        }
 
     def case_dashboard(self, arguments: dict[str, Any]) -> dict[str, Any]:
         db = self._db()
@@ -1162,6 +1345,21 @@ class RelicMcpServer:
         stderr_tail = _read_tail(Path(str(job["stderr_path"])), max_bytes)
         parsed_stdout = _json_value(stdout_tail, None) if stdout_tail.strip().startswith(("{", "[")) else None
         return {**_public_job(job), "stdout_tail": stdout_tail, "stderr_tail": stderr_tail, "json": parsed_stdout}
+
+    def get_mcp_job_progress(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        job = self._mcp_jobs.get(_required(arguments, "mcp_job_id"))
+        if job is None:
+            raise ValueError("MCP job not found")
+        max_bytes = _bounded_int(arguments, "max_bytes", default=50_000, minimum=1_000, maximum=200_000)
+        self._refresh_mcp_job(job)
+        text = "\n".join(
+            [
+                _read_tail(Path(str(job["stderr_path"])), max_bytes),
+                _read_tail(Path(str(job["stdout_path"])), max_bytes),
+            ]
+        )
+        progress = _parse_mcp_progress(text)
+        return {**_public_job(job), **progress}
 
     def cancel_mcp_job(self, arguments: dict[str, Any]) -> dict[str, Any]:
         job = self._mcp_jobs.get(_required(arguments, "mcp_job_id"))
@@ -1599,6 +1797,158 @@ def _resource_candidates(root: Path, *, case_id: str | None = None, kind: str | 
                 candidates.append(path)
     candidates.sort(key=lambda item: item.stat().st_mtime, reverse=True)
     return candidates
+
+
+def _case_report_resources(root: Path, case_id: str, *, purpose: str | None, limit: int) -> list[dict[str, Any]]:
+    expected = _expected_report_names(purpose or "full")
+    rows: list[dict[str, Any]] = []
+    root_resolved = root.resolve()
+    for path in _resource_candidates(root, case_id=case_id, kind="report"):
+        resolved = path.resolve()
+        if resolved != root_resolved and root_resolved not in resolved.parents:
+            continue
+        if expected and _report_resource_name(resolved) not in expected and resolved.name not in {"index.md", "report-index.json", "bundle-quality.json"}:
+            continue
+        stat = resolved.stat()
+        relative = resolved.relative_to(root_resolved)
+        rows.append(
+            {
+                "uri": _resource_uri(relative),
+                "relative_path": str(relative),
+                "name": _report_resource_name(resolved),
+                "filename": resolved.name,
+                "format": resolved.suffix.casefold().lstrip("."),
+                "size_bytes": stat.st_size,
+                "modified_at": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
+            }
+        )
+        if len(rows) >= limit:
+            break
+    return rows
+
+
+def _report_resource_name(path: Path) -> str:
+    if path.name == "index.md":
+        return "index"
+    if path.name == "report-index.json":
+        return "report-index"
+    if path.suffix.casefold() in {".md", ".json", ".csv"}:
+        return path.stem
+    return path.name
+
+
+def _expected_report_names(purpose: str) -> set[str]:
+    common = {
+        "executive-summary",
+        "case-overview",
+        "evidence-gaps",
+        "processing-decisions",
+        "processing-readiness",
+        "regression-smoke",
+        "bundle-quality",
+        "index",
+        "report-index",
+    }
+    groups = {
+        "triage": common | {"suspicious-executions", "user-intent", "file-movement-identity", "opened-from-removable-media", "opened-from-cloud-storage", "cloud-mounts", "cloud-removable-overlap", "artifact-processing-status"},
+        "usb": common | {"shellbag-external-storage", "file-movement-identity", "opened-from-removable-media", "cloud-removable-overlap", "shortcut-droid-changes", "shortcut-object-tracking", "usn-lifecycle"},
+        "cloud": common | {"cloud-artifacts", "opened-from-cloud-storage", "cloud-mounts", "cloud-removable-overlap", "user-intent"},
+        "execution": common | {"execution", "execution-correlation", "suspicious-executions", "program-provenance", "remote-access", "user-intent"},
+        "memory": common | {"memory-analysis", "memory-credentials", "memory-disk-correlations", "memory-support-files", "combined-artifacts", "crash-dump-analysis", "memory-artifacts"},
+    }
+    if purpose == "full":
+        return set()
+    return groups.get(purpose, groups["triage"])
+
+
+def _memory_source_rows(db: Database, case_id: str, *, limit: int) -> list[dict[str, Any]]:
+    rows = []
+    for row in db.conn.execute(
+        """
+        SELECT activity_log.created_at, activity_log.computer_id, computers.label AS computer_label,
+               activity_log.image_id, activity_log.event, activity_log.message, activity_log.details_json
+        FROM activity_log
+        LEFT JOIN computers ON computers.id = activity_log.computer_id
+        WHERE activity_log.case_id = ?
+          AND (
+            activity_log.event LIKE 'memory.%'
+            OR activity_log.event LIKE 'crash%'
+            OR activity_log.message LIKE '%memory%'
+            OR activity_log.message LIKE '%pagefile%'
+            OR activity_log.message LIKE '%hiberfil%'
+            OR activity_log.message LIKE '%swapfile%'
+            OR activity_log.message LIKE '%dump%'
+          )
+        ORDER BY activity_log.created_at DESC
+        LIMIT ?
+        """,
+        (case_id, limit),
+    ).fetchall():
+        item = dict(row)
+        item["details"] = _json_value(item.pop("details_json"), {})
+        rows.append(item)
+    return rows
+
+
+def _has_required_action(readiness: dict[str, Any] | None) -> bool:
+    if not readiness:
+        return False
+    summary = readiness.get("summary") if isinstance(readiness.get("summary"), dict) else {}
+    return int(summary.get("required_needs_action_count") or summary.get("needs_action_count") or 0) > 0
+
+
+def _parse_mcp_progress(text: str) -> dict[str, Any]:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    parsed: list[dict[str, Any]] = []
+    latest: dict[str, Any] = {}
+    for line in lines:
+        row = _parse_progress_line(line)
+        if row:
+            parsed.append(row)
+            latest.update({key: value for key, value in row.items() if key != "raw"})
+    return {
+        "summary": {
+            "progress_line_count": len(parsed),
+            "last_progress": parsed[-1] if parsed else None,
+            **latest,
+        },
+        "progress": parsed[-100:],
+    }
+
+
+def _parse_progress_line(line: str) -> dict[str, Any] | None:
+    if "report-bundle-many" not in line and "report-bundle csv" not in line and "profile " not in line:
+        return None
+    row: dict[str, Any] = {"raw": line}
+    if "report-bundle-many" in line:
+        row["workflow"] = "report_bundle_many"
+        match = re.search(r"computer (?P<current>\d+)/(?P<total>\d+)", line)
+        if match:
+            row["current_computer_index"] = int(match.group("current"))
+            row["computer_count"] = int(match.group("total"))
+        progress = re.search(r"computers_done=(?P<done>\d+) computers_total=(?P<total>\d+)", line)
+        if progress:
+            row["computers_done"] = int(progress.group("done"))
+            row["computer_count"] = int(progress.group("total"))
+        label = re.search(r"label=(?P<label>[^\s]+)", line)
+        if label:
+            row["computer_label"] = label.group("label")
+        for key in ("imported_computers", "rows", "skipped", "failed", "files"):
+            match = re.search(rf"{key}=(?P<value>\d+)", line)
+            if match:
+                row[key] = int(match.group("value"))
+    elif "report-bundle csv" in line:
+        row["workflow"] = "report_bundle"
+        match = re.search(r"csv (?P<current>\d+)/(?P<total>\d+)", line)
+        if match:
+            row["current_csv_index"] = int(match.group("current"))
+            row["csv_count"] = int(match.group("total"))
+        tool = re.search(r"tool=(?P<tool>[^\s]+)", line)
+        if tool:
+            row["tool_name"] = tool.group("tool")
+    elif "profile " in line:
+        row["workflow"] = "profile"
+    return row
 
 
 def _safe_resource_case_glob(case_id: str | None) -> str:

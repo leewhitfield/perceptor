@@ -29906,7 +29906,8 @@ def rebuild_derived_timeline_events(
     if image_id:
         where.append("image_id = ?")
         params.append(image_id)
-    db.conn.execute(f"DELETE FROM timeline_events WHERE {' AND '.join(where)}", params)
+    if not _sqlite_object_is_view(db, "timeline_events"):
+        db.conn.execute(f"DELETE FROM timeline_events WHERE {' AND '.join(where)}", params)
     if db.analytics is not None:
         db.analytics.delete_where("timeline_events", " AND ".join(where), params)
     events = [
@@ -29915,6 +29916,14 @@ def rebuild_derived_timeline_events(
     ]
     db.insert_timeline_events(events)
     return {"case_id": case_id, "image_id": image_id, "deleted_source_tool": DERIVED_TIMELINE_TOOL, "inserted": len(events)}
+
+
+def _sqlite_object_is_view(db: Database, name: str) -> bool:
+    row = db.conn.execute(
+        "SELECT type FROM sqlite_master WHERE name = ?",
+        (name,),
+    ).fetchone()
+    return bool(row and row["type"] == "view")
 
 
 def derived_timeline_events(db: Database, case_id: str, *, limit: int = 5000) -> list[dict[str, Any]]:
