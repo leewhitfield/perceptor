@@ -90,6 +90,7 @@ from forensic_orchestrator.reports import (
     processing_decision_markdown,
     processing_decision_report,
     processing_progress_report,
+    case_dashboard_report,
     processing_readiness_markdown,
     processing_readiness_report,
     resume_plan_report,
@@ -553,11 +554,14 @@ def test_workspace_health_progress_and_resume_plan_reports(tmp_path):
 
     health = workspace_health_report(db, case.id, min_free_gb=0.01)
     progress = processing_progress_report(db, case.id)
+    dashboard = case_dashboard_report(db, case.id)
     resume = resume_plan_report(db, case.id)
 
     assert health["summary"]["path_count"] >= 3
     assert any(row["label"] == "case_root" for row in health["paths"])
     assert progress["summary"]["failed_timing_count"] == 1
+    assert dashboard["summary"]["failed_timing_count"] == 1
+    assert dashboard["summary"]["computers"] == 1
     assert resume["summary"]["failed_timing_count"] == 1
     assert any("rebuild-postprocess" in command for command in resume["recommended_commands"])
 

@@ -100,6 +100,7 @@ from .reports import (
     communication_groups_report,
     communications_report,
     case_summary_report,
+    case_dashboard_report,
     case_executive_summary_markdown,
     case_executive_summary_report,
     case_overview_markdown,
@@ -317,6 +318,7 @@ from .standalone import (
     artifact_capability_report,
     backup_case_databases,
     benchmark_report,
+    create_sample_report_bundle_fixture,
     dependency_report,
     doctor_report,
     install_third_party_tool,
@@ -427,6 +429,84 @@ def _csv_fieldnames(rows: list[dict[str, object]]) -> list[str]:
                 fieldnames.append(key)
                 seen.add(key)
     return fieldnames
+
+
+def report_output_quality_report(path: Path) -> dict[str, object]:
+    root = path.resolve()
+    if not root.exists():
+        raise OrchestratorError(f"Report output path does not exist: {root}")
+    files = [root] if root.is_file() else sorted(item for item in root.rglob("*") if item.is_file())
+    rows: list[dict[str, object]] = []
+    for file_path in files:
+        suffix = file_path.suffix.casefold()
+        status = "ok"
+        issue = ""
+        row: dict[str, object] = {
+            "path": str(file_path),
+            "relative_path": str(file_path.relative_to(root)) if root.is_dir() else file_path.name,
+            "format": suffix.lstrip(".") or "unknown",
+            "status": status,
+        }
+        try:
+            if suffix == ".csv":
+                with file_path.open("r", encoding="utf-8-sig", errors="replace", newline="") as handle:
+                    reader = csv.reader(handle)
+                    header = next(reader, [])
+                    data_rows = sum(1 for _ in reader)
+                duplicates = sorted({column for column in header if column and header.count(column) > 1})
+                empty = sum(1 for column in header if not column)
+                if duplicates or empty:
+                    status = "warning"
+                    issue = "duplicate_or_empty_header"
+                row.update(
+                    {
+                        "row_count": data_rows,
+                        "column_count": len(header),
+                        "duplicate_columns": ",".join(duplicates),
+                        "empty_header_count": empty,
+                    }
+                )
+            elif suffix == ".json":
+                json.loads(file_path.read_text(encoding="utf-8"))
+                row.update({"row_count": "", "column_count": ""})
+            elif suffix in {".md", ".txt"}:
+                text = file_path.read_text(encoding="utf-8", errors="replace")
+                if not text.strip():
+                    status = "warning"
+                    issue = "empty_text_report"
+                row.update({"line_count": len(text.splitlines())})
+            else:
+                status = "skipped"
+                issue = "unsupported_extension"
+        except Exception as exc:
+            status = "error"
+            issue = str(exc)
+        row["status"] = status
+        row["issue"] = issue
+        rows.append(row)
+    return {
+        "path": str(root),
+        "summary": {
+            "file_count": len(rows),
+            "ok_count": sum(1 for row in rows if row.get("status") == "ok"),
+            "warning_count": sum(1 for row in rows if row.get("status") == "warning"),
+            "error_count": sum(1 for row in rows if row.get("status") == "error"),
+            "skipped_count": sum(1 for row in rows if row.get("status") == "skipped"),
+        },
+        "files": rows,
+    }
+
+
+def _enforce_zip_uncompressed_limit(report: dict[str, object], max_gb: float) -> None:
+    if max_gb <= 0:
+        return
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    uncompressed_gb = float(summary.get("uncompressed_gb") or 0)
+    if uncompressed_gb > max_gb:
+        raise OrchestratorError(
+            f"Refusing to process zip: uncompressed size {uncompressed_gb} GB exceeds limit {max_gb} GB. "
+            "Raise --max-uncompressed-gb after confirming workspace free space."
+        )
 
 
 def _flatten_row(row: dict[str, object]) -> dict[str, object]:
@@ -1993,6 +2073,7 @@ def build_parser() -> argparse.ArgumentParser:
     ingest_zip.add_argument("--preflight", action="store_true", help="Validate computer folders and parser coverage without importing")
     ingest_zip.add_argument("--format", choices=["json", "table", "csv"], default="json", help="Output format for --preflight")
     ingest_zip.add_argument("--output", help="Output path for --preflight")
+    ingest_zip.add_argument("--max-uncompressed-gb", type=float, default=0.0, help="Abort zip import/preflight if total uncompressed size exceeds this value; 0 disables")
     ingest_zip.add_argument("--resume-from-manifest", help="Bulk import manifest from an interrupted or previous import; completed computer folders are skipped")
     ingest_zip.add_argument("--accept-duplicate", action="store_true")
     ingest_zip.add_argument("--no-progress", action="store_true")
@@ -2005,6 +2086,15 @@ def build_parser() -> argparse.ArgumentParser:
     report_sub = report.add_subparsers(dest="action", required=True)
     report_summary = report_sub.add_parser("summary")
     report_summary.add_argument("--case", required=True, dest="case_id")
+    report_dashboard = report_sub.add_parser("dashboard")
+    report_dashboard.add_argument("--case", required=True, dest="case_id")
+    report_dashboard.add_argument("--limit", type=int, default=25)
+    report_dashboard.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    report_dashboard.add_argument("--output")
+    report_validate_outputs = report_sub.add_parser("validate-outputs")
+    report_validate_outputs.add_argument("--path", required=True)
+    report_validate_outputs.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    report_validate_outputs.add_argument("--output")
     report_specs = report_sub.add_parser("specs")
     report_specs.add_argument("--format", choices=["json", "table", "csv"], default="table")
     report_specs.add_argument("--output")
@@ -3237,8 +3327,13 @@ def build_parser() -> argparse.ArgumentParser:
     standalone_benchmark = standalone_sub.add_parser("benchmark")
     standalone_benchmark.add_argument("--case", required=True, dest="case_id")
     standalone_benchmark.add_argument("--limit", type=int, default=100)
+    standalone_benchmark.add_argument("--baseline", help="Compare against a previously written benchmark JSON")
+    standalone_benchmark.add_argument("--write-baseline", help="Write the current benchmark JSON for future comparison")
     standalone_benchmark.add_argument("--format", choices=["json", "table", "csv"], default="json")
     standalone_benchmark.add_argument("--output")
+    standalone_fixture = standalone_sub.add_parser("sample-fixture")
+    standalone_fixture.add_argument("--output", required=True, help="Write a tiny multi-computer report bundle zip")
+    standalone_fixture.add_argument("--format", choices=["json", "table"], default="json")
     standalone_backlog = standalone_sub.add_parser("backlog")
     standalone_backlog.add_argument("--format", choices=["json", "table", "csv"], default="json")
     standalone_backlog.add_argument("--output")
@@ -3317,6 +3412,7 @@ def run(args: argparse.Namespace) -> int:
         return 0
     if args.resource == "ingest" and args.action == "triage-zip" and args.preflight:
         report = report_bundle_preflight_report(Path(args.path))
+        _enforce_zip_uncompressed_limit(report, args.max_uncompressed_gb)
         write_report_output(
             report,
             report["computers"],
@@ -3334,6 +3430,7 @@ def run(args: argparse.Namespace) -> int:
         "install-tool",
         "profile-catalog",
         "artifact-capability",
+        "sample-fixture",
         "backlog",
     }:
         if args.action == "version":
@@ -3387,6 +3484,10 @@ def run(args: argparse.Namespace) -> int:
         if args.action == "artifact-capability":
             report = artifact_capability_report(registry, profile=args.profile)
             write_report_output(report, report["artifacts"], args.format, args.output, title="Artifact capability matrix", columns=["profile", "tool_name", "artifact_name", "method", "optional", "recursive", "source", "destination"])
+            return 0
+        if args.action == "sample-fixture":
+            report = create_sample_report_bundle_fixture(Path(args.output))
+            write_report_output(report, [report], args.format, None, title="Sample report bundle fixture", columns=["path", "computer_count", "csv_count", "member_count"])
             return 0
         if args.action == "backlog":
             report = standalone_backlog_report()
@@ -3503,7 +3604,14 @@ def run(args: argparse.Namespace) -> int:
             return 0
 
         if args.resource == "standalone" and args.action == "benchmark":
-            report = benchmark_report(db, case_id=args.case_id, limit=args.limit)
+            report = benchmark_report(
+                db,
+                case_id=args.case_id,
+                limit=args.limit,
+                baseline_path=Path(args.baseline) if args.baseline else None,
+            )
+            if args.write_baseline:
+                write_text_output(json.dumps(sanitize_report_paths(report), indent=2, default=str), args.write_baseline)
             write_report_output(report, report["timings"], args.format, args.output, title=f"Benchmark timings for case {args.case_id}", columns=["duration_ms", "scope", "phase", "name", "tool_name", "artifact_name", "status"])
             return 0
 
@@ -3696,6 +3804,8 @@ def run(args: argparse.Namespace) -> int:
             return 0
 
         if args.resource == "ingest" and args.action == "triage-zip":
+            preflight = report_bundle_preflight_report(Path(args.path))
+            _enforce_zip_uncompressed_limit(preflight, args.max_uncompressed_gb)
             result = import_report_bundle_many(
                 db=db,
                 paths=paths,
@@ -4933,6 +5043,49 @@ def run(args: argparse.Namespace) -> int:
 
         if args.resource == "report" and args.action == "summary":
             print_json(case_summary_report(db, args.case_id))
+            return 0
+
+        if args.resource == "report" and args.action == "dashboard":
+            report = case_dashboard_report(db, args.case_id, limit=args.limit)
+            rows = [
+                {
+                    "case_id": args.case_id,
+                    **(report.get("summary") if isinstance(report.get("summary"), dict) else {}),
+                }
+            ]
+            write_report_output(
+                report,
+                rows,
+                args.format,
+                args.output,
+                title=f"Case dashboard for case {args.case_id}",
+                columns=[
+                    "case_id",
+                    "computers",
+                    "images",
+                    "outputs",
+                    "parsed_row_count",
+                    "active_timing_count",
+                    "failed_timing_count",
+                    "unmapped_import_count",
+                    "evidence_gap_count",
+                    "suspicious_finding_count",
+                    "warning_count",
+                    "error_count",
+                ],
+            )
+            return 0
+
+        if args.resource == "report" and args.action == "validate-outputs":
+            report = report_output_quality_report(Path(args.path))
+            write_report_output(
+                report,
+                report["files"],
+                args.format,
+                args.output,
+                title="Report output validation",
+                columns=["status", "format", "relative_path", "row_count", "column_count", "duplicate_columns", "empty_header_count", "issue"],
+            )
             return 0
 
         if args.resource == "report" and args.action == "case-overview":

@@ -220,16 +220,22 @@ def test_parser_coverage_and_unmapped_import_report(tmp_path, monkeypatch):
         "user,C:/Cache/cache000.bin,/tmp/sheet.jpg,contact_sheet_available,visual_material_available\n",
         encoding="utf-8",
     )
+    (input_root / "SrumRecords.csv").write_text(
+        "provider_guid,provider_name,record_type,source_table,timestamp,app_name,bytes_received\n"
+        "973f5d5c-1d90-4944-be8e-24b94231a174,Network,network_usage,table,2024-01-01,app.exe,42\n",
+        encoding="utf-8",
+    )
 
     coverage = parser_coverage_report(tmp_path / "input")
-    assert coverage["summary"]["csv_count"] == 4
-    assert coverage["summary"]["mapped_count"] == 3
+    assert coverage["summary"]["csv_count"] == 5
+    assert coverage["summary"]["mapped_count"] == 4
     assert coverage["summary"]["unmapped_count"] == 1
-    assert {row["tool_name"] for row in coverage["files"] if row["status"] == "mapped"} >= {"MFTECmd", "UalParser", "RdpCacheParser"}
+    assert {row["tool_name"] for row in coverage["files"] if row["status"] == "mapped"} >= {"MFTECmd", "UalParser", "RdpCacheParser", "SrumECmd"}
     preflight = report_bundle_preflight_report(tmp_path / "input")
     assert preflight["summary"]["ready"] is True
     assert preflight["summary"]["computer_count"] == 1
-    assert preflight["computers"][0]["mapped_count"] == 3
+    assert preflight["summary"]["member_count"] == 5
+    assert preflight["computers"][0]["mapped_count"] == 4
     assert preflight["computers"][0]["unmapped_count"] == 1
 
     paths = WorkspacePaths(tmp_path / "analysis")

@@ -65,6 +65,7 @@ PARSER_ROUTE_SUMMARY = [
     {"tool_name": "USPParser", "match": "TZWorks USP header"},
     {"tool_name": "UalParser", "match": "UalRecords.csv or UAL/SUM header"},
     {"tool_name": "RdpCacheParser", "match": "RdpCacheItems.csv, RdpVisualObservations.csv, or RDP cache header"},
+    {"tool_name": "SrumECmd", "match": "SrumRecords.csv or SRUM normalized header"},
 ]
 
 
@@ -602,6 +603,8 @@ def infer_report_candidate(path: Path) -> ReportCandidate | None:
         return ReportCandidate(path, "UalParser")
     if lower in {"rdpcacheitems.csv", "rdpvisualobservations.csv"}:
         return ReportCandidate(path, "RdpCacheParser")
+    if lower in {"srumrecords.csv", "srum_records.csv"}:
+        return ReportCandidate(path, "SrumECmd")
     if lower in {"automaticdestinations.csv", "customdestinations.csv"}:
         return ReportCandidate(path, "JLECmd")
     if re.match(r".+_activity\.csv$", lower) or re.match(r".+_activityoperations\.csv$", lower):
@@ -682,6 +685,10 @@ def infer_report_candidate(path: Path) -> ReportCandidate | None:
         return ReportCandidate(path, "RdpCacheParser", note="RDP cache output detected by header")
     if _header_has(header, "source_cache_path", "observation_type", "certainty"):
         return ReportCandidate(path, "RdpCacheParser", note="RDP visual observation output detected by header")
+    if _header_has(header, "provider_guid", "record_type", "source_table") and (
+        "app_name" in header or "bytes_received" in header or "timestamp" in header
+    ):
+        return ReportCandidate(path, "SrumECmd", note="SRUM output detected by header")
     return None
 
 
@@ -743,6 +750,11 @@ def report_bundle_preflight_report(report_root: Path) -> dict[str, Any]:
     else:
         raise ValueError(f"Report path must be a directory or .zip file: {root}")
     summary = dict(coverage.get("summary") or {})
+    if root.is_file() and root.suffix.lower() == ".zip":
+        zip_stats = _zip_size_summary(root)
+        summary.update(zip_stats)
+    else:
+        summary.update({"member_count": sum(int(item.get("member_count") or 0) for item in roots)})
     summary["computer_count"] = len(roots)
     summary["ready"] = bool(roots) and int(summary.get("csv_count") or 0) > 0
     return {
@@ -771,6 +783,23 @@ def _coverage_counts_for_prefix(rows: list[Any], prefix: str) -> dict[str, int]:
     return {
         "mapped_count": sum(1 for row in scoped if row.get("status") == "mapped"),
         "unmapped_count": sum(1 for row in scoped if row.get("status") == "unmapped"),
+    }
+
+
+def _zip_size_summary(zip_path: Path) -> dict[str, Any]:
+    with zipfile.ZipFile(zip_path) as archive:
+        members = [info for info in archive.infolist() if not info.is_dir()]
+    uncompressed = sum(int(info.file_size or 0) for info in members)
+    compressed = sum(int(info.compress_size or 0) for info in members)
+    largest = max(members, key=lambda item: item.file_size or 0, default=None)
+    return {
+        "member_count": len(members),
+        "compressed_bytes": compressed,
+        "uncompressed_bytes": uncompressed,
+        "compressed_gb": round(compressed / (1024**3), 3),
+        "uncompressed_gb": round(uncompressed / (1024**3), 3),
+        "largest_member": largest.filename if largest else "",
+        "largest_member_bytes": int(largest.file_size or 0) if largest else 0,
     }
 
 
@@ -825,6 +854,10 @@ def _candidate_from_header(path: Path, header: set[str]) -> ReportCandidate | No
         return ReportCandidate(path, "RdpCacheParser", note="RDP cache output detected by header")
     if _header_has(header, "source_cache_path", "observation_type", "certainty"):
         return ReportCandidate(path, "RdpCacheParser", note="RDP visual observation output detected by header")
+    if _header_has(header, "provider_guid", "record_type", "source_table") and (
+        "app_name" in header or "bytes_received" in header or "timestamp" in header
+    ):
+        return ReportCandidate(path, "SrumECmd", note="SRUM output detected by header")
     return None
 
 
@@ -1328,6 +1361,7 @@ def _looks_like_supported_header(header: set[str]) -> bool:
         {"database_file", "source_table", "role_name"},
         {"source_cache_path", "fragment_path", "contact_sheet_path"},
         {"source_cache_path", "observation_type", "certainty"},
+        {"provider_guid", "record_type", "source_table"},
     )
     return any(signature <= header for signature in signatures)
 

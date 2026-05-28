@@ -7,6 +7,8 @@ from forensic_orchestrator.paths import WorkspacePaths
 from forensic_orchestrator.standalone import (
     artifact_capability_report,
     backup_case_databases,
+    benchmark_report,
+    create_sample_report_bundle_fixture,
     doctor_report,
     _extract_eztools_urls,
     _parse_rustc_version,
@@ -64,6 +66,8 @@ def test_standalone_reports_cover_profiles_schema_jobs_and_backups(tmp_path):
             "output_folder": tmp_path / "out",
         }
     )
+    timing_id = db.start_process_timing(case_id=case.id, scope="test", phase="fixture", name="timed")
+    db.finish_process_timing(timing_id, details={"fixture": True})
     registry = ToolRegistry.from_files([Path("forensic_orchestrator/plugins/eztools.yaml")])
 
     assert profile_catalog_report(registry)["summary"]["profile_count"] > 0
@@ -77,6 +81,15 @@ def test_standalone_reports_cover_profiles_schema_jobs_and_backups(tmp_path):
     assert doctor["smoke"]["passed"] is True
     backup = backup_case_databases(db, paths, case_id=case.id, output_dir=tmp_path / "backups")
     assert Path(backup["manifest"]).exists()
+    benchmark = benchmark_report(db, case_id=case.id)
+    baseline_path = tmp_path / "benchmark.json"
+    baseline_path.write_text('{"summary":{"returned_duration_seconds":0}}', encoding="utf-8")
+    compared = benchmark_report(db, case_id=case.id, baseline_path=baseline_path)
+    assert benchmark["summary"]["timing_count_returned"] == 1
+    assert compared["baseline"]["status"] == "compared"
+    fixture = create_sample_report_bundle_fixture(tmp_path / "sample.zip")
+    assert Path(fixture["path"]).exists()
+    assert fixture["computer_count"] == 2
     assert standalone_backlog_report()["summary"]["item_count"] == 28
 
 

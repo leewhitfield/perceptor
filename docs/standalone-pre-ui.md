@@ -104,6 +104,10 @@ uv run forensic-orchestrator --config config.yaml standalone tool-status
   databases with a manifest.
 - `standalone jobs --case CASE_ID`: recent job status.
 - `standalone benchmark --case CASE_ID`: slowest recorded process timings.
+- `standalone benchmark --case CASE_ID --write-baseline benchmark.json`: record
+  a timing baseline; use `--baseline benchmark.json` on a later run to compare.
+- `standalone sample-fixture --output sample-live-case.zip`: create a tiny
+  multi-computer report bundle for smoke tests and demonstrations.
 - `standalone backlog`: the pre-UI standalone hardening checklist.
 
 ## Operational Defaults
@@ -146,7 +150,8 @@ Before importing unfamiliar export sets, check parser coverage:
 uv run relic --root /analysis/case-root ingest triage-zip \
   --path /evidence/live-case.zip \
   --preflight \
-  --format table
+  --format table \
+  --max-uncompressed-gb 75
 
 uv run relic --root /analysis/case-root report-bundle coverage \
   --path /evidence/live-case.zip \
@@ -158,6 +163,10 @@ reported later:
 
 ```bash
 uv run relic --root /analysis/case-root report unmapped-imports --case CASE_ID --format table
+uv run relic --root /analysis/case-root report dashboard --case CASE_ID --format table
+uv run relic --root /analysis/case-root report validate-outputs \
+  --path /analysis/case-root/cases/CASE_ID/outputs/reports/triage-bundle \
+  --format table
 ```
 
 Purpose bundles keep review output focused:

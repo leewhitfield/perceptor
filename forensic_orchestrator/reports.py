@@ -19697,6 +19697,60 @@ def processing_progress_report(db: Database, case_id: str, *, limit: int = 50) -
     }
 
 
+def case_dashboard_report(db: Database, case_id: str, *, limit: int = 25) -> dict[str, Any]:
+    db.get_case(case_id)
+    summary = case_summary_report(db, case_id)
+    progress = processing_progress_report(db, case_id, limit=limit)
+    unmapped = unmapped_imports_report(db, case_id, limit=limit)
+    gaps = evidence_gaps_report(db, case_id, limit=limit)
+    suspicious = suspicious_executions_report(db, case_id, limit=limit)
+    latest_reports = [
+        {**dict(row), "details": json.loads(row["details_json"] or "{}")}
+        for row in db.conn.execute(
+            """
+            SELECT created_at, event, message, details_json
+            FROM activity_log
+            WHERE case_id = ?
+              AND event IN ('report_bundle.import_completed', 'report_bundle.csv_unsupported')
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (case_id, limit),
+        ).fetchall()
+    ]
+    warnings = db.activity_for_case(case_id, level="warning", limit=limit)
+    errors = db.activity_for_case(case_id, level="error", limit=limit)
+    top_findings = []
+    for row in suspicious.get("findings") or suspicious.get("items") or []:
+        if isinstance(row, dict):
+            top_findings.append(row)
+    return {
+        "case_id": case_id,
+        "summary": {
+            **(summary.get("counts") or {}),
+            "parsed_row_count": (progress.get("summary") or {}).get("parsed_row_count", 0),
+            "active_timing_count": (progress.get("summary") or {}).get("active_timing_count", 0),
+            "failed_timing_count": (progress.get("summary") or {}).get("failed_timing_count", 0),
+            "unmapped_import_count": (unmapped.get("summary") or {}).get("unmapped_count", 0),
+            "evidence_gap_count": (gaps.get("summary") or {}).get("gap_count", 0),
+            "suspicious_finding_count": (suspicious.get("summary") or {}).get("finding_count", 0),
+            "warning_count": len(warnings),
+            "error_count": len(errors),
+        },
+        "computers": summary.get("computers") or [],
+        "images": summary.get("images") or [],
+        "parsed_row_counts": summary.get("parsed_row_counts") or [],
+        "active_timings": progress.get("active_timings") or [],
+        "failed_timings": progress.get("failed_timings") or [],
+        "unmapped_imports": unmapped.get("unmapped") or [],
+        "evidence_gaps": gaps.get("gaps") or [],
+        "top_findings": top_findings[:limit],
+        "latest_report_activity": latest_reports,
+        "warnings": [dict(row) for row in warnings],
+        "errors": [dict(row) for row in errors],
+    }
+
+
 def resume_plan_report(db: Database, case_id: str, *, limit: int = 50) -> dict[str, Any]:
     progress = processing_progress_report(db, case_id, limit=limit)
     health = workspace_health_report(db, case_id)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import platform
 import csv
+import json
 import re
 import shutil
 import subprocess
@@ -300,7 +301,7 @@ def job_status_report(db: Database, *, case_id: str, limit: int = 100) -> dict[s
     }
 
 
-def benchmark_report(db: Database, *, case_id: str, limit: int = 100) -> dict[str, Any]:
+def benchmark_report(db: Database, *, case_id: str, limit: int = 100, baseline_path: Path | None = None) -> dict[str, Any]:
     db.get_case(case_id)
     rows = [
         dict(row)
@@ -317,7 +318,7 @@ def benchmark_report(db: Database, *, case_id: str, limit: int = 100) -> dict[st
         ).fetchall()
     ]
     total_ms = sum(int(row.get("duration_ms") or 0) for row in rows)
-    return {
+    report = {
         "case_id": case_id,
         "summary": {
             "timing_count_returned": len(rows),
@@ -325,6 +326,68 @@ def benchmark_report(db: Database, *, case_id: str, limit: int = 100) -> dict[st
             "slowest_duration_seconds": round((int(rows[0].get("duration_ms") or 0) / 1000), 3) if rows else 0,
         },
         "timings": rows,
+    }
+    if baseline_path is not None:
+        report["baseline"] = _benchmark_baseline_comparison(report, baseline_path)
+    return report
+
+
+def _benchmark_baseline_comparison(report: dict[str, Any], baseline_path: Path) -> dict[str, Any]:
+    try:
+        baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        return {"path": str(baseline_path), "status": "unavailable", "error": str(exc)}
+    except json.JSONDecodeError as exc:
+        return {"path": str(baseline_path), "status": "invalid_json", "error": str(exc)}
+    current_seconds = float((report.get("summary") or {}).get("returned_duration_seconds") or 0)
+    baseline_seconds = float((baseline.get("summary") or {}).get("returned_duration_seconds") or 0)
+    delta = round(current_seconds - baseline_seconds, 3)
+    pct = round((delta / baseline_seconds) * 100, 2) if baseline_seconds else 0
+    return {
+        "path": str(baseline_path),
+        "status": "compared",
+        "baseline_duration_seconds": baseline_seconds,
+        "current_duration_seconds": current_seconds,
+        "delta_seconds": delta,
+        "delta_percent": pct,
+    }
+
+
+def create_sample_report_bundle_fixture(output_path: Path) -> dict[str, Any]:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    computers = {
+        "ComputerA": {
+            "metadata.json": '{"computer_name":"ComputerA","fixture":"relic-live-case"}\n',
+            "MFT/ComputerA_$MFT.csv": (
+                "EntryNumber,SequenceNumber,ParentPath,FileName,Created0x10\n"
+                "42,3,C:/Users/ComputerA,note.txt,2024-01-01 00:00:00\n"
+            ),
+            "Prefetch/PECmd_Output.csv": (
+                "SourceFilename,ExecutableName,Hash,RunCount,LastRun\n"
+                "C:/Windows/Prefetch/NOTEPAD.EXE-12345678.pf,NOTEPAD.EXE,12345678,1,2024-01-02 00:00:00\n"
+            ),
+        },
+        "ComputerB": {
+            "metadata.json": '{"computer_name":"ComputerB","fixture":"relic-live-case"}\n',
+            "UAL/UalRecords.csv": (
+                "database_file,source_table,role_name,client_name,client_ip,first_seen,last_seen\n"
+                "SystemIdentity.mdb,RoleAccess,File Server,HOST02,10.0.0.2,2024-01-01,2024-01-03\n"
+            ),
+            "RDP/RdpVisualObservations.csv": (
+                "user_profile,source_cache_path,contact_sheet_path,observation_type,certainty\n"
+                "user,C:/Cache/cache000.bin,contact-sheet.jpg,contact_sheet_available,visual_material_available\n"
+            ),
+        },
+    }
+    with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for computer, files in computers.items():
+            for relative, content in files.items():
+                archive.writestr(f"{computer}/{relative}", content)
+    return {
+        "path": str(output_path),
+        "computer_count": len(computers),
+        "csv_count": sum(1 for files in computers.values() for name in files if name.casefold().endswith(".csv")),
+        "member_count": sum(len(files) for files in computers.values()),
     }
 
 
