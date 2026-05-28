@@ -49,6 +49,7 @@ from .reports import (
     account_compromise_markdown,
     account_compromise_report,
     amcache_report,
+    artifact_search_report,
     artifact_sources_report,
     artifact_completeness_report,
     artifact_processing_status_report,
@@ -65,6 +66,7 @@ from .reports import (
     browser_hosts_report,
     browser_report,
     case_review_report,
+    case_next_actions_report,
     carve_coverage_markdown,
     carve_coverage_report,
     cd_burning_activity_markdown,
@@ -311,7 +313,14 @@ from .search.opensearch import (
     search_result_drilldown,
 )
 from .report_specs import list_report_specs, run_report_spec
-from .report_bundle import import_report_bundle, import_report_bundle_many, parser_coverage_report, report_bundle_preflight_report
+from .report_bundle import (
+    import_report_bundle,
+    import_report_bundle_many,
+    parser_coverage_report,
+    parser_gap_report,
+    progress_manifest_report,
+    report_bundle_preflight_report,
+)
 from .safety import OrchestratorError
 from .artifact_dedupe import rebuild_artifact_windows_old_dedupe
 from .artifact_distinct import rebuild_distinct_artifact_tables
@@ -2157,6 +2166,10 @@ def build_parser() -> argparse.ArgumentParser:
     report_bundle_coverage.add_argument("--path", help="Directory or zip to scan for supported and unmapped CSVs")
     report_bundle_coverage.add_argument("--format", choices=["json", "table", "csv"], default="json")
     report_bundle_coverage.add_argument("--output")
+    report_bundle_gaps = report_bundle_sub.add_parser("gaps")
+    report_bundle_gaps.add_argument("--path", help="Directory or zip to scan for unmapped CSV header groups")
+    report_bundle_gaps.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    report_bundle_gaps.add_argument("--output")
 
     ingest = subparsers.add_parser("ingest")
     ingest_sub = ingest.add_subparsers(dest="action", required=True)
@@ -3111,6 +3124,11 @@ def build_parser() -> argparse.ArgumentParser:
     report_progress.add_argument("--limit", type=int, default=50)
     report_progress.add_argument("--format", choices=["json", "table", "csv"], default="json")
     report_progress.add_argument("--output")
+    report_progress_manifests = report_sub.add_parser("progress-manifests")
+    report_progress_manifests.add_argument("--path", help="Optional specific progress manifest JSON")
+    report_progress_manifests.add_argument("--limit", type=int, default=50)
+    report_progress_manifests.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    report_progress_manifests.add_argument("--output")
     report_resume_plan = report_sub.add_parser("resume-plan")
     report_resume_plan.add_argument("--case", required=True, dest="case_id")
     report_resume_plan.add_argument("--limit", type=int, default=50)
@@ -3126,6 +3144,22 @@ def build_parser() -> argparse.ArgumentParser:
     report_unmapped_imports.add_argument("--limit", type=int, default=250)
     report_unmapped_imports.add_argument("--format", choices=["json", "table", "csv"], default="json")
     report_unmapped_imports.add_argument("--output")
+    report_next_actions = report_sub.add_parser("next-actions")
+    report_next_actions.add_argument("--case", required=True, dest="case_id")
+    report_next_actions.add_argument("--limit", type=int, default=25)
+    report_next_actions.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    report_next_actions.add_argument("--output")
+    report_artifact_search = report_sub.add_parser("artifact-search")
+    report_artifact_search.add_argument("--case", required=True, dest="case_id")
+    report_artifact_search.add_argument("--query")
+    report_artifact_search.add_argument("--user")
+    report_artifact_search.add_argument("--computer")
+    report_artifact_search.add_argument("--source-type")
+    report_artifact_search.add_argument("--start")
+    report_artifact_search.add_argument("--end")
+    report_artifact_search.add_argument("--limit", type=int, default=100)
+    report_artifact_search.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    report_artifact_search.add_argument("--output")
     report_case_review = report_sub.add_parser("case-review")
     report_case_review.add_argument("--case", required=True, dest="case_id")
     report_case_review.add_argument("--limit", type=int, default=25)
@@ -3584,6 +3618,17 @@ def run(args: argparse.Namespace) -> int:
             args.output,
             title="Report bundle parser coverage",
             columns=["status", "computer_label", "tool_name", "row_count", "relative_path", "note", "recommendation"],
+        )
+        return 0
+    if args.resource == "report-bundle" and args.action == "gaps":
+        report = parser_gap_report(Path(args.path) if args.path else None)
+        write_report_output(
+            report,
+            report["gaps"],
+            args.format,
+            args.output,
+            title="Report bundle parser gaps",
+            columns=["header_signature", "file_count", "row_count", "computers", "examples", "recommendation"],
         )
         return 0
     if args.resource == "ingest" and args.action == "triage-zip" and args.preflight:
@@ -6007,6 +6052,18 @@ def run(args: argparse.Namespace) -> int:
             )
             return 0
 
+        if args.resource == "report" and args.action == "progress-manifests":
+            report = progress_manifest_report(paths.root, limit=args.limit, path=Path(args.path) if args.path else None)
+            write_report_output(
+                report,
+                report["manifests"],
+                args.format,
+                args.output,
+                title="Progress manifests",
+                columns=["stage", "case_id", "computer_label", "computers_done", "computers_total", "imported_rows", "updated_at", "relative_path"],
+            )
+            return 0
+
         if args.resource == "report" and args.action == "resume-plan":
             report = resume_plan_report(db, args.case_id, limit=args.limit)
             write_report_output(
@@ -6043,6 +6100,40 @@ def run(args: argparse.Namespace) -> int:
                 args.output,
                 title=f"Unmapped report-bundle imports for case {args.case_id}",
                 columns=["created_at", "computer_label", "relative_path", "path", "message"],
+            )
+            return 0
+
+        if args.resource == "report" and args.action == "next-actions":
+            report = case_next_actions_report(db, args.case_id, limit=args.limit)
+            write_report_output(
+                report,
+                report["actions"],
+                args.format,
+                args.output,
+                title=f"Next actions for case {args.case_id}",
+                columns=["priority", "category", "title", "detail", "suggested_command"],
+            )
+            return 0
+
+        if args.resource == "report" and args.action == "artifact-search":
+            report = artifact_search_report(
+                db,
+                args.case_id,
+                query=args.query,
+                user=args.user,
+                computer=args.computer,
+                source_type=args.source_type,
+                start=args.start,
+                end=args.end,
+                limit=args.limit,
+            )
+            write_report_output(
+                report,
+                report["results"],
+                args.format,
+                args.output,
+                title=f"Artifact search for case {args.case_id}",
+                columns=["timestamp", "category", "table", "computer_label", "summary", "matched_fields"],
             )
             return 0
 

@@ -806,6 +806,81 @@ def parser_coverage_report(report_root: Path | None = None) -> dict[str, Any]:
     }
 
 
+def parser_gap_report(report_root: Path | None = None) -> dict[str, Any]:
+    coverage = parser_coverage_report(report_root)
+    groups = coverage.get("unmapped_groups") if isinstance(coverage.get("unmapped_groups"), list) else []
+    return {
+        "report_root": coverage.get("report_root", ""),
+        "summary": {
+            **dict(coverage.get("summary") or {}),
+            "unmapped_group_count": len(groups),
+        },
+        "gaps": groups,
+        "unmapped": coverage.get("unmapped", []),
+    }
+
+
+def progress_manifest_report(root: Path, *, limit: int = 50, path: Path | None = None) -> dict[str, Any]:
+    limit = max(1, min(int(limit), 1000))
+    root = root.resolve()
+    manifest_paths = [path.expanduser().resolve()] if path else sorted(
+        (root / "progress").glob("*.json"),
+        key=lambda item: item.stat().st_mtime,
+        reverse=True,
+    )
+    rows: list[dict[str, Any]] = []
+    for manifest_path in manifest_paths[:limit]:
+        try:
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            stat = manifest_path.stat()
+            summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+            rows.append(
+                {
+                    "path": str(manifest_path),
+                    "relative_path": str(manifest_path.relative_to(root)) if _is_relative_to(manifest_path, root) else str(manifest_path),
+                    "stage": payload.get("stage") or summary.get("stage") or "",
+                    "case_id": payload.get("case_id") or summary.get("case_id") or "",
+                    "computer_label": payload.get("current_computer") or "",
+                    "computers_total": payload.get("computers_total") or summary.get("computers_total") or 0,
+                    "computers_done": payload.get("computers_done") or summary.get("computers_done") or 0,
+                    "imported_computers": payload.get("imported_computers") or summary.get("imported_computers") or 0,
+                    "imported_rows": payload.get("imported_rows") or summary.get("imported_rows") or 0,
+                    "updated_at": payload.get("updated_at") or "",
+                    "modified_at": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
+                    "payload": payload,
+                }
+            )
+        except Exception as exc:
+            rows.append(
+                {
+                    "path": str(manifest_path),
+                    "relative_path": str(manifest_path.relative_to(root)) if _is_relative_to(manifest_path, root) else str(manifest_path),
+                    "stage": "error",
+                    "case_id": "",
+                    "computer_label": "",
+                    "computers_total": 0,
+                    "computers_done": 0,
+                    "imported_computers": 0,
+                    "imported_rows": 0,
+                    "updated_at": "",
+                    "modified_at": "",
+                    "error": str(exc),
+                    "payload": {},
+                }
+            )
+    return {
+        "root": str(root),
+        "summary": {
+            "manifest_count": len(rows),
+            "limit": limit,
+            "active_count": sum(1 for row in rows if row.get("stage") not in {"completed", "error"}),
+            "completed_count": sum(1 for row in rows if row.get("stage") == "completed"),
+            "error_count": sum(1 for row in rows if row.get("stage") == "error"),
+        },
+        "manifests": rows,
+    }
+
+
 def report_bundle_preflight_report(report_root: Path) -> dict[str, Any]:
     root = report_root.resolve()
     coverage = parser_coverage_report(root)
@@ -870,6 +945,14 @@ def _coverage_counts_for_prefix(rows: list[Any], prefix: str) -> dict[str, int]:
         "mapped_count": sum(1 for row in scoped if row.get("status") == "mapped"),
         "unmapped_count": sum(1 for row in scoped if row.get("status") == "unmapped"),
     }
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
 
 
 def _zip_size_summary(zip_path: Path) -> dict[str, Any]:

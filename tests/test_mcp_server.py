@@ -44,6 +44,10 @@ def test_mcp_initialize_and_list_tools(tmp_path):
     assert "relic_timeline_window" in names
     assert "relic_case_next_actions" in names
     assert "relic_write_review_packet" in names
+    assert "relic_search_artifacts" in names
+    assert "relic_list_review_packets" in names
+    assert "relic_read_review_packet" in names
+    assert "relic_list_progress_manifests" in names
     assert "relic_list_mcp_jobs" in names
     assert "relic_get_mcp_job_progress" in names
     assert "relic_mcp_tool_reference" in names
@@ -302,6 +306,62 @@ def test_mcp_write_review_packet_creates_resources(tmp_path):
     assert Path(packet["json_path"]).exists()
     assert Path(packet["markdown_path"]).exists()
     assert any(uri.endswith(".md") for uri in packet["resource_uris"])
+
+    listed = server.list_review_packets({"case_id": "case-1"})
+    assert listed["summary"]["packet_count"] == 1
+    read = server.read_review_packet({"uri": listed["packets"][0]["json_uri"]})
+    assert read["packet"]["title"] == "Lead Review"
+
+
+def test_mcp_artifact_search_and_progress_manifests(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORENSIC_ANALYTICS_MODE", "sqlite")
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    db.create_case("case-1", tmp_path)
+    computer = db.create_computer(computer_id="computer-1", case_id="case-1", label="HOST01")
+    image = db.add_image("image-1", "case-1", tmp_path / "host.E01", computer_id=computer.id)
+    db.conn.execute(
+        """
+        INSERT INTO shellbag_entries (
+          id, case_id, computer_id, image_id, tool_output_id, tool_name, source_csv,
+          row_number, user_profile, absolute_path, drive_letter, volume_serial_number,
+          last_write_time, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "shellbag-1",
+            "case-1",
+            computer.id,
+            image.id,
+            "tool-1",
+            "SBECmd",
+            "shellbags.csv",
+            1,
+            "Users/Alice",
+            "E:/Cases/powershell notes",
+            "E:",
+            "ABCD-1234",
+            "2024-01-01T00:00:00Z",
+            "2024-01-01T00:00:00Z",
+        ),
+    )
+    db.conn.commit()
+    db.close()
+    progress_dir = tmp_path / "progress"
+    progress_dir.mkdir()
+    (progress_dir / "report-bundle-many-test.json").write_text(
+        json.dumps({"stage": "completed", "case_id": "case-1", "computers_total": 2, "computers_done": 2, "imported_rows": 42}),
+        encoding="utf-8",
+    )
+    server = RelicMcpServer(root=tmp_path)
+
+    found = server.search_artifacts({"case_id": "case-1", "query": "powershell", "computer": "HOST01"})
+    assert found["summary"]["result_count"] == 1
+    assert found["results"][0]["computer_label"] == "HOST01"
+    assert found["results"][0]["matched_fields"] == ["absolute_path"]
+
+    manifests = server.list_progress_manifests({})
+    assert manifests["summary"]["manifest_count"] == 1
+    assert manifests["manifests"][0]["imported_rows"] == 42
 
 
 def test_mcp_tool_reference_and_audit_log(tmp_path):

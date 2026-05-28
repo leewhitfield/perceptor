@@ -90,6 +90,115 @@ WEB_CLOUD_PROVIDERS = [
 ]
 
 
+ARTIFACT_SEARCH_SPECS = [
+    {
+        "table": "timeline_events",
+        "category": "timeline",
+        "fields": ["description", "event_type", "source_tool", "source_table", "details_json"],
+        "display": ["timestamp_utc", "event_type", "description", "source_tool"],
+        "timestamp": "timestamp_utc",
+    },
+    {
+        "table": "mft_entries",
+        "category": "filesystem",
+        "fields": ["file_name", "parent_path", "extension", "object_id", "birth_volume_id", "birth_object_id", "source_file"],
+        "display": ["file_name", "parent_path", "extension", "created_si", "modified_si"],
+        "timestamp": "modified_si",
+    },
+    {
+        "table": "usn_journal_entries",
+        "category": "filesystem",
+        "fields": ["file_name", "full_path", "reason", "reason_flags", "source_file"],
+        "display": ["update_timestamp", "file_name", "full_path", "reason"],
+        "timestamp": "update_timestamp",
+    },
+    {
+        "table": "prefetch_items",
+        "category": "execution",
+        "fields": ["prefetch_name", "artifact_path", "original_path", "executable_name", "referenced_strings", "resolved_reference_path"],
+        "display": ["last_run_time_utc", "executable_name", "original_path", "run_count"],
+        "timestamp": "last_run_time_utc",
+    },
+    {
+        "table": "amcache_entries",
+        "category": "execution",
+        "fields": ["path", "name", "publisher", "product_name", "version", "sha1"],
+        "display": ["timestamp_utc", "name", "path", "sha1"],
+        "timestamp": "timestamp_utc",
+    },
+    {
+        "table": "shellbag_entries",
+        "category": "user_activity",
+        "fields": ["absolute_path", "user_profile", "drive_letter", "volume_guid", "volume_serial_number", "volume_name"],
+        "display": ["last_write_time", "user_profile", "absolute_path", "drive_letter"],
+        "timestamp": "last_write_time",
+        "user": "user_profile",
+    },
+    {
+        "table": "usb_devices",
+        "category": "external_storage",
+        "fields": ["serial", "friendly_name", "vendor", "product", "drive_letter", "volume_guid", "volume_serial_number", "volume_name", "key_path"],
+        "display": ["key_last_write_utc", "serial", "friendly_name", "drive_letter", "volume_serial_number"],
+        "timestamp": "key_last_write_utc",
+        "user": "user_profile",
+    },
+    {
+        "table": "usb_storage_devices",
+        "category": "external_storage",
+        "fields": ["serial", "friendly_name", "vendor", "product", "drive_letter", "volume_guid", "volume_serial_number", "volume_name", "source_artifacts"],
+        "display": ["last_arrival_utc", "serial", "friendly_name", "drive_letter", "volume_serial_number"],
+        "timestamp": "last_arrival_utc",
+        "user": "user_profiles",
+    },
+    {
+        "table": "usb_connection_events",
+        "category": "external_storage",
+        "fields": ["serial", "volume_serial_number", "volume_guid", "drive_letter", "event_type", "event_source", "source_path", "key_path"],
+        "display": ["event_time_utc", "serial", "event_type", "drive_letter", "volume_serial_number"],
+        "timestamp": "event_time_utc",
+    },
+    {
+        "table": "browser_history",
+        "category": "browser",
+        "fields": ["url", "title", "browser", "source_path", "profile_path"],
+        "display": ["visit_time_utc", "browser", "title", "url"],
+        "timestamp": "visit_time_utc",
+        "user": "profile_path",
+    },
+    {
+        "table": "browser_downloads",
+        "category": "browser",
+        "fields": ["target_path", "tab_url", "site_url", "referrer", "browser", "source_path", "profile_path"],
+        "display": ["start_time_utc", "browser", "target_path", "tab_url"],
+        "timestamp": "start_time_utc",
+        "user": "profile_path",
+    },
+    {
+        "table": "windows_search_files",
+        "category": "windows_search",
+        "fields": ["item_path", "item_url", "folder_path", "file_name", "owner", "computer_name", "row_json"],
+        "display": ["gather_time", "file_name", "item_path", "item_url"],
+        "timestamp": "gather_time",
+        "user": "owner",
+    },
+    {
+        "table": "windows_search_internet_history",
+        "category": "windows_search",
+        "fields": ["item_url", "target_url", "target_host", "title", "item_path", "folder_path", "owner"],
+        "display": ["gather_time", "title", "target_url", "target_host"],
+        "timestamp": "gather_time",
+        "user": "owner",
+    },
+    {
+        "table": "windows_search_indexed_content",
+        "category": "windows_search",
+        "fields": ["item_path", "item_name", "item_type", "content_field", "content_text"],
+        "display": ["timestamp", "item_name", "item_path", "content_field"],
+        "timestamp": "timestamp",
+    },
+]
+
+
 APPLICATION_INDICATORS = [
     {"application": "Tor Browser", "tokens": ("tor browser", "start tor browser", "torbrowser", "\\tor.exe", "/tor.exe")},
     {"application": "VMware", "tokens": ("vmware", "vmware.exe", ".vmx", ".vmdk", ".vmem", ".nvram")},
@@ -30362,6 +30471,235 @@ def _table_exists(db: Database, table: str) -> bool:
         (table,),
     ).fetchone()
     return row is not None
+
+
+def artifact_search_report(
+    db: Database,
+    case_id: str,
+    *,
+    query: str | None = None,
+    user: str | None = None,
+    computer: str | None = None,
+    source_type: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    limit: int = 100,
+) -> dict[str, Any]:
+    """Search common parsed artifact tables without requiring OpenSearch."""
+    limit = max(1, min(int(limit), 1000))
+    query_text = (query or "").strip()
+    user_text = (user or "").strip()
+    computer_text = (computer or "").strip()
+    source_text = (source_type or "").strip().casefold()
+    computer_labels = _case_computer_labels(db, case_id)
+    image_paths = _case_image_paths(db, case_id)
+    computer_ids = _matching_computer_ids(computer_labels, computer_text)
+    results: list[dict[str, Any]] = []
+    searched_tables = 0
+
+    for spec in ARTIFACT_SEARCH_SPECS:
+        table = str(spec["table"])
+        category = str(spec["category"])
+        if source_text and source_text not in {category.casefold(), table.casefold()}:
+            continue
+        columns = _report_table_columns(db, case_id, table)
+        if not columns:
+            continue
+        searched_tables += 1
+        searchable = [field for field in spec["fields"] if field in columns]
+        display = [field for field in spec["display"] if field in columns]
+        timestamp_col = str(spec.get("timestamp") or "")
+        user_col = str(spec.get("user") or "")
+        select_cols = _dedupe_columns(["id", "case_id", "computer_id", "image_id", timestamp_col, user_col, *display, *searchable])
+        select_cols = [column for column in select_cols if column in columns]
+        if "id" not in select_cols or "case_id" not in select_cols:
+            continue
+        where = ["case_id = ?"]
+        params: list[Any] = [case_id]
+        if query_text and searchable:
+            clauses = [f"LOWER(COALESCE({field}, '')) LIKE ?" for field in searchable]
+            where.append("(" + " OR ".join(clauses) + ")")
+            params.extend([f"%{query_text.casefold()}%" for _ in searchable])
+        elif query_text and not searchable:
+            continue
+        if user_text and user_col and user_col in columns:
+            where.append(f"LOWER(COALESCE({user_col}, '')) LIKE ?")
+            params.append(f"%{user_text.casefold()}%")
+        elif user_text:
+            continue
+        if computer_ids is not None:
+            if not computer_ids:
+                continue
+            placeholders = ", ".join("?" for _ in computer_ids)
+            where.append(f"computer_id IN ({placeholders})")
+            params.extend(computer_ids)
+        if start and timestamp_col in columns:
+            where.append(f"{timestamp_col} >= ?")
+            params.append(start)
+        if end and timestamp_col in columns:
+            where.append(f"{timestamp_col} <= ?")
+            params.append(end)
+        order = f"ORDER BY {timestamp_col} DESC" if timestamp_col in columns else "ORDER BY id"
+        remaining = limit - len(results)
+        sql = f"SELECT {', '.join(select_cols)} FROM {table} WHERE {' AND '.join(where)} {order} LIMIT ?"
+        rows = _query_report_rows(db, case_id, table, sql, [*params, remaining])
+        for row in rows:
+            item = dict(row)
+            item["table"] = table
+            item["category"] = category
+            item["timestamp"] = item.get(timestamp_col) if timestamp_col else None
+            item["computer_label"] = computer_labels.get(str(item.get("computer_id") or ""))
+            item["image_path"] = image_paths.get(str(item.get("image_id") or ""))
+            item["matched_fields"] = _artifact_matched_fields(item, searchable, query_text)
+            item["summary"] = _artifact_search_summary(item, display, searchable)
+            results.append(item)
+            if len(results) >= limit:
+                break
+        if len(results) >= limit:
+            break
+
+    return {
+        "case_id": case_id,
+        "query": query_text,
+        "filters": {
+            "user": user_text,
+            "computer": computer_text,
+            "source_type": source_text,
+            "start": start or "",
+            "end": end or "",
+        },
+        "summary": {
+            "searched_tables": searched_tables,
+            "result_count": len(results),
+            "limit": limit,
+        },
+        "results": results,
+    }
+
+
+def case_next_actions_report(db: Database, case_id: str, *, limit: int = 25) -> dict[str, Any]:
+    limit = max(1, min(int(limit), 1000))
+    actions: list[dict[str, Any]] = []
+
+    def add(priority: int, category: str, title: str, detail: str, command: str = "", evidence: dict[str, Any] | None = None) -> None:
+        actions.append(
+            {
+                "priority": priority,
+                "category": category,
+                "title": title,
+                "detail": detail,
+                "suggested_command": command,
+                "evidence": evidence or {},
+            }
+        )
+
+    readiness = processing_readiness_report(db, case_id, limit=limit)
+    for item in readiness.get("items") or readiness.get("checks") or []:
+        if isinstance(item, dict) and str(item.get("status") or "").casefold() in {"needs_action", "failed", "missing"}:
+            add(
+                10,
+                "readiness",
+                str(item.get("label") or item.get("name") or "Readiness item needs action"),
+                str(item.get("summary") or item.get("details") or ""),
+                f"relic --root <workspace> report processing-readiness --case {case_id}",
+                item,
+            )
+
+    gaps = evidence_gaps_report(db, case_id, limit=limit)
+    for gap in gaps.get("gaps") or []:
+        severity = str(gap.get("severity") or "")
+        priority = 20 if severity == "error" else 30 if severity == "warning" else 60
+        add(
+            priority,
+            "evidence_gap",
+            str(gap.get("title") or "Evidence gap"),
+            str(gap.get("summary") or gap.get("recommendation") or ""),
+            f"relic --root <workspace> report evidence-gaps --case {case_id}",
+            gap,
+        )
+
+    unmapped = unmapped_imports_report(db, case_id, limit=limit)
+    if int((unmapped.get("summary") or {}).get("unmapped_count") or 0):
+        add(
+            25,
+            "parser_gap",
+            "Unmapped live-response CSVs need parser review",
+            f"{unmapped['summary']['unmapped_count']} unsupported CSV imports were recorded.",
+            f"relic --root <workspace> report unmapped-imports --case {case_id} --format table",
+            unmapped.get("summary"),
+        )
+
+    suspicious = suspicious_executions_report(db, case_id, limit=limit)
+    for finding in (suspicious.get("findings") or suspicious.get("items") or [])[:5]:
+        add(
+            35,
+            "suspicious_execution",
+            str(finding.get("application") or finding.get("display_path") or "Suspicious execution finding"),
+            str(finding.get("reason") or finding.get("summary") or ""),
+            f"relic --root <workspace> report suspicious-executions --case {case_id}",
+            finding,
+        )
+
+    storage = external_storage_report(db, case_id, limit=limit, rebuild_correlations=False, include_file_activity=False)
+    for device in (storage.get("devices") or storage.get("storage_devices") or [])[:5]:
+        if device.get("file_activity_count") or device.get("matched_file_count") or device.get("serial_reliability") == "fake_or_generated":
+            add(
+                45,
+                "external_storage",
+                str(device.get("display_name") or device.get("serial") or "External storage lead"),
+                str(device.get("summary") or device.get("serial_reliability") or ""),
+                f"relic --root <workspace> report external-storage --case {case_id}",
+                device,
+            )
+
+    actions.sort(key=lambda row: (int(row["priority"]), str(row["category"]), str(row["title"])))
+    returned = actions[:limit]
+    return {"case_id": case_id, "actions": returned, "summary": {"action_count": len(returned), "total_action_count": len(actions), "limit": limit}}
+
+
+def _case_computer_labels(db: Database, case_id: str) -> dict[str, str]:
+    rows = db.conn.execute("SELECT id, label FROM computers WHERE case_id = ?", (case_id,)).fetchall()
+    return {str(row["id"]): str(row["label"] or "") for row in rows}
+
+
+def _case_image_paths(db: Database, case_id: str) -> dict[str, str]:
+    rows = db.conn.execute("SELECT id, path FROM images WHERE case_id = ?", (case_id,)).fetchall()
+    return {str(row["id"]): str(row["path"] or "") for row in rows}
+
+
+def _matching_computer_ids(labels: dict[str, str], computer: str) -> list[str] | None:
+    if not computer:
+        return None
+    needle = computer.casefold()
+    return [computer_id for computer_id, label in labels.items() if needle in computer_id.casefold() or needle in label.casefold()]
+
+
+def _dedupe_columns(columns: Iterable[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for column in columns:
+        if column and column not in seen:
+            seen.add(column)
+            result.append(column)
+    return result
+
+
+def _artifact_matched_fields(row: dict[str, Any], fields: list[str], query: str) -> list[str]:
+    if not query:
+        return []
+    needle = query.casefold()
+    return [field for field in fields if needle in str(row.get(field) or "").casefold()]
+
+
+def _artifact_search_summary(row: dict[str, Any], display: list[str], searchable: list[str]) -> str:
+    values = []
+    for field in [*display, *searchable]:
+        value = row.get(field)
+        if value not in (None, "") and str(value) not in values:
+            values.append(str(value))
+        if len(values) >= 3:
+            break
+    return " | ".join(values)
 
 
 def _table_has_column(db: Database, table: str, column: str) -> bool:

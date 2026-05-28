@@ -14,7 +14,7 @@ from forensic_orchestrator.evidence import create_case
 from forensic_orchestrator.paths import WorkspacePaths
 from forensic_orchestrator.report_bundle import infer_report_candidate
 from forensic_orchestrator.report_bundle import import_report_bundle_many
-from forensic_orchestrator.report_bundle import parser_coverage_report
+from forensic_orchestrator.report_bundle import parser_coverage_report, parser_gap_report, progress_manifest_report
 from forensic_orchestrator.report_bundle import report_bundle_preflight_report
 from forensic_orchestrator.reports import unmapped_imports_report
 from forensic_orchestrator.tools.usp import normalized_usp_row
@@ -245,6 +245,9 @@ def test_parser_coverage_and_unmapped_import_report(tmp_path, monkeypatch):
     assert "Review manually" in unknown["recommendation"]
     assert coverage["unmapped_groups"][0]["file_count"] == 1
     assert coverage["unmapped_groups"][0]["computers"] == ["ComputerA"]
+    gaps = parser_gap_report(tmp_path / "input")
+    assert gaps["summary"]["unmapped_group_count"] == 1
+    assert gaps["gaps"][0]["header_signature"] == "alpha|beta"
     preflight = report_bundle_preflight_report(tmp_path / "input")
     assert preflight["summary"]["ready"] is True
     assert preflight["summary"]["computer_count"] == 1
@@ -260,6 +263,32 @@ def test_parser_coverage_and_unmapped_import_report(tmp_path, monkeypatch):
 
     assert unmapped["summary"]["unmapped_count"] == 1
     assert unmapped["unmapped"][0]["relative_path"].endswith("unknown.csv")
+
+
+def test_progress_manifest_report_reads_live_progress(tmp_path):
+    progress_dir = tmp_path / "progress"
+    progress_dir.mkdir()
+    manifest = progress_dir / "report-bundle-many-test.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "stage": "completed",
+                "case_id": "case-1",
+                "current_computer": "HOST01",
+                "computers_total": 3,
+                "computers_done": 3,
+                "imported_computers": 3,
+                "imported_rows": 99,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = progress_manifest_report(tmp_path)
+
+    assert report["summary"]["completed_count"] == 1
+    assert report["manifests"][0]["relative_path"] == "progress/report-bundle-many-test.json"
+    assert report["manifests"][0]["imported_rows"] == 99
 
 
 def test_execution_purpose_bundle_writes_execution_reports_and_quality(tmp_path, monkeypatch):

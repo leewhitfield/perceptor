@@ -18,9 +18,11 @@ import uuid
 from .config import default_plugin_path
 from .db import Database
 from .paths import WorkspacePaths
-from .report_bundle import parser_coverage_report, report_bundle_preflight_report
+from .report_bundle import parser_coverage_report, progress_manifest_report, report_bundle_preflight_report
 from .reports import (
+    artifact_search_report,
     browser_activity_report,
+    case_next_actions_report,
     case_review_report,
     case_dashboard_report,
     case_summary_report,
@@ -568,6 +570,26 @@ class RelicMcpServer:
                 annotations=read_only,
             ),
             McpTool(
+                name="relic_search_artifacts",
+                title="Relic Artifact Search",
+                description="Search parsed artifact tables by text, user, computer, source type, and time bounds without requiring OpenSearch.",
+                input_schema=_object_schema(
+                    {
+                        "case_id": _string_schema("Relic case ID."),
+                        "query": _string_schema("Optional text to find in searchable artifact fields."),
+                        "user": _string_schema("Optional user/profile filter."),
+                        "computer": _string_schema("Optional computer label or ID filter."),
+                        "source_type": _string_schema("Optional artifact category or table name."),
+                        "start": _string_schema("Optional inclusive timestamp lower bound."),
+                        "end": _string_schema("Optional inclusive timestamp upper bound."),
+                        "limit": _integer_schema("Maximum rows to return.", default=100, minimum=1, maximum=1000),
+                    },
+                    required=["case_id"],
+                ),
+                handler=self.search_artifacts,
+                annotations=read_only,
+            ),
+            McpTool(
                 name="relic_case_next_actions",
                 title="Relic Case Next Actions",
                 description="Return ranked next investigative actions from readiness, gaps, unmapped imports, suspicious execution, USB, and cloud findings.",
@@ -593,6 +615,22 @@ class RelicMcpServer:
                 handler=self.write_review_packet,
                 annotations=safe_write,
                 permission="safe_write",
+            ),
+            McpTool(
+                name="relic_list_review_packets",
+                title="List Relic Review Packets",
+                description="List MCP review packets previously written for a case.",
+                input_schema=_case_limit_schema(default=50),
+                handler=self.list_review_packets,
+                annotations=read_only,
+            ),
+            McpTool(
+                name="relic_read_review_packet",
+                title="Read Relic Review Packet",
+                description="Read a saved MCP review packet JSON or Markdown resource.",
+                input_schema=_object_schema({"uri": _string_schema("Review packet resource URI.")}, required=["uri"]),
+                handler=self.read_review_packet,
+                annotations=read_only,
             ),
             McpTool(
                 name="relic_ingest_triage_zip_preflight",
@@ -739,6 +777,19 @@ class RelicMcpServer:
                 annotations=read_only,
             ),
             McpTool(
+                name="relic_list_progress_manifests",
+                title="List Relic Progress Manifests",
+                description="List live report-bundle/import progress manifests under the workspace progress directory.",
+                input_schema=_object_schema(
+                    {
+                        "limit": _integer_schema("Maximum manifests to return.", default=50, minimum=1, maximum=1000),
+                        "path": _string_schema("Optional specific progress manifest path."),
+                    }
+                ),
+                handler=self.list_progress_manifests,
+                annotations=read_only,
+            ),
+            McpTool(
                 name="relic_cancel_mcp_job",
                 title="Cancel Relic MCP Job",
                 description="Cancel a running MCP-launched subprocess. Requires --allow-processing.",
@@ -851,13 +902,15 @@ class RelicMcpServer:
             stat = resolved.stat()
             relative = resolved.relative_to(root_resolved)
             mime_type = mimetypes.guess_type(resolved.name)[0] or "text/plain"
+            metadata = _resource_metadata(root_resolved, resolved, case_id=case_id, kind=kind)
             resources.append(
                 {
                     "uri": _resource_uri(relative),
                     "name": str(relative),
                     "title": resolved.name,
                     "mimeType": mime_type,
-                    "description": f"Relic workspace file ({stat.st_size} bytes)",
+                    "description": metadata["description"],
+                    **metadata,
                 }
             )
         return {"resources": resources}
@@ -1374,13 +1427,29 @@ class RelicMcpServer:
         finally:
             db.close()
 
+    def search_artifacts(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        db = self._db()
+        try:
+            return artifact_search_report(
+                db,
+                _required(arguments, "case_id"),
+                query=_optional_text(arguments, "query"),
+                user=_optional_text(arguments, "user"),
+                computer=_optional_text(arguments, "computer"),
+                source_type=_optional_text(arguments, "source_type"),
+                start=_optional_text(arguments, "start"),
+                end=_optional_text(arguments, "end"),
+                limit=_limit(arguments, default=100),
+            )
+        finally:
+            db.close()
+
     def case_next_actions(self, arguments: dict[str, Any]) -> dict[str, Any]:
         case_id = _required(arguments, "case_id")
         limit = _limit(arguments, default=25)
         db = self._db()
         try:
-            actions = _case_next_actions(db, case_id, limit=limit)
-            return {"case_id": case_id, "actions": actions[:limit], "summary": {"action_count": len(actions[:limit])}}
+            return case_next_actions_report(db, case_id, limit=limit)
         finally:
             db.close()
 
@@ -1408,6 +1477,48 @@ class RelicMcpServer:
             "json_path": str(json_path),
             "markdown_path": str(md_path),
             "resource_uris": _resource_uris_for_path(self.paths.root, output_dir),
+        }
+
+    def list_review_packets(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        case_id = _required(arguments, "case_id")
+        limit = _limit(arguments, default=50)
+        packet_dir = self.paths.case_dir(case_id) / "reports" / "mcp-review-packets"
+        packets = []
+        if packet_dir.exists():
+            for path in sorted(packet_dir.glob("*-review-packet.json"), key=lambda item: item.stat().st_mtime, reverse=True)[:limit]:
+                payload = _load_json_file(path)
+                stat = path.stat()
+                markdown_path = path.with_suffix(".md")
+                packets.append(
+                    {
+                        "case_id": case_id,
+                        "title": payload.get("title") or path.stem,
+                        "created_at": payload.get("created_at") or "",
+                        "json_uri": _resource_uri(path.resolve().relative_to(self.paths.root.resolve())),
+                        "markdown_uri": _resource_uri(markdown_path.resolve().relative_to(self.paths.root.resolve())) if markdown_path.exists() else "",
+                        "relative_path": str(path.resolve().relative_to(self.paths.root.resolve())),
+                        "size_bytes": stat.st_size,
+                        "modified_at": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
+                    }
+                )
+        return {"case_id": case_id, "packets": packets, "summary": {"packet_count": len(packets), "limit": limit}}
+
+    def read_review_packet(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        uri = _required(arguments, "uri")
+        path = _path_from_resource_uri(self.paths.root, uri)
+        packet_dir_token = f"{os.sep}mcp-review-packets{os.sep}"
+        if packet_dir_token not in str(path) or path.suffix.casefold() not in {".json", ".md"}:
+            raise ValueError("URI is not a review packet resource")
+        if path.stat().st_size > MCP_RESOURCE_MAX_BYTES:
+            raise ValueError(f"Review packet is too large to read through MCP: {path}")
+        text = path.read_text(encoding="utf-8", errors="replace")
+        payload = json.loads(text) if path.suffix.casefold() == ".json" else None
+        return {
+            "uri": uri,
+            "path": str(path),
+            "format": path.suffix.casefold().lstrip("."),
+            "text": text,
+            "packet": payload,
         }
 
     def ingest_triage_zip_preflight(self, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -1550,6 +1661,10 @@ class RelicMcpServer:
         )
         progress = _parse_mcp_progress(text)
         return {**_public_job(job), **progress}
+
+    def list_progress_manifests(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        manifest_path = _workspace_path(self.paths.root, str(arguments["path"])) if arguments.get("path") else None
+        return progress_manifest_report(self.paths.root, limit=_limit(arguments, default=50), path=manifest_path)
 
     def cancel_mcp_job(self, arguments: dict[str, Any]) -> dict[str, Any]:
         job = self._mcp_jobs.get(_required(arguments, "mcp_job_id"))
@@ -2011,6 +2126,7 @@ def _case_report_resources(root: Path, case_id: str, *, purpose: str | None, lim
             continue
         stat = resolved.stat()
         relative = resolved.relative_to(root_resolved)
+        metadata = _resource_metadata(root_resolved, resolved, case_id=case_id, kind="report")
         rows.append(
             {
                 "uri": _resource_uri(relative),
@@ -2020,11 +2136,74 @@ def _case_report_resources(root: Path, case_id: str, *, purpose: str | None, lim
                 "format": resolved.suffix.casefold().lstrip("."),
                 "size_bytes": stat.st_size,
                 "modified_at": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
+                "kind": metadata["kind"],
+                "purpose": metadata["purpose"],
+                "tags": metadata["tags"],
             }
         )
         if len(rows) >= limit:
             break
     return rows
+
+
+def _resource_metadata(root: Path, path: Path, *, case_id: str | None = None, kind: str | None = None) -> dict[str, Any]:
+    stat = path.stat()
+    relative = path.relative_to(root)
+    inferred_kind = kind or _infer_resource_kind(relative)
+    inferred_case = case_id or _case_id_from_relative(relative)
+    report_name = _report_resource_name(path) if inferred_kind == "report" else ""
+    purpose, tags = _resource_report_index_metadata(path, report_name)
+    if not tags and report_name:
+        tags = sorted(_expected_report_names("usb") & {report_name}) or []
+    description = f"Relic {inferred_kind} resource"
+    if inferred_case:
+        description += f" for case {inferred_case}"
+    description += f" ({stat.st_size} bytes)"
+    return {
+        "kind": inferred_kind,
+        "case_id": inferred_case or "",
+        "report_name": report_name,
+        "purpose": purpose,
+        "tags": tags,
+        "size_bytes": stat.st_size,
+        "modified_at": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
+        "description": description,
+    }
+
+
+def _infer_resource_kind(relative: Path) -> str:
+    parts = relative.parts
+    if parts and parts[0] == "progress":
+        return "progress"
+    if parts and parts[0] == "mcp-jobs":
+        return "mcp-job"
+    if "logs" in parts:
+        return "log"
+    if "manifest" in relative.name.casefold():
+        return "manifest"
+    return "report"
+
+
+def _case_id_from_relative(relative: Path) -> str:
+    parts = relative.parts
+    if len(parts) >= 2 and parts[0] == "cases":
+        return parts[1]
+    return ""
+
+
+def _resource_report_index_metadata(path: Path, report_name: str) -> tuple[str, list[str]]:
+    index_path = path.parent / "report-index.json"
+    if not index_path.exists():
+        return "", []
+    index = _load_json_file(index_path)
+    reports = index.get("reports") if isinstance(index.get("reports"), list) else []
+    for row in reports:
+        if not isinstance(row, dict):
+            continue
+        if row.get("name") == report_name or row.get("filename") == path.name:
+            tags = row.get("tags") if isinstance(row.get("tags"), list) else []
+            return str(row.get("purpose") or index.get("purpose") or ""), [str(tag) for tag in tags]
+    return str(index.get("purpose") or ""), []
 
 
 def _report_resource_name(path: Path) -> str:
@@ -2151,49 +2330,6 @@ def _parse_progress_line(line: str) -> dict[str, Any] | None:
     return row
 
 
-def _case_next_actions(db: Database, case_id: str, *, limit: int) -> list[dict[str, Any]]:
-    actions: list[dict[str, Any]] = []
-
-    def add(priority: int, category: str, title: str, detail: str, command: str = "", evidence: dict[str, Any] | None = None) -> None:
-        actions.append(
-            {
-                "priority": priority,
-                "category": category,
-                "title": title,
-                "detail": detail,
-                "suggested_command": command,
-                "evidence": evidence or {},
-            }
-        )
-
-    readiness = processing_readiness_report(db, case_id, limit=limit)
-    for item in readiness.get("items") or readiness.get("checks") or []:
-        if isinstance(item, dict) and str(item.get("status") or "").casefold() in {"needs_action", "failed", "missing"}:
-            add(10, "readiness", str(item.get("label") or item.get("name") or "Readiness item needs action"), str(item.get("summary") or item.get("details") or ""), f"relic --root <workspace> report processing-readiness --case {case_id}", item)
-
-    gaps = evidence_gaps_report(db, case_id, limit=limit)
-    for gap in gaps.get("gaps") or []:
-        severity = str(gap.get("severity") or "")
-        priority = 20 if severity == "error" else 30 if severity == "warning" else 60
-        add(priority, "evidence_gap", str(gap.get("title") or "Evidence gap"), str(gap.get("summary") or gap.get("recommendation") or ""), f"relic --root <workspace> report evidence-gaps --case {case_id}", gap)
-
-    unmapped = unmapped_imports_report(db, case_id, limit=limit)
-    if int((unmapped.get("summary") or {}).get("unmapped_count") or 0):
-        add(25, "parser_gap", "Unmapped live-response CSVs need parser review", f"{unmapped['summary']['unmapped_count']} unsupported CSV imports were recorded.", f"relic --root <workspace> report unmapped-imports --case {case_id} --format table", unmapped.get("summary"))
-
-    suspicious = suspicious_executions_report(db, case_id, limit=limit)
-    for finding in (suspicious.get("findings") or suspicious.get("items") or [])[:5]:
-        add(35, "suspicious_execution", str(finding.get("application") or finding.get("display_path") or "Suspicious execution finding"), str(finding.get("reason") or finding.get("summary") or ""), f"relic --root <workspace> report suspicious-executions --case {case_id}", finding)
-
-    storage = external_storage_report(db, case_id, limit=limit, rebuild_correlations=False, include_file_activity=False)
-    for device in (storage.get("devices") or storage.get("storage_devices") or [])[:5]:
-        if device.get("file_activity_count") or device.get("matched_file_count") or device.get("serial_reliability") == "fake_or_generated":
-            add(45, "external_storage", str(device.get("display_name") or device.get("serial") or "External storage lead"), str(device.get("summary") or device.get("serial_reliability") or ""), f"relic --root <workspace> report external-storage --case {case_id}", device)
-
-    actions.sort(key=lambda row: (int(row["priority"]), str(row["category"]), str(row["title"])))
-    return actions
-
-
 def _review_packet_markdown(payload: dict[str, Any]) -> str:
     lines = [
         f"# {payload.get('title') or 'MCP Review Packet'}",
@@ -2258,6 +2394,14 @@ def _path_from_resource_uri(root: Path, uri: str) -> Path:
         raise ValueError(f"Unsupported resource URI: {uri}")
     relative = unquote(uri[len(prefix):])
     return _workspace_path(root, relative)
+
+
+def _load_json_file(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _extend_optional(command: list[str], option: str, value: object) -> None:
