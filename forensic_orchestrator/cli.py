@@ -1562,9 +1562,9 @@ def build_parser() -> argparse.ArgumentParser:
     mcp = subparsers.add_parser("mcp")
     mcp_sub = mcp.add_subparsers(dest="action", required=True)
     mcp_serve = mcp_sub.add_parser("serve")
-    mcp_serve.add_argument("--allow-processing", action="store_true", help="Expose processing tools when implemented")
-    mcp_serve.add_argument("--allow-sensitive", action="store_true", help="Expose sensitive tools when implemented")
-    mcp_serve.add_argument("--allow-external-ai", action="store_true", help="Expose external-AI tools when implemented")
+    mcp_serve.add_argument("--allow-processing", action="store_true", help="Permit MCP import and processing tools")
+    mcp_serve.add_argument("--allow-sensitive", action="store_true", help="Reserve permission for future sensitive MCP tools")
+    mcp_serve.add_argument("--allow-external-ai", action="store_true", help="Reserve permission for future external-AI MCP tools")
 
     case = subparsers.add_parser("case")
     case_sub = case.add_subparsers(dest="action", required=True)
@@ -3452,6 +3452,7 @@ def run(args: argparse.Namespace) -> int:
             allow_processing=args.allow_processing,
             allow_sensitive=args.allow_sensitive,
             allow_external_ai=args.allow_external_ai,
+            plugin_paths=config.plugin_paths,
         )
     if args.resource == "report-bundle" and args.action == "coverage":
         report = parser_coverage_report(Path(args.path) if args.path else None)

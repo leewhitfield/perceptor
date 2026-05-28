@@ -624,18 +624,19 @@ For clients that use a JSON command configuration, use the same command and args
 }
 ```
 
-The initial MCP surface is read-only. It exposes workspace, case, computer,
-image, job, progress, health, resume-plan, dashboard, and timeline inspection.
-Processing, sensitive credential reveal, external AI, and destructive actions
-are intentionally not exposed by default.
+The base MCP surface includes read-only inspection and safe report-generation
+tools. Processing tools are visible to clients but reject calls unless the
+server was started with `--allow-processing`. Sensitive credential reveal,
+external AI, and destructive actions are intentionally not implemented in the
+default MCP surface.
 
-Reserved opt-in switches:
+Opt-in switches:
 
-- `--allow-processing`: permits processing tools when they are added.
-- `--allow-sensitive`: permits sensitive tools when they are added.
-- `--allow-external-ai`: permits external-AI tools when they are added.
+- `--allow-processing`: permits import and image/profile processing tools.
+- `--allow-sensitive`: reserved for future sensitive tools.
+- `--allow-external-ai`: reserved for future external-AI tools.
 
-Initial read-only MCP tools:
+Read-only MCP tools:
 
 - `relic_workspace_summary`
 - `relic_list_cases`
@@ -649,6 +650,29 @@ Initial read-only MCP tools:
 - `relic_list_jobs`
 - `relic_get_job`
 - `relic_timeline`
+- `relic_ingest_triage_zip_preflight`
+- `relic_report_bundle_coverage`
+- `relic_profile_preview`
+- `relic_doctor`
+- `relic_list_report_types`
+
+Safe-write MCP tools:
+
+- `relic_generate_report`
+- `relic_write_report_bundle`
+
+Processing-gated MCP tools:
+
+- `relic_import_triage_zip`
+- `relic_import_report_bundle`
+- `relic_process_image`
+- `relic_run_profile`
+- `relic_get_mcp_job`
+
+Processing tools start background subprocesses and return an `mcp_job_id`, PID,
+command, and stdout/stderr paths under `ROOT/mcp-jobs/`. Poll
+`relic_get_mcp_job` for the MCP subprocess state, and use `relic_list_jobs` or
+`relic_processing_progress` for Relic's internal parser/tool job records.
 
 ## Report Commands
 

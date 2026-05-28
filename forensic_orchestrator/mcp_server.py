@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, Callable, TextIO
+import uuid
 
+from .config import default_plugin_path
 from .db import Database
 from .paths import WorkspacePaths
+from .report_bundle import parser_coverage_report, report_bundle_preflight_report
 from .reports import (
     case_dashboard_report,
     case_summary_report,
@@ -17,10 +22,28 @@ from .reports import (
     timeline_report,
     workspace_health_report,
 )
-from .standalone import job_status_report
+from .standalone import doctor_report, job_status_report
+from .tools.profiles import profile_extraction_preview
+from .tools.registry import ToolRegistry
 
 
 SUPPORTED_PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
+SUPPORTED_MCP_REPORTS = {
+    "dashboard",
+    "progress",
+    "resume-plan",
+    "external-storage",
+    "suspicious-executions",
+    "interesting-executables",
+    "file-movement-identity",
+    "opened-from-removable-media",
+    "opened-from-cloud-storage",
+    "memory-analysis",
+    "memory-artifacts",
+    "cloud-artifacts",
+    "usb-files",
+    "usb-timeline",
+}
 
 
 @dataclass(frozen=True)
@@ -31,6 +54,7 @@ class McpTool:
     input_schema: dict[str, Any]
     handler: Callable[[dict[str, Any]], dict[str, Any]]
     annotations: dict[str, Any]
+    permission: str = "read"
 
     def definition(self) -> dict[str, Any]:
         return {
@@ -50,11 +74,14 @@ class RelicMcpServer:
         allow_processing: bool = False,
         allow_sensitive: bool = False,
         allow_external_ai: bool = False,
+        plugin_paths: list[Path] | None = None,
     ) -> None:
         self.paths = WorkspacePaths(root)
         self.allow_processing = allow_processing
         self.allow_sensitive = allow_sensitive
         self.allow_external_ai = allow_external_ai
+        self.plugin_paths = plugin_paths or [default_plugin_path()]
+        self._mcp_jobs: dict[str, dict[str, Any]] = {}
         self.tools = {tool.name: tool for tool in self._build_tools()}
 
     def handle_message(self, message: dict[str, Any]) -> dict[str, Any] | None:
@@ -92,9 +119,9 @@ class RelicMcpServer:
             "capabilities": {"tools": {"listChanged": False}},
             "serverInfo": {"name": "relic", "version": _package_version()},
             "instructions": (
-                "Relic MCP exposes forensic workspace tools. This initial surface is read-only; "
-                "processing, sensitive credential reveal, external AI upload, and destructive actions "
-                "require explicit server startup flags before those tools are exposed."
+                "Relic MCP exposes forensic workspace tools. Inspection and report-generation tools are available by default. "
+                "Import and processing calls require --allow-processing. Sensitive credential reveal, external AI upload, "
+                "and destructive actions are not implemented in the default MCP surface."
             ),
         }
 
@@ -106,6 +133,7 @@ class RelicMcpServer:
         tool = self.tools.get(name)
         if tool is None:
             raise ValueError(f"Unknown tool: {name}")
+        self._require_permission(tool.permission)
         try:
             result = tool.handler(arguments)
             return _tool_result(result)
@@ -114,6 +142,8 @@ class RelicMcpServer:
 
     def _build_tools(self) -> list[McpTool]:
         read_only = {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True}
+        safe_write = {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False}
+        processing = {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False}
         return [
             McpTool(
                 name="relic_workspace_summary",
@@ -227,6 +257,183 @@ class RelicMcpServer:
                 ),
                 handler=self.timeline,
                 annotations=read_only,
+            ),
+            McpTool(
+                name="relic_ingest_triage_zip_preflight",
+                title="Relic Triage ZIP Preflight",
+                description="Validate a live-case/report ZIP without importing it.",
+                input_schema=_object_schema(
+                    {
+                        "path": _string_schema("Path to the live-case/report ZIP or folder."),
+                        "max_uncompressed_gb": {"type": "number", "description": "Optional maximum uncompressed ZIP size in GB. 0 disables.", "default": 0.0},
+                    },
+                    required=["path"],
+                ),
+                handler=self.ingest_triage_zip_preflight,
+                annotations=read_only,
+            ),
+            McpTool(
+                name="relic_report_bundle_coverage",
+                title="Relic Report Bundle Coverage",
+                description="Inspect report-bundle parser coverage for a folder or ZIP.",
+                input_schema=_object_schema({"path": _string_schema("Optional report bundle folder or ZIP path.")}),
+                handler=self.report_bundle_coverage,
+                annotations=read_only,
+            ),
+            McpTool(
+                name="relic_profile_preview",
+                title="Relic Profile Preview",
+                description="Preview extraction and tool coverage for a Relic processing profile.",
+                input_schema=_object_schema({"profile": _string_schema("Relic profile name.")}, required=["profile"]),
+                handler=self.profile_preview,
+                annotations=read_only,
+            ),
+            McpTool(
+                name="relic_doctor",
+                title="Relic Doctor",
+                description="Run Relic doctor checks. This MCP tool does not repair dependencies.",
+                input_schema=_object_schema(
+                    {
+                        "case_id": _string_schema("Optional Relic case ID."),
+                        "profile": _string_schema("Optional profile name."),
+                        "smoke": {"type": "boolean", "description": "Run a small isolated smoke test.", "default": False},
+                    }
+                ),
+                handler=self.doctor,
+                annotations=read_only,
+            ),
+            McpTool(
+                name="relic_list_report_types",
+                title="Relic Report Types",
+                description="List report types supported by the generic MCP report runner.",
+                input_schema=_object_schema({}),
+                handler=self.list_report_types,
+                annotations=read_only,
+            ),
+            McpTool(
+                name="relic_generate_report",
+                title="Relic Generate Report",
+                description="Generate a supported report through the Relic CLI and return stdout/stderr metadata.",
+                input_schema=_object_schema(
+                    {
+                        "case_id": _string_schema("Relic case ID."),
+                        "report_name": _string_schema("Supported report name."),
+                        "format": {"type": "string", "enum": ["json", "table", "csv", "md"], "default": "json"},
+                        "limit": _integer_schema("Maximum rows to return.", default=100, minimum=1, maximum=1000),
+                        "output": _string_schema("Optional output path. Must be under the workspace root."),
+                    },
+                    required=["case_id", "report_name"],
+                ),
+                handler=self.generate_report,
+                annotations=safe_write,
+                permission="safe_write",
+            ),
+            McpTool(
+                name="relic_write_report_bundle",
+                title="Relic Write Report Bundle",
+                description="Write a purpose-built report bundle under the workspace root.",
+                input_schema=_object_schema(
+                    {
+                        "case_id": _string_schema("Relic case ID."),
+                        "output_dir": _string_schema("Output directory under the workspace root."),
+                        "purpose": {"type": "string", "enum": ["full", "usb", "cloud", "execution", "memory", "triage"], "default": "full"},
+                        "limit": _integer_schema("Maximum rows per report.", default=100, minimum=1, maximum=1000),
+                    },
+                    required=["case_id", "output_dir"],
+                ),
+                handler=self.write_report_bundle,
+                annotations=safe_write,
+                permission="safe_write",
+            ),
+            McpTool(
+                name="relic_get_mcp_job",
+                title="Get Relic MCP Job",
+                description="Return status for a long-running process launched by this MCP server.",
+                input_schema=_object_schema({"mcp_job_id": _string_schema("MCP job ID returned by a processing tool.")}, required=["mcp_job_id"]),
+                handler=self.get_mcp_job,
+                annotations=read_only,
+            ),
+            McpTool(
+                name="relic_import_triage_zip",
+                title="Relic Import Triage ZIP",
+                description="Start a gated bulk live-case/report ZIP import as a background MCP job.",
+                input_schema=_object_schema(
+                    {
+                        "path": _string_schema("Path to the live-case/report ZIP or folder."),
+                        "case_id": _string_schema("Optional existing case ID."),
+                        "accept_duplicate": {"type": "boolean", "default": False},
+                        "no_progress": {"type": "boolean", "default": False},
+                        "write_reports": {"type": "boolean", "default": True},
+                        "report_purpose": {"type": "string", "enum": ["full", "usb", "cloud", "execution", "memory", "triage"], "default": "triage"},
+                        "report_output_dir": _string_schema("Optional report output directory under the workspace root."),
+                    },
+                    required=["path"],
+                ),
+                handler=self.import_triage_zip,
+                annotations=processing,
+                permission="processing",
+            ),
+            McpTool(
+                name="relic_import_report_bundle",
+                title="Relic Import Report Bundle",
+                description="Start a gated single-computer report bundle import as a background MCP job.",
+                input_schema=_object_schema(
+                    {
+                        "path": _string_schema("Path to report bundle folder."),
+                        "case_id": _string_schema("Optional existing case ID."),
+                        "computer_id": _string_schema("Optional existing computer ID."),
+                        "computer_label": _string_schema("Optional computer label."),
+                        "accept_duplicate": {"type": "boolean", "default": False},
+                        "no_progress": {"type": "boolean", "default": False},
+                    },
+                    required=["path"],
+                ),
+                handler=self.import_report_bundle,
+                annotations=processing,
+                permission="processing",
+            ),
+            McpTool(
+                name="relic_process_image",
+                title="Relic Process Image",
+                description="Start a gated image processing run as a background MCP job.",
+                input_schema=_object_schema(
+                    {
+                        "path": _string_schema("Path to source image."),
+                        "case_id": _string_schema("Optional existing case ID."),
+                        "computer_id": _string_schema("Optional existing computer ID."),
+                        "computer_label": _string_schema("Optional computer label."),
+                        "hostname": _string_schema("Optional hostname."),
+                        "profile": _string_schema("Processing profile name."),
+                        "filesystem": {"type": "boolean", "default": False},
+                        "use_sudo_mount": {"type": "boolean", "default": False},
+                        "keep_mounted": {"type": "boolean", "default": False},
+                        "accept_duplicate": {"type": "boolean", "default": False},
+                        "replace_existing": {"type": "boolean", "default": False},
+                        "workers": _integer_schema("Worker slots.", default=1, minimum=1, maximum=64),
+                    },
+                    required=["path"],
+                ),
+                handler=self.process_image,
+                annotations=processing,
+                permission="processing",
+            ),
+            McpTool(
+                name="relic_run_profile",
+                title="Relic Run Profile",
+                description="Start a gated profile run against an existing case image as a background MCP job.",
+                input_schema=_object_schema(
+                    {
+                        "case_id": _string_schema("Relic case ID."),
+                        "image_id": _string_schema("Relic image ID."),
+                        "profile": _string_schema("Processing profile name."),
+                        "accept_duplicate": {"type": "boolean", "default": False},
+                        "replace_existing": {"type": "boolean", "default": False},
+                    },
+                    required=["case_id", "image_id", "profile"],
+                ),
+                handler=self.run_profile,
+                annotations=processing,
+                permission="processing",
             ),
         ]
 
@@ -385,6 +592,235 @@ class RelicMcpServer:
         finally:
             db.close()
 
+    def ingest_triage_zip_preflight(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        report = report_bundle_preflight_report(Path(_required(arguments, "path")).expanduser())
+        _enforce_uncompressed_limit(report, float(arguments.get("max_uncompressed_gb") or 0.0))
+        return report
+
+    def report_bundle_coverage(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        path = str(arguments.get("path") or "").strip()
+        return parser_coverage_report(Path(path).expanduser() if path else None)
+
+    def profile_preview(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return profile_extraction_preview(self._registry(), _required(arguments, "profile"))
+
+    def doctor(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        db = self._db()
+        try:
+            return doctor_report(
+                db,
+                self.paths,
+                self._registry(),
+                case_id=str(arguments.get("case_id") or "").strip() or None,
+                profile=str(arguments.get("profile") or "").strip() or None,
+                smoke=bool(arguments.get("smoke") or False),
+                repair=False,
+            )
+        finally:
+            db.close()
+
+    def list_report_types(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        reports = [
+            {"name": name, "safe_write": True}
+            for name in sorted(SUPPORTED_MCP_REPORTS)
+        ]
+        return {"reports": reports, "total_returned": len(reports)}
+
+    def generate_report(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        report_name = _required(arguments, "report_name")
+        if report_name not in SUPPORTED_MCP_REPORTS:
+            raise ValueError(f"Unsupported MCP report_name: {report_name}")
+        fmt = str(arguments.get("format") or "json")
+        if fmt not in {"json", "table", "csv", "md"}:
+            raise ValueError("format must be one of: json, table, csv, md")
+        command = self._base_cli_command() + [
+            "report",
+            report_name,
+            "--case",
+            _required(arguments, "case_id"),
+            "--format",
+            fmt,
+            "--limit",
+            str(_limit(arguments, default=100)),
+        ]
+        output = str(arguments.get("output") or "").strip()
+        if output:
+            command.extend(["--output", str(_workspace_path(self.paths.root, output))])
+        return self._run_cli_capture(command)
+
+    def write_report_bundle(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        db = self._db()
+        try:
+            from .cli import write_case_report_bundle
+
+            output_dir = _workspace_path(self.paths.root, _required(arguments, "output_dir"))
+            purpose = str(arguments.get("purpose") or "full")
+            if purpose not in {"full", "usb", "cloud", "execution", "memory", "triage"}:
+                raise ValueError("purpose must be one of: full, usb, cloud, execution, memory, triage")
+            return write_case_report_bundle(
+                db,
+                _required(arguments, "case_id"),
+                output_dir,
+                limit=_limit(arguments, default=100),
+                purpose=purpose,
+            )
+        finally:
+            db.close()
+
+    def get_mcp_job(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        mcp_job_id = _required(arguments, "mcp_job_id")
+        job = self._mcp_jobs.get(mcp_job_id)
+        if job is None:
+            raise ValueError(f"MCP job not found in this server session: {mcp_job_id}")
+        process: subprocess.Popen[str] = job["process"]
+        returncode = process.poll()
+        if returncode is None:
+            status = "running"
+        elif returncode == 0:
+            status = "completed"
+        else:
+            status = "failed"
+        job.update(
+            {
+                "status": status,
+                "returncode": returncode,
+                "ended_at": job.get("ended_at") or (_now() if returncode is not None else None),
+            }
+        )
+        return {key: value for key, value in job.items() if key != "process"}
+
+    def import_triage_zip(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        command = self._base_cli_command() + ["ingest", "triage-zip", "--path", str(Path(_required(arguments, "path")).expanduser())]
+        _extend_optional(command, "--case", arguments.get("case_id"))
+        if bool(arguments.get("accept_duplicate") or False):
+            command.append("--accept-duplicate")
+        if bool(arguments.get("no_progress") or False):
+            command.append("--no-progress")
+        if bool(arguments.get("write_reports", True)):
+            command.append("--write-reports")
+        else:
+            command.append("--no-write-reports")
+        _extend_optional(command, "--report-purpose", arguments.get("report_purpose") or "triage")
+        if arguments.get("report_output_dir"):
+            command.extend(["--report-output-dir", str(_workspace_path(self.paths.root, str(arguments["report_output_dir"])))])
+        return self._start_mcp_process("import_triage_zip", command)
+
+    def import_report_bundle(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        command = self._base_cli_command() + ["report-bundle", "import", "--path", str(Path(_required(arguments, "path")).expanduser())]
+        _extend_optional(command, "--case", arguments.get("case_id"))
+        _extend_optional(command, "--computer", arguments.get("computer_id"))
+        _extend_optional(command, "--computer-label", arguments.get("computer_label"))
+        if bool(arguments.get("accept_duplicate") or False):
+            command.append("--accept-duplicate")
+        if bool(arguments.get("no_progress") or False):
+            command.append("--no-progress")
+        return self._start_mcp_process("import_report_bundle", command)
+
+    def process_image(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        command = self._base_cli_command() + [
+            "process",
+            "--path",
+            str(Path(_required(arguments, "path")).expanduser()),
+            "--profile",
+            str(arguments.get("profile") or "windows-basic"),
+            "--workers",
+            str(_bounded_int(arguments, "workers", default=1, minimum=1, maximum=64)),
+        ]
+        _extend_optional(command, "--case", arguments.get("case_id"))
+        _extend_optional(command, "--computer", arguments.get("computer_id"))
+        _extend_optional(command, "--computer-label", arguments.get("computer_label"))
+        _extend_optional(command, "--hostname", arguments.get("hostname"))
+        for flag, key in (
+            ("--filesystem", "filesystem"),
+            ("--sudo", "use_sudo_mount"),
+            ("--keep-mounted", "keep_mounted"),
+            ("--accept-duplicate", "accept_duplicate"),
+            ("--replace-existing", "replace_existing"),
+        ):
+            if bool(arguments.get(key) or False):
+                command.append(flag)
+        return self._start_mcp_process("process_image", command)
+
+    def run_profile(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        command = self._base_cli_command() + [
+            "run",
+            "--case",
+            _required(arguments, "case_id"),
+            "--image",
+            _required(arguments, "image_id"),
+            "--profile",
+            _required(arguments, "profile"),
+        ]
+        for flag, key in (("--accept-duplicate", "accept_duplicate"), ("--replace-existing", "replace_existing")):
+            if bool(arguments.get(key) or False):
+                command.append(flag)
+        return self._start_mcp_process("run_profile", command)
+
+    def _registry(self) -> ToolRegistry:
+        return ToolRegistry.from_files(self.plugin_paths)
+
+    def _base_cli_command(self) -> list[str]:
+        command = [sys.executable, "-m", "forensic_orchestrator.cli", "--root", str(self.paths.root)]
+        for plugin_path in self.plugin_paths:
+            command.extend(["--plugin", str(plugin_path)])
+        return command
+
+    def _run_cli_capture(self, command: list[str]) -> dict[str, Any]:
+        completed = subprocess.run(command, cwd=Path.cwd(), capture_output=True, text=True, check=False)
+        parsed_stdout = _json_value(completed.stdout, None) if completed.stdout.strip().startswith(("{", "[")) else None
+        return {
+            "command": command,
+            "returncode": completed.returncode,
+            "status": "completed" if completed.returncode == 0 else "failed",
+            "stdout": completed.stdout[-100_000:],
+            "stderr": completed.stderr[-20_000:],
+            "json": parsed_stdout,
+        }
+
+    def _start_mcp_process(self, name: str, command: list[str]) -> dict[str, Any]:
+        job_id = str(uuid.uuid4())
+        job_dir = self.paths.root / "mcp-jobs" / job_id
+        job_dir.mkdir(parents=True, exist_ok=True)
+        stdout_path = job_dir / "stdout.txt"
+        stderr_path = job_dir / "stderr.txt"
+        stdout_handle = stdout_path.open("w", encoding="utf-8")
+        stderr_handle = stderr_path.open("w", encoding="utf-8")
+        try:
+            process = subprocess.Popen(
+                command,
+                cwd=Path.cwd(),
+                stdout=stdout_handle,
+                stderr=stderr_handle,
+                text=True,
+                start_new_session=True,
+            )
+        finally:
+            stdout_handle.close()
+            stderr_handle.close()
+        job = {
+            "mcp_job_id": job_id,
+            "name": name,
+            "status": "running",
+            "pid": process.pid,
+            "command": command,
+            "stdout_path": str(stdout_path),
+            "stderr_path": str(stderr_path),
+            "started_at": _now(),
+            "ended_at": None,
+            "returncode": None,
+            "process": process,
+        }
+        self._mcp_jobs[job_id] = job
+        return {key: value for key, value in job.items() if key != "process"}
+
+    def _require_permission(self, permission: str) -> None:
+        if permission == "processing" and not self.allow_processing:
+            raise ValueError("Tool requires MCP server startup flag: --allow-processing")
+        if permission == "sensitive" and not self.allow_sensitive:
+            raise ValueError("Tool requires MCP server startup flag: --allow-sensitive")
+        if permission == "external_ai" and not self.allow_external_ai:
+            raise ValueError("Tool requires MCP server startup flag: --allow-external-ai")
+
     def _permissions(self) -> dict[str, bool]:
         return {
             "read_only": True,
@@ -411,6 +847,7 @@ def run_mcp_server(
     allow_processing: bool = False,
     allow_sensitive: bool = False,
     allow_external_ai: bool = False,
+    plugin_paths: list[Path] | None = None,
     stdin: TextIO = sys.stdin,
     stdout: TextIO = sys.stdout,
 ) -> int:
@@ -419,6 +856,7 @@ def run_mcp_server(
         allow_processing=allow_processing,
         allow_sensitive=allow_sensitive,
         allow_external_ai=allow_external_ai,
+        plugin_paths=plugin_paths,
     )
     for line in stdin:
         line = line.strip()
@@ -491,9 +929,50 @@ def _limit(arguments: dict[str, Any], *, default: int) -> int:
     return max(1, min(limit, 1000))
 
 
+def _bounded_int(arguments: dict[str, Any], key: str, *, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(arguments.get(key) or default)
+    except (TypeError, ValueError):
+        raise ValueError(f"{key} must be an integer")
+    return max(minimum, min(value, maximum))
+
+
 def _count_table(db: Database, table: str) -> int:
     row = db.conn.execute(f"SELECT COUNT(*) AS count FROM {table}").fetchone()
     return int(row["count"] if row else 0)
+
+
+def _enforce_uncompressed_limit(report: dict[str, Any], max_uncompressed_gb: float) -> None:
+    if max_uncompressed_gb <= 0:
+        return
+    summary = report.get("summary") or {}
+    uncompressed = int(summary.get("uncompressed_size") or summary.get("uncompressed_bytes") or 0)
+    if uncompressed <= 0:
+        return
+    limit = int(max_uncompressed_gb * 1024 * 1024 * 1024)
+    if uncompressed > limit:
+        raise ValueError(f"ZIP uncompressed size {uncompressed} exceeds MCP limit {limit}")
+
+
+def _workspace_path(root: Path, value: str) -> Path:
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = root / path
+    resolved = path.resolve()
+    root_resolved = root.resolve()
+    if resolved != root_resolved and root_resolved not in resolved.parents:
+        raise ValueError(f"MCP output paths must stay under workspace root: {root_resolved}")
+    return resolved
+
+
+def _extend_optional(command: list[str], option: str, value: object) -> None:
+    text = str(value or "").strip()
+    if text:
+        command.extend([option, text])
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _case_rows(db: Database, limit: int) -> list[dict[str, Any]]:
