@@ -15,11 +15,25 @@ from .db import Database
 from .paths import WorkspacePaths
 from .report_bundle import parser_coverage_report, report_bundle_preflight_report
 from .reports import (
+    browser_activity_report,
+    case_review_report,
     case_dashboard_report,
     case_summary_report,
+    cloud_artifacts_report,
+    communications_report,
+    external_storage_report,
+    file_movement_identity_report,
+    memory_analysis_report,
+    memory_artifacts_report,
+    opened_from_cloud_storage_report,
+    opened_from_removable_media_report,
     processing_progress_report,
+    registry_activity_report,
     resume_plan_report,
+    shortcuts_report,
+    suspicious_executions_report,
     timeline_report,
+    usb_file_correlation_report,
     workspace_health_report,
 )
 from .standalone import doctor_report, job_status_report
@@ -256,6 +270,176 @@ class RelicMcpServer:
                     required=["case_id"],
                 ),
                 handler=self.timeline,
+                annotations=read_only,
+            ),
+            McpTool(
+                name="relic_query_suspicious_executions",
+                title="Query Suspicious Executions",
+                description="Return suspicious execution findings for a case.",
+                input_schema=_case_limit_schema(default=100),
+                handler=self.query_suspicious_executions,
+                annotations=read_only,
+            ),
+            McpTool(
+                name="relic_query_external_storage",
+                title="Query External Storage",
+                description="Return external/removable storage summary and timeline context.",
+                input_schema=_object_schema(
+                    {
+                        "case_id": _string_schema("Relic case ID."),
+                        "limit": _integer_schema("Maximum rows to return.", default=250, minimum=1, maximum=1000),
+                        "include_file_activity": {"type": "boolean", "default": True},
+                    },
+                    required=["case_id"],
+                ),
+                handler=self.query_external_storage,
+                annotations=read_only,
+            ),
+            McpTool(
+                name="relic_query_usb_files",
+                title="Query USB Files",
+                description="Return USB/removable-media file correlations.",
+                input_schema=_object_schema(
+                    {
+                        "case_id": _string_schema("Relic case ID."),
+                        "limit": _integer_schema("Maximum rows to return.", default=500, minimum=1, maximum=1000),
+                        "grouped": {"type": "boolean", "default": False},
+                    },
+                    required=["case_id"],
+                ),
+                handler=self.query_usb_files,
+                annotations=read_only,
+            ),
+            McpTool(
+                name="relic_query_file_movement_identity",
+                title="Query File Movement Identity",
+                description="Return identity and movement correlations from shortcuts, DROID, and related artifacts.",
+                input_schema=_object_schema(
+                    {
+                        "case_id": _string_schema("Relic case ID."),
+                        "limit": _integer_schema("Maximum rows to return.", default=100, minimum=1, maximum=1000),
+                        "contains": _string_schema("Optional text filter."),
+                        "min_confidence": {"type": "string", "enum": ["review", "low", "context", "medium", "high"]},
+                        "high_confidence_only": {"type": "boolean", "default": False},
+                    },
+                    required=["case_id"],
+                ),
+                handler=self.query_file_movement_identity,
+                annotations=read_only,
+            ),
+            McpTool(
+                name="relic_query_opened_from_removable_media",
+                title="Query Opened From Removable Media",
+                description="Return files or artifacts indicating user-opened content from removable media.",
+                input_schema=_user_contains_schema(default=100),
+                handler=self.query_opened_from_removable_media,
+                annotations=read_only,
+            ),
+            McpTool(
+                name="relic_query_opened_from_cloud_storage",
+                title="Query Opened From Cloud Storage",
+                description="Return files or artifacts indicating user-opened content from cloud-synced storage.",
+                input_schema=_object_schema(
+                    {
+                        "case_id": _string_schema("Relic case ID."),
+                        "limit": _integer_schema("Maximum rows to return.", default=100, minimum=1, maximum=1000),
+                        "user": _string_schema("Optional user/profile filter."),
+                        "provider": _string_schema("Optional cloud provider filter."),
+                        "contains": _string_schema("Optional text filter."),
+                    },
+                    required=["case_id"],
+                ),
+                handler=self.query_opened_from_cloud_storage,
+                annotations=read_only,
+            ),
+            McpTool(
+                name="relic_query_cloud_artifacts",
+                title="Query Cloud Artifacts",
+                description="Return cloud storage and cloud application artifacts.",
+                input_schema=_case_limit_schema(default=100),
+                handler=self.query_cloud_artifacts,
+                annotations=read_only,
+            ),
+            McpTool(
+                name="relic_query_memory_artifacts",
+                title="Query Memory Artifacts",
+                description="Return memory artifact inventory rows.",
+                input_schema=_case_limit_schema(default=100),
+                handler=self.query_memory_artifacts,
+                annotations=read_only,
+            ),
+            McpTool(
+                name="relic_query_browser_activity",
+                title="Query Browser Activity",
+                description="Return browser host, download, WebCache, and cache correlation summary.",
+                input_schema=_object_schema(
+                    {
+                        "case_id": _string_schema("Relic case ID."),
+                        "limit": _integer_schema("Maximum rows to return.", default=100, minimum=1, maximum=1000),
+                        "browser": _string_schema("Optional browser filter."),
+                        "user": _string_schema("Optional user/profile filter."),
+                        "include_noise": {"type": "boolean", "default": False},
+                    },
+                    required=["case_id"],
+                ),
+                handler=self.query_browser_activity,
+                annotations=read_only,
+            ),
+            McpTool(
+                name="relic_query_registry_activity",
+                title="Query Registry Activity",
+                description="Return targeted registry activity such as RunMRU, RecentDocs, UserAssist, or Office MRU.",
+                input_schema=_object_schema(
+                    {
+                        "case_id": _string_schema("Relic case ID."),
+                        "artifact": _string_schema("Registry artifact name, for example runmru, recentdocs, userassist, office-mru."),
+                        "limit": _integer_schema("Maximum rows to return.", default=100, minimum=1, maximum=1000),
+                        "user": _string_schema("Optional user/profile filter."),
+                    },
+                    required=["case_id", "artifact"],
+                ),
+                handler=self.query_registry_activity,
+                annotations=read_only,
+            ),
+            McpTool(
+                name="relic_query_shortcuts",
+                title="Query Shortcuts",
+                description="Return LNK or JumpList shortcut artifacts.",
+                input_schema=_object_schema(
+                    {
+                        "case_id": _string_schema("Relic case ID."),
+                        "limit": _integer_schema("Maximum rows to return.", default=100, minimum=1, maximum=1000),
+                        "artifact_type": {"type": "string", "enum": ["lnk", "jumplist"]},
+                    },
+                    required=["case_id"],
+                ),
+                handler=self.query_shortcuts,
+                annotations=read_only,
+            ),
+            McpTool(
+                name="relic_query_communications",
+                title="Query Communications",
+                description="Return communication artifacts from mailbox, Windows Search, messaging, and related sources.",
+                input_schema=_object_schema(
+                    {
+                        "case_id": _string_schema("Relic case ID."),
+                        "limit": _integer_schema("Maximum rows to return.", default=100, minimum=1, maximum=1000),
+                        "user": _string_schema("Optional user/profile filter."),
+                        "contains": _string_schema("Optional text filter."),
+                        "source_type": _string_schema("Optional source type filter."),
+                        "include_low_value": {"type": "boolean", "default": False},
+                    },
+                    required=["case_id"],
+                ),
+                handler=self.query_communications,
+                annotations=read_only,
+            ),
+            McpTool(
+                name="relic_case_review",
+                title="Relic Case Review",
+                description="Return a combined investigative review across dashboard, suspicious execution, storage, cloud, movement, memory, browser, and communications.",
+                input_schema=_case_limit_schema(default=25),
+                handler=self.case_review,
                 annotations=read_only,
             ),
             McpTool(
@@ -592,6 +776,171 @@ class RelicMcpServer:
         finally:
             db.close()
 
+    def query_suspicious_executions(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        db = self._db()
+        try:
+            return suspicious_executions_report(db, _required(arguments, "case_id"), limit=_limit(arguments, default=100))
+        finally:
+            db.close()
+
+    def query_external_storage(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        db = self._db()
+        try:
+            return external_storage_report(
+                db,
+                _required(arguments, "case_id"),
+                limit=_limit(arguments, default=250),
+                rebuild_correlations=False,
+                include_file_activity=bool(arguments.get("include_file_activity", True)),
+            )
+        finally:
+            db.close()
+
+    def query_usb_files(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        db = self._db()
+        try:
+            return usb_file_correlation_report(
+                db,
+                _required(arguments, "case_id"),
+                limit=_limit(arguments, default=500),
+                grouped=bool(arguments.get("grouped") or False),
+            )
+        finally:
+            db.close()
+
+    def query_file_movement_identity(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        db = self._db()
+        try:
+            return file_movement_identity_report(
+                db,
+                _required(arguments, "case_id"),
+                contains=_optional_text(arguments, "contains"),
+                min_confidence=_optional_text(arguments, "min_confidence"),
+                high_confidence_only=bool(arguments.get("high_confidence_only") or False),
+                limit=_limit(arguments, default=100),
+            )
+        finally:
+            db.close()
+
+    def query_opened_from_removable_media(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        db = self._db()
+        try:
+            return opened_from_removable_media_report(
+                db,
+                _required(arguments, "case_id"),
+                user=_optional_text(arguments, "user"),
+                contains=_optional_text(arguments, "contains"),
+                limit=_limit(arguments, default=100),
+            )
+        finally:
+            db.close()
+
+    def query_opened_from_cloud_storage(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        db = self._db()
+        try:
+            return opened_from_cloud_storage_report(
+                db,
+                _required(arguments, "case_id"),
+                user=_optional_text(arguments, "user"),
+                provider=_optional_text(arguments, "provider"),
+                contains=_optional_text(arguments, "contains"),
+                limit=_limit(arguments, default=100),
+            )
+        finally:
+            db.close()
+
+    def query_cloud_artifacts(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        db = self._db()
+        try:
+            return cloud_artifacts_report(db, _required(arguments, "case_id"), limit=_limit(arguments, default=100))
+        finally:
+            db.close()
+
+    def query_memory_artifacts(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        db = self._db()
+        try:
+            return memory_artifacts_report(db, _required(arguments, "case_id"), limit=_limit(arguments, default=100))
+        finally:
+            db.close()
+
+    def query_browser_activity(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        db = self._db()
+        try:
+            return browser_activity_report(
+                db,
+                _required(arguments, "case_id"),
+                limit=_limit(arguments, default=100),
+                browser=_optional_text(arguments, "browser"),
+                user=_optional_text(arguments, "user"),
+                exclude_noise=not bool(arguments.get("include_noise") or False),
+            )
+        finally:
+            db.close()
+
+    def query_registry_activity(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        db = self._db()
+        try:
+            return registry_activity_report(
+                db,
+                _required(arguments, "case_id"),
+                artifact=_required(arguments, "artifact"),
+                user=_optional_text(arguments, "user"),
+                limit=_limit(arguments, default=100),
+            )
+        finally:
+            db.close()
+
+    def query_shortcuts(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        db = self._db()
+        try:
+            return shortcuts_report(
+                db,
+                _required(arguments, "case_id"),
+                artifact_type=_optional_text(arguments, "artifact_type"),
+                limit=_limit(arguments, default=100),
+            )
+        finally:
+            db.close()
+
+    def query_communications(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        db = self._db()
+        try:
+            return communications_report(
+                db,
+                _required(arguments, "case_id"),
+                limit=_limit(arguments, default=100),
+                user=_optional_text(arguments, "user"),
+                contains=_optional_text(arguments, "contains"),
+                source_type=_optional_text(arguments, "source_type"),
+                include_low_value=bool(arguments.get("include_low_value") or False),
+            )
+        finally:
+            db.close()
+
+    def case_review(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        case_id = _required(arguments, "case_id")
+        limit = _limit(arguments, default=25)
+        db = self._db()
+        try:
+            review = case_review_report(db, case_id, limit=limit)
+            return {
+                "case_id": case_id,
+                "review": review,
+                "dashboard": case_dashboard_report(db, case_id, limit=limit),
+                "suspicious_executions": suspicious_executions_report(db, case_id, limit=limit),
+                "external_storage": external_storage_report(db, case_id, limit=limit, rebuild_correlations=False, include_file_activity=False),
+                "cloud_artifacts": cloud_artifacts_report(db, case_id, limit=limit),
+                "file_movement_identity": file_movement_identity_report(db, case_id, limit=limit),
+                "opened_from_removable_media": opened_from_removable_media_report(db, case_id, limit=limit),
+                "opened_from_cloud_storage": opened_from_cloud_storage_report(db, case_id, limit=limit),
+                "memory_analysis": memory_analysis_report(db, case_id, limit=limit),
+                "memory_artifacts": memory_artifacts_report(db, case_id, limit=limit),
+                "browser_activity": browser_activity_report(db, case_id, limit=limit),
+                "communications": communications_report(db, case_id, limit=limit),
+            }
+        finally:
+            db.close()
+
     def ingest_triage_zip_preflight(self, arguments: dict[str, Any]) -> dict[str, Any]:
         report = report_bundle_preflight_report(Path(_required(arguments, "path")).expanduser())
         _enforce_uncompressed_limit(report, float(arguments.get("max_uncompressed_gb") or 0.0))
@@ -906,6 +1255,18 @@ def _case_limit_schema(*, default: int) -> dict[str, Any]:
     )
 
 
+def _user_contains_schema(*, default: int) -> dict[str, Any]:
+    return _object_schema(
+        {
+            "case_id": _string_schema("Relic case ID."),
+            "limit": _integer_schema("Maximum rows to return.", default=default, minimum=1, maximum=1000),
+            "user": _string_schema("Optional user/profile filter."),
+            "contains": _string_schema("Optional text filter."),
+        },
+        required=["case_id"],
+    )
+
+
 def _string_schema(description: str) -> dict[str, Any]:
     return {"type": "string", "description": description}
 
@@ -919,6 +1280,11 @@ def _required(arguments: dict[str, Any], key: str) -> str:
     if not value:
         raise ValueError(f"Missing required argument: {key}")
     return value
+
+
+def _optional_text(arguments: dict[str, Any], key: str) -> str | None:
+    value = str(arguments.get(key) or "").strip()
+    return value or None
 
 
 def _limit(arguments: dict[str, Any], *, default: int) -> int:

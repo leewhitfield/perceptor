@@ -29,6 +29,9 @@ def test_mcp_initialize_and_list_tools(tmp_path):
     assert "relic_case_summary" in names
     assert "relic_ingest_triage_zip_preflight" in names
     assert "relic_import_triage_zip" in names
+    assert "relic_query_suspicious_executions" in names
+    assert "relic_query_external_storage" in names
+    assert "relic_case_review" in names
     assert any(tool["annotations"]["readOnlyHint"] is False for tool in tools)
 
 
@@ -130,3 +133,33 @@ def test_mcp_triage_zip_preflight(tmp_path):
     result = response["result"]["structuredContent"]
     assert result["summary"]["computer_count"] == 1
     assert result["computers"][0]["label"] == "HOST01"
+
+
+def test_mcp_artifact_queries_and_case_review_are_structured(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    db.create_case("case-1", tmp_path)
+    db.close()
+    server = RelicMcpServer(root=tmp_path)
+
+    suspicious = server.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "relic_query_suspicious_executions", "arguments": {"case_id": "case-1"}},
+        }
+    )
+    assert suspicious["result"]["structuredContent"]["case_id"] == "case-1"
+
+    review = server.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {"name": "relic_case_review", "arguments": {"case_id": "case-1", "limit": 5}},
+        }
+    )
+    structured = review["result"]["structuredContent"]
+    assert structured["case_id"] == "case-1"
+    assert "dashboard" in structured
+    assert "external_storage" in structured

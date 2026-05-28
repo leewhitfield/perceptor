@@ -655,6 +655,19 @@ Read-only MCP tools:
 - `relic_profile_preview`
 - `relic_doctor`
 - `relic_list_report_types`
+- `relic_query_suspicious_executions`
+- `relic_query_external_storage`
+- `relic_query_usb_files`
+- `relic_query_file_movement_identity`
+- `relic_query_opened_from_removable_media`
+- `relic_query_opened_from_cloud_storage`
+- `relic_query_cloud_artifacts`
+- `relic_query_memory_artifacts`
+- `relic_query_browser_activity`
+- `relic_query_registry_activity`
+- `relic_query_shortcuts`
+- `relic_query_communications`
+- `relic_case_review`
 
 Safe-write MCP tools:
 
