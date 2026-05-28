@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import mimetypes
+import os
+import signal
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -8,6 +11,7 @@ from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, Callable, TextIO
+from urllib.parse import quote, unquote
 import uuid
 
 from .config import default_plugin_path
@@ -58,6 +62,8 @@ SUPPORTED_MCP_REPORTS = {
     "usb-files",
     "usb-timeline",
 }
+MCP_JOB_INDEX = "index.json"
+MCP_RESOURCE_MAX_BYTES = 1_000_000
 
 
 @dataclass(frozen=True)
@@ -95,7 +101,7 @@ class RelicMcpServer:
         self.allow_sensitive = allow_sensitive
         self.allow_external_ai = allow_external_ai
         self.plugin_paths = plugin_paths or [default_plugin_path()]
-        self._mcp_jobs: dict[str, dict[str, Any]] = {}
+        self._mcp_jobs: dict[str, dict[str, Any]] = self._load_mcp_job_index()
         self.tools = {tool.name: tool for tool in self._build_tools()}
 
     def handle_message(self, message: dict[str, Any]) -> dict[str, Any] | None:
@@ -111,6 +117,10 @@ class RelicMcpServer:
                 return self._response(request_id, self._initialize_result(message.get("params") or {}))
             if method == "ping":
                 return self._response(request_id, {})
+            if method == "resources/list":
+                return self._response(request_id, self._list_resources(message.get("params") or {}))
+            if method == "resources/read":
+                return self._response(request_id, self._read_resource(message.get("params") or {}))
             if method == "tools/list":
                 return self._response(request_id, {"tools": [tool.definition() for tool in self.tools.values()]})
             if method == "tools/call":
@@ -130,7 +140,7 @@ class RelicMcpServer:
         protocol_version = requested if requested in SUPPORTED_PROTOCOL_VERSIONS else SUPPORTED_PROTOCOL_VERSIONS[0]
         return {
             "protocolVersion": protocol_version,
-            "capabilities": {"tools": {"listChanged": False}},
+            "capabilities": {"tools": {"listChanged": False}, "resources": {"subscribe": False, "listChanged": False}},
             "serverInfo": {"name": "relic", "version": _package_version()},
             "instructions": (
                 "Relic MCP exposes forensic workspace tools. Inspection and report-generation tools are available by default. "
@@ -532,10 +542,33 @@ class RelicMcpServer:
             McpTool(
                 name="relic_get_mcp_job",
                 title="Get Relic MCP Job",
-                description="Return status for a long-running process launched by this MCP server.",
+                description="Return persisted status for a long-running process launched by MCP.",
                 input_schema=_object_schema({"mcp_job_id": _string_schema("MCP job ID returned by a processing tool.")}, required=["mcp_job_id"]),
                 handler=self.get_mcp_job,
                 annotations=read_only,
+            ),
+            McpTool(
+                name="relic_get_mcp_job_output",
+                title="Get Relic MCP Job Output",
+                description="Return stdout/stderr tails and parsed JSON stdout when available for an MCP job.",
+                input_schema=_object_schema(
+                    {
+                        "mcp_job_id": _string_schema("MCP job ID returned by a processing tool."),
+                        "max_bytes": _integer_schema("Maximum bytes to return from each stream.", default=20000, minimum=1000, maximum=200000),
+                    },
+                    required=["mcp_job_id"],
+                ),
+                handler=self.get_mcp_job_output,
+                annotations=read_only,
+            ),
+            McpTool(
+                name="relic_cancel_mcp_job",
+                title="Cancel Relic MCP Job",
+                description="Cancel a running MCP-launched subprocess. Requires --allow-processing.",
+                input_schema=_object_schema({"mcp_job_id": _string_schema("MCP job ID returned by a processing tool.")}, required=["mcp_job_id"]),
+                handler=self.cancel_mcp_job,
+                annotations=processing,
+                permission="processing",
             ),
             McpTool(
                 name="relic_import_triage_zip",
@@ -623,6 +656,38 @@ class RelicMcpServer:
 
     def _db(self) -> Database:
         return Database(self.paths.db_path())
+
+    def _list_resources(self, params: dict[str, Any]) -> dict[str, Any]:
+        limit = _bounded_int(params, "limit", default=200, minimum=1, maximum=1000)
+        resources = []
+        for path in _resource_candidates(self.paths.root):
+            if len(resources) >= limit:
+                break
+            stat = path.stat()
+            relative = path.relative_to(self.paths.root)
+            mime_type = mimetypes.guess_type(path.name)[0] or "text/plain"
+            resources.append(
+                {
+                    "uri": _resource_uri(relative),
+                    "name": str(relative),
+                    "title": path.name,
+                    "mimeType": mime_type,
+                    "description": f"Relic workspace file ({stat.st_size} bytes)",
+                }
+            )
+        return {"resources": resources}
+
+    def _read_resource(self, params: dict[str, Any]) -> dict[str, Any]:
+        uri = _required(params, "uri")
+        path = _path_from_resource_uri(self.paths.root, uri)
+        if not path.exists() or not path.is_file():
+            raise ValueError(f"Resource not found: {uri}")
+        size = path.stat().st_size
+        if size > MCP_RESOURCE_MAX_BYTES:
+            raise ValueError(f"Resource exceeds MCP read limit ({size} > {MCP_RESOURCE_MAX_BYTES} bytes): {uri}")
+        mime_type = mimetypes.guess_type(path.name)[0] or "text/plain"
+        text = path.read_text(encoding="utf-8", errors="replace")
+        return {"contents": [{"uri": uri, "mimeType": mime_type, "text": text}]}
 
     def workspace_summary(self, arguments: dict[str, Any]) -> dict[str, Any]:
         if not self.paths.db_path().exists():
@@ -1020,23 +1085,48 @@ class RelicMcpServer:
         mcp_job_id = _required(arguments, "mcp_job_id")
         job = self._mcp_jobs.get(mcp_job_id)
         if job is None:
-            raise ValueError(f"MCP job not found in this server session: {mcp_job_id}")
-        process: subprocess.Popen[str] = job["process"]
-        returncode = process.poll()
-        if returncode is None:
-            status = "running"
-        elif returncode == 0:
-            status = "completed"
-        else:
-            status = "failed"
-        job.update(
-            {
-                "status": status,
-                "returncode": returncode,
-                "ended_at": job.get("ended_at") or (_now() if returncode is not None else None),
-            }
-        )
-        return {key: value for key, value in job.items() if key != "process"}
+            raise ValueError(f"MCP job not found: {mcp_job_id}")
+        self._refresh_mcp_job(job)
+        self._save_mcp_job_index()
+        return _public_job(job)
+
+    def get_mcp_job_output(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        job = self._mcp_jobs.get(_required(arguments, "mcp_job_id"))
+        if job is None:
+            raise ValueError("MCP job not found")
+        max_bytes = _bounded_int(arguments, "max_bytes", default=20_000, minimum=1_000, maximum=200_000)
+        self._refresh_mcp_job(job)
+        stdout_tail = _read_tail(Path(str(job["stdout_path"])), max_bytes)
+        stderr_tail = _read_tail(Path(str(job["stderr_path"])), max_bytes)
+        parsed_stdout = _json_value(stdout_tail, None) if stdout_tail.strip().startswith(("{", "[")) else None
+        return {**_public_job(job), "stdout_tail": stdout_tail, "stderr_tail": stderr_tail, "json": parsed_stdout}
+
+    def cancel_mcp_job(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        job = self._mcp_jobs.get(_required(arguments, "mcp_job_id"))
+        if job is None:
+            raise ValueError("MCP job not found")
+        self._refresh_mcp_job(job)
+        if job.get("status") != "running":
+            return {**_public_job(job), "cancelled": False, "reason": "Job is not running."}
+        pid = int(job["pid"])
+        try:
+            os.killpg(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            job["status"] = "unknown_finished"
+            job["ended_at"] = job.get("ended_at") or _now()
+            self._save_mcp_job_index()
+            return {**_public_job(job), "cancelled": False, "reason": "Process was no longer running."}
+        process = job.get("process")
+        if isinstance(process, subprocess.Popen):
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+        job["status"] = "cancelled"
+        job["ended_at"] = _now()
+        job["returncode"] = -signal.SIGTERM
+        self._save_mcp_job_index()
+        return {**_public_job(job), "cancelled": True}
 
     def import_triage_zip(self, arguments: dict[str, Any]) -> dict[str, Any]:
         command = self._base_cli_command() + ["ingest", "triage-zip", "--path", str(Path(_required(arguments, "path")).expanduser())]
@@ -1128,7 +1218,7 @@ class RelicMcpServer:
 
     def _start_mcp_process(self, name: str, command: list[str]) -> dict[str, Any]:
         job_id = str(uuid.uuid4())
-        job_dir = self.paths.root / "mcp-jobs" / job_id
+        job_dir = self._mcp_jobs_dir() / job_id
         job_dir.mkdir(parents=True, exist_ok=True)
         stdout_path = job_dir / "stdout.txt"
         stderr_path = job_dir / "stderr.txt"
@@ -1160,7 +1250,53 @@ class RelicMcpServer:
             "process": process,
         }
         self._mcp_jobs[job_id] = job
-        return {key: value for key, value in job.items() if key != "process"}
+        self._save_mcp_job_index()
+        return _public_job(job)
+
+    def _refresh_mcp_job(self, job: dict[str, Any]) -> None:
+        process = job.get("process")
+        returncode = process.poll() if isinstance(process, subprocess.Popen) else None
+        if returncode is not None:
+            job["returncode"] = returncode
+            job["status"] = "completed" if returncode == 0 else "failed"
+            job["ended_at"] = job.get("ended_at") or _now()
+            return
+        if job.get("status") in {"completed", "failed", "cancelled"}:
+            return
+        pid = int(job.get("pid") or 0)
+        if pid and _pid_is_running(pid):
+            job["status"] = "running"
+        else:
+            job["status"] = "unknown_finished"
+            job["ended_at"] = job.get("ended_at") or _now()
+
+    def _mcp_jobs_dir(self) -> Path:
+        path = self.paths.root / "mcp-jobs"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def _mcp_job_index_path(self) -> Path:
+        return self._mcp_jobs_dir() / MCP_JOB_INDEX
+
+    def _load_mcp_job_index(self) -> dict[str, dict[str, Any]]:
+        path = self.paths.root / "mcp-jobs" / MCP_JOB_INDEX
+        if not path.exists():
+            return {}
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+        jobs = data.get("jobs") if isinstance(data, dict) else data
+        if not isinstance(jobs, list):
+            return {}
+        return {str(job["mcp_job_id"]): dict(job) for job in jobs if isinstance(job, dict) and job.get("mcp_job_id")}
+
+    def _save_mcp_job_index(self) -> None:
+        path = self._mcp_job_index_path()
+        rows = [_public_job(job) for job in self._mcp_jobs.values()]
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"jobs": rows}, indent=2, default=str), encoding="utf-8")
+        tmp.replace(path)
 
     def _require_permission(self, permission: str) -> None:
         if permission == "processing" and not self.allow_processing:
@@ -1236,6 +1372,32 @@ def _tool_result(result: dict[str, Any], *, is_error: bool = False) -> dict[str,
         "structuredContent": result,
         "isError": is_error,
     }
+
+
+def _public_job(job: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in job.items() if key != "process"}
+
+
+def _pid_is_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _read_tail(path: Path, max_bytes: int) -> str:
+    if not path.exists() or not path.is_file():
+        return ""
+    size = path.stat().st_size
+    with path.open("rb") as handle:
+        if size > max_bytes:
+            handle.seek(-max_bytes, os.SEEK_END)
+        return handle.read(max_bytes).decode("utf-8", errors="replace")
 
 
 def _object_schema(properties: dict[str, Any], *, required: list[str] | None = None) -> dict[str, Any]:
@@ -1329,6 +1491,44 @@ def _workspace_path(root: Path, value: str) -> Path:
     if resolved != root_resolved and root_resolved not in resolved.parents:
         raise ValueError(f"MCP output paths must stay under workspace root: {root_resolved}")
     return resolved
+
+
+def _resource_candidates(root: Path) -> list[Path]:
+    candidates: list[Path] = []
+    if not root.exists():
+        return candidates
+    patterns = (
+        "cases/*/reports/**/*",
+        "cases/*/outputs/reports/**/*",
+        "cases/*/outputs/**/*manifest*.json",
+        "cases/*/outputs/**/*manifest*.csv",
+        "cases/*/logs/**/*",
+        "mcp-jobs/**/*",
+    )
+    for pattern in patterns:
+        for path in root.glob(pattern):
+            if path.is_file() and _is_text_resource(path):
+                candidates.append(path)
+    candidates.sort(key=lambda item: item.stat().st_mtime, reverse=True)
+    return candidates
+
+
+def _is_text_resource(path: Path) -> bool:
+    if path.name == MCP_JOB_INDEX:
+        return True
+    return path.suffix.casefold() in {".txt", ".md", ".json", ".jsonl", ".csv", ".tsv", ".log", ".html", ".htm", ".xml"}
+
+
+def _resource_uri(relative: Path) -> str:
+    return "relic://workspace/" + quote(str(relative).replace("\\", "/"), safe="/")
+
+
+def _path_from_resource_uri(root: Path, uri: str) -> Path:
+    prefix = "relic://workspace/"
+    if not uri.startswith(prefix):
+        raise ValueError(f"Unsupported resource URI: {uri}")
+    relative = unquote(uri[len(prefix):])
+    return _workspace_path(root, relative)
 
 
 def _extend_optional(command: list[str], option: str, value: object) -> None:

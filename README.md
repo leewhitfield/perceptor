@@ -176,7 +176,9 @@ The base MCP surface includes read-only workspace/case inspection, preflight
 tools, timeline queries, and safe report generation. Import and image/profile
 processing tools require `--allow-processing`; sensitive credential reveal,
 external AI, and destructive actions are not implemented in the default MCP
-surface.
+surface. MCP-launched subprocess metadata is persisted under `ROOT/mcp-jobs/`,
+and MCP resources expose generated text reports, manifests, logs, and job output
+through `relic://workspace/...` URIs.
 
 Report plugins can add read-only SQL reports without changing the built-in
 Python report functions. Specs can be embedded in the YAML passed to `--plugin`,

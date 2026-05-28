@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import sys
+import time
 import zipfile
 from io import StringIO
 
@@ -163,3 +165,54 @@ def test_mcp_artifact_queries_and_case_review_are_structured(tmp_path):
     assert structured["case_id"] == "case-1"
     assert "dashboard" in structured
     assert "external_storage" in structured
+
+
+def test_mcp_job_persists_and_output_can_be_read(tmp_path):
+    server = RelicMcpServer(root=tmp_path)
+    started = server._start_mcp_process("test", [sys.executable, "-c", "import json; print(json.dumps({'ok': True}))"])
+    job_id = started["mcp_job_id"]
+
+    for _ in range(50):
+        status = server.get_mcp_job({"mcp_job_id": job_id})
+        if status["status"] != "running":
+            break
+        time.sleep(0.05)
+
+    reloaded = RelicMcpServer(root=tmp_path)
+    persisted = reloaded.get_mcp_job({"mcp_job_id": job_id})
+    assert persisted["mcp_job_id"] == job_id
+    output = reloaded.get_mcp_job_output({"mcp_job_id": job_id})
+    assert output["json"] == {"ok": True}
+
+
+def test_mcp_cancel_job_requires_processing_and_records_cancelled(tmp_path):
+    server = RelicMcpServer(root=tmp_path, allow_processing=True)
+    started = server._start_mcp_process("sleep", [sys.executable, "-c", "import time; time.sleep(30)"])
+
+    response = server.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "relic_cancel_mcp_job", "arguments": {"mcp_job_id": started["mcp_job_id"]}},
+        }
+    )
+
+    result = response["result"]["structuredContent"]
+    assert result["cancelled"] is True
+    assert result["status"] == "cancelled"
+
+
+def test_mcp_resources_list_and_read_workspace_reports(tmp_path):
+    report = tmp_path / "cases" / "case-1" / "reports" / "summary.md"
+    report.parent.mkdir(parents=True)
+    report.write_text("# Summary\n", encoding="utf-8")
+    server = RelicMcpServer(root=tmp_path)
+
+    listed = server.handle_message({"jsonrpc": "2.0", "id": 1, "method": "resources/list", "params": {}})
+    resources = listed["result"]["resources"]
+    uri = resources[0]["uri"]
+    assert uri.startswith("relic://workspace/")
+
+    read = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "resources/read", "params": {"uri": uri}})
+    assert read["result"]["contents"][0]["text"] == "# Summary\n"
