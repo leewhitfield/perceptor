@@ -425,10 +425,10 @@ broader sweep outside common OS/application roots.
 profiles and, when `BMC_TOOLS` is configured, extracts tile fragments, records
 their dimensions and hashes in `rdp_cache_items`, and stores reusable image
 metadata in `image_analysis_items`. The follow-on `RdpVisionReview` stage uses
-the OpenAI Responses API when `OPENAI_API_KEY` is configured to produce bounded
-semantic observations from contact sheets. If no key is configured, or the API
-call fails, it records a Tesseract OCR fallback row instead. `windows-deep` also
-includes this parser.
+the OpenAI Responses API only when both `OPENAI_API_KEY` and
+`FORENSIC_ALLOW_EXTERNAL_AI=1` are configured to produce bounded semantic
+observations from contact sheets. Otherwise, or if the API call fails, it records
+a Tesseract OCR fallback row instead. `windows-deep` also includes this parser.
 
 `windows-old` scopes the existing Windows artifact parsers to `Windows.old`.
 It stores extracted artifacts and parser output under a `Windows.old` namespace,

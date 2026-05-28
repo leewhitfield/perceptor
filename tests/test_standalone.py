@@ -1,4 +1,6 @@
 from pathlib import Path
+import hashlib
+import zipfile
 
 from forensic_orchestrator import standalone as standalone_module
 from forensic_orchestrator.config import load_config
@@ -11,6 +13,9 @@ from forensic_orchestrator.standalone import (
     create_sample_report_bundle_fixture,
     doctor_report,
     _extract_eztools_urls,
+    _extract_archive,
+    _normalized_sha1,
+    _sha1_file,
     _parse_rustc_version,
     install_third_party_tool,
     job_status_report,
@@ -171,3 +176,25 @@ def test_eztools_catalog_url_parser_filters_net9():
         "https://download.ericzimmermanstools.com/net9/AmcacheParser_6.zip",
         "https://download.ericzimmermanstools.com/net9/bstrings.zip",
     ]
+
+
+def test_managed_tool_archive_extract_rejects_traversal(tmp_path):
+    archive = tmp_path / "tool.zip"
+    with zipfile.ZipFile(archive, "w") as handle:
+        handle.writestr("../outside.txt", "bad")
+
+    try:
+        _extract_archive(archive, tmp_path / "tools")
+    except ValueError as exc:
+        assert "Unsafe archive member path" in str(exc)
+    else:
+        raise AssertionError("unsafe archive member was accepted")
+
+
+def test_sha1_helpers_normalize_and_hash(tmp_path):
+    payload = tmp_path / "payload.zip"
+    payload.write_bytes(b"payload")
+    expected = hashlib.sha1(b"payload").hexdigest()
+
+    assert _normalized_sha1(f'"{expected}"') == expected
+    assert _sha1_file(payload) == expected

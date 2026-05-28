@@ -33,13 +33,19 @@ def parse_rdp_vision_review_to_csv(_source: Path, output: Path) -> list[Path]:
             rows.append(_status_row(contact, "openai_vision_missing_contact_sheet", "Contact sheet file is missing."))
             continue
         api_key = os.environ.get("OPENAI_API_KEY", "").strip()
-        if api_key:
+        external_ai_allowed = _truthy(os.environ.get("FORENSIC_ALLOW_EXTERNAL_AI"))
+        if api_key and external_ai_allowed:
             result = _openai_contact_sheet_review(contact_sheet, api_key=api_key)
             if result.get("status") == "ok":
                 rows.append(_openai_observation_row(contact, contact_sheet, result))
                 continue
             rows.append(_status_row(contact, "openai_vision_error", str(result.get("error") or "OpenAI vision review failed."), result))
-        rows.append(_tesseract_fallback_row(contact, contact_sheet, tesseract_rows.get(str(contact_sheet))))
+        fallback_reason = (
+            "OPENAI_API_KEY configured but FORENSIC_ALLOW_EXTERNAL_AI is not enabled"
+            if api_key and not external_ai_allowed
+            else "OPENAI_API_KEY not configured"
+        )
+        rows.append(_tesseract_fallback_row(contact, contact_sheet, tesseract_rows.get(str(contact_sheet)), fallback_reason=fallback_reason))
     csv_path = output / "RdpVisualObservations.csv"
     _write_csv(csv_path, rows)
     return [csv_path]
@@ -121,6 +127,10 @@ def _openai_contact_sheet_review(contact_sheet: Path, *, api_key: str) -> dict[s
     }
 
 
+def _truthy(value: str | None) -> bool:
+    return str(value or "").strip().casefold() in {"1", "true", "yes", "y", "on"}
+
+
 def _openai_observation_row(contact: dict[str, str], contact_sheet: Path, result: dict[str, Any]) -> dict[str, object]:
     review = result.get("review") if isinstance(result.get("review"), dict) else {}
     applications = _join_values(review.get("visible_applications"))
@@ -156,6 +166,8 @@ def _tesseract_fallback_row(
     contact: dict[str, str],
     contact_sheet: Path,
     ocr_row: dict[str, str] | None,
+    *,
+    fallback_reason: str = "OPENAI_API_KEY not configured",
 ) -> dict[str, object]:
     observed_text = _truncate(str((ocr_row or {}).get("observed_text") or ""), OBSERVED_TEXT_LIMIT)
     observation_type = "tesseract_fallback_contact_sheet_ocr" if observed_text else "tesseract_fallback_no_text"
@@ -171,12 +183,12 @@ def _tesseract_fallback_row(
         "observed_text": observed_text,
         "observed_path": "",
         "certainty": certainty,
-        "caveat": "OpenAI vision was not configured; this row falls back to Tesseract OCR and is not semantic visual interpretation.",
+        "caveat": "External AI vision was not enabled; this row falls back to Tesseract OCR and is not semantic visual interpretation.",
         "details_json": json.dumps(
             {
                 "provider": "tesseract_fallback",
                 "source_contact_sheet_sha256": _file_sha256(contact_sheet),
-                "fallback_reason": "OPENAI_API_KEY not configured",
+                "fallback_reason": fallback_reason,
             }
         ),
     }

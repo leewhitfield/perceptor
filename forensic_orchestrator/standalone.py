@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import platform
 import csv
+import hashlib
 import json
 import re
 import shutil
@@ -795,10 +796,16 @@ def _install_eztools_from_catalog(target: Path, *, wanted_tool: str, force: bool
             output_dir.mkdir(parents=True, exist_ok=True)
             archive = output_dir / str(item["Name"])
             _download_file(str(item["URL"]), archive)
+            expected_sha1 = _normalized_sha1(item.get("SHA1"))
+            if expected_sha1:
+                actual_sha1 = _sha1_file(archive)
+                if actual_sha1.casefold() != expected_sha1.casefold():
+                    archive.unlink(missing_ok=True)
+                    raise ValueError(f"SHA1 mismatch for {item.get('Name')}: expected {expected_sha1}, got {actual_sha1}")
             if archive.suffix.casefold() == ".zip":
                 _extract_archive(archive, output_dir)
                 archive.unlink(missing_ok=True)
-            downloaded.append(item)
+            downloaded.append({**item, "SHA1Verified": bool(expected_sha1)})
         except Exception as exc:
             errors.append(f"{item.get('Name')}: {exc}")
     _write_eztools_details(target / "!!!RemoteFileDetails.csv", [*local_details.values(), *downloaded])
@@ -942,7 +949,7 @@ def _load_eztools_details(path: Path) -> dict[str, dict[str, Any]]:
 
 def _write_eztools_details(path: Path, rows: list[dict[str, Any]]) -> None:
     merged = {str(row.get("URL")): row for row in rows if row.get("URL")}
-    fieldnames = ["Name", "SHA1", "URL", "Size", "IsNet9"]
+    fieldnames = ["Name", "SHA1", "SHA1Verified", "URL", "Size", "IsNet9"]
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
@@ -1032,12 +1039,83 @@ def _download_file(url: str, destination: Path) -> None:
 
 def _extract_archive(archive: Path, target_dir: Path) -> None:
     if archive.suffix == ".zip":
-        with zipfile.ZipFile(archive) as handle:
-            handle.extractall(target_dir)
+        _safe_extract_zip(archive, target_dir)
         return
     if archive.name.endswith((".tar.gz", ".tgz")):
-        with tarfile.open(archive) as handle:
-            handle.extractall(target_dir, filter="data")
+        _safe_extract_tar(archive, target_dir)
+
+
+def _safe_extract_zip(archive: Path, target_dir: Path) -> None:
+    target_root = target_dir.resolve()
+    target_root.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(archive) as handle:
+        for member in handle.infolist():
+            relative = _safe_archive_member_name(member.filename)
+            if relative is None:
+                continue
+            destination = (target_root / relative).resolve()
+            if target_root not in destination.parents and destination != target_root:
+                raise ValueError(f"Unsafe archive member path: {member.filename}")
+            mode = (member.external_attr >> 16) & 0o170000
+            if mode in {0o120000, 0o160000}:
+                raise ValueError(f"Refusing archive link member: {member.filename}")
+            if member.is_dir():
+                destination.mkdir(parents=True, exist_ok=True)
+                continue
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            with handle.open(member) as source, destination.open("wb") as output:
+                shutil.copyfileobj(source, output)
+
+
+def _safe_extract_tar(archive: Path, target_dir: Path) -> None:
+    target_root = target_dir.resolve()
+    target_root.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(archive) as handle:
+        for member in handle.getmembers():
+            relative = _safe_archive_member_name(member.name)
+            if relative is None:
+                continue
+            if member.issym() or member.islnk() or member.isdev():
+                raise ValueError(f"Refusing archive link/device member: {member.name}")
+            destination = (target_root / relative).resolve()
+            if target_root not in destination.parents and destination != target_root:
+                raise ValueError(f"Unsafe archive member path: {member.name}")
+            if member.isdir():
+                destination.mkdir(parents=True, exist_ok=True)
+                continue
+            if not member.isfile():
+                continue
+            source = handle.extractfile(member)
+            if source is None:
+                continue
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            with source, destination.open("wb") as output:
+                shutil.copyfileobj(source, output)
+
+
+def _safe_archive_member_name(name: str) -> Path | None:
+    normalized = name.replace("\\", "/").strip()
+    if not normalized:
+        return None
+    if normalized.startswith("/") or re.match(r"^[A-Za-z]:", normalized):
+        raise ValueError(f"Unsafe archive member path: {name}")
+    parts = [part for part in normalized.split("/") if part not in {"", "."}]
+    if any(part == ".." for part in parts):
+        raise ValueError(f"Unsafe archive member path: {name}")
+    return Path(*parts) if parts else None
+
+
+def _normalized_sha1(value: Any) -> str:
+    text = str(value or "").strip().strip('"').strip("'")
+    return text if re.fullmatch(r"(?i)[0-9a-f]{40}", text) else ""
+
+
+def _sha1_file(path: Path) -> str:
+    digest = hashlib.sha1()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _chmod_executables(target_dir: Path) -> None:

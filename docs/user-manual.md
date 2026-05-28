@@ -100,6 +100,12 @@ Important dependency nuance:
   privileged package management.
 - Python tools such as `pypykatz` and Volatility can be installed by the app.
 - EZ tools are downloaded into the managed tools folder.
+- Managed tool archives are extracted with explicit path checks. Relic rejects
+  absolute paths, drive-letter paths, parent-directory traversal, and archive
+  link/device entries during extraction.
+- EZ tools are SHA1 checked when the download catalog provides a valid SHA1
+  value. The managed `!!!RemoteFileDetails.csv` records whether a SHA1 was
+  verified for each downloaded item.
 - SIDR is built as the native Linux Rust binary from source. Relic does not use
   the upstream Windows `sidr.exe` for Linux parsing.
 - Optional tools reduce coverage but should not stop workflows unless the
@@ -132,6 +138,20 @@ Preflight does not import data. It reports:
 - mapped/unmapped parser counts,
 - zip member counts,
 - compressed and uncompressed size metadata.
+
+Mounting a ZIP evidence file also performs a safety preflight before extraction.
+This applies when the ZIP is being treated as evidence that contains a disk
+image or virtual disk. Relic rejects:
+
+- unsafe member paths, including absolute paths, drive-letter paths, empty paths,
+  and parent-directory traversal,
+- ZIP link entries,
+- archives with more than 1,000,000 file members,
+- archives whose uncompressed file size would not fit in the workspace
+  filesystem while leaving a 10 GB reserve.
+
+There is no fixed evidence-size cap for disk-image ZIPs. The effective limit is
+available workspace disk space minus the reserve.
 
 3. Import:
 
@@ -353,8 +373,10 @@ Switches:
 - `--report-output-dir DIR`.
 
 Nuance: use `--preflight --max-uncompressed-gb` before importing large live-case
-zips. This prevents surprises from compressed zips expanding into far more disk
-space than expected.
+zips. This option belongs to bulk report/triage ZIP import, where the operator
+can choose a case-specific expansion ceiling. Disk-image ZIP mounting uses a
+different guard: it rejects unsafe paths and requires the uncompressed contents
+to fit in the workspace filesystem with a 10 GB free-space reserve.
 
 ## Memory Commands
 
@@ -770,7 +792,11 @@ uv run relic --root ROOT standalone benchmark --case CASE_ID --baseline benchmar
 - Use `--keep-mounted` only when you need manual review.
 - Run `image cleanup-stale-mounts` after crashes or interrupted sessions.
 - Use `--preflight` for large zips before import.
-- Use `--max-uncompressed-gb` on zip imports to avoid exhausting workspace disk.
+- Use `--max-uncompressed-gb` on bulk live-case/report zip imports to avoid
+  exhausting workspace disk. Disk-image ZIP mounting has no fixed GB cap, but it
+  requires enough free space for the uncompressed files plus a 10 GB reserve.
+- External AI review is off by default. Set `FORENSIC_ALLOW_EXTERNAL_AI=1` only
+  when uploading RDP contact sheets to the configured model provider is approved.
 - Use credential reveal options only under controlled conditions.
 - Treat memory credential strings as leads unless validated.
 - Treat UserAssist, Amcache, and ShimCache as activity/presence indicators, not

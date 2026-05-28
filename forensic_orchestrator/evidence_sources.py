@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import zipfile
+import shutil
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,6 +18,8 @@ RAW_EXTENSIONS = {".dd", ".raw", ".img", ".001"}
 VIRTUAL_DISK_EXTENSIONS = {".vhd", ".vhdx", ".vmdk"}
 ZIP_EXTENSIONS = {".zip"}
 REPORT_EXTENSIONS = {".csv", ".json", ".xml", ".html", ".htm", ".xlsx", ".tsv", ".txt"}
+ZIP_FREE_SPACE_RESERVE_BYTES = 10 * 1024 * 1024 * 1024
+ZIP_MAX_MEMBER_COUNT = 1_000_000
 
 
 @dataclass(frozen=True)
@@ -189,16 +193,33 @@ def _extract_zip_and_select_candidate(
         extract_dir.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(image.path) as archive:
             members = archive.infolist()
+            _validate_zip_extraction_budget(members, extract_dir)
+            extract_root = extract_dir.resolve()
             for member in members:
-                _validate_zip_member(member.filename)
-                archive.extract(member, extract_dir)
+                target = _zip_member_target(member.filename, extract_root)
+                mode = (member.external_attr >> 16) & 0o170000
+                if mode in {0o120000, 0o160000}:
+                    raise MountError(f"Refusing ZIP link member: {member.filename}")
+                if member.is_dir():
+                    target.mkdir(parents=True, exist_ok=True)
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with archive.open(member) as source, target.open("wb") as output:
+                    shutil.copyfileobj(source, output)
         db.log_activity(
             case_id=case_id,
             image_id=image.id,
             computer_id=image.computer_id,
             event="evidence.zip_extracted",
             message="Extracted ZIP evidence into case storage",
-            details={"source": str(image.path), "extract_dir": str(extract_dir), "member_count": len(members)},
+            details={
+                "source": str(image.path),
+                "extract_dir": str(extract_dir),
+                "member_count": len(members),
+                "uncompressed_bytes": sum(int(member.file_size or 0) for member in members if not member.is_dir()),
+                "compressed_bytes": sum(int(member.compress_size or 0) for member in members if not member.is_dir()),
+                "free_space_reserve_bytes": ZIP_FREE_SPACE_RESERVE_BYTES,
+            },
         )
         candidates = _discover_candidates(extract_dir)
     if not candidates:
@@ -262,9 +283,37 @@ def _candidate_score(kind: str) -> int:
 
 
 def _validate_zip_member(name: str) -> None:
-    path = Path(name)
-    if path.is_absolute() or ".." in path.parts:
+    _zip_member_target(name, Path("/tmp"))
+
+
+def _zip_member_target(name: str, destination_root: Path) -> Path:
+    normalized = name.replace("\\", "/").strip()
+    if not normalized:
+        raise MountError("Unsafe empty ZIP member path")
+    if normalized.startswith("/") or re.match(r"^[A-Za-z]:", normalized):
         raise MountError(f"Unsafe ZIP member path: {name}")
+    parts = [part for part in normalized.split("/") if part not in {"", "."}]
+    if any(part == ".." for part in parts):
+        raise MountError(f"Unsafe ZIP member path: {name}")
+    target = (destination_root / Path(*parts)).resolve()
+    root = destination_root.resolve()
+    if root not in target.parents and target != root:
+        raise MountError(f"Unsafe ZIP member path: {name}")
+    return target
+
+
+def _validate_zip_extraction_budget(members: list[zipfile.ZipInfo], extract_dir: Path) -> None:
+    files = [member for member in members if not member.is_dir()]
+    if len(files) > ZIP_MAX_MEMBER_COUNT:
+        raise MountError(f"ZIP evidence member count {len(files)} exceeds safety limit {ZIP_MAX_MEMBER_COUNT}")
+    uncompressed = sum(int(member.file_size or 0) for member in files)
+    available = shutil.disk_usage(extract_dir).free
+    required = uncompressed + ZIP_FREE_SPACE_RESERVE_BYTES
+    if required > available:
+        raise MountError(
+            "Refusing to extract ZIP evidence because the workspace filesystem does not have enough free space: "
+            f"uncompressed={uncompressed} available={available} reserve={ZIP_FREE_SPACE_RESERVE_BYTES}"
+        )
 
 
 def _looks_like_ewf_segment(name: str) -> bool:

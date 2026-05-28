@@ -122,6 +122,7 @@ def test_rdp_vision_review_uses_openai_api_without_storing_raw_review(tmp_path, 
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("FORENSIC_ALLOW_EXTERNAL_AI", "1")
     monkeypatch.setenv("FORENSIC_OPENAI_RESPONSES_URL", f"http://127.0.0.1:{server.server_port}/v1/responses")
     try:
         outputs = parse_rdp_vision_review_to_csv(tmp_path / "unused", tmp_path / "out" / "RdpVisionReview")
@@ -138,3 +139,16 @@ def test_rdp_vision_review_uses_openai_api_without_storing_raw_review(tmp_path, 
     assert details["response_id"] == "resp_test"
     assert "raw_review" not in details
     assert requests[0]["input"][0]["content"][1]["type"] == "input_image"
+
+
+def test_rdp_vision_review_requires_external_ai_opt_in(tmp_path, monkeypatch):
+    _seed_rdp_cache_outputs(tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.delenv("FORENSIC_ALLOW_EXTERNAL_AI", raising=False)
+
+    outputs = parse_rdp_vision_review_to_csv(tmp_path / "unused", tmp_path / "out" / "RdpVisionReview")
+
+    rows = _rows(outputs[0])
+    assert rows[0]["observation_type"] == "tesseract_fallback_no_text"
+    details = json.loads(rows[0]["details_json"])
+    assert details["fallback_reason"] == "OPENAI_API_KEY configured but FORENSIC_ALLOW_EXTERNAL_AI is not enabled"

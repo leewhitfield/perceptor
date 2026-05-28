@@ -80,6 +80,31 @@ def test_zip_report_only_is_identified_but_not_mountable(tmp_path):
         prepare_mount_source(db=db, paths=paths, case_id=case.id, image=image, dry_run=False)
 
 
+def test_zip_extract_rejects_unsafe_member_path(tmp_path):
+    zip_path = tmp_path / "bad.zip"
+    with zipfile.ZipFile(zip_path, "w") as archive:
+        archive.writestr("../disk.raw", b"raw image placeholder")
+    db, paths, case, image = _case_with_image(tmp_path, zip_path)
+
+    with pytest.raises(MountError, match="Unsafe ZIP member path"):
+        prepare_mount_source(db=db, paths=paths, case_id=case.id, image=image, dry_run=False)
+
+
+def test_zip_extract_requires_workspace_free_space(tmp_path, monkeypatch):
+    zip_path = tmp_path / "huge.zip"
+    with zipfile.ZipFile(zip_path, "w") as archive:
+        archive.writestr("exports/disk.raw", b"raw image placeholder")
+    db, paths, case, image = _case_with_image(tmp_path, zip_path)
+
+    class FakeUsage:
+        free = 1
+
+    monkeypatch.setattr("forensic_orchestrator.evidence_sources.shutil.disk_usage", lambda _path: FakeUsage())
+
+    with pytest.raises(MountError, match="does not have enough free space"):
+        prepare_mount_source(db=db, paths=paths, case_id=case.id, image=image, dry_run=False)
+
+
 def test_virtual_disk_dry_run_prepares_qemu_raw_target_without_dependency(tmp_path):
     vmdk_path = tmp_path / "vm.vmdk"
     vmdk_path.write_bytes(b"vmdk image placeholder")
