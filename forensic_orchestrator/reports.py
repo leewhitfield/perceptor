@@ -127,6 +127,60 @@ ARTIFACT_SEARCH_SPECS = [
         "timestamp": "timestamp_utc",
     },
     {
+        "table": "shortcut_items",
+        "category": "shortcut",
+        "fields": ["artifact_name", "artifact_path", "file_name", "file_location", "target_path", "local_path", "common_path", "network_path", "command_line_arguments", "tracker_id", "droid_volume_id", "droid_file_id", "birth_droid_volume_id", "birth_droid_file_id", "app_id", "app_id_description"],
+        "display": ["target_accessed", "artifact_type", "file_name", "file_location", "target_path"],
+        "timestamp": "target_accessed",
+    },
+    {
+        "table": "registry_artifacts",
+        "category": "registry",
+        "fields": ["artifact", "category", "key_path", "value_name", "value_data", "display_name", "normalized_path", "notes", "user_profile"],
+        "display": ["event_time_utc", "artifact", "display_name", "normalized_path", "value_data"],
+        "timestamp": "event_time_utc",
+        "user": "user_profile",
+    },
+    {
+        "table": "registry_recentdocs",
+        "category": "registry",
+        "fields": ["target_name", "lnk_name", "extension", "key_path", "recmd_description", "user_profile"],
+        "display": ["opened_on", "user_profile", "target_name", "extension"],
+        "timestamp": "opened_on",
+        "user": "user_profile",
+    },
+    {
+        "table": "registry_runmru",
+        "category": "registry",
+        "fields": ["executable", "key_path", "recmd_description", "user_profile"],
+        "display": ["opened_on", "user_profile", "executable"],
+        "timestamp": "opened_on",
+        "user": "user_profile",
+    },
+    {
+        "table": "registry_userassist",
+        "category": "registry",
+        "fields": ["program_name", "key_path", "recmd_description", "user_profile"],
+        "display": ["last_executed", "user_profile", "program_name", "run_counter"],
+        "timestamp": "last_executed",
+        "user": "user_profile",
+    },
+    {
+        "table": "srum_records",
+        "category": "srum",
+        "fields": ["provider_name", "record_type", "source_table", "app_id", "app_name", "app_path", "app_description", "user_name", "user_sid", "l2_profile_name", "network_type"],
+        "display": ["timestamp", "record_type", "app_name", "user_name"],
+        "timestamp": "timestamp",
+        "user": "user_name",
+    },
+    {
+        "table": "recycle_items",
+        "category": "recycle_bin",
+        "fields": ["source_path", "top_level_name", "recycled_path", "display_name", "original_path"],
+        "display": ["deletion_time_utc", "display_name", "original_path", "file_size"],
+        "timestamp": "deletion_time_utc",
+    },
+    {
         "table": "shellbag_entries",
         "category": "user_activity",
         "fields": ["absolute_path", "user_profile", "drive_letter", "volume_guid", "volume_serial_number", "volume_name"],
@@ -174,6 +228,62 @@ ARTIFACT_SEARCH_SPECS = [
         "user": "profile_path",
     },
     {
+        "table": "mailbox_messages",
+        "category": "communications",
+        "fields": ["source_path", "container_path", "message_path", "user_profile", "message_id", "conversation_topic", "subject", "sender", "recipients", "cc", "bcc", "body_text", "attachment_names"],
+        "display": ["message_date_utc", "user_profile", "subject", "sender"],
+        "timestamp": "message_date_utc",
+        "user": "user_profile",
+    },
+    {
+        "table": "windows_activities",
+        "category": "user_activity",
+        "fields": ["user_profile", "app_id", "app_display_name", "activity_type", "display_text", "file_name", "content_uri", "activation_uri", "fallback_uri", "payload_json"],
+        "display": ["start_time_utc", "user_profile", "app_display_name", "display_text"],
+        "timestamp": "start_time_utc",
+        "user": "user_profile",
+    },
+    {
+        "table": "office_backstage_items",
+        "category": "documents",
+        "fields": ["artifact_type", "user_profile", "application", "name", "value", "path", "url", "host", "details_json"],
+        "display": ["timestamp_utc", "user_profile", "application", "path"],
+        "timestamp": "timestamp_utc",
+        "user": "user_profile",
+    },
+    {
+        "table": "cloud_sync_artifacts",
+        "category": "cloud",
+        "fields": ["provider", "artifact_type", "user_profile", "source_path", "source_name", "local_path", "cloud_path", "file_name", "file_id", "stable_id", "server_path", "url", "sync_status", "event_type", "owner", "details_json"],
+        "display": ["event_time_utc", "provider", "file_name", "local_path", "cloud_path"],
+        "timestamp": "event_time_utc",
+        "user": "user_profile",
+    },
+    {
+        "table": "cloud_server_events",
+        "category": "cloud",
+        "fields": ["provider", "service", "event_type", "actor", "actor_id", "actor_ip", "target", "operation", "result", "client_app", "file_name", "file_path", "url", "message_id", "raw_fields_json"],
+        "display": ["event_time_utc", "provider", "event_type", "target"],
+        "timestamp": "event_time_utc",
+        "user": "actor",
+    },
+    {
+        "table": "rdp_cache_items",
+        "category": "remote_access",
+        "fields": ["record_type", "user_profile", "source_cache_path", "fragment_path", "contact_sheet_path", "file_name", "sha256", "parser_note", "details_json"],
+        "display": ["created_at", "user_profile", "record_type", "file_name"],
+        "timestamp": "created_at",
+        "user": "user_profile",
+    },
+    {
+        "table": "rdp_visual_observations",
+        "category": "remote_access",
+        "fields": ["user_profile", "source_cache_path", "contact_sheet_path", "observation_type", "observed_application", "observed_text", "observed_path", "certainty", "details_json"],
+        "display": ["observation_time_utc", "user_profile", "observation_type", "observed_text"],
+        "timestamp": "observation_time_utc",
+        "user": "user_profile",
+    },
+    {
         "table": "windows_search_files",
         "category": "windows_search",
         "fields": ["item_path", "item_url", "folder_path", "file_name", "owner", "computer_name", "row_json"],
@@ -199,12 +309,12 @@ ARTIFACT_SEARCH_SPECS = [
 ]
 
 ARTIFACT_LEAD_SEARCH_PRESETS = {
-    "execution": ["execution", "timeline"],
-    "usb": ["external_storage", "user_activity"],
-    "cloud": ["windows_search", "browser"],
-    "documents": ["filesystem", "windows_search", "user_activity"],
+    "execution": ["execution", "timeline", "registry", "srum", "shortcut"],
+    "usb": ["external_storage", "user_activity", "shortcut", "recycle_bin"],
+    "cloud": ["cloud", "windows_search", "browser"],
+    "documents": ["documents", "filesystem", "windows_search", "user_activity", "shortcut", "recycle_bin"],
     "browser": ["browser", "windows_search"],
-    "communications": ["windows_search", "browser"],
+    "communications": ["communications", "windows_search", "browser"],
 }
 
 
@@ -30561,6 +30671,7 @@ def artifact_search_report(
             item["image_path"] = image_paths.get(str(item.get("image_id") or ""))
             item["matched_fields"] = _artifact_matched_fields(item, searchable, query_text)
             item["summary"] = _artifact_search_summary(item, display, searchable)
+            item["drilldown"] = _artifact_drilldown_hint(item)
             results.append(item)
             if len(results) >= limit:
                 break
@@ -30680,6 +30791,36 @@ def case_activity_digest_report(db: Database, case_id: str, *, limit: int = 25) 
         "evidence_gaps": (gaps.get("gaps") or [])[:limit],
         "next_actions": (actions.get("actions") or [])[:limit],
     }
+
+
+def case_activity_digest_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    lines = [
+        "# Case Activity Digest",
+        "",
+        f"Case: `{report.get('case_id') or ''}`",
+        "",
+        "## Summary",
+        "",
+    ]
+    for key in (
+        "timeline_count",
+        "suspicious_execution_count",
+        "external_storage_count",
+        "opened_from_removable_count",
+        "opened_from_cloud_count",
+        "evidence_gap_count",
+        "next_action_count",
+    ):
+        lines.append(f"- {key.replace('_', ' ').title()}: `{summary.get(key, 0)}`")
+    _markdown_digest_rows(lines, "Next Actions", report.get("next_actions"), ("priority", "category", "title", "detail"))
+    _markdown_digest_rows(lines, "Recent Timeline", report.get("recent_timeline"), ("timestamp", "source", "event_type", "summary"))
+    _markdown_digest_rows(lines, "Suspicious Executions", report.get("suspicious_executions"), ("application", "display_path", "reason", "summary"))
+    _markdown_digest_rows(lines, "External Storage", report.get("external_storage"), ("display_name", "serial", "volume_serial_number", "serial_reliability"))
+    _markdown_digest_rows(lines, "Opened From Removable Media", report.get("opened_from_removable_media"), ("timestamp", "file_path", "user_profile", "evidence"))
+    _markdown_digest_rows(lines, "Opened From Cloud Storage", report.get("opened_from_cloud_storage"), ("timestamp", "file_path", "provider", "user_profile"))
+    _markdown_digest_rows(lines, "Evidence Gaps", report.get("evidence_gaps"), ("severity", "title", "summary", "recommendation"))
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def case_next_actions_report(db: Database, case_id: str, *, limit: int = 25) -> dict[str, Any]:
@@ -30805,6 +30946,49 @@ def _artifact_search_summary(row: dict[str, Any], display: list[str], searchable
         if len(values) >= 3:
             break
     return " | ".join(values)
+
+
+def _artifact_drilldown_hint(row: dict[str, Any]) -> dict[str, Any]:
+    table = str(row.get("table") or "")
+    category = str(row.get("category") or "")
+    path = _first_present(row, ("item_path", "file_location", "target_path", "local_path", "absolute_path", "original_path", "full_path", "parent_path", "path", "file_path"))
+    file_name = _first_present(row, ("file_name", "item_name", "display_name", "target_name", "name"))
+    serial = _first_present(row, ("serial", "volume_serial_number", "usb_serial"))
+    user = _first_present(row, ("user_profile", "user_name", "owner", "actor", "profile_path"))
+    timestamp = row.get("timestamp")
+    if category == "external_storage" or table.startswith("usb_"):
+        return {"tool": "relic_usb_dossier", "report": "usb-dossier", "arguments": _non_empty({"serial": serial, "volume_serial_number": row.get("volume_serial_number"), "volume_guid": row.get("volume_guid")})}
+    if path or file_name:
+        return {"tool": "relic_file_dossier", "report": "file-dossier", "arguments": _non_empty({"path": path, "name": file_name})}
+    if user:
+        return {"tool": "relic_user_activity", "report": "user-activity", "arguments": {"user": user}}
+    if timestamp:
+        return {"tool": "relic_timeline_window", "report": "timeline-review", "arguments": {"center": timestamp}}
+    return {"tool": "relic_case_activity_digest", "report": "activity-digest", "arguments": {}}
+
+
+def _first_present(row: dict[str, Any], keys: Iterable[str]) -> Any:
+    for key in keys:
+        value = row.get(key)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _non_empty(values: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in values.items() if value not in (None, "", [], {})}
+
+
+def _markdown_digest_rows(lines: list[str], title: str, rows: Any, columns: tuple[str, ...]) -> None:
+    lines.extend(["", f"## {title}", ""])
+    if not isinstance(rows, list) or not rows:
+        lines.append("- None")
+        return
+    for row in rows[:25]:
+        if not isinstance(row, dict):
+            continue
+        parts = [str(row.get(column) or "") for column in columns if row.get(column) not in (None, "")]
+        lines.append(f"- {' | '.join(parts) if parts else json.dumps(row, default=str)}")
 
 
 def _table_has_column(db: Database, table: str, column: str) -> bool:

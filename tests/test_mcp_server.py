@@ -369,6 +369,7 @@ def test_mcp_artifact_search_and_progress_manifests(tmp_path, monkeypatch):
     assert found["summary"]["result_count"] == 1
     assert found["results"][0]["computer_label"] == "HOST01"
     assert found["results"][0]["matched_fields"] == ["absolute_path"]
+    assert found["results"][0]["drilldown"]["tool"] == "relic_file_dossier"
 
     manifests = server.list_progress_manifests({})
     assert manifests["summary"]["manifest_count"] == 1

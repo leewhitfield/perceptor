@@ -48,6 +48,7 @@ def test_cli_search_progress_and_gap_reports(tmp_path, monkeypatch, capsys):
     assert cli_main(["--root", str(paths.root), "report", "artifact-search", "--case", "case-1", "--query", "powershell", "--format", "json"]) == 0
     artifact = json.loads(capsys.readouterr().out)
     assert artifact["summary"]["result_count"] == 1
+    assert artifact["results"][0]["drilldown"]["tool"] == "relic_file_dossier"
 
     assert cli_main(["--root", str(paths.root), "report", "lead-search", "--case", "case-1", "--preset", "usb", "--query", "powershell", "--format", "json"]) == 0
     lead = json.loads(capsys.readouterr().out)
@@ -69,3 +70,6 @@ def test_cli_search_progress_and_gap_reports(tmp_path, monkeypatch, capsys):
     assert cli_main(["--root", str(paths.root), "report", "activity-digest", "--case", "case-1", "--format", "json"]) == 0
     digest = json.loads(capsys.readouterr().out)
     assert digest["case_id"] == "case-1"
+
+    assert cli_main(["--root", str(paths.root), "report", "activity-digest", "--case", "case-1", "--format", "md"]) == 0
+    assert "# Case Activity Digest" in capsys.readouterr().out

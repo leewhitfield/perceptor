@@ -68,6 +68,7 @@ from .reports import (
     browser_report,
     case_review_report,
     case_activity_digest_report,
+    case_activity_digest_markdown,
     case_next_actions_report,
     carve_coverage_markdown,
     carve_coverage_report,
@@ -3176,7 +3177,7 @@ def build_parser() -> argparse.ArgumentParser:
     report_activity_digest = report_sub.add_parser("activity-digest")
     report_activity_digest.add_argument("--case", required=True, dest="case_id")
     report_activity_digest.add_argument("--limit", type=int, default=25)
-    report_activity_digest.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    report_activity_digest.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
     report_activity_digest.add_argument("--output")
     report_case_review = report_sub.add_parser("case-review")
     report_case_review.add_argument("--case", required=True, dest="case_id")
@@ -6179,24 +6180,27 @@ def run(args: argparse.Namespace) -> int:
 
         if args.resource == "report" and args.action == "activity-digest":
             report = case_activity_digest_report(db, args.case_id, limit=args.limit)
-            rows = [
-                {"section": "recent_timeline", **row}
-                for row in report.get("recent_timeline", [])
-                if isinstance(row, dict)
-            ]
-            rows.extend(
-                {"section": "next_actions", **row}
-                for row in report.get("next_actions", [])
-                if isinstance(row, dict)
-            )
-            write_report_output(
-                report,
-                rows,
-                args.format,
-                args.output,
-                title=f"Activity digest for case {args.case_id}",
-                columns=["section", "timestamp", "priority", "category", "event_type", "title", "summary", "detail"],
-            )
+            if args.format == "md":
+                write_text_output(case_activity_digest_markdown(report), args.output)
+            else:
+                rows = [
+                    {"section": "recent_timeline", **row}
+                    for row in report.get("recent_timeline", [])
+                    if isinstance(row, dict)
+                ]
+                rows.extend(
+                    {"section": "next_actions", **row}
+                    for row in report.get("next_actions", [])
+                    if isinstance(row, dict)
+                )
+                write_report_output(
+                    report,
+                    rows,
+                    args.format,
+                    args.output,
+                    title=f"Activity digest for case {args.case_id}",
+                    columns=["section", "timestamp", "priority", "category", "event_type", "title", "summary", "detail"],
+                )
             return 0
 
         if args.resource == "report" and args.action == "carve-coverage":
