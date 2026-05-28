@@ -165,7 +165,9 @@ uv run relic --root ~/analysis/case-root ingest triage-zip \
 
 By default, this creates/reuses a case, creates one computer per top-level
 folder, imports mapped CSVs, logs unsupported CSVs, rebuilds post-processing
-tables, and writes a triage report bundle.
+tables, writes a triage report bundle, and writes a live progress JSON file
+under `ROOT/progress/`. Use `--progress-manifest PATH` to choose the progress
+file path explicitly.
 
 4. Check progress/status:
 
@@ -589,6 +591,7 @@ uv run relic standalone jobs --case CASE_ID --format table
 uv run relic standalone benchmark --case CASE_ID --write-baseline benchmark.json
 uv run relic standalone benchmark --case CASE_ID --baseline benchmark.json --format table
 uv run relic standalone sample-fixture --output sample-live-case.zip --format table
+uv run relic standalone verify-install --format table
 uv run relic standalone backlog --format table
 ```
 
@@ -600,6 +603,7 @@ Key standalone switches:
 - `smoke-regression`: run the standalone proof path: doctor smoke, sample
   live-case fixture import, report bundle generation, output validation, and
   MCP tool listing.
+- `verify-install`: friendly alias for `smoke-regression`.
 - `dependencies --env-file PATH`: load tool env vars before checking.
 - `repair-dependencies --required-only`: skip optional dependencies.
 - `install-tool TOOL --force`: force reinstall/rebuild.
@@ -657,6 +661,10 @@ Read-only MCP tools:
 - `relic_list_jobs`
 - `relic_get_job`
 - `relic_timeline`
+- `relic_timeline_window`
+- `relic_file_dossier`
+- `relic_usb_dossier`
+- `relic_user_activity`
 - `relic_ingest_triage_zip_preflight`
 - `relic_report_bundle_coverage`
 - `relic_profile_preview`
@@ -675,6 +683,7 @@ Read-only MCP tools:
 - `relic_query_shortcuts`
 - `relic_query_communications`
 - `relic_case_review`
+- `relic_case_next_actions`
 - `relic_get_mcp_job`
 - `relic_list_mcp_jobs`
 - `relic_get_mcp_job_output`
@@ -685,6 +694,7 @@ Safe-write MCP tools:
 
 - `relic_generate_report`
 - `relic_write_report_bundle`
+- `relic_write_review_packet`
 
 Processing-gated MCP tools:
 
@@ -724,6 +734,14 @@ Case-navigation MCP tools:
   readiness, processing progress, and resume-plan signals.
 - `relic_discover_reports`: returns report bundle files as
   `relic://workspace/...` resource URIs, optionally filtered by bundle purpose.
+- `relic_file_dossier`, `relic_usb_dossier`, `relic_user_activity`, and
+  `relic_timeline_window`: focused drilldowns for following leads without
+  knowing the matching CLI report names.
+- `relic_case_next_actions`: ranks likely next investigative steps from
+  readiness, evidence gaps, unmapped imports, suspicious execution, and storage
+  findings.
+- `relic_write_review_packet`: writes selected findings, report URIs, timeline
+  rows, and notes to JSON/Markdown under the case reports folder.
 
 MCP audit entries are written to `ROOT/mcp-jobs/audit.jsonl`. Each entry records
 the tool name, permission tier, status, timestamp, argument keys, and bounded
@@ -737,7 +755,7 @@ MCP resources:
 - `resources/list` exposes text report, manifest, log, and MCP job files under
   the workspace root.
 - `resources/list` accepts optional `case_id`, `kind`, and `limit` parameters.
-  Supported kinds are `report`, `manifest`, `log`, and `mcp-job`.
+  Supported kinds are `report`, `manifest`, `log`, `mcp-job`, and `progress`.
 - `resources/read` reads those files through `relic://workspace/...` URIs.
 - Individual resource reads are limited to 1 MB to avoid accidentally returning
   large evidence or bulk artifact files.
@@ -759,7 +777,9 @@ uv run relic report REPORT_NAME --help
 
 `report-bundle coverage --path PATH` reports parser coverage for live-response
 CSV folders/zips with computer attribution, mapped parser, row count, and a
-recommendation for unmapped files.
+recommendation for unmapped files. It also groups unmapped files by header
+signature so repeated parser gaps across many computers are visible as one
+implementation target.
 
 Operational reports:
 

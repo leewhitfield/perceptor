@@ -5,6 +5,7 @@ import sys
 import time
 import zipfile
 from io import StringIO
+from pathlib import Path
 
 from forensic_orchestrator.db import Database
 from forensic_orchestrator.mcp_server import RelicMcpServer, run_mcp_server
@@ -37,6 +38,12 @@ def test_mcp_initialize_and_list_tools(tmp_path):
     assert "relic_case_evidence_map" in names
     assert "relic_case_readiness" in names
     assert "relic_discover_reports" in names
+    assert "relic_file_dossier" in names
+    assert "relic_usb_dossier" in names
+    assert "relic_user_activity" in names
+    assert "relic_timeline_window" in names
+    assert "relic_case_next_actions" in names
+    assert "relic_write_review_packet" in names
     assert "relic_list_mcp_jobs" in names
     assert "relic_get_mcp_job_progress" in names
     assert "relic_mcp_tool_reference" in names
@@ -274,6 +281,27 @@ def test_mcp_discover_reports_returns_resource_uris(tmp_path):
     assert discovered["summary"]["resource_count"] >= 2
     assert any(item["uri"].startswith("relic://workspace/") for item in discovered["resources"])
     assert any(item["name"] == "opened-from-removable-media" for item in discovered["resources"])
+
+
+def test_mcp_write_review_packet_creates_resources(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.close()
+    server = RelicMcpServer(root=tmp_path)
+
+    packet = server.write_review_packet(
+        {
+            "case_id": "case-1",
+            "title": "Lead Review",
+            "notes": "Review this lead.",
+            "findings": [{"title": "Finding"}],
+            "report_uris": ["relic://workspace/cases/case-1/reports/index.md"],
+        }
+    )
+
+    assert Path(packet["json_path"]).exists()
+    assert Path(packet["markdown_path"]).exists()
+    assert any(uri.endswith(".md") for uri in packet["resource_uris"])
 
 
 def test_mcp_tool_reference_and_audit_log(tmp_path):

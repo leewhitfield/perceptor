@@ -115,6 +115,7 @@ uv run forensic-orchestrator --config config.yaml standalone tool-status
 - `standalone smoke-regression`: run doctor smoke, generate/import the sample
   live-case fixture, write a triage report bundle, validate report output, and
   verify MCP tool listing in an isolated temporary workspace.
+- `standalone verify-install`: friendly alias for `standalone smoke-regression`.
 - `standalone backlog`: the pre-UI standalone hardening checklist.
 
 ## Operational Defaults

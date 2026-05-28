@@ -1131,6 +1131,7 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
                 **item,
                 "filename": Path(str(item["path"])).name,
                 "relative_path": Path(str(item["path"])).name,
+                "tags": _report_index_tags(str(item["name"])),
             }
             for item in written
         ],
@@ -1149,6 +1150,27 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
         "reports": written,
         "total_written": len(written) + 2,
     }
+
+
+def _report_index_tags(name: str) -> list[str]:
+    tags: set[str] = set()
+    mapping = {
+        "usb": ("usb", "removable", "shellbag", "usn"),
+        "execution": ("execution", "suspicious", "program", "remote-access", "prefetch"),
+        "cloud": ("cloud", "onedrive", "google", "opened-from-cloud"),
+        "memory": ("memory", "crash", "credential"),
+        "credential": ("credential",),
+        "timeline": ("timeline", "usn-lifecycle"),
+        "quality": ("quality", "readiness", "gaps", "decisions", "smoke"),
+        "browser": ("browser",),
+    }
+    lower = name.casefold()
+    for tag, needles in mapping.items():
+        if any(needle in lower for needle in needles):
+            tags.add(tag)
+    if not tags:
+        tags.add("review")
+    return sorted(tags)
 
 
 def _report_bundle_quality_report(
@@ -2130,6 +2152,7 @@ def build_parser() -> argparse.ArgumentParser:
     report_bundle_many.add_argument("--write-reports", action="store_true", help="Write a purpose report bundle after import")
     report_bundle_many.add_argument("--report-purpose", choices=["full", "usb", "cloud", "execution", "memory", "triage"], default="triage")
     report_bundle_many.add_argument("--report-output-dir")
+    report_bundle_many.add_argument("--progress-manifest", help="Write live bulk-import progress JSON to this path")
     report_bundle_coverage = report_bundle_sub.add_parser("coverage")
     report_bundle_coverage.add_argument("--path", help="Directory or zip to scan for supported and unmapped CSVs")
     report_bundle_coverage.add_argument("--format", choices=["json", "table", "csv"], default="json")
@@ -2151,6 +2174,7 @@ def build_parser() -> argparse.ArgumentParser:
     ingest_zip.add_argument("--no-write-reports", action="store_false", dest="write_reports")
     ingest_zip.add_argument("--report-purpose", choices=["full", "usb", "cloud", "execution", "memory", "triage"], default="triage")
     ingest_zip.add_argument("--report-output-dir")
+    ingest_zip.add_argument("--progress-manifest", help="Write live bulk-import progress JSON to this path")
 
     report = subparsers.add_parser("report")
     report_sub = report.add_subparsers(dest="action", required=True)
@@ -3407,6 +3431,9 @@ def build_parser() -> argparse.ArgumentParser:
     standalone_smoke_regression = standalone_sub.add_parser("smoke-regression")
     standalone_smoke_regression.add_argument("--format", choices=["json", "table"], default="json")
     standalone_smoke_regression.add_argument("--output")
+    standalone_verify = standalone_sub.add_parser("verify-install")
+    standalone_verify.add_argument("--format", choices=["json", "table"], default="json")
+    standalone_verify.add_argument("--output")
     standalone_backlog = standalone_sub.add_parser("backlog")
     standalone_backlog.add_argument("--format", choices=["json", "table", "csv"], default="json")
     standalone_backlog.add_argument("--output")
@@ -3446,6 +3473,7 @@ def _bulk_import_payload(result, *, written_reports: dict[str, object] | None = 
         "warnings": result.warnings,
         "markdown_path": result.markdown_path,
         "manifest_path": result.manifest_path,
+        "progress_manifest_path": result.progress_manifest_path,
         "computers": [
             {
                 "computer_id": item.computer_id,
@@ -3580,6 +3608,7 @@ def run(args: argparse.Namespace) -> int:
         "artifact-capability",
         "sample-fixture",
         "smoke-regression",
+        "verify-install",
         "backlog",
     }:
         if args.action == "version":
@@ -3638,7 +3667,7 @@ def run(args: argparse.Namespace) -> int:
             report = create_sample_report_bundle_fixture(Path(args.output))
             write_report_output(report, [report], args.format, None, title="Sample report bundle fixture", columns=["path", "computer_count", "csv_count", "member_count"])
             return 0
-        if args.action == "smoke-regression":
+        if args.action in {"smoke-regression", "verify-install"}:
             report = standalone_smoke_regression_report(registry, config.plugin_paths)
             if args.format == "table":
                 write_report_output(report, report["checks"], "table", args.output, title="Standalone smoke regression", columns=["name", "passed", "details"])
@@ -3937,9 +3966,10 @@ def run(args: argparse.Namespace) -> int:
                     "skipped_files": result.skipped_files,
                     "failed_files": result.failed_files,
                     "warnings": result.warnings,
-                    "markdown_path": result.markdown_path,
-                    "manifest_path": result.manifest_path,
-                }
+                "markdown_path": result.markdown_path,
+                "manifest_path": result.manifest_path,
+                "progress_manifest_path": result.progress_manifest_path,
+            }
             )
             return 0
 
@@ -3951,6 +3981,7 @@ def run(args: argparse.Namespace) -> int:
                 case_id=args.case_id,
                 accept_duplicate=args.accept_duplicate,
                 resume_manifest=Path(args.resume_from_manifest) if args.resume_from_manifest else None,
+                progress_manifest=Path(args.progress_manifest) if args.progress_manifest else None,
                 progress=None if args.no_progress else print_progress,
             )
             written_reports = None
@@ -3970,6 +4001,7 @@ def run(args: argparse.Namespace) -> int:
                 case_id=args.case_id,
                 accept_duplicate=args.accept_duplicate,
                 resume_manifest=Path(args.resume_from_manifest) if args.resume_from_manifest else None,
+                progress_manifest=Path(args.progress_manifest) if args.progress_manifest else None,
                 progress=None if args.no_progress else print_progress,
             )
             written_reports = None

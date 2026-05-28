@@ -126,6 +126,7 @@ class ReportBundleBulkImportResult:
     items: list[ReportBundleImportResult] = field(default_factory=list)
     markdown_path: str = ""
     manifest_path: str = ""
+    progress_manifest_path: str = ""
 
 
 def import_report_bundle(
@@ -406,6 +407,7 @@ def import_report_bundle_many(
     case_id: str | None = None,
     accept_duplicate: bool = False,
     resume_manifest: Path | None = None,
+    progress_manifest: Path | None = None,
     progress: ProgressFn | None = None,
 ) -> ReportBundleBulkImportResult:
     started = datetime.now(timezone.utc)
@@ -422,6 +424,7 @@ def import_report_bundle_many(
             case_id=case_id,
             accept_duplicate=accept_duplicate,
             resume_state=resume_state,
+            progress_manifest=progress_manifest,
             progress=progress,
             started=started,
         )
@@ -433,12 +436,21 @@ def import_report_bundle_many(
         _progress(progress, f"report-bundle-many discovered computers={len(computer_roots)}")
         active_case_id = case_id
         bulk = ReportBundleBulkImportResult(case_id=case_id or "", report_root=str(report_root.resolve()))
+        writer = _BulkProgressWriter(
+            path=progress_manifest or _default_bulk_progress_path(paths),
+            report_root=report_root,
+            computers_total=len(computer_roots),
+        )
+        bulk.progress_manifest_path = str(writer.path)
+        writer.write(stage="discovered", case_id=active_case_id, computers_done=0, imported_computers=0, imported_rows=0)
         for index, computer_root in enumerate(computer_roots, 1):
             label = _computer_label_for_folder(computer_root)
             if _resume_completed(resume_state, label):
                 _progress(progress, f"report-bundle-many computer {index}/{len(computer_roots)} skipped_completed label={label}")
+                writer.write(stage="computer_skipped", case_id=active_case_id, computers_done=index, current_computer=label)
                 continue
             _progress(progress, f"report-bundle-many computer {index}/{len(computer_roots)} start label={label} path={computer_root}")
+            writer.write(stage="computer_started", case_id=active_case_id, computers_done=index - 1, current_computer=label)
             result = import_report_bundle(
                 db=db,
                 paths=paths,
@@ -451,6 +463,7 @@ def import_report_bundle_many(
             if active_case_id is None:
                 active_case_id = result.case_id
                 bulk.case_id = result.case_id
+                writer.write(stage="case_created", case_id=active_case_id)
             bulk.imported_computers += 1
             bulk.imported_files += result.imported_files
             bulk.imported_rows += result.imported_rows
@@ -468,6 +481,17 @@ def import_report_bundle_many(
                 f"report-bundle-many progress computers_done={index} computers_total={len(computer_roots)} "
                 f"imported_computers={bulk.imported_computers} rows={bulk.imported_rows} elapsed={_format_elapsed(started)}",
             )
+            writer.write(
+                stage="computer_completed",
+                case_id=active_case_id,
+                computers_done=index,
+                current_computer=label,
+                imported_computers=bulk.imported_computers,
+                imported_files=bulk.imported_files,
+                imported_rows=bulk.imported_rows,
+                skipped_files=bulk.skipped_files,
+                failed_files=bulk.failed_files,
+            )
         if active_case_id is None:
             raise ValueError("Bulk import did not create or use a case")
         bulk.case_id = active_case_id
@@ -483,6 +507,18 @@ def import_report_bundle_many(
         )
         bulk.markdown_path = str(_write_bulk_markdown_report(paths, bulk, distinct_stats))
         bulk.manifest_path = str(_write_bulk_import_manifest(paths, bulk, distinct_stats))
+        writer.write(
+            stage="completed",
+            case_id=active_case_id,
+            computers_done=len(computer_roots),
+            imported_computers=bulk.imported_computers,
+            imported_files=bulk.imported_files,
+            imported_rows=bulk.imported_rows,
+            skipped_files=bulk.skipped_files,
+            failed_files=bulk.failed_files,
+            markdown_path=bulk.markdown_path,
+            manifest_path=bulk.manifest_path,
+        )
         _progress(
             progress,
             "report-bundle-many completed "
@@ -504,6 +540,7 @@ def _import_report_bundle_many_zip(
     case_id: str | None,
     accept_duplicate: bool,
     resume_state: dict[str, Any],
+    progress_manifest: Path | None,
     progress: ProgressFn | None,
     started: datetime,
 ) -> ReportBundleBulkImportResult:
@@ -513,14 +550,23 @@ def _import_report_bundle_many_zip(
     _progress(progress, f"report-bundle-many zip discovered computers={len(roots)}")
     active_case_id = case_id
     bulk = ReportBundleBulkImportResult(case_id=case_id or "", report_root=str(report_root))
+    writer = _BulkProgressWriter(
+        path=progress_manifest or _default_bulk_progress_path(paths),
+        report_root=report_root,
+        computers_total=len(roots),
+    )
+    bulk.progress_manifest_path = str(writer.path)
+    writer.write(stage="zip_discovered", case_id=active_case_id, computers_done=0, imported_computers=0, imported_rows=0)
     staging_parent = paths.root / "staging" / "report-bundle-import" / f"{report_root.stem}-{uuid.uuid4()}"
     staging_parent.mkdir(parents=True, exist_ok=True)
     try:
         for index, root in enumerate(roots, 1):
             if _resume_completed(resume_state, root.label):
                 _progress(progress, f"report-bundle-many zip computer {index}/{len(roots)} skipped_completed label={root.label}")
+                writer.write(stage="computer_skipped", case_id=active_case_id, computers_done=index, current_computer=root.label)
                 continue
             staging_root = staging_parent / f"{index:04d}-{_safe_stage_name(root.label)}"
+            writer.write(stage="computer_extracting", case_id=active_case_id, computers_done=index - 1, current_computer=root.label)
             _progress(
                 progress,
                 f"report-bundle-many zip computer {index}/{len(roots)} extract start "
@@ -541,6 +587,7 @@ def _import_report_bundle_many_zip(
                 if active_case_id is None:
                     active_case_id = result.case_id
                     bulk.case_id = result.case_id
+                    writer.write(stage="case_created", case_id=active_case_id)
                 bulk.imported_computers += 1
                 bulk.imported_files += result.imported_files
                 bulk.imported_rows += result.imported_rows
@@ -557,6 +604,17 @@ def _import_report_bundle_many_zip(
                     progress,
                     f"report-bundle-many progress computers_done={index} computers_total={len(roots)} "
                     f"imported_computers={bulk.imported_computers} rows={bulk.imported_rows} elapsed={_format_elapsed(started)}",
+                )
+                writer.write(
+                    stage="computer_completed",
+                    case_id=active_case_id,
+                    computers_done=index,
+                    current_computer=root.label,
+                    imported_computers=bulk.imported_computers,
+                    imported_files=bulk.imported_files,
+                    imported_rows=bulk.imported_rows,
+                    skipped_files=bulk.skipped_files,
+                    failed_files=bulk.failed_files,
                 )
             finally:
                 _progress(progress, f"report-bundle-many zip computer {index}/{len(roots)} cleanup staging={staging_root}")
@@ -576,6 +634,18 @@ def _import_report_bundle_many_zip(
         )
         bulk.markdown_path = str(_write_bulk_markdown_report(paths, bulk, distinct_stats))
         bulk.manifest_path = str(_write_bulk_import_manifest(paths, bulk, distinct_stats))
+        writer.write(
+            stage="completed",
+            case_id=active_case_id,
+            computers_done=len(roots),
+            imported_computers=bulk.imported_computers,
+            imported_files=bulk.imported_files,
+            imported_rows=bulk.imported_rows,
+            skipped_files=bulk.skipped_files,
+            failed_files=bulk.failed_files,
+            markdown_path=bulk.markdown_path,
+            manifest_path=bulk.manifest_path,
+        )
         _progress(
             progress,
             "report-bundle-many completed "
@@ -732,6 +802,7 @@ def parser_coverage_report(report_root: Path | None = None) -> dict[str, Any]:
         "routes": PARSER_ROUTE_SUMMARY,
         "files": rows,
         "unmapped": unmapped,
+        "unmapped_groups": _unmapped_gap_groups(unmapped),
     }
 
 
@@ -778,6 +849,7 @@ def report_bundle_preflight_report(report_root: Path) -> dict[str, Any]:
         "routes": coverage["routes"],
         "files": coverage["files"],
         "unmapped": coverage["unmapped"],
+        "unmapped_groups": coverage.get("unmapped_groups", []),
     }
 
 
@@ -831,6 +903,7 @@ def _dir_parser_coverage(root: Path) -> list[dict[str, Any]]:
                 relative_path=_display_path(path, root),
                 candidate=candidate,
                 row_count=_csv_data_row_count(path),
+                header_signature=_csv_header_signature(path),
             )
         )
     return rows
@@ -852,6 +925,7 @@ def _zip_parser_coverage(zip_path: Path) -> list[dict[str, Any]]:
                     relative_path=info.filename,
                     candidate=candidate,
                     row_count=_zip_csv_data_row_count(archive, info),
+                    header_signature=_zip_header_signature(archive, info),
                 )
             )
     return rows
@@ -899,7 +973,14 @@ def _zip_csv_header(archive: zipfile.ZipFile, info: zipfile.ZipInfo) -> set[str]
     return set()
 
 
-def _coverage_row(*, path: str, relative_path: str, candidate: ReportCandidate | None, row_count: int | None = None) -> dict[str, Any]:
+def _coverage_row(
+    *,
+    path: str,
+    relative_path: str,
+    candidate: ReportCandidate | None,
+    row_count: int | None = None,
+    header_signature: str | None = None,
+) -> dict[str, Any]:
     first_part = relative_path.replace("\\", "/").split("/", 1)[0] if relative_path else ""
     return {
         "path": path,
@@ -908,6 +989,7 @@ def _coverage_row(*, path: str, relative_path: str, candidate: ReportCandidate |
         "status": "mapped" if candidate else "unmapped",
         "tool_name": candidate.tool_name if candidate else "",
         "row_count": row_count,
+        "header_signature": header_signature or "",
         "note": candidate.note if candidate else "No safe importer mapping for this CSV",
         "recommendation": _coverage_recommendation(relative_path, candidate),
     }
@@ -919,6 +1001,33 @@ def _csv_data_row_count(path: Path) -> int | None:
             return _data_row_count_from_lines(handle)
     except OSError:
         return None
+
+
+def _csv_header_signature(path: Path) -> str:
+    try:
+        return _header_signature(_generic_csv_header(path))
+    except OSError:
+        return ""
+
+
+def _zip_header_signature(archive: zipfile.ZipFile, info: zipfile.ZipInfo) -> str:
+    try:
+        return _header_signature(_zip_csv_header(archive, info))
+    except (OSError, UnicodeDecodeError, zipfile.BadZipFile):
+        return ""
+
+
+def _generic_csv_header(path: Path) -> set[str]:
+    with path.open("r", encoding="utf-8-sig", errors="replace", newline="") as handle:
+        for row in csv.reader(handle):
+            lowered = {cell.strip().lower() for cell in row if cell.strip()}
+            if len(lowered) >= 2:
+                return lowered
+    return set()
+
+
+def _header_signature(header: set[str]) -> str:
+    return "|".join(sorted(part.strip().casefold() for part in header if part.strip())[:40])
 
 
 def _zip_csv_data_row_count(archive: zipfile.ZipFile, info: zipfile.ZipInfo) -> int | None:
@@ -959,6 +1068,62 @@ def _coverage_recommendation(relative_path: str, candidate: ReportCandidate | No
     if "registry" in lower or "recmd" in lower:
         return "Review as registry output and map to RECmd or RegistryArtifactParser."
     return "Review manually; no safe importer mapping is configured yet."
+
+
+def _default_bulk_progress_path(paths: WorkspacePaths) -> Path:
+    return paths.root / "progress" / f"report-bundle-many-{uuid.uuid4()}.json"
+
+
+@dataclass
+class _BulkProgressWriter:
+    path: Path
+    report_root: Path
+    computers_total: int
+    history: list[dict[str, Any]] = field(default_factory=list)
+
+    def write(self, *, stage: str, **updates: Any) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        event = {"timestamp": datetime.now(timezone.utc).isoformat(), "stage": stage, **updates}
+        self.history.append(event)
+        payload = {
+            "workflow": "report_bundle_many",
+            "report_root": str(self.report_root),
+            "progress_manifest": str(self.path),
+            "updated_at": event["timestamp"],
+            "stage": stage,
+            "computers_total": self.computers_total,
+            **updates,
+            "history": self.history[-50:],
+        }
+        self.path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+
+
+def _unmapped_gap_groups(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        signature = str(row.get("header_signature") or "<unknown>")
+        group = groups.setdefault(
+            signature,
+            {
+                "header_signature": signature,
+                "file_count": 0,
+                "row_count": 0,
+                "computers": set(),
+                "examples": [],
+                "recommendation": row.get("recommendation") or "",
+            },
+        )
+        group["file_count"] += 1
+        group["row_count"] += int(row.get("row_count") or 0)
+        if row.get("computer_label"):
+            group["computers"].add(str(row["computer_label"]))
+        if len(group["examples"]) < 5:
+            group["examples"].append(row.get("relative_path") or row.get("path"))
+    result = []
+    for group in groups.values():
+        result.append({**group, "computers": sorted(group["computers"]), "computer_count": len(group["computers"])})
+    result.sort(key=lambda item: (-int(item["file_count"]), str(item["header_signature"])))
+    return result
 
 
 def _run_post_import_rebuilds(db: Database, *, case_id: str, image_id: str) -> list[str]:

@@ -138,6 +138,11 @@ def test_report_bundle_import_many_zip_creates_one_computer_per_top_level_folder
     assert result.imported_rows == 2
     assert result.failed_files == 0
     assert result.manifest_path
+    assert result.progress_manifest_path
+    progress_manifest = json.loads(Path(result.progress_manifest_path).read_text(encoding="utf-8"))
+    assert progress_manifest["stage"] == "completed"
+    assert progress_manifest["computers_total"] == 2
+    assert progress_manifest["imported_computers"] == 2
     manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
     assert manifest["manifest_type"] == "report_bundle_bulk_import"
     assert len(manifest["computers"]) == 2
@@ -236,7 +241,10 @@ def test_parser_coverage_and_unmapped_import_report(tmp_path, monkeypatch):
     unknown = next(row for row in coverage["files"] if row["status"] == "unmapped")
     assert unknown["computer_label"] == "ComputerA"
     assert unknown["row_count"] == 1
+    assert unknown["header_signature"] == "alpha|beta"
     assert "Review manually" in unknown["recommendation"]
+    assert coverage["unmapped_groups"][0]["file_count"] == 1
+    assert coverage["unmapped_groups"][0]["computers"] == ["ComputerA"]
     preflight = report_bundle_preflight_report(tmp_path / "input")
     assert preflight["summary"]["ready"] is True
     assert preflight["summary"]["computer_count"] == 1
