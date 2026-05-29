@@ -30,6 +30,7 @@ from .storage_policy import CONTENT_HEAVY_TABLES, storage_policy_items
 from .timestamps import normalize_timestamp, parse_timestamp
 from .tools.memory_strings import assess_hiberfil_source, memory_artifact_type as _classify_memory_artifact_type
 from .tools.usb_partition import usb_rows_from_partition_diagnostic_event
+from .tools.usb_summary import enrich_usb_storage_device_volume_serials
 from .usn_rules import load_usn_rules, match_usn_rules
 
 
@@ -12079,6 +12080,7 @@ def usb_verbose_report(
 
 def rebuild_usb_file_correlations(db: Database, case_id: str) -> int:
     db.get_case(case_id)
+    enrich_usb_storage_device_volume_serials(db, case_id=case_id)
     rows = _usb_file_correlation_rows(db, case_id, limit=None)
     connection_rows = _query_report_rows(
         db,
@@ -12141,6 +12143,8 @@ def usb_file_correlation_report(
     files = _dedupe_usb_file_items(rows)
     counts_by_device: dict[tuple[str, str | None, str | None, str | None], dict[str, Any]] = {}
     for row in rows:
+        row["matched_volume_serial_number"] = row.get("usb_volume_serial_number") or row.get("artifact_volume_serial_number")
+        row["matched_volume_name"] = row.get("usb_volume_name") or row.get("artifact_volume_name")
         key = (
             row["usb_serial"],
             row["usb_volume_serial_number"],
@@ -12174,15 +12178,18 @@ def usb_file_correlation_report(
             item["exact_vsn_matches"] += 1
         elif row["volume_serial_match"] == "suffix":
             item["suffix_vsn_matches"] += 1
+        elif row["volume_serial_match"] == "volume_name":
+            item["volume_name_matches"] = item.get("volume_name_matches", 0) + 1
     shellbag_rows = db.conn.execute(
         "SELECT COUNT(*) AS count FROM shellbag_entries WHERE case_id = ?",
         (case_id,),
     ).fetchone()["count"]
     return {
         "case_id": case_id,
-        "correlation_key": "normalized volume serial number",
+        "correlation_key": "normalized volume serial number; volume label fallback when device-side volume serial is missing",
         "notes": [
             "LNK and Jump List rows are matched to USB storage devices by volume serial number.",
+            "When USB device evidence lacks a volume serial number, LNK and Jump List rows can fall back to a non-generic matching volume label.",
             "Shellbag rows participate when volume serial data is available in shellbag_entries.",
             "Suffix matching is used when USB evidence has a wider NTFS-style serial and shortcut evidence has the lower 32-bit serial.",
         ],
@@ -12209,6 +12216,7 @@ def _usb_file_correlation_rows(db: Database, case_id: str, *, limit: int | None)
             WITH usb AS (
               SELECT *,
                      UPPER(REPLACE(volume_serial_number, '-', '')) AS usb_vsn_norm,
+                     UPPER(TRIM(COALESCE(volume_name, ''))) AS usb_volume_name_norm,
                      UPPER(REPLACE(REPLACE(volume_guid, CHAR(123), ''), CHAR(125), '')) AS usb_guid_norm,
                      UPPER(drive_letter) AS usb_drive_norm
               FROM usb_storage_devices
@@ -12260,6 +12268,7 @@ def _usb_file_correlation_rows(db: Database, case_id: str, *, limit: int | None)
                 NULL AS artifact_volume_guid,
                 NULL AS artifact_drive_letter,
                 UPPER(REPLACE(volume_serial_number, '-', '')) AS artifact_vsn_norm,
+                UPPER(TRIM(COALESCE(volume_name, ''))) AS artifact_volume_name_norm,
                 NULL AS artifact_guid_norm,
                 NULL AS artifact_drive_norm,
                 UPPER(REPLACE(COALESCE(file_location, file_name, ''), '\\\\', '\\')) AS artifact_path_norm,
@@ -12291,6 +12300,7 @@ def _usb_file_correlation_rows(db: Database, case_id: str, *, limit: int | None)
                 volume_guid AS artifact_volume_guid,
                 drive_letter AS artifact_drive_letter,
                 UPPER(REPLACE(volume_serial_number, '-', '')) AS artifact_vsn_norm,
+                UPPER(TRIM(COALESCE(volume_name, ''))) AS artifact_volume_name_norm,
                 UPPER(REPLACE(REPLACE(volume_guid, CHAR(123), ''), CHAR(125), '')) AS artifact_guid_norm,
                 UPPER(drive_letter) AS artifact_drive_norm,
                 UPPER(
@@ -12443,6 +12453,13 @@ def _usb_file_correlation_rows(db: Database, case_id: str, *, limit: int | None)
                   AND usb.usb_guid_norm LIKE '%' || artifacts.artifact_guid_norm || '%'
                 )
                 OR (
+                  artifacts.source_artifact_type != 'shellbag'
+                  AND (usb.usb_vsn_norm IS NULL OR usb.usb_vsn_norm = '')
+                  AND artifacts.artifact_volume_name_norm IS NOT NULL
+                  AND artifacts.artifact_volume_name_norm NOT IN ('', 'LOCAL DISK', 'NEW VOLUME', 'USB DRIVE', 'REMOVABLE DISK')
+                  AND artifacts.artifact_volume_name_norm = usb.usb_volume_name_norm
+                )
+                OR (
                   artifacts.source_artifact_type = 'shellbag'
                   AND artifacts.artifact_drive_norm IS NOT NULL
                   AND artifacts.artifact_drive_norm != ''
@@ -12493,6 +12510,11 @@ def _usb_file_correlation_rows(db: Database, case_id: str, *, limit: int | None)
                   AND scored.artifact_vsn_norm = SUBSTR(scored.usb_vsn_norm, -8) THEN 'suffix'
                 WHEN scored.artifact_guid_norm IS NOT NULL
                   AND scored.usb_guid_norm LIKE '%' || scored.artifact_guid_norm || '%' THEN 'volume_guid'
+                WHEN scored.source_artifact_type != 'shellbag'
+                  AND (scored.usb_vsn_norm IS NULL OR scored.usb_vsn_norm = '')
+                  AND scored.artifact_volume_name_norm IS NOT NULL
+                  AND scored.artifact_volume_name_norm NOT IN ('', 'LOCAL DISK', 'NEW VOLUME', 'USB DRIVE', 'REMOVABLE DISK')
+                  AND scored.artifact_volume_name_norm = scored.usb_volume_name_norm THEN 'volume_name'
                 WHEN scored.source_artifact_type = 'shellbag'
                   AND scored.anchor_count >= 2
                   AND scored.anchored_device_count = 1
@@ -12516,6 +12538,11 @@ def _usb_file_correlation_rows(db: Database, case_id: str, *, limit: int | None)
                   AND scored.artifact_vsn_norm = SUBSTR(scored.usb_vsn_norm, -8) THEN 'medium'
                 WHEN scored.artifact_guid_norm IS NOT NULL
                   AND scored.usb_guid_norm LIKE '%' || scored.artifact_guid_norm || '%' THEN 'high'
+                WHEN scored.source_artifact_type != 'shellbag'
+                  AND (scored.usb_vsn_norm IS NULL OR scored.usb_vsn_norm = '')
+                  AND scored.artifact_volume_name_norm IS NOT NULL
+                  AND scored.artifact_volume_name_norm NOT IN ('', 'LOCAL DISK', 'NEW VOLUME', 'USB DRIVE', 'REMOVABLE DISK')
+                  AND scored.artifact_volume_name_norm = scored.usb_volume_name_norm THEN 'medium'
                 WHEN scored.source_artifact_type = 'shellbag'
                   AND scored.anchor_count >= 2
                   AND scored.anchored_device_count = 1 THEN 'high'
@@ -12602,9 +12629,19 @@ def _usb_file_correlation_rows_duckdb(db: Database, case_id: str, *, limit: int 
             continue
         for usb in usb_rows:
             usb_vsn = _normalize_usb_serial(usb.get("volume_serial_number"))
-            if not usb_vsn:
+            usb_volume_name = _normalize_usb_volume_name(usb.get("volume_name"))
+            artifact_volume_name = _normalize_usb_volume_name(artifact.get("volume_name"))
+            if not usb_vsn and not _usb_volume_name_matchable(usb_volume_name, artifact_volume_name):
                 continue
-            match = "exact" if artifact_vsn == usb_vsn else "suffix" if usb_vsn.endswith(artifact_vsn) or artifact_vsn.endswith(usb_vsn) else ""
+            match = (
+                "exact"
+                if usb_vsn and artifact_vsn == usb_vsn
+                else "suffix"
+                if usb_vsn and (usb_vsn.endswith(artifact_vsn) or artifact_vsn.endswith(usb_vsn))
+                else "volume_name"
+                if not usb_vsn and _usb_volume_name_matchable(usb_volume_name, artifact_volume_name)
+                else ""
+            )
             if not match:
                 continue
             results.append(
@@ -12741,6 +12778,16 @@ def _normalize_usb_drive(value: Any) -> str:
     if not text:
         return ""
     return text if text.endswith(":") else f"{text[:1]}:"
+
+
+def _normalize_usb_volume_name(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip().upper())
+
+
+def _usb_volume_name_matchable(left: str, right: str) -> bool:
+    if not left or not right or left != right:
+        return False
+    return left not in {"LOCAL DISK", "NEW VOLUME", "USB DRIVE", "REMOVABLE DISK"}
 
 
 def _normalize_usb_artifact_path(value: Any) -> str:
@@ -13044,6 +13091,8 @@ def _dedupe_usb_file_items(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "usb_volume_name": row.get("usb_volume_name"),
                 "usb_drive_letter": row.get("usb_drive_letter"),
                 "usb_product": row.get("usb_product"),
+                "matched_volume_serial_number": row.get("matched_volume_serial_number") or row.get("usb_volume_serial_number") or row.get("artifact_volume_serial_number"),
+                "matched_volume_name": row.get("matched_volume_name") or row.get("usb_volume_name") or row.get("artifact_volume_name"),
                 "file_name": row.get("file_name"),
                 "file_location": row.get("file_location"),
                 "artifact_count": 0,

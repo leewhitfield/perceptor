@@ -16,6 +16,7 @@ from forensic_orchestrator.reports import (
 )
 import forensic_orchestrator.tools.ingest as ingest_module
 from forensic_orchestrator.tools.ingest import ingest_csv_output
+from forensic_orchestrator.tools.usb_summary import rebuild_usb_storage_devices
 
 
 @pytest.fixture(autouse=True)
@@ -1873,6 +1874,98 @@ def test_usb_registry_artifacts_populate_usb_devices(tmp_path):
     assert breakdown["raw_usb_evidence_rows"] == 6
     assert breakdown["summarized_usb_storage_devices"] == 1
     assert {"artifact": "usb_device_history", "row_count": 2} in breakdown["artifact_counts"]
+
+
+def test_usb_storage_summary_enriches_missing_volume_serial_from_shortcut_label(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    db.insert_usb_devices(
+        [
+            {
+                "id": "usb-device",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "usb-output",
+                "tool_name": "RegistryArtifactParser",
+                "source_csv": tmp_path / "usb.csv",
+                "row_number": 1,
+                "source_path": "SYSTEM",
+                "artifact": "usb_device_history",
+                "device_type": "usb_storage",
+                "vendor": "CB",
+                "product": "Cellebrite",
+                "friendly_name": "CB Cellebrite USB Device",
+                "serial": "29B1109550240002",
+                "volume_name": None,
+                "volume_serial_number": None,
+                "property_name": "FriendlyName",
+                "property_value": "CB Cellebrite USB Device",
+            },
+            {
+                "id": "usb-volume",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "usb-output",
+                "tool_name": "RegistryArtifactParser",
+                "source_csv": tmp_path / "usb.csv",
+                "row_number": 2,
+                "source_path": "SOFTWARE",
+                "artifact": "usb_volume_history",
+                "device_type": "portable_device_volume",
+                "vendor": "CB",
+                "product": "Cellebrite",
+                "serial": "29B1109550240002",
+                "volume_name": "BYEBYE",
+                "volume_serial_number": None,
+                "property_name": "FriendlyName",
+                "property_value": "BYEBYE",
+            },
+        ]
+    )
+    db.insert_shortcut_items(
+        [
+            {
+                "id": "shortcut-1",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "shortcut-output",
+                "tool_name": "JLECmd",
+                "source_csv": tmp_path / "JLECmd.csv",
+                "row_number": 1,
+                "artifact_type": "jumplist",
+                "artifact_name": "autoDestinations-ms",
+                "artifact_path": "/artifacts/jumplists/mayas/autoDestinations-ms",
+                "file_name": "The end.docx",
+                "file_location": "D:\\The end.docx",
+                "device_type": "removable",
+                "volume_serial_number": "3304EABA",
+                "volume_name": "BYEBYE",
+                "jumplist_item_number": "1",
+            }
+        ]
+    )
+
+    assert rebuild_usb_storage_devices(db, case_id=case.id) == 1
+
+    summary = db.conn.execute(
+        """
+        SELECT serial, product, volume_name, volume_serial_number, source_artifacts
+        FROM usb_storage_devices
+        WHERE serial = '29B1109550240002'
+        """
+    ).fetchone()
+    assert dict(summary) == {
+        "serial": "29B1109550240002",
+        "product": "Cellebrite",
+        "volume_name": "BYEBYE",
+        "volume_serial_number": "3304EABA",
+        "source_artifacts": "usb_device_history, usb_volume_history, shortcut_volume_label_enrichment",
+    }
 
 
 def test_usb_report_bundle_rows_unpack_mounted_devices_and_volume_cache(tmp_path):

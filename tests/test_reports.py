@@ -5967,6 +5967,35 @@ def test_usb_file_correlation_matches_shortcuts_by_volume_serial(tmp_path):
                 "evidence_row_count": 1,
                 "source_artifacts": "test",
             },
+            {
+                "id": "usb-3",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "serial": "USB789",
+                "vendor_id": None,
+                "product_id": None,
+                "vendor": "CB",
+                "product": "Cellebrite",
+                "revision": None,
+                "friendly_name": "CB Cellebrite USB Device",
+                "parent_id_prefix": None,
+                "device_service": "USBSTOR",
+                "drive_letter": None,
+                "volume_guid": None,
+                "volume_serial_number": None,
+                "volume_name": "BYEBYE",
+                "capacity_bytes": None,
+                "alternate_scsi_serial": None,
+                "user_profiles": None,
+                "first_install_date_utc": None,
+                "last_arrival_utc": None,
+                "last_removal_utc": None,
+                "first_volume_serial_event_utc": None,
+                "last_partition_event_utc": None,
+                "evidence_row_count": 1,
+                "source_artifacts": "test",
+            },
         ]
     )
     db.insert_shortcut_items(
@@ -6021,6 +6050,31 @@ def test_usb_file_correlation_matches_shortcuts_by_volume_serial(tmp_path):
                 "lnk_accessed": None,
                 "jumplist_item_number": "1",
             },
+            {
+                "id": str(uuid.uuid4()),
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "output-4",
+                "tool_name": "JLECmd",
+                "source_csv": tmp_path / "JLECmd.csv",
+                "row_number": 3,
+                "artifact_type": "jumplist",
+                "artifact_name": "autoDestinations-ms",
+                "artifact_path": "/artifacts/jumplists/mayas/AppData/Roaming/Microsoft/Windows/Recent/AutomaticDestinations/autoDestinations-ms",
+                "file_name": "The end.docx",
+                "file_location": "D:\\The end.docx",
+                "target_created": None,
+                "target_modified": None,
+                "target_accessed": None,
+                "device_type": "removable",
+                "volume_serial_number": "3304EABA",
+                "volume_name": "BYEBYE",
+                "lnk_created": None,
+                "lnk_modified": None,
+                "lnk_accessed": None,
+                "jumplist_item_number": "2",
+            },
         ]
     )
     db.insert_shellbag_entries(
@@ -6058,19 +6112,19 @@ def test_usb_file_correlation_matches_shortcuts_by_volume_serial(tmp_path):
 
     report = usb_file_correlation_report(db, case.id)
 
-    assert report["total_returned"] == 3
-    assert {row["file_name"] for row in report["items"] if row["file_name"]} == {"doc.txt", "image.jpg"}
+    assert report["total_returned"] == 4
+    assert {row["file_name"] for row in report["items"] if row["file_name"]} == {"doc.txt", "image.jpg", "The end.docx"}
     match_methods = {row["file_name"]: row["volume_serial_match"] for row in report["items"] if row["file_name"]}
-    assert match_methods == {"doc.txt": "exact", "image.jpg": "suffix"}
+    assert match_methods == {"doc.txt": "exact", "image.jpg": "suffix", "The end.docx": "exact"}
     shellbag = [row for row in report["items"] if row["source_artifact_type"] == "shellbag"][0]
     assert shellbag["file_location"] == "F:\\Folder"
     assert shellbag["volume_serial_match"] == "volume_guid"
     assert shellbag["confidence"] == "high"
     users = {row["file_name"]: row["user_profile"] for row in report["items"]}
-    assert users == {"doc.txt": "fredr", "image.jpg": "jean", None: "fredr"}
+    assert users == {"doc.txt": "fredr", "image.jpg": "jean", "The end.docx": "mayas", None: "fredr"}
     grouped = usb_file_correlation_report(db, case.id, grouped=True)
-    assert grouped["total_files"] == 3
-    assert {row["user_profiles"] for row in grouped["files"]} == {"fredr", "jean"}
+    assert grouped["total_files"] == 4
+    assert {row["user_profiles"] for row in grouped["files"]} == {"fredr", "jean", "mayas"}
     timeline = usb_timeline_report(db, case.id)
     assert [event for event in timeline["events"] if event["event_type"] == "usb_first_connected"]
 

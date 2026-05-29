@@ -54,10 +54,56 @@ def rebuild_usb_storage_devices(db: Database, *, case_id: str, image_id: str | N
         summary = _summary_for_group(items, serial)
         if _is_storage_summary(summary):
             summaries.append(summary)
+    _enrich_summaries_from_shortcut_volume_labels(db, case_id=case_id, image_id=image_id, summaries=summaries)
     with db.bulk_transaction():
         db.delete_usb_storage_devices(case_id=case_id, image_id=image_id)
         db.insert_usb_storage_devices(summaries)
     return len(summaries)
+
+
+def enrich_usb_storage_device_volume_serials(db: Database, *, case_id: str, image_id: str | None = None) -> int:
+    summaries = [
+        dict(row)
+        for row in query_rows(
+        db,
+        "usb_storage_devices",
+        "SELECT * FROM usb_storage_devices WHERE case_id = ?" + (" AND image_id = ?" if image_id is not None else ""),
+        [case_id] + ([image_id] if image_id is not None else []),
+    )
+    ]
+    items = [dict(row) for row in summaries]
+    _enrich_summaries_from_shortcut_volume_labels(db, case_id=case_id, image_id=image_id, summaries=items)
+    updates = [
+        item
+        for item, original in zip(items, summaries)
+        if item.get("volume_serial_number") != original.get("volume_serial_number")
+        or item.get("source_artifacts") != original.get("source_artifacts")
+    ]
+    if not updates:
+        return 0
+    if db.analytics_mode == "sqlite":
+        with db.bulk_transaction():
+            for item in updates:
+                db.conn.execute(
+                    """
+                    UPDATE usb_storage_devices
+                    SET volume_serial_number = ?, source_artifacts = ?
+                    WHERE id = ?
+                    """,
+                    (item.get("volume_serial_number"), item.get("source_artifacts"), item.get("id")),
+                )
+    elif db.analytics is not None:
+        with db.analytics._write_connection(case_id) as conn:
+            for item in updates:
+                conn.execute(
+                    """
+                    UPDATE usb_storage_devices
+                    SET volume_serial_number = ?, source_artifacts = ?
+                    WHERE id = ?
+                    """,
+                    (item.get("volume_serial_number"), item.get("source_artifacts"), item.get("id")),
+                )
+    return len(updates)
 
 
 def rebuild_usb_connection_events(db: Database, *, case_id: str, image_id: str | None = None) -> int:
@@ -199,6 +245,67 @@ def _summary_for_group(items: list[dict[str, Any]], serial: str) -> dict[str, An
         "source_artifacts": _join_unique(items, "artifact"),
         "source_device_types": _join_unique(items, "device_type"),
     }
+
+
+def _enrich_summaries_from_shortcut_volume_labels(
+    db: Database,
+    *,
+    case_id: str,
+    image_id: str | None,
+    summaries: list[dict[str, Any]],
+) -> None:
+    params: list[Any] = [case_id]
+    image_filter = ""
+    if image_id is not None:
+        image_filter = "AND image_id = ?"
+        params.append(image_id)
+    rows = query_rows(
+        db,
+        "shortcut_items",
+        f"""
+        SELECT image_id, volume_name, volume_serial_number
+        FROM shortcut_items
+        WHERE case_id = ? {image_filter}
+          AND volume_name IS NOT NULL
+          AND TRIM(volume_name) != ''
+          AND volume_serial_number IS NOT NULL
+          AND TRIM(volume_serial_number) != ''
+        """,
+        params,
+    )
+    serials_by_label: dict[tuple[str, str], set[str]] = defaultdict(set)
+    for row in rows:
+        label = _normal_volume_label(row.get("volume_name"))
+        serial = _clean(row.get("volume_serial_number"))
+        if not label or not serial:
+            continue
+        serials_by_label[(str(row.get("image_id") or ""), label)].add(serial)
+
+    for summary in summaries:
+        if _clean(summary.get("volume_serial_number")):
+            continue
+        label = _normal_volume_label(summary.get("volume_name"))
+        if not label:
+            continue
+        serials = sorted(serials_by_label.get((str(summary.get("image_id") or ""), label), set()))
+        if not serials:
+            continue
+        summary["volume_serial_number"] = ", ".join(serials)
+        summary["source_artifacts"] = _append_unique_value(summary.get("source_artifacts"), "shortcut_volume_label_enrichment")
+
+
+def _normal_volume_label(value: Any) -> str:
+    text = re.sub(r"\s+", " ", str(value or "").strip().upper())
+    if text in {"", "LOCAL DISK", "NEW VOLUME", "USB DRIVE", "REMOVABLE DISK"}:
+        return ""
+    return text
+
+
+def _append_unique_value(existing: Any, value: str) -> str:
+    values = [part.strip() for part in str(existing or "").split(",") if part.strip()]
+    if value not in values:
+        values.append(value)
+    return ", ".join(values)
 
 
 def _connection_events_for_row(item: dict[str, Any], serial: str) -> list[dict[str, Any]]:
