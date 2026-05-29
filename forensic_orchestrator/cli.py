@@ -50,7 +50,9 @@ from .reports import (
     account_compromise_report,
     amcache_report,
     artifact_lead_search_report,
+    artifact_lead_search_markdown,
     artifact_search_report,
+    artifact_search_source_inventory_report,
     artifact_sources_report,
     artifact_completeness_report,
     artifact_processing_status_report,
@@ -955,7 +957,7 @@ def _bundle_report_names_for_purpose(purpose: str) -> set[str] | None:
         "bundle-quality",
     }
     groups = {
-        "triage": common | {"suspicious-executions", "user-intent", "file-movement-identity", "opened-from-removable-media", "opened-from-cloud-storage", "cloud-mounts", "cloud-removable-overlap", "artifact-processing-status", "lead-search-usb", "lead-search-execution", "lead-search-cloud", "lead-search-browser", "lead-search-documents", "lead-search-communications"},
+        "triage": common | {"suspicious-executions", "user-intent", "file-movement-identity", "opened-from-removable-media", "opened-from-cloud-storage", "cloud-mounts", "cloud-removable-overlap", "artifact-processing-status", "lead-search-usb", "lead-search-execution", "lead-search-cloud", "lead-search-browser", "lead-search-documents", "lead-search-communications", "lead-search-usb-summary", "lead-search-execution-summary", "lead-search-cloud-summary", "lead-search-browser-summary", "lead-search-documents-summary", "lead-search-communications-summary"},
         "usb": common | {"shellbag-external-storage", "file-movement-identity", "opened-from-removable-media", "cloud-removable-overlap", "shortcut-droid-changes", "shortcut-object-tracking", "usn-lifecycle"},
         "cloud": common | {"cloud-artifacts", "opened-from-cloud-storage", "cloud-mounts", "cloud-removable-overlap", "user-intent"},
         "execution": common | {"execution", "execution-correlation", "suspicious-executions", "program-provenance", "remote-access", "user-intent"},
@@ -1065,6 +1067,12 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
         ("lead-search-browser", "json", "Browser lead search", lambda: lead_search("browser")),
         ("lead-search-documents", "json", "Document lead search", lambda: lead_search("documents")),
         ("lead-search-communications", "json", "Communications lead search", lambda: lead_search("communications")),
+        ("lead-search-usb-summary", "md", "USB lead search summary", lambda: artifact_lead_search_markdown(lead_search("usb"))),
+        ("lead-search-execution-summary", "md", "Execution lead search summary", lambda: artifact_lead_search_markdown(lead_search("execution"))),
+        ("lead-search-cloud-summary", "md", "Cloud lead search summary", lambda: artifact_lead_search_markdown(lead_search("cloud"))),
+        ("lead-search-browser-summary", "md", "Browser lead search summary", lambda: artifact_lead_search_markdown(lead_search("browser"))),
+        ("lead-search-documents-summary", "md", "Document lead search summary", lambda: artifact_lead_search_markdown(lead_search("documents"))),
+        ("lead-search-communications-summary", "md", "Communications lead search summary", lambda: artifact_lead_search_markdown(lead_search("communications"))),
     ]
     written: list[dict[str, object]] = []
     for stem, extension, title, builder in report_builders:
@@ -1095,9 +1103,10 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
         write_csv_rows(rows, str(path))
         csv_quality_inputs.append((stem, rows))
         written.append({"name": stem, "title": title, "path": str(path), "format": "csv"})
+    packet_entries = _case_packet_index_entries(db, case_id)
     if wanted("bundle-quality"):
         quality_path = output_dir / "bundle-quality.json"
-        quality = _report_bundle_quality_report(case_id=case_id, purpose=purpose, csv_exports=csv_quality_inputs, reports=written)
+        quality = _report_bundle_quality_report(case_id=case_id, purpose=purpose, csv_exports=csv_quality_inputs, reports=written, packets=packet_entries)
         write_text_output(json.dumps(quality, indent=2, default=str), str(quality_path))
         written.append({"name": "bundle-quality", "title": "Bundle quality", "path": str(quality_path), "format": "json"})
     overview_report = overview() if wanted("case-overview") or wanted("executive-summary") else {}
@@ -1139,6 +1148,10 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
     ]
     for item in written:
         index_lines.append(f"- [{item['title']}]({Path(str(item['path'])).name})")
+    if packet_entries:
+        index_lines.extend(["", "## Saved Packets", ""])
+        for item in packet_entries[:50]:
+            index_lines.append(f"- {item.get('kind', 'packet')}: `{item.get('relative_path') or item.get('path')}`")
     index_path = output_dir / "index.md"
     write_text_output("\n".join(index_lines).rstrip() + "\n", str(index_path))
     report_index_path = output_dir / "report-index.json"
@@ -1157,8 +1170,10 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
             }
             for item in written
         ],
+        "packets": packet_entries,
         "summary": {
             "report_count": len(written),
+            "packet_count": len(packet_entries),
             "total_written": len(written) + 2,
         },
     }
@@ -1197,12 +1212,131 @@ def _report_index_tags(name: str) -> list[str]:
     return sorted(tags)
 
 
+def _case_packet_index_entries(db: Database, case_id: str) -> list[dict[str, object]]:
+    try:
+        case_root = db.get_case(case_id).root
+    except KeyError:
+        return []
+    workspace_root = case_root.parent.parent if case_root.parent.name == "cases" else case_root
+    rows: list[dict[str, object]] = []
+    for directory, kind in (("mcp-review-packets", "review-packet"), ("mcp-search-packets", "search-packet")):
+        packet_dir = case_root / "reports" / directory
+        if not packet_dir.exists():
+            continue
+        for path in sorted(packet_dir.glob("*"), key=lambda item: item.stat().st_mtime if item.exists() else 0, reverse=True):
+            if not path.is_file() or path.suffix.casefold() not in {".json", ".md", ".txt"}:
+                continue
+            stat = path.stat()
+            try:
+                relative = path.relative_to(workspace_root)
+            except ValueError:
+                relative = path
+            rows.append(
+                {
+                    "name": path.stem,
+                    "title": path.stem.replace("-", " ").replace("_", " ").title(),
+                    "kind": kind,
+                    "path": str(path),
+                    "filename": path.name,
+                    "relative_path": str(relative),
+                    "format": path.suffix.casefold().lstrip("."),
+                    "size_bytes": stat.st_size,
+                    "modified_at": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
+                    "tags": _report_index_tags(f"{directory}/{path.name}"),
+                }
+            )
+    return rows
+
+
+def _workspace_map_report(db: Database, paths: WorkspacePaths, *, case_id: str | None = None, limit: int = 100) -> dict[str, object]:
+    limit = max(1, min(int(limit), 1000))
+    if case_id:
+        case_rows = [dict(row) for row in db.conn.execute("SELECT id, root, created_at FROM cases WHERE id = ? LIMIT 1", (case_id,)).fetchall()]
+    else:
+        case_rows = [dict(row) for row in db.conn.execute("SELECT id, root, created_at FROM cases ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()]
+    cases: list[dict[str, object]] = []
+    for case in case_rows:
+        current_case_id = str(case.get("id") or "")
+        computers = [
+            dict(row)
+            for row in db.conn.execute(
+                "SELECT id, label, hostname, notes, created_at FROM computers WHERE case_id = ? ORDER BY label LIMIT ?",
+                (current_case_id, limit),
+            ).fetchall()
+        ]
+        images = [
+            dict(row)
+            for row in db.conn.execute(
+                """
+                SELECT images.id, images.computer_id, computers.label AS computer_label, images.path, images.created_at
+                FROM images
+                LEFT JOIN computers ON computers.id = images.computer_id
+                WHERE images.case_id = ?
+                ORDER BY images.created_at DESC
+                LIMIT ?
+                """,
+                (current_case_id, limit),
+            ).fetchall()
+        ]
+        reports = _case_report_index_entries(paths, current_case_id, limit=limit)
+        packets = _case_packet_index_entries(db, current_case_id)[:limit]
+        jobs = (job_status_report(db, case_id=current_case_id, limit=limit).get("jobs") or [])[:limit]
+        cases.append({"case": case, "computers": computers, "images": images, "reports": reports, "packets": packets, "jobs": jobs})
+    progress = progress_manifest_report(paths.root, limit=limit)
+    return {
+        "workspace_root": str(paths.root),
+        "summary": {
+            "case_count": len(cases),
+            "progress_manifest_count": (progress.get("summary") or {}).get("manifest_count", 0),
+            "packet_count": sum(len(row.get("packets") or []) for row in cases),
+        },
+        "cases": cases,
+        "progress_manifests": progress.get("manifests") or [],
+    }
+
+
+def _case_report_index_entries(paths: WorkspacePaths, case_id: str, *, limit: int) -> list[dict[str, object]]:
+    case_root = paths.case_dir(case_id)
+    report_root = case_root / "reports"
+    if not report_root.exists():
+        return []
+    rows: list[dict[str, object]] = []
+    for path in sorted(report_root.rglob("*"), key=lambda item: item.stat().st_mtime if item.exists() and item.is_file() else 0, reverse=True):
+        if not path.is_file() or path.suffix.casefold() not in {".json", ".md", ".csv", ".txt"}:
+            continue
+        if "mcp-review-packets" in path.parts or "mcp-search-packets" in path.parts:
+            continue
+        stat = path.stat()
+        try:
+            relative = path.relative_to(paths.root)
+        except ValueError:
+            relative = path
+        rows.append(
+            {
+                "name": path.stem,
+                "title": path.stem.replace("-", " ").replace("_", " ").title(),
+                "kind": "report",
+                "path": str(path),
+                "filename": path.name,
+                "relative_path": str(relative),
+                "format": path.suffix.casefold().lstrip("."),
+                "size_bytes": stat.st_size,
+                "modified_at": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
+                "tags": _report_index_tags(path.stem),
+            }
+        )
+        if len(rows) >= limit:
+            break
+    return rows
+
+
 def _report_bundle_quality_report(
     *,
     case_id: str,
     purpose: str,
     csv_exports: list[tuple[str, list[dict[str, object]]]],
     reports: list[dict[str, object]],
+    packets: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     checks: list[dict[str, object]] = []
     for name, rows in csv_exports:
@@ -1216,6 +1350,30 @@ def _report_bundle_quality_report(
                 "status": "ok",
             }
         )
+    packets = packets or []
+    lead_reports = [row for row in reports if str(row.get("name") or "").startswith("lead-search-")]
+    lead_json = [row for row in lead_reports if str(row.get("format") or "") == "json"]
+    lead_markdown = [row for row in lead_reports if str(row.get("format") or "") == "md"]
+    quality_checks = [
+        {
+            "name": "lead-search-json",
+            "status": "ok" if lead_json or purpose != "triage" else "missing",
+            "count": len(lead_json),
+            "message": "Lead search JSON exports are available." if lead_json else "No lead search JSON exports found.",
+        },
+        {
+            "name": "lead-search-markdown",
+            "status": "ok" if lead_markdown or purpose != "triage" else "missing",
+            "count": len(lead_markdown),
+            "message": "Lead search Markdown summaries are available." if lead_markdown else "No lead search Markdown summaries found.",
+        },
+        {
+            "name": "saved-packets",
+            "status": "ok" if packets else "info",
+            "count": len(packets),
+            "message": "Saved MCP packets were indexed." if packets else "No saved MCP packets were present for this case.",
+        },
+    ]
     return {
         "case_id": case_id,
         "purpose": purpose,
@@ -1224,8 +1382,14 @@ def _report_bundle_quality_report(
             "csv_export_count": len(csv_exports),
             "csv_row_count": sum(len(rows) for _, rows in csv_exports),
             "empty_csv_export_count": sum(1 for _, rows in csv_exports if not rows),
+            "lead_export_count": len(lead_json),
+            "lead_markdown_count": len(lead_markdown),
+            "packet_count": len(packets),
         },
         "csv_exports": checks,
+        "lead_exports": lead_reports,
+        "packets": packets,
+        "checks": quality_checks,
     }
 
 
@@ -3154,6 +3318,11 @@ def build_parser() -> argparse.ArgumentParser:
     report_workspace_health.add_argument("--min-free-gb", type=float, default=10.0)
     report_workspace_health.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
     report_workspace_health.add_argument("--output")
+    report_workspace_map = report_sub.add_parser("workspace-map")
+    report_workspace_map.add_argument("--case", dest="case_id")
+    report_workspace_map.add_argument("--limit", type=int, default=100)
+    report_workspace_map.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    report_workspace_map.add_argument("--output")
     report_unmapped_imports = report_sub.add_parser("unmapped-imports")
     report_unmapped_imports.add_argument("--case", required=True, dest="case_id")
     report_unmapped_imports.add_argument("--limit", type=int, default=250)
@@ -3175,6 +3344,10 @@ def build_parser() -> argparse.ArgumentParser:
     report_artifact_search.add_argument("--limit", type=int, default=100)
     report_artifact_search.add_argument("--format", choices=["json", "table", "csv"], default="json")
     report_artifact_search.add_argument("--output")
+    report_artifact_search_sources = report_sub.add_parser("artifact-search-sources")
+    report_artifact_search_sources.add_argument("--case", required=True, dest="case_id")
+    report_artifact_search_sources.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    report_artifact_search_sources.add_argument("--output")
     report_lead_search = report_sub.add_parser("lead-search")
     report_lead_search.add_argument("--case", required=True, dest="case_id")
     report_lead_search.add_argument("--preset", required=True, choices=["execution", "usb", "cloud", "documents", "browser", "communications"])
@@ -6127,6 +6300,30 @@ def run(args: argparse.Namespace) -> int:
             )
             return 0
 
+        if args.resource == "report" and args.action == "workspace-map":
+            report = _workspace_map_report(db, paths, case_id=args.case_id, limit=args.limit)
+            rows = [
+                {
+                    "case_id": row.get("case", {}).get("id") if isinstance(row.get("case"), dict) else "",
+                    "computer_count": len(row.get("computers") or []),
+                    "image_count": len(row.get("images") or []),
+                    "report_count": len(row.get("reports") or []),
+                    "packet_count": len(row.get("packets") or []),
+                    "job_count": len(row.get("jobs") or []),
+                }
+                for row in report["cases"]
+                if isinstance(row, dict)
+            ]
+            write_report_output(
+                report,
+                rows,
+                args.format,
+                args.output,
+                title="Workspace map",
+                columns=["case_id", "computer_count", "image_count", "report_count", "packet_count", "job_count"],
+            )
+            return 0
+
         if args.resource == "report" and args.action == "unmapped-imports":
             report = unmapped_imports_report(db, args.case_id, limit=args.limit)
             write_report_output(
@@ -6170,6 +6367,18 @@ def run(args: argparse.Namespace) -> int:
                 args.output,
                 title=f"Artifact search for case {args.case_id}",
                 columns=["timestamp", "category", "table", "computer_label", "summary", "matched_fields"],
+            )
+            return 0
+
+        if args.resource == "report" and args.action == "artifact-search-sources":
+            report = artifact_search_source_inventory_report(db, args.case_id)
+            write_report_output(
+                report,
+                report["sources"],
+                args.format,
+                args.output,
+                title=f"Artifact search source inventory for case {args.case_id}",
+                columns=["category", "table", "available", "populated", "row_count", "timestamp_field", "user_field"],
             )
             return 0
 

@@ -22,6 +22,7 @@ from .report_bundle import parser_coverage_report, progress_manifest_report, rep
 from .reports import (
     artifact_lead_search_report,
     artifact_search_report,
+    artifact_search_source_inventory_report,
     browser_activity_report,
     case_activity_digest_report,
     case_next_actions_report,
@@ -627,6 +628,14 @@ class RelicMcpServer:
                     required=["case_id"],
                 ),
                 handler=self.search_artifacts,
+                annotations=read_only,
+            ),
+            McpTool(
+                name="relic_artifact_search_sources",
+                title="Relic Artifact Search Sources",
+                description="Return the artifact tables, categories, fields, and row counts covered by artifact and lead search.",
+                input_schema=_object_schema({"case_id": _string_schema("Relic case ID.")}, required=["case_id"]),
+                handler=self.artifact_search_sources,
                 annotations=read_only,
             ),
             McpTool(
@@ -1629,6 +1638,13 @@ class RelicMcpServer:
                 end=_optional_text(arguments, "end"),
                 limit=_limit(arguments, default=100),
             )
+        finally:
+            db.close()
+
+    def artifact_search_sources(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        db = self._db()
+        try:
+            return artifact_search_source_inventory_report(db, _required(arguments, "case_id"))
         finally:
             db.close()
 

@@ -314,16 +314,26 @@ def test_triage_bundle_writes_lead_search_exports(tmp_path, monkeypatch):
     paths = WorkspacePaths(tmp_path / "analysis")
     db = Database(paths.db_path())
     case_id = create_case(db, paths)
+    packet_dir = paths.case_dir(case_id) / "reports" / "mcp-search-packets"
+    packet_dir.mkdir(parents=True, exist_ok=True)
+    (packet_dir / "usb-lead.json").write_text(json.dumps({"case_id": case_id, "title": "USB lead"}), encoding="utf-8")
 
     bundle = write_case_report_bundle(db, case_id, tmp_path / "triage-bundle", purpose="triage", limit=10)
     db.close()
 
     names = {item["name"] for item in bundle["reports"]}
     assert {"lead-search-usb", "lead-search-execution", "lead-search-cloud", "lead-search-browser", "lead-search-documents", "lead-search-communications"} <= names
+    assert {"lead-search-usb-summary", "lead-search-execution-summary", "lead-search-cloud-summary", "lead-search-browser-summary", "lead-search-documents-summary", "lead-search-communications-summary"} <= names
     report_index = json.loads((tmp_path / "triage-bundle" / "report-index.json").read_text(encoding="utf-8"))
     lead_rows = [row for row in report_index["reports"] if str(row["name"]).startswith("lead-search-")]
     assert lead_rows
     assert all("lead" in row["tags"] for row in lead_rows)
+    assert report_index["summary"]["packet_count"] == 1
+    assert report_index["packets"][0]["filename"] == "usb-lead.json"
+    quality = json.loads((tmp_path / "triage-bundle" / "bundle-quality.json").read_text(encoding="utf-8"))
+    assert quality["summary"]["lead_export_count"] == 6
+    assert quality["summary"]["lead_markdown_count"] == 6
+    assert quality["summary"]["packet_count"] == 1
 
 
 def test_report_bundle_import_many_warns_when_distinct_rebuild_hits_disk_full(tmp_path, monkeypatch):

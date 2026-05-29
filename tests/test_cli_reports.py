@@ -63,6 +63,18 @@ def test_cli_search_progress_and_gap_reports(tmp_path, monkeypatch, capsys):
     assert cli_main(["--root", str(paths.root), "report", "rerun-search-packet", "--packet", str(packet_path), "--format", "json"]) == 0
     rerun = json.loads(capsys.readouterr().out)
     assert rerun["comparison"]["unchanged_count"] == 1
+    assert rerun["comparison"]["changed_count"] == 0
+
+    assert cli_main(["--root", str(paths.root), "report", "artifact-search-sources", "--case", "case-1", "--format", "json"]) == 0
+    sources = json.loads(capsys.readouterr().out)
+    shellbag_source = next(row for row in sources["sources"] if row["table"] == "shellbag_entries")
+    assert shellbag_source["populated"] is True
+    assert shellbag_source["row_count"] == 1
+
+    assert cli_main(["--root", str(paths.root), "report", "workspace-map", "--case", "case-1", "--format", "json"]) == 0
+    workspace = json.loads(capsys.readouterr().out)
+    assert workspace["summary"]["case_count"] == 1
+    assert workspace["cases"][0]["computers"][0]["label"] == "HOST01"
 
     assert cli_main(["--root", str(paths.root), "report", "progress-manifests", "--format", "json"]) == 0
     progress = json.loads(capsys.readouterr().out)

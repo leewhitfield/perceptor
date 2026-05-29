@@ -50,6 +50,7 @@ def test_mcp_initialize_and_list_tools(tmp_path):
     assert "relic_case_next_actions" in names
     assert "relic_write_review_packet" in names
     assert "relic_search_artifacts" in names
+    assert "relic_artifact_search_sources" in names
     assert "relic_list_review_packets" in names
     assert "relic_read_review_packet" in names
     assert "relic_write_search_packet" in names
@@ -381,6 +382,9 @@ def test_mcp_artifact_search_and_progress_manifests(tmp_path, monkeypatch):
 
     lead = server.lead_search({"case_id": "case-1", "preset": "usb", "query": "powershell"})
     assert lead["summary"]["result_count"] == 1
+    sources = server.artifact_search_sources({"case_id": "case-1"})
+    shellbag_source = next(row for row in sources["sources"] if row["table"] == "shellbag_entries")
+    assert shellbag_source["populated"] is True
     digest = server.case_activity_digest({"case_id": "case-1"})
     assert digest["case_id"] == "case-1"
     packet = server.write_search_packet({"case_id": "case-1", "preset": "usb", "query": "powershell", "title": "USB lead"})
@@ -394,6 +398,7 @@ def test_mcp_artifact_search_and_progress_manifests(tmp_path, monkeypatch):
     assert listed["summary"]["packet_count"] == 1
     assert read["packet"]["title"] == "USB lead"
     assert rerun["comparison"]["unchanged_count"] == 1
+    assert rerun["comparison"]["changed_count"] == 0
     assert any(row["kind"] == "packet" for row in exports["resources"])
     assert workspace["summary"]["case_count"] == 1
     assert guide["summary"]["step_count"] >= 8

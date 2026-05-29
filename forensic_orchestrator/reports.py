@@ -30766,6 +30766,47 @@ def artifact_lead_search_report(
     }
 
 
+def artifact_search_source_inventory_report(db: Database, case_id: str) -> dict[str, Any]:
+    """Return the tables and fields covered by artifact/lead search."""
+    sources: list[dict[str, Any]] = []
+    available_count = 0
+    populated_count = 0
+    for spec in ARTIFACT_SEARCH_SPECS:
+        table = str(spec["table"])
+        columns = _report_table_columns(db, case_id, table)
+        searchable = [field for field in spec["fields"] if field in columns]
+        display = [field for field in spec["display"] if field in columns]
+        timestamp_col = str(spec.get("timestamp") or "")
+        row_count = _table_count(db, table, case_id) if columns else 0
+        available = bool(columns)
+        populated = row_count > 0
+        available_count += 1 if available else 0
+        populated_count += 1 if populated else 0
+        sources.append(
+            {
+                "table": table,
+                "category": str(spec["category"]),
+                "available": available,
+                "populated": populated,
+                "row_count": row_count,
+                "searchable_fields": searchable,
+                "display_fields": display,
+                "timestamp_field": timestamp_col if timestamp_col in columns else "",
+                "user_field": str(spec.get("user") or "") if str(spec.get("user") or "") in columns else "",
+                "missing_search_fields": [field for field in spec["fields"] if field not in columns],
+            }
+        )
+    return {
+        "case_id": case_id,
+        "summary": {
+            "source_count": len(sources),
+            "available_source_count": available_count,
+            "populated_source_count": populated_count,
+        },
+        "sources": sources,
+    }
+
+
 def case_activity_digest_report(db: Database, case_id: str, *, limit: int = 25) -> dict[str, Any]:
     limit = max(1, min(int(limit), 1000))
     timeline = timeline_review_report(db, case_id, limit=limit)
@@ -30830,8 +30871,28 @@ def rerun_search_packet_report(db: Database, packet: dict[str, Any], *, limit_ov
     previous_search = packet.get("search") if isinstance(packet.get("search"), dict) else {}
     previous_results = previous_search.get("results") if isinstance(previous_search.get("results"), list) else []
     current_results = rerun.get("results") if isinstance(rerun.get("results"), list) else []
-    previous_keys = {_search_result_key(row) for row in previous_results if isinstance(row, dict)}
-    current_keys = {_search_result_key(row) for row in current_results if isinstance(row, dict)}
+    previous_by_key = {_search_result_key(row): row for row in previous_results if isinstance(row, dict)}
+    current_by_key = {_search_result_key(row): row for row in current_results if isinstance(row, dict)}
+    previous_keys = set(previous_by_key)
+    current_keys = set(current_by_key)
+    shared_keys = previous_keys & current_keys
+    changed: list[dict[str, Any]] = []
+    unchanged_count = 0
+    for key in shared_keys:
+        previous_hash = _search_result_hash(previous_by_key[key])
+        current_hash = _search_result_hash(current_by_key[key])
+        if previous_hash == current_hash:
+            unchanged_count += 1
+            continue
+        changed.append(
+            {
+                "key": {"table": key[0], "id": key[1]},
+                "previous_hash": previous_hash,
+                "current_hash": current_hash,
+                "previous": previous_by_key[key],
+                "current": current_by_key[key],
+            }
+        )
     return {
         "case_id": case_id,
         "title": packet.get("title") or "",
@@ -30844,12 +30905,39 @@ def rerun_search_packet_report(db: Database, packet: dict[str, Any], *, limit_ov
             "current_count": len(current_keys),
             "added_count": len(current_keys - previous_keys),
             "removed_count": len(previous_keys - current_keys),
-            "unchanged_count": len(current_keys & previous_keys),
+            "changed_count": len(changed),
+            "unchanged_count": unchanged_count,
             "added": [row for row in current_results if isinstance(row, dict) and _search_result_key(row) in current_keys - previous_keys],
             "removed": [row for row in previous_results if isinstance(row, dict) and _search_result_key(row) in previous_keys - current_keys],
+            "changed": changed,
         },
         "search": rerun,
     }
+
+
+def artifact_lead_search_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    lines = [
+        f"# {str(report.get('preset') or 'Lead').title()} Lead Search",
+        "",
+        f"Case: `{report.get('case_id') or ''}`",
+        f"Query: `{report.get('query') or ''}`",
+        "",
+        "## Summary",
+        "",
+        f"- Result count: `{summary.get('result_count', 0)}`",
+        f"- Total matching before limit: `{summary.get('total_matching', 0)}`",
+        f"- Limit: `{summary.get('limit', 0)}`",
+        f"- Categories: `{', '.join(str(item) for item in summary.get('categories') or [])}`",
+    ]
+    category_rows = report.get("category_summaries") if isinstance(report.get("category_summaries"), list) else []
+    if category_rows:
+        lines.extend(["", "## Category Coverage", ""])
+        for row in category_rows:
+            if isinstance(row, dict):
+                lines.append(f"- {row.get('category')}: `{row.get('result_count', 0)}` results across `{row.get('searched_tables', 0)}` tables")
+    _markdown_digest_rows(lines, "Top Results", report.get("results"), ("timestamp", "category", "table", "computer_label", "summary"))
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def case_activity_digest_markdown(report: dict[str, Any]) -> str:
@@ -31072,6 +31160,13 @@ def _artifact_search_score(row: dict[str, Any], query: str, user: str) -> tuple[
 
 def _search_result_key(row: dict[str, Any]) -> tuple[str, str]:
     return (str(row.get("table") or ""), str(row.get("id") or row.get("source_record_id") or row.get("summary") or ""))
+
+
+def _search_result_hash(row: dict[str, Any]) -> str:
+    ignored = {"score", "score_reasons", "drilldown"}
+    normalized = {key: value for key, value in row.items() if key not in ignored}
+    payload = json.dumps(normalized, sort_keys=True, default=str, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _first_present(row: dict[str, Any], keys: Iterable[str]) -> Any:
