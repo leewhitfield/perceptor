@@ -60,10 +60,20 @@ def test_cli_search_progress_and_gap_reports(tmp_path, monkeypatch, capsys):
         json.dumps({"case_id": "case-1", "search_type": "lead", "arguments": {"case_id": "case-1", "preset": "usb", "query": "powershell", "limit": 100}, "search": lead}),
         encoding="utf-8",
     )
+    case_packet_dir = paths.case_dir("case-1") / "reports" / "mcp-search-packets"
+    case_packet_dir.mkdir(parents=True, exist_ok=True)
+    (case_packet_dir / "usb-lead-search-packet.json").write_text(packet_path.read_text(encoding="utf-8"), encoding="utf-8")
     assert cli_main(["--root", str(paths.root), "report", "rerun-search-packet", "--packet", str(packet_path), "--format", "json"]) == 0
     rerun = json.loads(capsys.readouterr().out)
     assert rerun["comparison"]["unchanged_count"] == 1
     assert rerun["comparison"]["changed_count"] == 0
+    assert cli_main(["--root", str(paths.root), "report", "rerun-search-packet", "--packet", str(packet_path), "--format", "md"]) == 0
+    assert "# Search Packet Rerun" in capsys.readouterr().out
+
+    assert cli_main(["--root", str(paths.root), "report", "changed-search-packets", "--case", "case-1", "--format", "json"]) == 0
+    changed_packets = json.loads(capsys.readouterr().out)
+    assert changed_packets["summary"]["packet_count"] == 1
+    assert changed_packets["summary"]["changed_packet_count"] == 0
 
     assert cli_main(["--root", str(paths.root), "report", "artifact-search-sources", "--case", "case-1", "--format", "json"]) == 0
     sources = json.loads(capsys.readouterr().out)

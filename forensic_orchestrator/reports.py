@@ -30915,6 +30915,123 @@ def rerun_search_packet_report(db: Database, packet: dict[str, Any], *, limit_ov
     }
 
 
+def search_packet_metadata(db: Database, case_id: str, search: dict[str, Any], arguments: dict[str, Any], *, tool_version: str = "") -> dict[str, Any]:
+    """Return defensibility metadata for saved search packets."""
+    results = search.get("results") if isinstance(search.get("results"), list) else []
+    result_hashes = [_search_result_hash(row) for row in results if isinstance(row, dict)]
+    case_counts = _case_packet_counts(db, case_id)
+    return {
+        "tool": "relic",
+        "tool_version": tool_version,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "case_id": case_id,
+        "arguments": {key: value for key, value in arguments.items() if value not in (None, "", [], {})},
+        "case_counts": case_counts,
+        "result_count": len(result_hashes),
+        "result_hash_algorithm": "sha256",
+        "result_hashes": result_hashes,
+        "result_hash_set": hashlib.sha256("\n".join(sorted(result_hashes)).encode("utf-8")).hexdigest() if result_hashes else "",
+    }
+
+
+def changed_search_packets_report(
+    db: Database,
+    case_id: str,
+    packets: Iterable[dict[str, Any]],
+    *,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """Rerun saved search packets and summarize changed comparisons."""
+    limit = max(1, min(int(limit), 1000))
+    rows: list[dict[str, Any]] = []
+    for packet in packets:
+        if not isinstance(packet, dict) or str(packet.get("case_id") or "") != case_id:
+            continue
+        comparison = rerun_search_packet_report(db, packet)
+        counts = comparison.get("comparison") if isinstance(comparison.get("comparison"), dict) else {}
+        changed = int(counts.get("added_count") or 0) + int(counts.get("removed_count") or 0) + int(counts.get("changed_count") or 0)
+        rows.append(
+            {
+                "case_id": case_id,
+                "title": packet.get("title") or "",
+                "created_at": packet.get("created_at") or "",
+                "search_type": packet.get("search_type") or "",
+                "changed": changed > 0,
+                "change_count": changed,
+                "added_count": int(counts.get("added_count") or 0),
+                "removed_count": int(counts.get("removed_count") or 0),
+                "changed_count": int(counts.get("changed_count") or 0),
+                "unchanged_count": int(counts.get("unchanged_count") or 0),
+                "previous_count": int(counts.get("previous_count") or 0),
+                "current_count": int(counts.get("current_count") or 0),
+                "arguments": packet.get("arguments") if isinstance(packet.get("arguments"), dict) else {},
+                "comparison": comparison,
+            }
+        )
+        if len(rows) >= limit:
+            break
+    rows.sort(key=lambda row: (bool(row.get("changed")), int(row.get("change_count") or 0), str(row.get("created_at") or "")), reverse=True)
+    return {
+        "case_id": case_id,
+        "summary": {
+            "packet_count": len(rows),
+            "changed_packet_count": sum(1 for row in rows if row.get("changed")),
+            "added_count": sum(int(row.get("added_count") or 0) for row in rows),
+            "removed_count": sum(int(row.get("removed_count") or 0) for row in rows),
+            "changed_result_count": sum(int(row.get("changed_count") or 0) for row in rows),
+            "limit": limit,
+        },
+        "packets": rows,
+    }
+
+
+def rerun_search_packet_markdown(report: dict[str, Any]) -> str:
+    comparison = report.get("comparison") if isinstance(report.get("comparison"), dict) else {}
+    lines = [
+        "# Search Packet Rerun",
+        "",
+        f"Case: `{report.get('case_id') or ''}`",
+        f"Title: `{report.get('title') or ''}`",
+        f"Type: `{report.get('search_type') or ''}`",
+        "",
+        "## Comparison",
+        "",
+    ]
+    for key in ("previous_count", "current_count", "added_count", "removed_count", "changed_count", "unchanged_count"):
+        lines.append(f"- {key.replace('_', ' ').title()}: `{comparison.get(key, 0)}`")
+    _markdown_digest_rows(lines, "Added Results", comparison.get("added"), ("timestamp", "category", "table", "summary"))
+    _markdown_digest_rows(lines, "Removed Results", comparison.get("removed"), ("timestamp", "category", "table", "summary"))
+    changed = comparison.get("changed") if isinstance(comparison.get("changed"), list) else []
+    lines.extend(["", "## Changed Results", ""])
+    if not changed:
+        lines.append("- None")
+    for row in changed[:25]:
+        if not isinstance(row, dict):
+            continue
+        current = row.get("current") if isinstance(row.get("current"), dict) else {}
+        lines.append(
+            f"- `{current.get('timestamp') or ''}` `{current.get('category') or current.get('table') or ''}` "
+            f"{current.get('summary') or row.get('key') or ''}"
+        )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def changed_search_packets_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    lines = [
+        "# Changed Search Packets",
+        "",
+        f"Case: `{report.get('case_id') or ''}`",
+        "",
+        "## Summary",
+        "",
+    ]
+    for key in ("packet_count", "changed_packet_count", "added_count", "removed_count", "changed_result_count"):
+        lines.append(f"- {key.replace('_', ' ').title()}: `{summary.get(key, 0)}`")
+    _markdown_digest_rows(lines, "Packets", report.get("packets"), ("changed", "change_count", "title", "created_at", "search_type"))
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def artifact_lead_search_markdown(report: dict[str, Any]) -> str:
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
     lines = [
@@ -31058,6 +31175,21 @@ def _case_computer_labels(db: Database, case_id: str) -> dict[str, str]:
 def _case_image_paths(db: Database, case_id: str) -> dict[str, str]:
     rows = db.conn.execute("SELECT id, path FROM images WHERE case_id = ?", (case_id,)).fetchall()
     return {str(row["id"]): str(row["path"] or "") for row in rows}
+
+
+def _case_packet_counts(db: Database, case_id: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for name, sql in (
+        ("computer_count", "SELECT COUNT(*) AS count FROM computers WHERE case_id = ?"),
+        ("image_count", "SELECT COUNT(*) AS count FROM images WHERE case_id = ?"),
+        ("tool_output_count", "SELECT COUNT(*) AS count FROM tool_outputs WHERE case_id = ?"),
+    ):
+        try:
+            row = db.conn.execute(sql, (case_id,)).fetchone()
+            counts[name] = int(row["count"] if row is not None else 0)
+        except Exception:
+            counts[name] = 0
+    return counts
 
 
 def _matching_computer_ids(labels: dict[str, str], computer: str) -> list[str] | None:

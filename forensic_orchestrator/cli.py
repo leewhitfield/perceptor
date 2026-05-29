@@ -72,6 +72,8 @@ from .reports import (
     case_activity_digest_report,
     case_activity_digest_markdown,
     case_next_actions_report,
+    changed_search_packets_markdown,
+    changed_search_packets_report,
     carve_coverage_markdown,
     carve_coverage_report,
     cd_burning_activity_markdown,
@@ -222,6 +224,7 @@ from .reports import (
     remote_access_attribution_report,
     rdp_remote_access_markdown,
     regression_smoke_report,
+    rerun_search_packet_markdown,
     rerun_search_packet_report,
     rebuild_derived_timeline_events,
     rdp_visual_observations_report,
@@ -958,6 +961,7 @@ def _bundle_report_names_for_purpose(purpose: str) -> set[str] | None:
     }
     groups = {
         "triage": common | {"suspicious-executions", "user-intent", "file-movement-identity", "opened-from-removable-media", "opened-from-cloud-storage", "cloud-mounts", "cloud-removable-overlap", "artifact-processing-status", "lead-search-usb", "lead-search-execution", "lead-search-cloud", "lead-search-browser", "lead-search-documents", "lead-search-communications", "lead-search-usb-summary", "lead-search-execution-summary", "lead-search-cloud-summary", "lead-search-browser-summary", "lead-search-documents-summary", "lead-search-communications-summary"},
+        "review": common | {"activity-digest", "next-actions", "workspace-map", "artifact-search-sources", "suspicious-executions", "file-movement-identity", "opened-from-removable-media", "opened-from-cloud-storage", "cloud-mounts", "cloud-removable-overlap", "artifact-processing-status", "lead-search-usb", "lead-search-execution", "lead-search-cloud", "lead-search-browser", "lead-search-documents", "lead-search-communications", "lead-search-usb-summary", "lead-search-execution-summary", "lead-search-cloud-summary", "lead-search-browser-summary", "lead-search-documents-summary", "lead-search-communications-summary", "changed-search-packets"},
         "usb": common | {"shellbag-external-storage", "file-movement-identity", "opened-from-removable-media", "cloud-removable-overlap", "shortcut-droid-changes", "shortcut-object-tracking", "usn-lifecycle"},
         "cloud": common | {"cloud-artifacts", "opened-from-cloud-storage", "cloud-mounts", "cloud-removable-overlap", "user-intent"},
         "execution": common | {"execution", "execution-correlation", "suspicious-executions", "program-provenance", "remote-access", "user-intent"},
@@ -966,8 +970,17 @@ def _bundle_report_names_for_purpose(purpose: str) -> set[str] | None:
     return groups.get(purpose, groups["triage"])
 
 
-def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, limit: int = 100, purpose: str = "full") -> dict[str, object]:
+def write_case_report_bundle(
+    db: Database,
+    case_id: str,
+    output_dir: Path,
+    *,
+    limit: int = 100,
+    purpose: str = "full",
+    progress: Callable[[str], None] | None = None,
+) -> dict[str, object]:
     output_dir.mkdir(parents=True, exist_ok=True)
+    _progress(progress, f"report bundle start case={case_id} purpose={purpose} output={output_dir}")
     selected = _bundle_report_names_for_purpose(purpose)
     cache: dict[str, object] = {}
 
@@ -1024,7 +1037,14 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
     def lead_search(preset: str) -> dict[str, object]:
         return cached(f"lead_search_{preset}", lambda: artifact_lead_search_report(db, case_id, preset=preset, limit=limit))  # type: ignore[return-value]
 
+    def changed_packets() -> dict[str, object]:
+        return cached("changed_packets", lambda: _changed_search_packets_for_case(db, case_id, limit=limit))  # type: ignore[return-value]
+
     report_builders: list[tuple[str, str, str, Callable[[], object]]] = [
+        ("activity-digest", "md", "Activity digest", lambda: case_activity_digest_markdown(case_activity_digest_report(db, case_id, limit=limit))),
+        ("next-actions", "json", "Next actions", lambda: case_next_actions_report(db, case_id, limit=limit)),
+        ("workspace-map", "json", "Workspace map", lambda: _workspace_map_report(db, _workspace_paths_from_case(db, case_id), case_id=case_id, limit=limit)),
+        ("artifact-search-sources", "json", "Artifact search sources", lambda: artifact_search_source_inventory_report(db, case_id)),
         ("executive-summary", "md", "Executive summary", lambda: case_executive_summary_markdown(case_executive_summary_report(db, case_id, limit=limit, memory_disk_report=memory_disk()))),
         ("case-overview", "md", "Case overview", lambda: case_overview_markdown(overview())),
         ("evidence-gaps", "md", "Evidence gaps", lambda: evidence_gaps_markdown(gaps())),
@@ -1073,11 +1093,13 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
         ("lead-search-browser-summary", "md", "Browser lead search summary", lambda: artifact_lead_search_markdown(lead_search("browser"))),
         ("lead-search-documents-summary", "md", "Document lead search summary", lambda: artifact_lead_search_markdown(lead_search("documents"))),
         ("lead-search-communications-summary", "md", "Communications lead search summary", lambda: artifact_lead_search_markdown(lead_search("communications"))),
+        ("changed-search-packets", "md", "Changed search packets", lambda: changed_search_packets_markdown(changed_packets())),
     ]
     written: list[dict[str, object]] = []
     for stem, extension, title, builder in report_builders:
         if not wanted(stem):
             continue
+        _progress(progress, f"report bundle write report name={stem} format={extension}")
         path = output_dir / f"{stem}.{extension}"
         payload = builder()
         if extension == "md":
@@ -1098,6 +1120,7 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
     for stem, title, rows_builder in csv_builders:
         if not wanted(stem):
             continue
+        _progress(progress, f"report bundle write csv name={stem}")
         path = output_dir / f"{stem}.csv"
         rows = rows_builder()
         write_csv_rows(rows, str(path))
@@ -1105,10 +1128,12 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
         written.append({"name": stem, "title": title, "path": str(path), "format": "csv"})
     packet_entries = _case_packet_index_entries(db, case_id)
     if wanted("bundle-quality"):
+        _progress(progress, "report bundle write quality")
         quality_path = output_dir / "bundle-quality.json"
         quality = _report_bundle_quality_report(case_id=case_id, purpose=purpose, csv_exports=csv_quality_inputs, reports=written, packets=packet_entries)
         write_text_output(json.dumps(quality, indent=2, default=str), str(quality_path))
         written.append({"name": "bundle-quality", "title": "Bundle quality", "path": str(quality_path), "format": "json"})
+    _progress(progress, "report bundle write index")
     overview_report = overview() if wanted("case-overview") or wanted("executive-summary") else {}
     credentials_report = credentials() if wanted("memory-credentials") else {}
     support_report = memory_support() if wanted("memory-support-files") else {}
@@ -1178,6 +1203,7 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
         },
     }
     write_text_output(json.dumps(sanitize_report_paths(report_index), indent=2, default=str), str(report_index_path))
+    _progress(progress, f"report bundle completed reports={len(written)} packets={len(packet_entries)}")
     return {
         "case_id": case_id,
         "purpose": purpose,
@@ -1210,6 +1236,11 @@ def _report_index_tags(name: str) -> list[str]:
     if not tags:
         tags.add("review")
     return sorted(tags)
+
+
+def _progress(progress: Callable[[str], None] | None, message: str) -> None:
+    if progress is not None:
+        progress(message)
 
 
 def _case_packet_index_entries(db: Database, case_id: str) -> list[dict[str, object]]:
@@ -1246,6 +1277,43 @@ def _case_packet_index_entries(db: Database, case_id: str) -> list[dict[str, obj
                 }
             )
     return rows
+
+
+def _workspace_paths_from_case(db: Database, case_id: str) -> WorkspacePaths:
+    try:
+        case_root = db.get_case(case_id).root
+    except KeyError:
+        return WorkspacePaths()
+    if case_root.parent.name == "cases":
+        return WorkspacePaths(case_root.parent.parent)
+    return WorkspacePaths(case_root)
+
+
+def _load_search_packets_for_case(db: Database, case_id: str, *, limit: int = 1000) -> list[dict[str, object]]:
+    try:
+        case_root = db.get_case(case_id).root
+    except KeyError:
+        return []
+    packet_dir = case_root / "reports" / "mcp-search-packets"
+    if not packet_dir.exists():
+        return []
+    packets: list[dict[str, object]] = []
+    for path in sorted(packet_dir.glob("*-search-packet.json"), key=lambda item: item.stat().st_mtime if item.exists() else 0, reverse=True):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if isinstance(payload, dict):
+            payload["_packet_path"] = str(path)
+            packets.append(payload)
+        if len(packets) >= limit:
+            break
+    return packets
+
+
+def _changed_search_packets_for_case(db: Database, case_id: str, *, limit: int = 50) -> dict[str, object]:
+    packets = _load_search_packets_for_case(db, case_id, limit=limit)
+    return changed_search_packets_report(db, case_id, packets, limit=limit)
 
 
 def _workspace_map_report(db: Database, paths: WorkspacePaths, *, case_id: str | None = None, limit: int = 100) -> dict[str, object]:
@@ -3362,8 +3430,13 @@ def build_parser() -> argparse.ArgumentParser:
     report_rerun_search_packet = report_sub.add_parser("rerun-search-packet")
     report_rerun_search_packet.add_argument("--packet", required=True, help="Saved search packet JSON path")
     report_rerun_search_packet.add_argument("--limit", type=int, help="Override saved packet limit")
-    report_rerun_search_packet.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    report_rerun_search_packet.add_argument("--format", choices=["md", "json", "table", "csv"], default="json")
     report_rerun_search_packet.add_argument("--output")
+    report_changed_search_packets = report_sub.add_parser("changed-search-packets")
+    report_changed_search_packets.add_argument("--case", required=True, dest="case_id")
+    report_changed_search_packets.add_argument("--limit", type=int, default=50)
+    report_changed_search_packets.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
+    report_changed_search_packets.add_argument("--output")
     report_activity_digest = report_sub.add_parser("activity-digest")
     report_activity_digest.add_argument("--case", required=True, dest="case_id")
     report_activity_digest.add_argument("--limit", type=int, default=25)
@@ -3395,7 +3468,8 @@ def build_parser() -> argparse.ArgumentParser:
     report_write_bundle.add_argument("--case", required=True, dest="case_id")
     report_write_bundle.add_argument("--limit", type=int, default=100)
     report_write_bundle.add_argument("--output-dir", required=True)
-    report_write_bundle.add_argument("--purpose", choices=["full", "usb", "cloud", "execution", "memory", "triage"], default="full")
+    report_write_bundle.add_argument("--purpose", choices=["full", "usb", "cloud", "execution", "memory", "triage", "review"], default="full")
+    report_write_bundle.add_argument("--no-progress", action="store_true", help="Suppress timestamped bundle generation progress messages on stderr")
     report_combined = report_sub.add_parser("combined-artifacts")
     report_combined.add_argument("--case", required=True, dest="case_id")
     report_combined.add_argument("--family", default="all")
@@ -5563,7 +5637,16 @@ def run(args: argparse.Namespace) -> int:
             return 0
 
         if args.resource == "report" and args.action == "write-bundle":
-            print_json(write_case_report_bundle(db, args.case_id, Path(args.output_dir), limit=args.limit, purpose=args.purpose))
+            print_json(
+                write_case_report_bundle(
+                    db,
+                    args.case_id,
+                    Path(args.output_dir),
+                    limit=args.limit,
+                    purpose=args.purpose,
+                    progress=None if args.no_progress else print_progress,
+                )
+            )
             return 0
 
         if args.resource == "report" and args.action == "combined-artifacts":
@@ -6407,14 +6490,46 @@ def run(args: argparse.Namespace) -> int:
         if args.resource == "report" and args.action == "rerun-search-packet":
             packet = json.loads(Path(args.packet).read_text(encoding="utf-8"))
             report = rerun_search_packet_report(db, packet, limit_override=args.limit)
-            write_report_output(
-                report,
-                report["comparison"]["added"],
-                args.format,
-                args.output,
-                title="Rerun search packet",
-                columns=["table", "id", "timestamp", "category", "summary", "score"],
-            )
+            if args.format == "md":
+                write_text_output(rerun_search_packet_markdown(report), args.output)
+            else:
+                comparison = report.get("comparison") if isinstance(report.get("comparison"), dict) else {}
+                rows = []
+                for section in ("added", "removed"):
+                    rows.extend({"change_type": section, **row} for row in comparison.get(section, []) if isinstance(row, dict))
+                rows.extend(
+                    {
+                        "change_type": "changed",
+                        **(row.get("current") if isinstance(row.get("current"), dict) else {}),
+                        "previous_hash": row.get("previous_hash"),
+                        "current_hash": row.get("current_hash"),
+                    }
+                    for row in comparison.get("changed", [])
+                    if isinstance(row, dict)
+                )
+                write_report_output(
+                    report,
+                    rows,
+                    args.format,
+                    args.output,
+                    title="Rerun search packet",
+                    columns=["change_type", "table", "id", "timestamp", "category", "summary", "score"],
+                )
+            return 0
+
+        if args.resource == "report" and args.action == "changed-search-packets":
+            report = _changed_search_packets_for_case(db, args.case_id, limit=args.limit)
+            if args.format == "md":
+                write_text_output(changed_search_packets_markdown(report), args.output)
+            else:
+                write_report_output(
+                    report,
+                    report["packets"],
+                    args.format,
+                    args.output,
+                    title=f"Changed search packets for case {args.case_id}",
+                    columns=["changed", "change_count", "title", "created_at", "search_type", "added_count", "removed_count", "changed_count"],
+                )
             return 0
 
         if args.resource == "report" and args.action == "activity-digest":

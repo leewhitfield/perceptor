@@ -336,6 +336,31 @@ def test_triage_bundle_writes_lead_search_exports(tmp_path, monkeypatch):
     assert quality["summary"]["packet_count"] == 1
 
 
+def test_review_bundle_writes_operator_context_and_progress(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORENSIC_ANALYTICS_MODE", "duckdb")
+    paths = WorkspacePaths(tmp_path / "analysis")
+    db = Database(paths.db_path())
+    case_id = create_case(db, paths)
+    packet_dir = paths.case_dir(case_id) / "reports" / "mcp-search-packets"
+    packet_dir.mkdir(parents=True, exist_ok=True)
+    (packet_dir / "empty-search-packet.json").write_text(
+        json.dumps({"case_id": case_id, "search_type": "artifact", "arguments": {"case_id": case_id, "query": "needle"}, "search": {"results": [], "summary": {}}}),
+        encoding="utf-8",
+    )
+    messages: list[str] = []
+
+    bundle = write_case_report_bundle(db, case_id, tmp_path / "review-bundle", purpose="review", limit=10, progress=messages.append)
+    db.close()
+
+    names = {item["name"] for item in bundle["reports"]}
+    assert {"activity-digest", "next-actions", "workspace-map", "artifact-search-sources", "changed-search-packets"} <= names
+    assert any("report bundle write report name=activity-digest" in message for message in messages)
+    assert any("report bundle completed" in message for message in messages)
+    report_index = json.loads((tmp_path / "review-bundle" / "report-index.json").read_text(encoding="utf-8"))
+    assert report_index["summary"]["packet_count"] == 1
+    assert (tmp_path / "review-bundle" / "changed-search-packets.md").exists()
+
+
 def test_report_bundle_import_many_warns_when_distinct_rebuild_hits_disk_full(tmp_path, monkeypatch):
     monkeypatch.setenv("FORENSIC_ANALYTICS_MODE", "duckdb")
     input_root = tmp_path / "input" / "ComputerA" / "MFT"

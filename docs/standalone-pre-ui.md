@@ -182,14 +182,16 @@ Purpose bundles keep review output focused:
 ```bash
 uv run relic --root /analysis/case-root report write-bundle \
   --case CASE_ID \
-  --purpose usb \
-  --output-dir /analysis/case-root/cases/CASE_ID/outputs/reports/usb-bundle
+  --purpose review \
+  --output-dir /analysis/case-root/cases/CASE_ID/outputs/reports/review-bundle
 ```
 
-Supported purposes are `triage`, `usb`, `cloud`, `execution`, `memory`, and
-`full`. Purpose bundles are computed lazily, so a narrow purpose avoids building
-reports outside that review lane. Each bundle also writes `bundle-quality.json`
-with report and CSV export row/column counts.
+Supported purposes are `review`, `triage`, `usb`, `cloud`, `execution`,
+`memory`, and `full`. Purpose bundles are computed lazily, so a narrow purpose
+avoids building reports outside that review lane. Each bundle also writes
+`bundle-quality.json` with report, CSV export, lead-search, and saved-packet
+checks. Bundle generation prints timestamped progress to stderr unless
+`--no-progress` is supplied.
 
 Memory workflow shortcut:
 

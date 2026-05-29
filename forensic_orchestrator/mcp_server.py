@@ -42,6 +42,7 @@ from .reports import (
     processing_progress_report,
     registry_activity_report,
     rerun_search_packet_report,
+    search_packet_metadata,
     resume_plan_report,
     processing_readiness_report,
     shortcuts_report,
@@ -261,7 +262,7 @@ class RelicMcpServer:
                 input_schema=_object_schema(
                     {
                         "case_id": _string_schema("Relic case ID."),
-                        "purpose": {"type": "string", "enum": ["full", "usb", "cloud", "execution", "memory", "triage"], "default": "full"},
+                        "purpose": {"type": "string", "enum": ["full", "usb", "cloud", "execution", "memory", "triage", "review"], "default": "full"},
                         "limit": _integer_schema("Maximum resources to return.", default=250, minimum=1, maximum=1000),
                     },
                     required=["case_id"],
@@ -751,7 +752,7 @@ class RelicMcpServer:
             McpTool(
                 name="relic_rerun_search_packet",
                 title="Rerun Relic Search Packet",
-                description="Rerun a saved MCP search packet and compare added, removed, and unchanged result IDs.",
+                description="Rerun a saved MCP search packet and compare added, removed, changed, and unchanged result IDs.",
                 input_schema=_object_schema(
                     {
                         "uri": _string_schema("Search packet JSON resource URI."),
@@ -1785,12 +1786,18 @@ class RelicMcpServer:
         packet_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + f"-{uuid.uuid4().hex[:8]}"
         output_dir = self.paths.case_dir(case_id) / "reports" / "mcp-search-packets"
         output_dir.mkdir(parents=True, exist_ok=True)
+        metadata_db = self._db()
+        try:
+            metadata = search_packet_metadata(metadata_db, case_id, search, arguments, tool_version=_package_version())
+        finally:
+            metadata_db.close()
         payload = {
             "case_id": case_id,
             "title": title,
             "created_at": _now(),
             "search_type": "lead" if preset else "artifact",
             "arguments": {key: value for key, value in arguments.items() if key not in {"findings", "timeline"}},
+            "metadata": metadata,
             "search": search,
         }
         json_path = output_dir / f"{packet_id}-search-packet.json"
@@ -1899,8 +1906,8 @@ class RelicMcpServer:
 
             output_dir = _workspace_path(self.paths.root, _required(arguments, "output_dir"))
             purpose = str(arguments.get("purpose") or "full")
-            if purpose not in {"full", "usb", "cloud", "execution", "memory", "triage"}:
-                raise ValueError("purpose must be one of: full, usb, cloud, execution, memory, triage")
+            if purpose not in {"full", "usb", "cloud", "execution", "memory", "triage", "review"}:
+                raise ValueError("purpose must be one of: full, usb, cloud, execution, memory, triage, review")
             result = write_case_report_bundle(
                 db,
                 _required(arguments, "case_id"),
@@ -2698,6 +2705,7 @@ def _review_packet_markdown(payload: dict[str, Any]) -> str:
 def _search_packet_markdown(payload: dict[str, Any]) -> str:
     search = payload.get("search") if isinstance(payload.get("search"), dict) else {}
     summary = search.get("summary") if isinstance(search.get("summary"), dict) else {}
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
     lines = [
         f"# {payload.get('title') or 'Search Packet'}",
         "",
@@ -2715,6 +2723,14 @@ def _search_packet_markdown(payload: dict[str, Any]) -> str:
     lines.extend(["", "## Filters", ""])
     for key, value in (payload.get("arguments") or {}).items():
         if value not in (None, "", [], {}):
+            lines.append(f"- {key}: `{value}`")
+    if metadata:
+        lines.extend(["", "## Packet Metadata", ""])
+        for key in ("tool", "tool_version", "generated_at", "result_count", "result_hash_algorithm", "result_hash_set"):
+            if metadata.get(key) not in (None, "", [], {}):
+                lines.append(f"- {key}: `{metadata.get(key)}`")
+        case_counts = metadata.get("case_counts") if isinstance(metadata.get("case_counts"), dict) else {}
+        for key, value in case_counts.items():
             lines.append(f"- {key}: `{value}`")
     lines.extend(["", "## Results", ""])
     results = search.get("results") if isinstance(search.get("results"), list) else []
@@ -2734,13 +2750,15 @@ def _mcp_workflow_guide() -> dict[str, Any]:
         {"order": 1, "tool": "relic_case_readiness", "purpose": "Check doctor, workspace health, readiness, progress, and resume signals."},
         {"order": 2, "tool": "relic_workspace_map", "purpose": "Get cases, evidence, reports, packets, progress manifests, and active jobs."},
         {"order": 3, "tool": "relic_case_evidence_map", "purpose": "Review computers, images, report resources, memory sources, jobs, and processing state for one case."},
-        {"order": 4, "tool": "relic_lead_search", "purpose": "Run preset execution, USB, cloud, document, browser, or communications searches."},
-        {"order": 5, "tool": "relic_search_artifacts", "purpose": "Run ad hoc artifact searches with user, computer, source, and time filters."},
-        {"order": 6, "tool": "drilldown tools", "purpose": "Follow search result drilldown hints into file, USB, user, timeline, registry, cloud, communication, shortcut, or remote-access context."},
-        {"order": 7, "tool": "relic_write_search_packet", "purpose": "Save repeatable searches and result sets as examiner work product."},
-        {"order": 8, "tool": "relic_write_review_packet", "purpose": "Save selected findings, notes, timeline slices, and report URIs."},
-        {"order": 9, "tool": "relic_discover_report_exports", "purpose": "Find generated reports and packets by purpose and tags."},
-        {"order": 10, "tool": "relic_write_report_bundle", "purpose": "Export a review bundle for handoff or UI consumption."},
+        {"order": 4, "tool": "relic_artifact_search_sources", "purpose": "Check which source tables, fields, and row counts are available for search."},
+        {"order": 5, "tool": "relic_lead_search", "purpose": "Run preset execution, USB, cloud, document, browser, or communications searches."},
+        {"order": 6, "tool": "relic_search_artifacts", "purpose": "Run ad hoc artifact searches with user, computer, source, and time filters."},
+        {"order": 7, "tool": "drilldown tools", "purpose": "Follow search result drilldown hints into file, USB, user, timeline, registry, cloud, communication, shortcut, or remote-access context."},
+        {"order": 8, "tool": "relic_write_search_packet", "purpose": "Save repeatable searches, result hash sets, case counts, and result sets as examiner work product."},
+        {"order": 9, "tool": "relic_rerun_search_packet", "purpose": "Rerun saved searches and compare added, removed, changed, and unchanged results."},
+        {"order": 10, "tool": "relic_write_review_packet", "purpose": "Save selected findings, notes, timeline slices, and report URIs."},
+        {"order": 11, "tool": "relic_discover_report_exports", "purpose": "Find generated reports and packets by purpose and tags."},
+        {"order": 12, "tool": "relic_write_report_bundle", "purpose": "Export a review bundle for handoff or UI consumption. Use purpose=review for MCP/operator review packs."},
     ]
     return {
         "title": "Relic MCP Workflow Guide",

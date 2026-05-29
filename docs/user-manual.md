@@ -683,7 +683,17 @@ Read-only MCP tools:
 - `relic_query_shortcuts`
 - `relic_query_communications`
 - `relic_case_review`
+- `relic_workspace_map`
+- `relic_artifact_search_sources`
+- `relic_search_artifacts`
+- `relic_lead_search`
+- `relic_case_activity_digest`
 - `relic_case_next_actions`
+- `relic_list_search_packets`
+- `relic_read_search_packet`
+- `relic_rerun_search_packet`
+- `relic_list_review_packets`
+- `relic_read_review_packet`
 - `relic_get_mcp_job`
 - `relic_list_mcp_jobs`
 - `relic_get_mcp_job_output`
@@ -694,6 +704,7 @@ Safe-write MCP tools:
 
 - `relic_generate_report`
 - `relic_write_report_bundle`
+- `relic_write_search_packet`
 - `relic_write_review_packet`
 
 Processing-gated MCP tools:
@@ -734,6 +745,13 @@ Case-navigation MCP tools:
   readiness, processing progress, and resume-plan signals.
 - `relic_discover_reports`: returns report bundle files as
   `relic://workspace/...` resource URIs, optionally filtered by bundle purpose.
+- `relic_workspace_map`: returns cases, computers, images, generated reports,
+  saved packets, progress manifests, and MCP jobs in one structure.
+- `relic_artifact_search_sources`: returns the artifact tables, categories,
+  searchable fields, and row counts available to artifact and lead search.
+- `relic_search_artifacts` and `relic_lead_search`: run general or preset lead
+  searches. Results include score, score reasons, matched fields, and drilldown
+  hints.
 - `relic_file_dossier`, `relic_usb_dossier`, `relic_user_activity`, and
   `relic_timeline_window`: focused drilldowns for following leads without
   knowing the matching CLI report names.
@@ -742,6 +760,22 @@ Case-navigation MCP tools:
   findings.
 - `relic_write_review_packet`: writes selected findings, report URIs, timeline
   rows, and notes to JSON/Markdown under the case reports folder.
+- `relic_write_search_packet`: saves repeatable search arguments, result sets,
+  result hash sets, case/image/tool-output counts, and JSON/Markdown work
+  product under `reports/mcp-search-packets`.
+- `relic_rerun_search_packet`: reruns a saved search packet and reports added,
+  removed, changed, and unchanged results. Use `report changed-search-packets`
+  to rerun all saved search packets for a case from the CLI.
+
+Recommended MCP review sequence:
+
+1. `relic_workspace_map`
+2. `relic_artifact_search_sources`
+3. `relic_lead_search` or `relic_search_artifacts`
+4. Follow each result's drilldown hint.
+5. `relic_write_search_packet`
+6. `relic_rerun_search_packet`
+7. `relic_write_report_bundle` with `purpose: "review"`
 
 MCP audit entries are written to `ROOT/mcp-jobs/audit.jsonl`. Each entry records
 the tool name, permission tier, status, timestamp, argument keys, and bounded
@@ -788,14 +822,20 @@ uv run relic --root ROOT report dashboard --case CASE_ID --format table
 uv run relic --root ROOT report progress --case CASE_ID --format table
 uv run relic --root ROOT report resume-plan --case CASE_ID --format table
 uv run relic --root ROOT report workspace-health --case CASE_ID --format md
+uv run relic --root ROOT report workspace-map --case CASE_ID --format json
 uv run relic --root ROOT report unmapped-imports --case CASE_ID --format table
 uv run relic --root ROOT report validate-outputs --path REPORT_DIR --format table
 uv run relic --root ROOT report regression-smoke --case CASE_ID --format table
-uv run relic --root ROOT report write-bundle --case CASE_ID --purpose triage --output-dir REPORT_DIR
+uv run relic --root ROOT report artifact-search-sources --case CASE_ID --format table
+uv run relic --root ROOT report changed-search-packets --case CASE_ID --format md
+uv run relic --root ROOT report write-bundle --case CASE_ID --purpose review --output-dir REPORT_DIR
 ```
 
 Purpose bundles:
 
+- `review`: MCP/operator review pack with activity digest, next actions,
+  workspace map, search-source inventory, lead summaries, saved packet index,
+  and changed search-packet summary.
 - `triage`: broad high-signal starting point.
 - `usb`: removable media, shellbags, shortcuts, object IDs, USN lifecycle.
 - `cloud`: cloud artifacts, opened-from-cloud, virtual mounts.
@@ -805,8 +845,9 @@ Purpose bundles:
 - `full`: all bundle reports.
 
 Each bundle writes `index.md` for human navigation, `report-index.json` for
-programmatic/UI/MCP navigation, and `bundle-quality.json` with report and CSV
-export row/column counts.
+programmatic/UI/MCP navigation, and `bundle-quality.json` with report, CSV
+export, lead-search, and saved-packet checks. Bundle generation prints
+timestamped progress to stderr by default; add `--no-progress` to suppress it.
 
 High-value report families:
 

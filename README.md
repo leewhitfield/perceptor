@@ -183,7 +183,12 @@ expose generated text reports, manifests, logs, and job output through
 `dry_run: true` to exercise the same command path without starting the actual
 processing work. MCP also exposes case evidence-map, readiness, report
 discovery, drilldown, review-packet, next-action, and job-progress tools so
-clients can navigate cases without knowing Relic's internal folder layout.
+clients can navigate cases without knowing Relic's internal folder layout. The
+MCP review workflow is: map the workspace, inspect artifact-search sources, run
+lead or ad hoc searches, follow drilldown hints, save search packets, rerun
+packets for added/removed/changed results, and write a `review` report bundle.
+Saved search packets include result hashes, case/image/tool-output counts, and
+JSON/Markdown work product under `reports/mcp-search-packets`.
 
 Report plugins can add read-only SQL reports without changing the built-in
 Python report functions. Specs can be embedded in the YAML passed to `--plugin`,

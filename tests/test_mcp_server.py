@@ -397,11 +397,14 @@ def test_mcp_artifact_search_and_progress_manifests(tmp_path, monkeypatch):
     assert Path(packet["json_path"]).exists()
     assert listed["summary"]["packet_count"] == 1
     assert read["packet"]["title"] == "USB lead"
+    assert read["packet"]["metadata"]["result_count"] == 1
+    assert read["packet"]["metadata"]["result_hash_algorithm"] == "sha256"
     assert rerun["comparison"]["unchanged_count"] == 1
     assert rerun["comparison"]["changed_count"] == 0
     assert any(row["kind"] == "packet" for row in exports["resources"])
     assert workspace["summary"]["case_count"] == 1
     assert guide["summary"]["step_count"] >= 8
+    assert any(step["tool"] == "relic_artifact_search_sources" for step in guide["steps"])
 
 
 def test_mcp_tool_reference_and_audit_log(tmp_path):
