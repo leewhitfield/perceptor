@@ -75,6 +75,14 @@ def test_cli_search_progress_and_gap_reports(tmp_path, monkeypatch, capsys):
     assert changed_packets["summary"]["packet_count"] == 1
     assert changed_packets["summary"]["changed_packet_count"] == 0
 
+    assert cli_main(["--root", str(paths.root), "report", "review-status", "--case", "case-1", "--format", "json"]) == 0
+    review_status = json.loads(capsys.readouterr().out)
+    assert any(row["category"] == "packets" for row in review_status["items"])
+
+    assert cli_main(["--root", str(paths.root), "report", "runbook", "--case", "case-1", "--format", "json"]) == 0
+    runbook = json.loads(capsys.readouterr().out)
+    assert any("review-status" in row["command"] for row in runbook["commands"])
+
     assert cli_main(["--root", str(paths.root), "report", "artifact-search-sources", "--case", "case-1", "--format", "json"]) == 0
     sources = json.loads(capsys.readouterr().out)
     shellbag_source = next(row for row in sources["sources"] if row["table"] == "shellbag_entries")

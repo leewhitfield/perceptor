@@ -8,7 +8,7 @@ from pathlib import Path
 import duckdb
 
 import forensic_orchestrator.report_bundle as report_bundle
-from forensic_orchestrator.cli import write_case_report_bundle
+from forensic_orchestrator.cli import write_case_report_bundle, write_handoff_package
 from forensic_orchestrator.db import Database
 from forensic_orchestrator.evidence import create_case
 from forensic_orchestrator.paths import WorkspacePaths
@@ -334,6 +334,9 @@ def test_triage_bundle_writes_lead_search_exports(tmp_path, monkeypatch):
     assert quality["summary"]["lead_export_count"] == 6
     assert quality["summary"]["lead_markdown_count"] == 6
     assert quality["summary"]["packet_count"] == 1
+    manifest = json.loads((tmp_path / "triage-bundle" / "bundle-manifest.json").read_text(encoding="utf-8"))
+    assert manifest["summary"]["file_count"] >= len(bundle["reports"])
+    assert all(row["sha256"] for row in manifest["files"])
 
 
 def test_review_bundle_writes_operator_context_and_progress(tmp_path, monkeypatch):
@@ -359,6 +362,15 @@ def test_review_bundle_writes_operator_context_and_progress(tmp_path, monkeypatc
     report_index = json.loads((tmp_path / "review-bundle" / "report-index.json").read_text(encoding="utf-8"))
     assert report_index["summary"]["packet_count"] == 1
     assert (tmp_path / "review-bundle" / "changed-search-packets.md").exists()
+    handoff_db = Database(paths.db_path())
+    try:
+        handoff = write_handoff_package(db=handoff_db, paths=paths, case_id=case_id, bundle_dir=tmp_path / "review-bundle", output=tmp_path / "handoff.zip")
+    finally:
+        handoff_db.close()
+    assert Path(str(handoff["output"])).exists()
+    with zipfile.ZipFile(str(handoff["output"])) as archive:
+        assert "handoff-manifest.json" in archive.namelist()
+        assert "bundle/bundle-manifest.json" in archive.namelist()
 
 
 def test_report_bundle_import_many_warns_when_distinct_rebuild_hits_disk_full(tmp_path, monkeypatch):

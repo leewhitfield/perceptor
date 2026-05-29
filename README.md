@@ -188,7 +188,10 @@ MCP review workflow is: map the workspace, inspect artifact-search sources, run
 lead or ad hoc searches, follow drilldown hints, save search packets, rerun
 packets for added/removed/changed results, and write a `review` report bundle.
 Saved search packets include result hashes, case/image/tool-output counts, and
-JSON/Markdown work product under `reports/mcp-search-packets`.
+JSON/Markdown work product under `reports/mcp-search-packets`. The CLI also
+provides `report review-status`, `report runbook`, and `report handoff-package`
+to check stale reports/packets, generate next commands, and zip reports plus
+packets with SHA256 manifests for handoff.
 
 Report plugins can add read-only SQL reports without changing the built-in
 Python report functions. Specs can be embedded in the YAML passed to `--plugin`,

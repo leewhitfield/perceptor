@@ -689,6 +689,7 @@ Read-only MCP tools:
 - `relic_lead_search`
 - `relic_case_activity_digest`
 - `relic_case_next_actions`
+- `relic_case_runbook`
 - `relic_list_search_packets`
 - `relic_read_search_packet`
 - `relic_rerun_search_packet`
@@ -770,12 +771,13 @@ Case-navigation MCP tools:
 Recommended MCP review sequence:
 
 1. `relic_workspace_map`
-2. `relic_artifact_search_sources`
-3. `relic_lead_search` or `relic_search_artifacts`
-4. Follow each result's drilldown hint.
-5. `relic_write_search_packet`
-6. `relic_rerun_search_packet`
-7. `relic_write_report_bundle` with `purpose: "review"`
+2. `relic_case_runbook`
+3. `relic_artifact_search_sources`
+4. `relic_lead_search` or `relic_search_artifacts`
+5. Follow each result's drilldown hint.
+6. `relic_write_search_packet`
+7. `relic_rerun_search_packet`
+8. `relic_write_report_bundle` with `purpose: "review"`
 
 MCP audit entries are written to `ROOT/mcp-jobs/audit.jsonl`. Each entry records
 the tool name, permission tier, status, timestamp, argument keys, and bounded
@@ -828,7 +830,10 @@ uv run relic --root ROOT report validate-outputs --path REPORT_DIR --format tabl
 uv run relic --root ROOT report regression-smoke --case CASE_ID --format table
 uv run relic --root ROOT report artifact-search-sources --case CASE_ID --format table
 uv run relic --root ROOT report changed-search-packets --case CASE_ID --format md
+uv run relic --root ROOT report review-status --case CASE_ID --format table
+uv run relic --root ROOT report runbook --case CASE_ID --format md
 uv run relic --root ROOT report write-bundle --case CASE_ID --purpose review --output-dir REPORT_DIR
+uv run relic --root ROOT report handoff-package --case CASE_ID --bundle-dir REPORT_DIR --output CASE_ID-handoff.zip
 ```
 
 Purpose bundles:
@@ -845,9 +850,12 @@ Purpose bundles:
 - `full`: all bundle reports.
 
 Each bundle writes `index.md` for human navigation, `report-index.json` for
-programmatic/UI/MCP navigation, and `bundle-quality.json` with report, CSV
-export, lead-search, and saved-packet checks. Bundle generation prints
-timestamped progress to stderr by default; add `--no-progress` to suppress it.
+programmatic/UI/MCP navigation, `bundle-quality.json` with report, CSV export,
+lead-search, and saved-packet checks, and `bundle-manifest.json` with file
+sizes and SHA256 hashes. Bundle generation prints timestamped progress to
+stderr by default; add `--no-progress` to suppress it. `report handoff-package`
+zips the selected bundle plus MCP packets and a handoff manifest without
+including evidence files or case databases.
 
 High-value report families:
 

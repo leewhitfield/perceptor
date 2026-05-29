@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import logging
 import os
@@ -12,8 +13,10 @@ import sys
 import tempfile
 import uuid
 from datetime import datetime, timezone
+from importlib import metadata
 from pathlib import Path
 from typing import Any, Callable
+import zipfile
 
 from .config import load_config
 from .analytics_query import query_one as analytics_query_one
@@ -1203,6 +1206,8 @@ def write_case_report_bundle(
         },
     }
     write_text_output(json.dumps(sanitize_report_paths(report_index), indent=2, default=str), str(report_index_path))
+    manifest_path = output_dir / "bundle-manifest.json"
+    manifest = _write_bundle_manifest(output_dir, case_id=case_id, purpose=purpose)
     _progress(progress, f"report bundle completed reports={len(written)} packets={len(packet_entries)}")
     return {
         "case_id": case_id,
@@ -1210,8 +1215,10 @@ def write_case_report_bundle(
         "output_dir": str(output_dir),
         "index": str(index_path),
         "report_index": str(report_index_path),
+        "bundle_manifest": str(manifest_path),
         "reports": written,
-        "total_written": len(written) + 2,
+        "total_written": len(written) + 3,
+        "manifest_summary": manifest.get("summary", {}),
     }
 
 
@@ -1241,6 +1248,53 @@ def _report_index_tags(name: str) -> list[str]:
 def _progress(progress: Callable[[str], None] | None, message: str) -> None:
     if progress is not None:
         progress(message)
+
+
+def _package_version() -> str:
+    try:
+        return metadata.version("forensic-orchestrator")
+    except metadata.PackageNotFoundError:
+        return "0.1.0"
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _write_bundle_manifest(output_dir: Path, *, case_id: str, purpose: str) -> dict[str, object]:
+    generated_at = datetime.now(timezone.utc).isoformat()
+    files: list[dict[str, object]] = []
+    for path in sorted(item for item in output_dir.rglob("*") if item.is_file()):
+        if path.name == "bundle-manifest.json":
+            continue
+        stat = path.stat()
+        files.append(
+            {
+                "relative_path": str(path.relative_to(output_dir)),
+                "filename": path.name,
+                "size_bytes": stat.st_size,
+                "sha256": _sha256_file(path),
+                "modified_at": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
+            }
+        )
+    manifest = {
+        "case_id": case_id,
+        "purpose": purpose,
+        "generated_at": generated_at,
+        "relic_version": _package_version(),
+        "bundle_dir": str(output_dir),
+        "summary": {
+            "file_count": len(files),
+            "total_bytes": sum(int(row["size_bytes"]) for row in files),
+        },
+        "files": files,
+    }
+    write_text_output(json.dumps(sanitize_report_paths(manifest), indent=2, default=str), str(output_dir / "bundle-manifest.json"))
+    return manifest
 
 
 def _case_packet_index_entries(db: Database, case_id: str) -> list[dict[str, object]]:
@@ -1309,6 +1363,61 @@ def _load_search_packets_for_case(db: Database, case_id: str, *, limit: int = 10
         if len(packets) >= limit:
             break
     return packets
+
+
+def _packet_health_report(db: Database, case_id: str, *, limit: int = 1000) -> dict[str, object]:
+    try:
+        case_root = db.get_case(case_id).root
+    except KeyError:
+        return {"case_id": case_id, "summary": {"packet_count": 0, "bad_packet_count": 0}, "packets": []}
+    packet_dir = case_root / "reports" / "mcp-search-packets"
+    rows: list[dict[str, object]] = []
+    if packet_dir.exists():
+        for path in sorted(packet_dir.glob("*-search-packet.json"), key=lambda item: item.stat().st_mtime if item.exists() else 0, reverse=True):
+            status = "ok"
+            issue = ""
+            payload: dict[str, object] = {}
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    payload = loaded
+                else:
+                    status = "bad"
+                    issue = "packet_json_not_object"
+            except Exception as exc:
+                status = "bad"
+                issue = f"malformed_json: {exc}"
+            if status == "ok":
+                if str(payload.get("case_id") or "") != case_id:
+                    status = "bad"
+                    issue = "case_id_mismatch"
+                elif not isinstance(payload.get("arguments"), dict):
+                    status = "bad"
+                    issue = "missing_arguments"
+                elif not isinstance(payload.get("search"), dict):
+                    status = "bad"
+                    issue = "missing_search"
+            rows.append(
+                {
+                    "path": str(path),
+                    "filename": path.name,
+                    "title": payload.get("title") or path.stem,
+                    "created_at": payload.get("created_at") or "",
+                    "status": status,
+                    "issue": issue,
+                    "search_type": payload.get("search_type") or "",
+                }
+            )
+            if len(rows) >= limit:
+                break
+    return {
+        "case_id": case_id,
+        "summary": {
+            "packet_count": len(rows),
+            "bad_packet_count": sum(1 for row in rows if row.get("status") != "ok"),
+        },
+        "packets": rows,
+    }
 
 
 def _changed_search_packets_for_case(db: Database, case_id: str, *, limit: int = 50) -> dict[str, object]:
@@ -1396,6 +1505,252 @@ def _case_report_index_entries(paths: WorkspacePaths, case_id: str, *, limit: in
         if len(rows) >= limit:
             break
     return rows
+
+
+def _latest_case_activity_time(db: Database, case_id: str) -> datetime | None:
+    candidates: list[datetime] = []
+    for table, column in (("tool_outputs", "created_at"), ("activity_log", "created_at"), ("jobs", "updated_at"), ("process_timings", "ended_at")):
+        try:
+            row = db.conn.execute(f"SELECT MAX({column}) AS value FROM {table} WHERE case_id = ?", (case_id,)).fetchone()
+        except Exception:
+            continue
+        value = row["value"] if row is not None else None
+        parsed = _parse_iso_datetime(str(value or ""))
+        if parsed:
+            candidates.append(parsed)
+    return max(candidates) if candidates else None
+
+
+def _parse_iso_datetime(value: str) -> datetime | None:
+    text = value.strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def generated_report_freshness_report(db: Database, paths: WorkspacePaths, case_id: str, *, limit: int = 250) -> dict[str, object]:
+    latest = _latest_case_activity_time(db, case_id)
+    reports = _case_report_index_entries(paths, case_id, limit=limit)
+    rows: list[dict[str, object]] = []
+    for report in reports:
+        modified = _parse_iso_datetime(str(report.get("modified_at") or ""))
+        status = "unknown"
+        if latest and modified:
+            status = "current" if modified >= latest else "stale"
+        elif modified:
+            status = "unknown"
+        rows.append({**report, "freshness": status, "latest_case_activity": latest.isoformat() if latest else ""})
+    return {
+        "case_id": case_id,
+        "summary": {
+            "report_count": len(rows),
+            "stale_count": sum(1 for row in rows if row.get("freshness") == "stale"),
+            "current_count": sum(1 for row in rows if row.get("freshness") == "current"),
+            "unknown_count": sum(1 for row in rows if row.get("freshness") == "unknown"),
+            "latest_case_activity": latest.isoformat() if latest else "",
+        },
+        "reports": rows,
+    }
+
+
+def review_status_report(db: Database, paths: WorkspacePaths, case_id: str, *, limit: int = 50) -> dict[str, object]:
+    readiness = processing_readiness_report(db, case_id, limit=limit)
+    progress = processing_progress_report(db, case_id, limit=limit)
+    unmapped = unmapped_imports_report(db, case_id, limit=limit)
+    next_actions = case_next_actions_report(db, case_id, limit=limit)
+    changed_packets = _changed_search_packets_for_case(db, case_id, limit=limit)
+    packet_health = _packet_health_report(db, case_id, limit=limit)
+    freshness = generated_report_freshness_report(db, paths, case_id, limit=max(limit, 250))
+    bundle_quality = _latest_bundle_quality(paths, case_id)
+    items = [
+        {
+            "category": "readiness",
+            "status": "needs_action" if (readiness.get("summary") or {}).get("required_needs_action_count") else "ok",
+            "count": (readiness.get("summary") or {}).get("required_needs_action_count", 0),
+            "summary": "Required readiness items needing action.",
+            "command": f"relic --root {paths.root} report processing-readiness --case {case_id} --format table",
+        },
+        {
+            "category": "processing",
+            "status": "needs_action" if (progress.get("summary") or {}).get("failed_timing_count") else "ok",
+            "count": (progress.get("summary") or {}).get("failed_timing_count", 0),
+            "summary": "Failed processing timing records.",
+            "command": f"relic --root {paths.root} report progress --case {case_id} --format table",
+        },
+        {
+            "category": "reports",
+            "status": "stale" if (freshness.get("summary") or {}).get("stale_count") else "ok",
+            "count": (freshness.get("summary") or {}).get("stale_count", 0),
+            "summary": "Generated reports older than latest case activity.",
+            "command": f"relic --root {paths.root} report review-status --case {case_id} --format json",
+        },
+        {
+            "category": "packets",
+            "status": "changed" if (changed_packets.get("summary") or {}).get("changed_packet_count") else "ok",
+            "count": (changed_packets.get("summary") or {}).get("changed_packet_count", 0),
+            "summary": "Saved search packets with added, removed, or changed results.",
+            "command": f"relic --root {paths.root} report changed-search-packets --case {case_id} --format md",
+        },
+        {
+            "category": "packet_health",
+            "status": "needs_action" if (packet_health.get("summary") or {}).get("bad_packet_count") else "ok",
+            "count": (packet_health.get("summary") or {}).get("bad_packet_count", 0),
+            "summary": "Malformed or unusable saved search packets.",
+            "command": f"relic --root {paths.root} report review-status --case {case_id} --format json",
+        },
+        {
+            "category": "unmapped_imports",
+            "status": "needs_action" if (unmapped.get("summary") or {}).get("unmapped_count") else "ok",
+            "count": (unmapped.get("summary") or {}).get("unmapped_count", 0),
+            "summary": "Imported files without parser mapping.",
+            "command": f"relic --root {paths.root} report unmapped-imports --case {case_id} --format table",
+        },
+        {
+            "category": "next_actions",
+            "status": "review",
+            "count": (next_actions.get("summary") or {}).get("action_count", 0),
+            "summary": "Ranked suggested investigative actions.",
+            "command": f"relic --root {paths.root} report next-actions --case {case_id} --format table",
+        },
+        {
+            "category": "bundle_quality",
+            "status": str((bundle_quality.get("summary") or {}).get("status") or "unknown"),
+            "count": (bundle_quality.get("summary") or {}).get("warning_count", 0),
+            "summary": "Latest bundle-quality checks.",
+            "command": f"relic --root {paths.root} report write-bundle --case {case_id} --purpose review --output-dir {paths.outputs_dir(case_id) / 'reports' / 'review-bundle'}",
+        },
+    ]
+    return {
+        "case_id": case_id,
+        "summary": {
+            "item_count": len(items),
+            "needs_attention_count": sum(1 for row in items if row.get("status") not in {"ok", "current"}),
+            "stale_report_count": (freshness.get("summary") or {}).get("stale_count", 0),
+            "changed_packet_count": (changed_packets.get("summary") or {}).get("changed_packet_count", 0),
+            "bad_packet_count": (packet_health.get("summary") or {}).get("bad_packet_count", 0),
+        },
+        "items": items,
+        "freshness": freshness,
+        "changed_packets": changed_packets,
+        "packet_health": packet_health,
+        "bundle_quality": bundle_quality,
+        "next_actions": next_actions,
+    }
+
+
+def _latest_bundle_quality(paths: WorkspacePaths, case_id: str) -> dict[str, object]:
+    candidates = sorted((paths.case_dir(case_id)).rglob("bundle-quality.json"), key=lambda item: item.stat().st_mtime if item.exists() else 0, reverse=True)
+    if not candidates:
+        return {"summary": {"status": "missing", "warning_count": 1}, "path": ""}
+    path = candidates[0]
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return {"summary": {"status": "error", "warning_count": 1}, "path": str(path), "error": str(exc)}
+    checks = payload.get("checks") if isinstance(payload.get("checks"), list) else []
+    bad = [row for row in checks if isinstance(row, dict) and row.get("status") not in {"ok", "info"}]
+    return {"summary": {"status": "ok" if not bad else "warning", "warning_count": len(bad)}, "path": str(path), "quality": payload}
+
+
+def case_runbook_report(db: Database, paths: WorkspacePaths, case_id: str, *, limit: int = 25) -> dict[str, object]:
+    status = review_status_report(db, paths, case_id, limit=limit)
+    commands: list[dict[str, object]] = []
+
+    def add(order: int, command: str, reason: str, safe: bool = True) -> None:
+        commands.append({"order": order, "command": command, "reason": reason, "safe": safe})
+
+    root = str(paths.root)
+    add(1, f"uv run relic --root {root} standalone doctor --smoke --format table", "Confirm installation and smoke path.")
+    add(2, f"uv run relic --root {root} report review-status --case {case_id} --format table", "Check the current operator status.")
+    add(3, f"uv run relic --root {root} report workspace-map --case {case_id} --format json", "Map computers, images, reports, packets, and jobs.")
+    add(4, f"uv run relic --root {root} report artifact-search-sources --case {case_id} --format table", "Confirm searchable artifact coverage.")
+    order = 5
+    for item in status.get("items") or []:
+        if isinstance(item, dict) and item.get("status") not in {"ok", "current"} and item.get("command"):
+            add(order, str(item["command"]), str(item.get("summary") or item.get("category") or "Review status item."))
+            order += 1
+    add(order, f"uv run relic --root {root} report write-bundle --case {case_id} --purpose review --output-dir {paths.outputs_dir(case_id) / 'reports' / 'review-bundle'}", "Generate the review bundle.")
+    add(order + 1, f"uv run relic --root {root} report handoff-package --case {case_id} --bundle-dir {paths.outputs_dir(case_id) / 'reports' / 'review-bundle'} --output {paths.outputs_dir(case_id) / 'reports' / f'{case_id}-handoff.zip'}", "Package reports, packets, quality, and manifest for handoff.")
+    return {"case_id": case_id, "summary": {"command_count": len(commands)}, "commands": commands[:limit], "review_status": status}
+
+
+def runbook_markdown(report: dict[str, object]) -> str:
+    lines = ["# Case Runbook", "", f"Case: `{report.get('case_id') or ''}`", "", "## Commands", ""]
+    for row in report.get("commands") or []:
+        if isinstance(row, dict):
+            lines.append(f"{row.get('order')}. `{row.get('command')}`")
+            lines.append(f"   - {row.get('reason')}")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def write_handoff_package(db: Database, paths: WorkspacePaths, case_id: str, bundle_dir: Path, output: Path) -> dict[str, object]:
+    db.get_case(case_id)
+    bundle_root = bundle_dir.resolve()
+    case_root = paths.case_dir(case_id).resolve()
+    if not bundle_root.exists() or not bundle_root.is_dir():
+        raise OrchestratorError(f"Bundle directory does not exist: {bundle_root}")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    include_files: list[tuple[Path, str]] = []
+    for path in sorted(item for item in bundle_root.rglob("*") if item.is_file()):
+        include_files.append((path, f"bundle/{path.relative_to(bundle_root)}"))
+    for directory in (case_root / "reports" / "mcp-search-packets", case_root / "reports" / "mcp-review-packets"):
+        if directory.exists():
+            for path in sorted(item for item in directory.rglob("*") if item.is_file() and item.suffix.casefold() in {".json", ".md", ".txt"}):
+                include_files.append((path, f"packets/{directory.name}/{path.relative_to(directory)}"))
+    manifest = {
+        "case_id": case_id,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "relic_version": _package_version(),
+        "bundle_dir": str(bundle_root),
+        "files": [
+            {
+                "archive_path": archive_path,
+                "source_path": str(path),
+                "size_bytes": path.stat().st_size,
+                "sha256": _sha256_file(path),
+            }
+            for path, archive_path in include_files
+        ],
+    }
+    manifest_bytes = json.dumps(sanitize_report_paths(manifest), indent=2, default=str).encode("utf-8")
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        seen: set[str] = set()
+        for path, archive_path in include_files:
+            candidate = archive_path
+            suffix = 1
+            while candidate in seen:
+                candidate = f"{archive_path}.{suffix}"
+                suffix += 1
+            seen.add(candidate)
+            archive.write(path, candidate)
+        archive.writestr("handoff-manifest.json", manifest_bytes)
+    return {
+        "case_id": case_id,
+        "output": str(output),
+        "file_count": len(include_files) + 1,
+        "total_bytes": output.stat().st_size,
+        "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+    }
+
+
+def review_status_markdown(report: dict[str, object]) -> str:
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    lines = ["# Review Status", "", f"Case: `{report.get('case_id') or ''}`", "", "## Summary", ""]
+    for key in ("item_count", "needs_attention_count", "stale_report_count", "changed_packet_count", "bad_packet_count"):
+        lines.append(f"- {key.replace('_', ' ').title()}: `{summary.get(key, 0)}`")
+    lines.extend(["", "## Items", ""])
+    for row in report.get("items") or []:
+        if isinstance(row, dict):
+            lines.append(f"- `{row.get('status')}` `{row.get('category')}` count `{row.get('count')}`: {row.get('summary')}")
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def _report_bundle_quality_report(
@@ -3437,6 +3792,16 @@ def build_parser() -> argparse.ArgumentParser:
     report_changed_search_packets.add_argument("--limit", type=int, default=50)
     report_changed_search_packets.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
     report_changed_search_packets.add_argument("--output")
+    report_review_status = report_sub.add_parser("review-status")
+    report_review_status.add_argument("--case", required=True, dest="case_id")
+    report_review_status.add_argument("--limit", type=int, default=50)
+    report_review_status.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
+    report_review_status.add_argument("--output")
+    report_runbook = report_sub.add_parser("runbook")
+    report_runbook.add_argument("--case", required=True, dest="case_id")
+    report_runbook.add_argument("--limit", type=int, default=25)
+    report_runbook.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
+    report_runbook.add_argument("--output")
     report_activity_digest = report_sub.add_parser("activity-digest")
     report_activity_digest.add_argument("--case", required=True, dest="case_id")
     report_activity_digest.add_argument("--limit", type=int, default=25)
@@ -3470,6 +3835,11 @@ def build_parser() -> argparse.ArgumentParser:
     report_write_bundle.add_argument("--output-dir", required=True)
     report_write_bundle.add_argument("--purpose", choices=["full", "usb", "cloud", "execution", "memory", "triage", "review"], default="full")
     report_write_bundle.add_argument("--no-progress", action="store_true", help="Suppress timestamped bundle generation progress messages on stderr")
+    report_handoff = report_sub.add_parser("handoff-package")
+    report_handoff.add_argument("--case", required=True, dest="case_id")
+    report_handoff.add_argument("--bundle-dir", required=True)
+    report_handoff.add_argument("--output", required=True)
+    report_handoff.add_argument("--format", choices=["json", "table"], default="json")
     report_combined = report_sub.add_parser("combined-artifacts")
     report_combined.add_argument("--case", required=True, dest="case_id")
     report_combined.add_argument("--family", default="all")
@@ -5649,6 +6019,18 @@ def run(args: argparse.Namespace) -> int:
             )
             return 0
 
+        if args.resource == "report" and args.action == "handoff-package":
+            report = write_handoff_package(db, paths, args.case_id, Path(args.bundle_dir), Path(args.output))
+            write_report_output(
+                report,
+                [report],
+                args.format,
+                None,
+                title=f"Handoff package for case {args.case_id}",
+                columns=["case_id", "output", "file_count", "total_bytes"],
+            )
+            return 0
+
         if args.resource == "report" and args.action == "combined-artifacts":
             report = combined_artifact_family_report(db, args.case_id, family=args.family, limit=args.limit)
             if args.format == "md":
@@ -6529,6 +6911,36 @@ def run(args: argparse.Namespace) -> int:
                     args.output,
                     title=f"Changed search packets for case {args.case_id}",
                     columns=["changed", "change_count", "title", "created_at", "search_type", "added_count", "removed_count", "changed_count"],
+                )
+            return 0
+
+        if args.resource == "report" and args.action == "review-status":
+            report = review_status_report(db, paths, args.case_id, limit=args.limit)
+            if args.format == "md":
+                write_text_output(review_status_markdown(report), args.output)
+            else:
+                write_report_output(
+                    report,
+                    report["items"],
+                    args.format,
+                    args.output,
+                    title=f"Review status for case {args.case_id}",
+                    columns=["category", "status", "count", "summary", "command"],
+                )
+            return 0
+
+        if args.resource == "report" and args.action == "runbook":
+            report = case_runbook_report(db, paths, args.case_id, limit=args.limit)
+            if args.format == "md":
+                write_text_output(runbook_markdown(report), args.output)
+            else:
+                write_report_output(
+                    report,
+                    report["commands"],
+                    args.format,
+                    args.output,
+                    title=f"Runbook for case {args.case_id}",
+                    columns=["order", "command", "reason", "safe"],
                 )
             return 0
 

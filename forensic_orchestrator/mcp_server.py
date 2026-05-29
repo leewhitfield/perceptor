@@ -676,6 +676,14 @@ class RelicMcpServer:
                 annotations=read_only,
             ),
             McpTool(
+                name="relic_case_runbook",
+                title="Relic Case Runbook",
+                description="Return safe next commands and reasons based on review status, readiness, packets, reports, and gaps.",
+                input_schema=_case_limit_schema(default=25),
+                handler=self.case_runbook,
+                annotations=read_only,
+            ),
+            McpTool(
                 name="relic_write_review_packet",
                 title="Write Relic Review Packet",
                 description="Write a small MCP review packet with selected findings, report URIs, timeline slices, and examiner notes.",
@@ -1679,6 +1687,15 @@ class RelicMcpServer:
         db = self._db()
         try:
             return case_next_actions_report(db, case_id, limit=limit)
+        finally:
+            db.close()
+
+    def case_runbook(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        db = self._db()
+        try:
+            from .cli import case_runbook_report
+
+            return case_runbook_report(db, self.paths, _required(arguments, "case_id"), limit=_limit(arguments, default=25))
         finally:
             db.close()
 
@@ -2750,15 +2767,16 @@ def _mcp_workflow_guide() -> dict[str, Any]:
         {"order": 1, "tool": "relic_case_readiness", "purpose": "Check doctor, workspace health, readiness, progress, and resume signals."},
         {"order": 2, "tool": "relic_workspace_map", "purpose": "Get cases, evidence, reports, packets, progress manifests, and active jobs."},
         {"order": 3, "tool": "relic_case_evidence_map", "purpose": "Review computers, images, report resources, memory sources, jobs, and processing state for one case."},
-        {"order": 4, "tool": "relic_artifact_search_sources", "purpose": "Check which source tables, fields, and row counts are available for search."},
-        {"order": 5, "tool": "relic_lead_search", "purpose": "Run preset execution, USB, cloud, document, browser, or communications searches."},
-        {"order": 6, "tool": "relic_search_artifacts", "purpose": "Run ad hoc artifact searches with user, computer, source, and time filters."},
-        {"order": 7, "tool": "drilldown tools", "purpose": "Follow search result drilldown hints into file, USB, user, timeline, registry, cloud, communication, shortcut, or remote-access context."},
-        {"order": 8, "tool": "relic_write_search_packet", "purpose": "Save repeatable searches, result hash sets, case counts, and result sets as examiner work product."},
-        {"order": 9, "tool": "relic_rerun_search_packet", "purpose": "Rerun saved searches and compare added, removed, changed, and unchanged results."},
-        {"order": 10, "tool": "relic_write_review_packet", "purpose": "Save selected findings, notes, timeline slices, and report URIs."},
-        {"order": 11, "tool": "relic_discover_report_exports", "purpose": "Find generated reports and packets by purpose and tags."},
-        {"order": 12, "tool": "relic_write_report_bundle", "purpose": "Export a review bundle for handoff or UI consumption. Use purpose=review for MCP/operator review packs."},
+        {"order": 4, "tool": "relic_case_runbook", "purpose": "Get safe next commands and reasons based on current case state."},
+        {"order": 5, "tool": "relic_artifact_search_sources", "purpose": "Check which source tables, fields, and row counts are available for search."},
+        {"order": 6, "tool": "relic_lead_search", "purpose": "Run preset execution, USB, cloud, document, browser, or communications searches."},
+        {"order": 7, "tool": "relic_search_artifacts", "purpose": "Run ad hoc artifact searches with user, computer, source, and time filters."},
+        {"order": 8, "tool": "drilldown tools", "purpose": "Follow search result drilldown hints into file, USB, user, timeline, registry, cloud, communication, shortcut, or remote-access context."},
+        {"order": 9, "tool": "relic_write_search_packet", "purpose": "Save repeatable searches, result hash sets, case counts, and result sets as examiner work product."},
+        {"order": 10, "tool": "relic_rerun_search_packet", "purpose": "Rerun saved searches and compare added, removed, changed, and unchanged results."},
+        {"order": 11, "tool": "relic_write_review_packet", "purpose": "Save selected findings, notes, timeline slices, and report URIs."},
+        {"order": 12, "tool": "relic_discover_report_exports", "purpose": "Find generated reports and packets by purpose and tags."},
+        {"order": 13, "tool": "relic_write_report_bundle", "purpose": "Export a review bundle for handoff or UI consumption. Use purpose=review for MCP/operator review packs."},
     ]
     return {
         "title": "Relic MCP Workflow Guide",

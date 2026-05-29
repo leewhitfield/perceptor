@@ -48,6 +48,7 @@ def test_mcp_initialize_and_list_tools(tmp_path):
     assert "relic_lead_search" in names
     assert "relic_case_activity_digest" in names
     assert "relic_case_next_actions" in names
+    assert "relic_case_runbook" in names
     assert "relic_write_review_packet" in names
     assert "relic_search_artifacts" in names
     assert "relic_artifact_search_sources" in names
@@ -386,7 +387,9 @@ def test_mcp_artifact_search_and_progress_manifests(tmp_path, monkeypatch):
     shellbag_source = next(row for row in sources["sources"] if row["table"] == "shellbag_entries")
     assert shellbag_source["populated"] is True
     digest = server.case_activity_digest({"case_id": "case-1"})
+    runbook = server.case_runbook({"case_id": "case-1"})
     assert digest["case_id"] == "case-1"
+    assert any("review-status" in row["command"] for row in runbook["commands"])
     packet = server.write_search_packet({"case_id": "case-1", "preset": "usb", "query": "powershell", "title": "USB lead"})
     listed = server.list_search_packets({"case_id": "case-1"})
     read = server.read_search_packet({"uri": listed["packets"][0]["json_uri"]})
