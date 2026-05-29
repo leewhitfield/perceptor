@@ -6,6 +6,12 @@ Operator manual: see `docs/user-manual.md` for setup, workflows, command
 switches, and reporting guidance. Supported install path: Ubuntu 24.04 LTS
 x86_64, bare metal or VM; see `docs/ubuntu-install.md`.
 
+Quick Ubuntu bootstrap from a source checkout:
+
+```bash
+scripts/bootstrap-ubuntu.sh
+```
+
 This MVP proves the initial workflow:
 
 1. Register a Windows E01 forensic image.

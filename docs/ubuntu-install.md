@@ -6,11 +6,38 @@ Relic currently supports **Ubuntu 24.04 LTS on x86_64**. Bare metal and virtual 
 
 Start with a clean Ubuntu 24.04 LTS x86_64 install and a workspace volume with enough free space for evidence expansion, extracted artifacts, DuckDB analytics files, and report bundles.
 
+## Automated Bootstrap
+
+From a source checkout, the supported bootstrap path is:
+
+```bash
+scripts/bootstrap-ubuntu.sh
+```
+
+Useful options:
+
+```bash
+scripts/bootstrap-ubuntu.sh --tools-dir ~/tools --env-file ~/tools/forensic-orchestrator.env
+scripts/bootstrap-ubuntu.sh --skip-tools
+scripts/bootstrap-ubuntu.sh --skip-smoke
+```
+
+The bootstrap script verifies Ubuntu 24.04 x86_64, installs baseline apt
+packages, installs `uv` if needed, runs `uv sync`, installs Relic-managed
+third-party tools unless skipped, loads the generated tool environment file, and
+runs `standalone doctor --smoke` unless skipped.
+
+## Manual Install
+
 Install baseline packages:
 
 ```bash
 sudo apt update
-sudo apt install -y git curl python3 python3-venv build-essential
+sudo apt install -y \
+  git curl python3 python3-venv python3-dev build-essential pkg-config libleveldb-dev \
+  sleuthkit ewf-tools qemu-utils ntfs-3g cryptsetup util-linux \
+  libesedb-utils exiftool poppler-utils tesseract-ocr \
+  libvshadow-utils dislocker libbde-utils
 ```
 
 Install `uv`:
@@ -59,6 +86,26 @@ uv run relic --root ~/analysis/case01 standalone doctor --smoke --format table
 ```
 
 If `platform_supported` fails, Relic is running outside the primary support target. It may still work for parsing/reporting, but full image mounting and third-party tool installation are not supported on that platform.
+
+## Common Failure Paths
+
+- `uv: command not found`: open a new login shell or add `~/.local/bin` to
+  `PATH`, then rerun `uv sync`.
+- `quickxorhash` or `plyvel` build failures: install baseline build packages
+  with `sudo apt install -y build-essential python3-dev pkg-config libleveldb-dev`.
+- Rust or `usnjrnl-forensic` failures: install a current Rust toolchain with
+  `rustup`, ensure `rustc --version` is 1.88.0 or newer, then rerun
+  `standalone install-tool usnjrnl-forensic`.
+- FUSE or mount failures: run `standalone doctor --smoke`, confirm `ewfmount`,
+  `ntfs-3g`, and `/dev/fuse` exist, and clean stale mounts with
+  `image cleanup-stale-mounts` before retrying.
+- EZ Tools setup failures: rerun `standalone install-tool eztools`; Relic
+  downloads the required release assets directly and does not require
+  PowerShell for the managed install path.
+- SIDR setup failures: rerun `standalone install-tool sidr`; Relic expects a
+  native Linux Rust build, not the upstream Windows `sidr.exe`.
+- Missing env file: rerun `standalone install-tool all --tools-dir ~/tools
+  --env-file ~/tools/forensic-orchestrator.env`, then `source` that file.
 
 ## First Case Checks
 

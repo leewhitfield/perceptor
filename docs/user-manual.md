@@ -579,7 +579,8 @@ context but are not disk image mounts.
 Relic's supported install target is Ubuntu 24.04 LTS on x86_64, either bare
 metal or VM. Native macOS, native Windows, Docker full-image mounting, WSL full
 mounting, ARM64, and non-Ubuntu Linux are not primary support targets. See
-`docs/ubuntu-install.md` for the current install contract.
+`docs/ubuntu-install.md` for the current install contract and
+`docs/release-checklist.md` for release verification.
 
 ```bash
 uv run relic standalone version --format table
