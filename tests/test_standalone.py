@@ -79,11 +79,13 @@ def test_standalone_reports_cover_profiles_schema_jobs_and_backups(tmp_path):
     assert profile_catalog_report(registry)["summary"]["profile_count"] > 0
     assert version_report(paths.root, [])["application"] == "Relic"
     assert "relic" in version_report(paths.root, [])["cli_aliases"]
+    assert version_report(paths.root, [])["platform_support"]["supported_platform"] == "Ubuntu 24.04 LTS x86_64"
     assert artifact_capability_report(registry, profile="windows-full")["summary"]["artifact_count"] > 0
     assert schema_status_report(db)["schema_version"]["version"] >= 4
     assert job_status_report(db, case_id=case.id)["summary"]["completed"] == 1
     doctor = doctor_report(db, paths, registry, smoke=True)
     assert doctor["summary"]["check_count"] >= 8
+    assert any(row["name"] == "platform_supported" for row in doctor["checks"])
     assert doctor["smoke"]["passed"] is True
     backup = backup_case_databases(db, paths, case_id=case.id, output_dir=tmp_path / "backups")
     assert Path(backup["manifest"]).exists()

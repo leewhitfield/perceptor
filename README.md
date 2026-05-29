@@ -3,7 +3,8 @@
 CLI-first starter repo for lawful forensic processing orchestration.
 
 Operator manual: see `docs/user-manual.md` for setup, workflows, command
-switches, and reporting guidance.
+switches, and reporting guidance. Supported install path: Ubuntu 24.04 LTS
+x86_64, bare metal or VM; see `docs/ubuntu-install.md`.
 
 This MVP proves the initial workflow:
 
@@ -19,6 +20,10 @@ This MVP proves the initial workflow:
 This is not a validated forensic product yet. Validate behavior, logging, mounts, and tool output handling before using it on real evidence.
 
 ## Requirements
+
+Relic currently supports Ubuntu 24.04 LTS on x86_64. Other Linux distributions,
+older Ubuntu releases, ARM64, WSL, Docker, native macOS, and native Windows are
+best-effort or unsupported for now, especially for full mounted-image workflows.
 
 Linux worker packages:
 

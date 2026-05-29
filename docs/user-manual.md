@@ -576,6 +576,11 @@ context but are not disk image mounts.
 
 ## Standalone Commands
 
+Relic's supported install target is Ubuntu 24.04 LTS on x86_64, either bare
+metal or VM. Native macOS, native Windows, Docker full-image mounting, WSL full
+mounting, ARM64, and non-Ubuntu Linux are not primary support targets. See
+`docs/ubuntu-install.md` for the current install contract.
+
 ```bash
 uv run relic standalone version --format table
 uv run relic standalone dependencies --format table

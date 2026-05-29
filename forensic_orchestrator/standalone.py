@@ -119,6 +119,7 @@ STANDALONE_BACKLOG = [
 
 
 def version_report(root: Path, plugin_paths: list[Path]) -> dict[str, Any]:
+    platform_support = _platform_support_report()
     return {
         "application": "Relic",
         "package": "forensic-orchestrator",
@@ -127,11 +128,53 @@ def version_report(root: Path, plugin_paths: list[Path]) -> dict[str, Any]:
         "python": sys.version.split()[0],
         "python_supported": sys.version_info >= (3, 11),
         "platform": platform.platform(),
-        "os_supported": platform.system().lower() == "linux",
+        "os_supported": bool(platform_support["supported"]),
+        "platform_support": platform_support,
         "root": str(root),
         "plugin_paths": [str(path) for path in plugin_paths],
         "generated_at": _now(),
     }
+
+
+def _platform_support_report() -> dict[str, Any]:
+    system = platform.system().lower()
+    machine = platform.machine().lower()
+    os_release = _linux_os_release()
+    ubuntu_version = os_release.get("VERSION_ID", "")
+    supported = system == "linux" and os_release.get("ID", "").lower() == "ubuntu" and ubuntu_version == "24.04" and machine in {"x86_64", "amd64"}
+    status = "supported" if supported else "unsupported"
+    notes = []
+    if system != "linux":
+        notes.append("Relic currently supports Ubuntu 24.04 LTS on x86_64 only. Native macOS and Windows are unsupported.")
+    elif os_release.get("ID", "").lower() != "ubuntu":
+        notes.append("Relic currently supports Ubuntu 24.04 LTS on x86_64 only. Other Linux distributions are best-effort.")
+    elif ubuntu_version != "24.04":
+        notes.append("Relic currently supports Ubuntu 24.04 LTS. Other Ubuntu releases are best-effort.")
+    if machine not in {"x86_64", "amd64"}:
+        notes.append("Relic currently supports x86_64. ARM64 is best-effort and some third-party tools may not install.")
+    return {
+        "status": status,
+        "supported": supported,
+        "system": platform.system(),
+        "machine": platform.machine(),
+        "linux_id": os_release.get("ID", ""),
+        "linux_version_id": ubuntu_version,
+        "supported_platform": "Ubuntu 24.04 LTS x86_64",
+        "notes": notes,
+    }
+
+
+def _linux_os_release() -> dict[str, str]:
+    path = Path("/etc/os-release")
+    if not path.exists():
+        return {}
+    values: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if "=" not in line or line.strip().startswith("#"):
+            continue
+        key, value = line.split("=", 1)
+        values[key] = value.strip().strip('"')
+    return values
 
 
 def tool_status_report(*, tools_dir: Path | None = None, env_file: Path | None = None) -> dict[str, Any]:
@@ -426,7 +469,7 @@ def doctor_report(
     version = version_report(paths.root, [])
     checks = [
         _check("python_supported", bool(version["python_supported"]), f"Python {version['python']}"),
-        _check("os_supported", bool(version["os_supported"]), platform.system()),
+        _check("platform_supported", bool(version["os_supported"]), version.get("platform_support")),
         _check("workspace_root_exists", paths.root.exists(), str(paths.root)),
         _check("sqlite_schema", bool((schema.get("schema_version") or {}).get("version")), schema.get("schema_version")),
         _check("required_dependencies", dependencies["summary"]["required_missing"] == 0, dependencies["summary"]),

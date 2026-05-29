@@ -6,6 +6,10 @@ tool.
 For the full operator manual, including common workflows, command switches, and
 report families, see [Relic User Manual](user-manual.md).
 
+Supported install target: Ubuntu 24.04 LTS on x86_64, bare metal or VM. Other
+platforms are best-effort or unsupported for full mounted-image workflows. See
+[Ubuntu Install](ubuntu-install.md).
+
 ## Install
 
 ```bash
