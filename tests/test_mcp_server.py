@@ -36,6 +36,8 @@ def test_mcp_initialize_and_list_tools(tmp_path):
     assert "relic_query_external_storage" in names
     assert "relic_case_review" in names
     assert "relic_case_evidence_map" in names
+    assert "relic_workspace_map" in names
+    assert "relic_mcp_workflow_guide" in names
     assert "relic_case_readiness" in names
     assert "relic_discover_reports" in names
     assert "relic_discover_report_exports" in names
@@ -53,6 +55,7 @@ def test_mcp_initialize_and_list_tools(tmp_path):
     assert "relic_write_search_packet" in names
     assert "relic_list_search_packets" in names
     assert "relic_read_search_packet" in names
+    assert "relic_rerun_search_packet" in names
     assert "relic_list_progress_manifests" in names
     assert "relic_list_mcp_jobs" in names
     assert "relic_get_mcp_job_progress" in names
@@ -370,6 +373,7 @@ def test_mcp_artifact_search_and_progress_manifests(tmp_path, monkeypatch):
     assert found["results"][0]["computer_label"] == "HOST01"
     assert found["results"][0]["matched_fields"] == ["absolute_path"]
     assert found["results"][0]["drilldown"]["tool"] == "relic_file_dossier"
+    assert found["results"][0]["score"] > 0
 
     manifests = server.list_progress_manifests({})
     assert manifests["summary"]["manifest_count"] == 1
@@ -382,9 +386,17 @@ def test_mcp_artifact_search_and_progress_manifests(tmp_path, monkeypatch):
     packet = server.write_search_packet({"case_id": "case-1", "preset": "usb", "query": "powershell", "title": "USB lead"})
     listed = server.list_search_packets({"case_id": "case-1"})
     read = server.read_search_packet({"uri": listed["packets"][0]["json_uri"]})
+    rerun = server.rerun_search_packet({"uri": listed["packets"][0]["json_uri"]})
+    exports = server.discover_report_exports({"case_id": "case-1", "purpose": "triage", "tags": ["packet"]})
+    workspace = server.workspace_map({"case_id": "case-1"})
+    guide = server.mcp_workflow_guide({})
     assert Path(packet["json_path"]).exists()
     assert listed["summary"]["packet_count"] == 1
     assert read["packet"]["title"] == "USB lead"
+    assert rerun["comparison"]["unchanged_count"] == 1
+    assert any(row["kind"] == "packet" for row in exports["resources"])
+    assert workspace["summary"]["case_count"] == 1
+    assert guide["summary"]["step_count"] >= 8
 
 
 def test_mcp_tool_reference_and_audit_log(tmp_path):

@@ -220,6 +220,7 @@ from .reports import (
     remote_access_attribution_report,
     rdp_remote_access_markdown,
     regression_smoke_report,
+    rerun_search_packet_report,
     rebuild_derived_timeline_events,
     rdp_visual_observations_report,
     registry_artifacts_report,
@@ -954,7 +955,7 @@ def _bundle_report_names_for_purpose(purpose: str) -> set[str] | None:
         "bundle-quality",
     }
     groups = {
-        "triage": common | {"suspicious-executions", "user-intent", "file-movement-identity", "opened-from-removable-media", "opened-from-cloud-storage", "cloud-mounts", "cloud-removable-overlap", "artifact-processing-status"},
+        "triage": common | {"suspicious-executions", "user-intent", "file-movement-identity", "opened-from-removable-media", "opened-from-cloud-storage", "cloud-mounts", "cloud-removable-overlap", "artifact-processing-status", "lead-search-usb", "lead-search-execution", "lead-search-cloud", "lead-search-browser", "lead-search-documents", "lead-search-communications"},
         "usb": common | {"shellbag-external-storage", "file-movement-identity", "opened-from-removable-media", "cloud-removable-overlap", "shortcut-droid-changes", "shortcut-object-tracking", "usn-lifecycle"},
         "cloud": common | {"cloud-artifacts", "opened-from-cloud-storage", "cloud-mounts", "cloud-removable-overlap", "user-intent"},
         "execution": common | {"execution", "execution-correlation", "suspicious-executions", "program-provenance", "remote-access", "user-intent"},
@@ -1018,6 +1019,9 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
     def cloud_overlap() -> dict[str, object]:
         return cached("cloud_overlap", lambda: cloud_removable_overlap_report(db, case_id, limit=limit))  # type: ignore[return-value]
 
+    def lead_search(preset: str) -> dict[str, object]:
+        return cached(f"lead_search_{preset}", lambda: artifact_lead_search_report(db, case_id, preset=preset, limit=limit))  # type: ignore[return-value]
+
     report_builders: list[tuple[str, str, str, Callable[[], object]]] = [
         ("executive-summary", "md", "Executive summary", lambda: case_executive_summary_markdown(case_executive_summary_report(db, case_id, limit=limit, memory_disk_report=memory_disk()))),
         ("case-overview", "md", "Case overview", lambda: case_overview_markdown(overview())),
@@ -1055,6 +1059,12 @@ def write_case_report_bundle(db: Database, case_id: str, output_dir: Path, *, li
         ("email-artifacts", "json", "Email artifacts", lambda: email_artifacts_report(db, case_id, limit=limit, memory_disk_report=memory_disk())),
         ("remote-access", "json", "Remote access", lambda: remote_access_sessions_report(db, case_id, limit=limit, memory_disk_report=memory_disk())),
         ("regression-smoke", "json", "Regression smoke", lambda: regression_smoke_report(db, case_id, limit=min(limit, 25))),
+        ("lead-search-usb", "json", "USB lead search", lambda: lead_search("usb")),
+        ("lead-search-execution", "json", "Execution lead search", lambda: lead_search("execution")),
+        ("lead-search-cloud", "json", "Cloud lead search", lambda: lead_search("cloud")),
+        ("lead-search-browser", "json", "Browser lead search", lambda: lead_search("browser")),
+        ("lead-search-documents", "json", "Document lead search", lambda: lead_search("documents")),
+        ("lead-search-communications", "json", "Communications lead search", lambda: lead_search("communications")),
     ]
     written: list[dict[str, object]] = []
     for stem, extension, title, builder in report_builders:
@@ -1175,6 +1185,8 @@ def _report_index_tags(name: str) -> list[str]:
         "timeline": ("timeline", "usn-lifecycle"),
         "quality": ("quality", "readiness", "gaps", "decisions", "smoke"),
         "browser": ("browser",),
+        "lead": ("lead-search",),
+        "packet": ("mcp-review-packets", "mcp-search-packets", "search-packet", "review-packet"),
     }
     lower = name.casefold()
     for tag, needles in mapping.items():
@@ -3174,6 +3186,11 @@ def build_parser() -> argparse.ArgumentParser:
     report_lead_search.add_argument("--limit", type=int, default=100)
     report_lead_search.add_argument("--format", choices=["json", "table", "csv"], default="json")
     report_lead_search.add_argument("--output")
+    report_rerun_search_packet = report_sub.add_parser("rerun-search-packet")
+    report_rerun_search_packet.add_argument("--packet", required=True, help="Saved search packet JSON path")
+    report_rerun_search_packet.add_argument("--limit", type=int, help="Override saved packet limit")
+    report_rerun_search_packet.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    report_rerun_search_packet.add_argument("--output")
     report_activity_digest = report_sub.add_parser("activity-digest")
     report_activity_digest.add_argument("--case", required=True, dest="case_id")
     report_activity_digest.add_argument("--limit", type=int, default=25)
@@ -6175,6 +6192,19 @@ def run(args: argparse.Namespace) -> int:
                 args.output,
                 title=f"{args.preset.title()} lead search for case {args.case_id}",
                 columns=["timestamp", "lead_preset", "category", "table", "computer_label", "summary", "matched_fields"],
+            )
+            return 0
+
+        if args.resource == "report" and args.action == "rerun-search-packet":
+            packet = json.loads(Path(args.packet).read_text(encoding="utf-8"))
+            report = rerun_search_packet_report(db, packet, limit_override=args.limit)
+            write_report_output(
+                report,
+                report["comparison"]["added"],
+                args.format,
+                args.output,
+                title="Rerun search packet",
+                columns=["table", "id", "timestamp", "category", "summary", "score"],
             )
             return 0
 

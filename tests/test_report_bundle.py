@@ -309,6 +309,23 @@ def test_execution_purpose_bundle_writes_execution_reports_and_quality(tmp_path,
     assert json.loads(report_index.read_text(encoding="utf-8"))["summary"]["report_count"] == len(bundle["reports"])
 
 
+def test_triage_bundle_writes_lead_search_exports(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORENSIC_ANALYTICS_MODE", "duckdb")
+    paths = WorkspacePaths(tmp_path / "analysis")
+    db = Database(paths.db_path())
+    case_id = create_case(db, paths)
+
+    bundle = write_case_report_bundle(db, case_id, tmp_path / "triage-bundle", purpose="triage", limit=10)
+    db.close()
+
+    names = {item["name"] for item in bundle["reports"]}
+    assert {"lead-search-usb", "lead-search-execution", "lead-search-cloud", "lead-search-browser", "lead-search-documents", "lead-search-communications"} <= names
+    report_index = json.loads((tmp_path / "triage-bundle" / "report-index.json").read_text(encoding="utf-8"))
+    lead_rows = [row for row in report_index["reports"] if str(row["name"]).startswith("lead-search-")]
+    assert lead_rows
+    assert all("lead" in row["tags"] for row in lead_rows)
+
+
 def test_report_bundle_import_many_warns_when_distinct_rebuild_hits_disk_full(tmp_path, monkeypatch):
     monkeypatch.setenv("FORENSIC_ANALYTICS_MODE", "duckdb")
     input_root = tmp_path / "input" / "ComputerA" / "MFT"

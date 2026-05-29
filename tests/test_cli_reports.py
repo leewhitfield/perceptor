@@ -49,11 +49,20 @@ def test_cli_search_progress_and_gap_reports(tmp_path, monkeypatch, capsys):
     artifact = json.loads(capsys.readouterr().out)
     assert artifact["summary"]["result_count"] == 1
     assert artifact["results"][0]["drilldown"]["tool"] == "relic_file_dossier"
+    assert artifact["results"][0]["score"] > 0
 
     assert cli_main(["--root", str(paths.root), "report", "lead-search", "--case", "case-1", "--preset", "usb", "--query", "powershell", "--format", "json"]) == 0
     lead = json.loads(capsys.readouterr().out)
     assert lead["preset"] == "usb"
     assert lead["summary"]["result_count"] == 1
+    packet_path = tmp_path / "search-packet.json"
+    packet_path.write_text(
+        json.dumps({"case_id": "case-1", "search_type": "lead", "arguments": {"case_id": "case-1", "preset": "usb", "query": "powershell", "limit": 100}, "search": lead}),
+        encoding="utf-8",
+    )
+    assert cli_main(["--root", str(paths.root), "report", "rerun-search-packet", "--packet", str(packet_path), "--format", "json"]) == 0
+    rerun = json.loads(capsys.readouterr().out)
+    assert rerun["comparison"]["unchanged_count"] == 1
 
     assert cli_main(["--root", str(paths.root), "report", "progress-manifests", "--format", "json"]) == 0
     progress = json.loads(capsys.readouterr().out)

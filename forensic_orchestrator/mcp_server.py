@@ -40,6 +40,7 @@ from .reports import (
     opened_from_removable_media_report,
     processing_progress_report,
     registry_activity_report,
+    rerun_search_packet_report,
     resume_plan_report,
     processing_readiness_report,
     shortcuts_report,
@@ -214,6 +215,27 @@ class RelicMcpServer:
                 description="Return case computers, images, report resources, memory sources, jobs, and processing state in one response.",
                 input_schema=_case_limit_schema(default=100),
                 handler=self.case_evidence_map,
+                annotations=read_only,
+            ),
+            McpTool(
+                name="relic_workspace_map",
+                title="Relic Workspace Map",
+                description="Return cases, computers, images, reports, progress manifests, MCP packets, and active jobs in one structure.",
+                input_schema=_object_schema(
+                    {
+                        "case_id": _string_schema("Optional case ID to scope the map."),
+                        "limit": _integer_schema("Maximum rows per section.", default=100, minimum=1, maximum=1000),
+                    }
+                ),
+                handler=self.workspace_map,
+                annotations=read_only,
+            ),
+            McpTool(
+                name="relic_mcp_workflow_guide",
+                title="Relic MCP Workflow Guide",
+                description="Return the recommended MCP workflow for case review, lead searches, drilldowns, packets, and exports.",
+                input_schema=_object_schema({}),
+                handler=self.mcp_workflow_guide,
                 annotations=read_only,
             ),
             McpTool(
@@ -718,6 +740,20 @@ class RelicMcpServer:
                 annotations=read_only,
             ),
             McpTool(
+                name="relic_rerun_search_packet",
+                title="Rerun Relic Search Packet",
+                description="Rerun a saved MCP search packet and compare added, removed, and unchanged result IDs.",
+                input_schema=_object_schema(
+                    {
+                        "uri": _string_schema("Search packet JSON resource URI."),
+                        "limit": _integer_schema("Optional rerun limit override.", default=100, minimum=1, maximum=1000),
+                    },
+                    required=["uri"],
+                ),
+                handler=self.rerun_search_packet,
+                annotations=read_only,
+            ),
+            McpTool(
                 name="relic_ingest_triage_zip_preflight",
                 title="Relic Triage ZIP Preflight",
                 description="Validate a live-case/report ZIP without importing it.",
@@ -1123,6 +1159,51 @@ class RelicMcpServer:
             }
         finally:
             db.close()
+
+    def workspace_map(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        limit = _limit(arguments, default=100)
+        case_filter = _optional_text(arguments, "case_id")
+        db = self._db()
+        try:
+            cases = [dict(row) for row in db.conn.execute("SELECT id, root, created_at FROM cases ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()]
+            if case_filter:
+                cases = [row for row in cases if row.get("id") == case_filter]
+            case_maps = []
+            for case in cases[:limit]:
+                case_id = str(case["id"])
+                computers = [dict(row) for row in db.conn.execute("SELECT id, label, notes, created_at FROM computers WHERE case_id = ? ORDER BY label LIMIT ?", (case_id, limit)).fetchall()]
+                images = [dict(row) for row in db.conn.execute("SELECT id, computer_id, path, created_at FROM images WHERE case_id = ? ORDER BY created_at DESC LIMIT ?", (case_id, limit)).fetchall()]
+                reports = _case_report_resources(self.paths.root, case_id, purpose=None, limit=limit)
+                packets = _case_packet_resources(self.paths.root, case_id, limit=limit)
+                jobs = job_status_report(db, case_id=case_id, limit=limit)
+                case_maps.append(
+                    {
+                        "case": case,
+                        "computers": computers,
+                        "images": images,
+                        "reports": reports,
+                        "packets": packets,
+                        "jobs": jobs.get("jobs") or [],
+                    }
+                )
+            progress = progress_manifest_report(self.paths.root, limit=limit)
+            mcp_jobs = self.list_mcp_jobs({"limit": limit})
+            return {
+                "workspace_root": str(self.paths.root),
+                "summary": {
+                    "case_count": len(case_maps),
+                    "progress_manifest_count": (progress.get("summary") or {}).get("manifest_count", 0),
+                    "mcp_job_count": len(mcp_jobs.get("jobs") or []),
+                },
+                "cases": case_maps,
+                "progress_manifests": progress.get("manifests") or [],
+                "mcp_jobs": mcp_jobs.get("jobs") or [],
+            }
+        finally:
+            db.close()
+
+    def mcp_workflow_guide(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return _mcp_workflow_guide()
 
     def case_readiness(self, arguments: dict[str, Any]) -> dict[str, Any]:
         case_id = str(arguments.get("case_id") or "").strip() or None
@@ -1713,6 +1794,16 @@ class RelicMcpServer:
 
     def read_search_packet(self, arguments: dict[str, Any]) -> dict[str, Any]:
         return _read_packet_resource(self.paths.root, _required(arguments, "uri"), directory_name="mcp-search-packets", label="search")
+
+    def rerun_search_packet(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        packet = self.read_search_packet({"uri": _required(arguments, "uri")}).get("packet")
+        if not isinstance(packet, dict):
+            raise ValueError("Search packet URI must reference a JSON packet")
+        db = self._db()
+        try:
+            return rerun_search_packet_report(db, packet, limit_override=_limit(arguments, default=int((packet.get("arguments") or {}).get("limit") or 100)))
+        finally:
+            db.close()
 
     def ingest_triage_zip_preflight(self, arguments: dict[str, Any]) -> dict[str, Any]:
         report = report_bundle_preflight_report(Path(_required(arguments, "path")).expanduser())
@@ -2309,6 +2400,7 @@ def _resource_candidates(root: Path, *, case_id: str | None = None, kind: str | 
         "log": (f"cases/{case_glob}/logs/**/*",),
         "mcp-job": ("mcp-jobs/**/*",),
         "progress": ("progress/**/*.json",),
+        "packet": (f"cases/{case_glob}/reports/mcp-review-packets/**/*", f"cases/{case_glob}/reports/mcp-search-packets/**/*"),
     }
     if kind:
         if kind not in kind_patterns:
@@ -2332,7 +2424,7 @@ def _case_report_resources(root: Path, case_id: str, *, purpose: str | None, lim
         resolved = path.resolve()
         if resolved != root_resolved and root_resolved not in resolved.parents:
             continue
-        if expected and _report_resource_name(resolved) not in expected and resolved.name not in {"index.md", "report-index.json", "bundle-quality.json"}:
+        if expected and not _is_packet_resource(resolved) and _report_resource_name(resolved) not in expected and resolved.name not in {"index.md", "report-index.json", "bundle-quality.json"}:
             continue
         stat = resolved.stat()
         relative = resolved.relative_to(root_resolved)
@@ -2356,13 +2448,32 @@ def _case_report_resources(root: Path, case_id: str, *, purpose: str | None, lim
     return rows
 
 
+def _case_packet_resources(root: Path, case_id: str, *, limit: int) -> list[dict[str, Any]]:
+    rows = []
+    for directory in ("mcp-review-packets", "mcp-search-packets"):
+        packet_dir = root / "cases" / case_id / "reports" / directory
+        if not packet_dir.exists():
+            continue
+        for path in sorted(packet_dir.glob("*"), key=lambda item: item.stat().st_mtime if item.exists() else 0, reverse=True):
+            if not path.is_file() or not _is_text_resource(path):
+                continue
+            metadata = _resource_metadata(root.resolve(), path.resolve(), case_id=case_id, kind="packet")
+            rows.append({"uri": _resource_uri(path.resolve().relative_to(root.resolve())), "relative_path": str(path.resolve().relative_to(root.resolve())), **metadata})
+            if len(rows) >= limit:
+                return rows
+    return rows
+
+
 def _resource_metadata(root: Path, path: Path, *, case_id: str | None = None, kind: str | None = None) -> dict[str, Any]:
     stat = path.stat()
     relative = path.relative_to(root)
-    inferred_kind = kind or _infer_resource_kind(relative)
+    inferred_kind = "packet" if _is_packet_resource(path) else (kind or _infer_resource_kind(relative))
     inferred_case = case_id or _case_id_from_relative(relative)
     report_name = _report_resource_name(path) if inferred_kind == "report" else ""
     purpose, tags = _resource_report_index_metadata(path, report_name)
+    if _is_packet_resource(path):
+        purpose = purpose or "examiner-work-product"
+        tags = sorted(set(tags) | {"packet", "review" if "review-packet" in path.name else "search"})
     if not tags and report_name:
         tags = sorted(_expected_report_names("usb") & {report_name}) or []
     description = f"Relic {inferred_kind} resource"
@@ -2387,11 +2498,18 @@ def _infer_resource_kind(relative: Path) -> str:
         return "progress"
     if parts and parts[0] == "mcp-jobs":
         return "mcp-job"
+    if "mcp-review-packets" in parts or "mcp-search-packets" in parts:
+        return "packet"
     if "logs" in parts:
         return "log"
     if "manifest" in relative.name.casefold():
         return "manifest"
     return "report"
+
+
+def _is_packet_resource(path: Path) -> bool:
+    parts = path.parts
+    return "mcp-review-packets" in parts or "mcp-search-packets" in parts
 
 
 def _case_id_from_relative(relative: Path) -> str:
@@ -2593,6 +2711,28 @@ def _search_packet_markdown(payload: dict[str, Any]) -> str:
                 f"{row.get('summary') or row.get('description') or row.get('title') or row.get('id') or ''}"
             )
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _mcp_workflow_guide() -> dict[str, Any]:
+    steps = [
+        {"order": 1, "tool": "relic_case_readiness", "purpose": "Check doctor, workspace health, readiness, progress, and resume signals."},
+        {"order": 2, "tool": "relic_workspace_map", "purpose": "Get cases, evidence, reports, packets, progress manifests, and active jobs."},
+        {"order": 3, "tool": "relic_case_evidence_map", "purpose": "Review computers, images, report resources, memory sources, jobs, and processing state for one case."},
+        {"order": 4, "tool": "relic_lead_search", "purpose": "Run preset execution, USB, cloud, document, browser, or communications searches."},
+        {"order": 5, "tool": "relic_search_artifacts", "purpose": "Run ad hoc artifact searches with user, computer, source, and time filters."},
+        {"order": 6, "tool": "drilldown tools", "purpose": "Follow search result drilldown hints into file, USB, user, timeline, registry, cloud, communication, shortcut, or remote-access context."},
+        {"order": 7, "tool": "relic_write_search_packet", "purpose": "Save repeatable searches and result sets as examiner work product."},
+        {"order": 8, "tool": "relic_write_review_packet", "purpose": "Save selected findings, notes, timeline slices, and report URIs."},
+        {"order": 9, "tool": "relic_discover_report_exports", "purpose": "Find generated reports and packets by purpose and tags."},
+        {"order": 10, "tool": "relic_write_report_bundle", "purpose": "Export a review bundle for handoff or UI consumption."},
+    ]
+    return {
+        "title": "Relic MCP Workflow Guide",
+        "summary": {"step_count": len(steps)},
+        "steps": steps,
+        "recommended_presets": ["execution", "usb", "cloud", "documents", "browser", "communications"],
+        "packet_tools": ["relic_write_search_packet", "relic_list_search_packets", "relic_rerun_search_packet", "relic_write_review_packet", "relic_list_review_packets"],
+    }
 
 
 def _list_packet_files(root: Path, packet_dir: Path, *, limit: int, suffix: str) -> dict[str, Any]:

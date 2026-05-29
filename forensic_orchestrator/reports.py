@@ -30671,6 +30671,9 @@ def artifact_search_report(
             item["image_path"] = image_paths.get(str(item.get("image_id") or ""))
             item["matched_fields"] = _artifact_matched_fields(item, searchable, query_text)
             item["summary"] = _artifact_search_summary(item, display, searchable)
+            score, score_reasons = _artifact_search_score(item, query_text, user_text)
+            item["score"] = score
+            item["score_reasons"] = score_reasons
             item["drilldown"] = _artifact_drilldown_hint(item)
             results.append(item)
             if len(results) >= limit:
@@ -30678,6 +30681,8 @@ def artifact_search_report(
         if len(results) >= limit:
             break
 
+    results.sort(key=lambda row: (int(row.get("score") or 0), str(row.get("timestamp") or "")), reverse=True)
+    results = results[:limit]
     return {
         "case_id": case_id,
         "query": query_text,
@@ -30790,6 +30795,60 @@ def case_activity_digest_report(db: Database, case_id: str, *, limit: int = 25) 
         "opened_from_cloud_storage": (opened_cloud.get("items") or opened_cloud.get("findings") or [])[:limit],
         "evidence_gaps": (gaps.get("gaps") or [])[:limit],
         "next_actions": (actions.get("actions") or [])[:limit],
+    }
+
+
+def rerun_search_packet_report(db: Database, packet: dict[str, Any], *, limit_override: int | None = None) -> dict[str, Any]:
+    case_id = str(packet.get("case_id") or "").strip()
+    arguments = packet.get("arguments") if isinstance(packet.get("arguments"), dict) else {}
+    search_type = str(packet.get("search_type") or ("lead" if arguments.get("preset") else "artifact"))
+    limit = int(limit_override or arguments.get("limit") or 100)
+    if search_type == "lead" or arguments.get("preset"):
+        rerun = artifact_lead_search_report(
+            db,
+            case_id,
+            preset=str(arguments.get("preset") or ""),
+            query=str(arguments.get("query") or "") or None,
+            user=str(arguments.get("user") or "") or None,
+            computer=str(arguments.get("computer") or "") or None,
+            start=str(arguments.get("start") or "") or None,
+            end=str(arguments.get("end") or "") or None,
+            limit=limit,
+        )
+    else:
+        rerun = artifact_search_report(
+            db,
+            case_id,
+            query=str(arguments.get("query") or "") or None,
+            user=str(arguments.get("user") or "") or None,
+            computer=str(arguments.get("computer") or "") or None,
+            source_type=str(arguments.get("source_type") or "") or None,
+            start=str(arguments.get("start") or "") or None,
+            end=str(arguments.get("end") or "") or None,
+            limit=limit,
+        )
+    previous_search = packet.get("search") if isinstance(packet.get("search"), dict) else {}
+    previous_results = previous_search.get("results") if isinstance(previous_search.get("results"), list) else []
+    current_results = rerun.get("results") if isinstance(rerun.get("results"), list) else []
+    previous_keys = {_search_result_key(row) for row in previous_results if isinstance(row, dict)}
+    current_keys = {_search_result_key(row) for row in current_results if isinstance(row, dict)}
+    return {
+        "case_id": case_id,
+        "title": packet.get("title") or "",
+        "search_type": search_type,
+        "arguments": arguments,
+        "previous_summary": previous_search.get("summary") if isinstance(previous_search.get("summary"), dict) else {},
+        "current_summary": rerun.get("summary") if isinstance(rerun.get("summary"), dict) else {},
+        "comparison": {
+            "previous_count": len(previous_keys),
+            "current_count": len(current_keys),
+            "added_count": len(current_keys - previous_keys),
+            "removed_count": len(previous_keys - current_keys),
+            "unchanged_count": len(current_keys & previous_keys),
+            "added": [row for row in current_results if isinstance(row, dict) and _search_result_key(row) in current_keys - previous_keys],
+            "removed": [row for row in previous_results if isinstance(row, dict) and _search_result_key(row) in previous_keys - current_keys],
+        },
+        "search": rerun,
     }
 
 
@@ -30956,6 +31015,21 @@ def _artifact_drilldown_hint(row: dict[str, Any]) -> dict[str, Any]:
     serial = _first_present(row, ("serial", "volume_serial_number", "usb_serial"))
     user = _first_present(row, ("user_profile", "user_name", "owner", "actor", "profile_path"))
     timestamp = row.get("timestamp")
+    if table.startswith("registry_"):
+        artifact = str(row.get("artifact") or "")
+        if not artifact and table.startswith("registry_"):
+            artifact = table.replace("registry_", "").replace("_", "-")
+        return {"tool": "relic_query_registry_activity", "report": "registry-activity", "arguments": _non_empty({"artifact": artifact, "user": user})}
+    if table == "srum_records":
+        return {"tool": "relic_timeline_window", "report": "srum-context", "arguments": _non_empty({"contains": row.get("app_name") or row.get("app_path") or row.get("user_name")})}
+    if table.startswith("mailbox_"):
+        return {"tool": "relic_query_communications", "report": "communications", "arguments": _non_empty({"user": user, "contains": row.get("subject") or row.get("sender") or row.get("message_id")})}
+    if table.startswith("cloud_"):
+        return {"tool": "relic_query_cloud_artifacts", "report": "cloud-artifacts", "arguments": _non_empty({"contains": row.get("file_name") or row.get("target") or row.get("provider")})}
+    if table.startswith("rdp_"):
+        return {"tool": "relic_timeline_window", "report": "remote-access", "arguments": _non_empty({"preset": "remote_access", "contains": row.get("observed_text") or row.get("observed_path") or row.get("file_name")})}
+    if table == "shortcut_items":
+        return {"tool": "relic_query_shortcuts", "report": "shortcuts", "arguments": _non_empty({"artifact_type": row.get("artifact_type")})}
     if category == "external_storage" or table.startswith("usb_"):
         return {"tool": "relic_usb_dossier", "report": "usb-dossier", "arguments": _non_empty({"serial": serial, "volume_serial_number": row.get("volume_serial_number"), "volume_guid": row.get("volume_guid")})}
     if path or file_name:
@@ -30965,6 +31039,39 @@ def _artifact_drilldown_hint(row: dict[str, Any]) -> dict[str, Any]:
     if timestamp:
         return {"tool": "relic_timeline_window", "report": "timeline-review", "arguments": {"center": timestamp}}
     return {"tool": "relic_case_activity_digest", "report": "activity-digest", "arguments": {}}
+
+
+def _artifact_search_score(row: dict[str, Any], query: str, user: str) -> tuple[int, list[str]]:
+    score = 0
+    reasons: list[str] = []
+    matched = set(row.get("matched_fields") or [])
+    path_fields = {"item_path", "file_location", "target_path", "local_path", "absolute_path", "original_path", "full_path", "parent_path", "path", "file_path"}
+    name_fields = {"file_name", "item_name", "display_name", "target_name", "name", "executable_name"}
+    if query and matched & (path_fields | name_fields):
+        score += 40
+        reasons.append("direct_filename_or_path_hit")
+    elif query and matched:
+        score += 20
+        reasons.append("text_hit")
+    if user and any(user.casefold() in str(row.get(key) or "").casefold() for key in ("user_profile", "user_name", "owner", "actor", "profile_path")):
+        score += 20
+        reasons.append("user_hit")
+    category = str(row.get("category") or "")
+    table = str(row.get("table") or "")
+    if category in {"execution", "external_storage", "cloud", "communications", "remote_access"} or table in {"prefetch_items", "shortcut_items", "mailbox_messages"}:
+        score += 15
+        reasons.append("high_value_source")
+    if row.get("timestamp"):
+        score += 5
+        reasons.append("timestamped")
+    if table in {"timeline_events", "prefetch_items", "usb_connection_events", "cloud_server_events"}:
+        score += 5
+        reasons.append("event_source")
+    return score, reasons
+
+
+def _search_result_key(row: dict[str, Any]) -> tuple[str, str]:
+    return (str(row.get("table") or ""), str(row.get("id") or row.get("source_record_id") or row.get("summary") or ""))
 
 
 def _first_present(row: dict[str, Any], keys: Iterable[str]) -> Any:
