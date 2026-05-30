@@ -29,7 +29,7 @@ uv run relic --root ~/analysis/release-check --dry-run process --path /evidence/
 CASE_ID="$(uv run python -c 'import json,sys; print(json.load(open(sys.argv[1]))["case_id"])' ~/analysis/release-check/dry-process.json)"
 uv run relic --root ~/analysis/release-check report review-status --case "${CASE_ID}" --format table
 uv run relic --root ~/analysis/release-check report runbook --case "${CASE_ID}" --format md
-uv run relic --root ~/analysis/release-check report write-bundle --case "${CASE_ID}" --purpose review --output-dir ~/analysis/release-check/cases/"${CASE_ID}"/outputs/reports/review-bundle
+uv run relic --root ~/analysis/release-check report write-bundle --case "${CASE_ID}" --purpose review
 uv run relic --root ~/analysis/release-check report handoff-package --case "${CASE_ID}" --bundle-dir ~/analysis/release-check/cases/"${CASE_ID}"/outputs/reports/review-bundle --output ~/analysis/release-check/cases/"${CASE_ID}"/outputs/reports/"${CASE_ID}"-handoff.zip
 ```
 

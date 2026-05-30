@@ -962,15 +962,33 @@ def _bundle_report_names_for_purpose(purpose: str) -> set[str] | None:
         "regression-smoke",
         "bundle-quality",
     }
+    usb_reports = {
+        "usb-summary",
+        "external-storage",
+        "shellbag-external-storage",
+        "usb-files",
+        "usb-timeline",
+        "file-movement-identity",
+        "opened-from-removable-media",
+        "cloud-removable-overlap",
+        "shortcut-droid-changes",
+        "shortcut-object-tracking",
+        "usn-lifecycle",
+    }
     groups = {
         "triage": common | {"suspicious-executions", "user-intent", "file-movement-identity", "opened-from-removable-media", "opened-from-cloud-storage", "cloud-mounts", "cloud-removable-overlap", "artifact-processing-status", "lead-search-usb", "lead-search-execution", "lead-search-cloud", "lead-search-browser", "lead-search-documents", "lead-search-communications", "lead-search-usb-summary", "lead-search-execution-summary", "lead-search-cloud-summary", "lead-search-browser-summary", "lead-search-documents-summary", "lead-search-communications-summary"},
-        "review": common | {"activity-digest", "next-actions", "workspace-map", "artifact-search-sources", "suspicious-executions", "file-movement-identity", "opened-from-removable-media", "opened-from-cloud-storage", "cloud-mounts", "cloud-removable-overlap", "artifact-processing-status", "lead-search-usb", "lead-search-execution", "lead-search-cloud", "lead-search-browser", "lead-search-documents", "lead-search-communications", "lead-search-usb-summary", "lead-search-execution-summary", "lead-search-cloud-summary", "lead-search-browser-summary", "lead-search-documents-summary", "lead-search-communications-summary", "changed-search-packets"},
-        "usb": common | {"shellbag-external-storage", "file-movement-identity", "opened-from-removable-media", "cloud-removable-overlap", "shortcut-droid-changes", "shortcut-object-tracking", "usn-lifecycle"},
+        "review": common | usb_reports | {"activity-digest", "next-actions", "workspace-map", "artifact-search-sources", "suspicious-executions", "opened-from-cloud-storage", "cloud-mounts", "artifact-processing-status", "lead-search-usb", "lead-search-execution", "lead-search-cloud", "lead-search-browser", "lead-search-documents", "lead-search-communications", "lead-search-usb-summary", "lead-search-execution-summary", "lead-search-cloud-summary", "lead-search-browser-summary", "lead-search-documents-summary", "lead-search-communications-summary", "changed-search-packets"},
+        "usb": common | usb_reports,
         "cloud": common | {"cloud-artifacts", "opened-from-cloud-storage", "cloud-mounts", "cloud-removable-overlap", "user-intent"},
         "execution": common | {"execution", "execution-correlation", "suspicious-executions", "program-provenance", "remote-access", "user-intent"},
         "memory": common | {"memory-analysis", "memory-credentials", "memory-disk-correlations", "memory-support-files", "combined-artifacts", "crash-dump-analysis", "memory-artifacts"},
     }
     return groups.get(purpose, groups["triage"])
+
+
+def _default_report_bundle_output_dir(paths: WorkspacePaths, case_id: str, purpose: str) -> Path:
+    purpose_name = (purpose or "full").casefold()
+    return paths.outputs_dir(case_id) / "reports" / f"{purpose_name}-bundle"
 
 
 def write_case_report_bundle(
@@ -1022,6 +1040,18 @@ def write_case_report_bundle(
     def shellbag_storage() -> dict[str, object]:
         return cached("shellbag_storage", lambda: shellbag_external_storage_report(db, case_id, limit=limit))  # type: ignore[return-value]
 
+    def external_storage() -> dict[str, object]:
+        return cached("external_storage", lambda: external_storage_report(db, case_id, limit=limit, include_file_activity=True))  # type: ignore[return-value]
+
+    def usb_summary() -> dict[str, object]:
+        return cached("usb_summary", lambda: usb_report(db, case_id, limit=limit))  # type: ignore[return-value]
+
+    def usb_files() -> dict[str, object]:
+        return cached("usb_files", lambda: usb_file_correlation_report(db, case_id, limit=limit))  # type: ignore[return-value]
+
+    def usb_timeline() -> dict[str, object]:
+        return cached("usb_timeline", lambda: usb_timeline_report(db, case_id, limit=limit))  # type: ignore[return-value]
+
     def file_identity() -> dict[str, object]:
         return cached("file_identity", lambda: file_movement_identity_report(db, case_id, limit=limit))  # type: ignore[return-value]
 
@@ -1064,7 +1094,11 @@ def write_case_report_bundle(
         ("memory-artifacts", "md", "Memory artifact inventory", lambda: memory_artifacts_markdown(memory_artifacts_report(db, case_id, limit=limit))),
         ("deep-recovery-status", "md", "Deep recovery status", lambda: deep_recovery_status_markdown(deep_recovery_status_report(db, case_id, limit=limit))),
         ("user-intent", "md", "User intent artifacts", lambda: user_intent_artifacts_markdown(user_intent())),
+        ("usb-summary", "json", "USB storage summary", lambda: usb_summary()),
+        ("external-storage", "md", "External storage", lambda: external_storage_markdown(external_storage())),
         ("shellbag-external-storage", "md", "Shellbag external storage", lambda: shellbag_external_storage_markdown(shellbag_storage())),
+        ("usb-files", "json", "USB file correlations", lambda: usb_files()),
+        ("usb-timeline", "json", "USB timeline", lambda: usb_timeline()),
         ("file-movement-identity", "md", "File movement and identity", lambda: file_movement_identity_markdown(file_identity())),
         ("opened-from-removable-media", "md", "Opened from removable media", lambda: opened_from_removable_media_markdown(opened_removable())),
         ("opened-from-cloud-storage", "md", "Opened from cloud storage", lambda: opened_from_cloud_storage_markdown(opened_cloud())),
@@ -1112,7 +1146,11 @@ def write_case_report_bundle(
         written.append({"name": stem, "title": title, "path": str(path), "format": extension})
     csv_builders: list[tuple[str, str, Callable[[], list[dict[str, object]]]]] = [
         ("user-intent", "User intent artifacts CSV", lambda: user_intent_artifacts_export_rows(user_intent())),
+        ("usb-summary", "USB storage summary CSV", lambda: usb_summary().get("usb_storage_devices", []) if isinstance(usb_summary().get("usb_storage_devices"), list) else []),
+        ("external-storage", "External storage CSV", lambda: external_storage_export_rows(external_storage())),
         ("shellbag-external-storage", "Shellbag external storage CSV", lambda: shellbag_external_storage_export_rows(shellbag_storage())),
+        ("usb-files", "USB file correlations CSV", lambda: usb_files().get("items", []) if isinstance(usb_files().get("items"), list) else []),
+        ("usb-timeline", "USB timeline CSV", lambda: usb_timeline().get("events", []) if isinstance(usb_timeline().get("events"), list) else []),
         ("file-movement-identity", "File movement and identity CSV", lambda: file_movement_identity_export_rows(file_identity())),
         ("opened-from-removable-media", "Opened from removable media CSV", lambda: opened_from_removable_media_export_rows(opened_removable())),
         ("opened-from-cloud-storage", "Opened from cloud storage CSV", lambda: opened_from_cloud_storage_export_rows(opened_cloud())),
@@ -1625,7 +1663,7 @@ def review_status_report(db: Database, paths: WorkspacePaths, case_id: str, *, l
             "status": str((bundle_quality.get("summary") or {}).get("status") or "unknown"),
             "count": (bundle_quality.get("summary") or {}).get("warning_count", 0),
             "summary": "Latest bundle-quality checks.",
-            "command": f"relic --root {paths.root} report write-bundle --case {case_id} --purpose review --output-dir {paths.outputs_dir(case_id) / 'reports' / 'review-bundle'}",
+            "command": f"relic --root {paths.root} report write-bundle --case {case_id} --purpose review",
         },
     ]
     return {
@@ -1677,7 +1715,7 @@ def case_runbook_report(db: Database, paths: WorkspacePaths, case_id: str, *, li
         if isinstance(item, dict) and item.get("status") not in {"ok", "current"} and item.get("command"):
             add(order, str(item["command"]), str(item.get("summary") or item.get("category") or "Review status item."))
             order += 1
-    add(order, f"uv run relic --root {root} report write-bundle --case {case_id} --purpose review --output-dir {paths.outputs_dir(case_id) / 'reports' / 'review-bundle'}", "Generate the review bundle.")
+    add(order, f"uv run relic --root {root} report write-bundle --case {case_id} --purpose review", "Generate the review bundle.")
     add(order + 1, f"uv run relic --root {root} report handoff-package --case {case_id} --bundle-dir {paths.outputs_dir(case_id) / 'reports' / 'review-bundle'} --output {paths.outputs_dir(case_id) / 'reports' / f'{case_id}-handoff.zip'}", "Package reports, packets, quality, and manifest for handoff.")
     return {"case_id": case_id, "summary": {"command_count": len(commands)}, "commands": commands[:limit], "review_status": status}
 
@@ -3832,7 +3870,7 @@ def build_parser() -> argparse.ArgumentParser:
     report_write_bundle = report_sub.add_parser("write-bundle")
     report_write_bundle.add_argument("--case", required=True, dest="case_id")
     report_write_bundle.add_argument("--limit", type=int, default=100)
-    report_write_bundle.add_argument("--output-dir", required=True)
+    report_write_bundle.add_argument("--output-dir", help="Directory for bundle files; defaults to cases/CASE_ID/outputs/reports/PURPOSE-bundle")
     report_write_bundle.add_argument("--purpose", choices=["full", "usb", "cloud", "execution", "memory", "triage", "review"], default="full")
     report_write_bundle.add_argument("--no-progress", action="store_true", help="Suppress timestamped bundle generation progress messages on stderr")
     report_handoff = report_sub.add_parser("handoff-package")
@@ -5994,7 +6032,7 @@ def run(args: argparse.Namespace) -> int:
         if args.resource == "report" and args.action == "regression-smoke":
             report = regression_smoke_report(db, args.case_id, limit=args.limit)
             if args.write_reports:
-                output_dir = Path(args.output_dir) if args.output_dir else paths.case_dir(args.case_id) / "reports" / "regression-smoke-bundle"
+                output_dir = Path(args.output_dir) if args.output_dir else _default_report_bundle_output_dir(paths, args.case_id, "regression-smoke")
                 report["written_reports"] = write_case_report_bundle(db, args.case_id, output_dir, limit=max(args.limit, 100), purpose="triage")
             write_report_output(
                 report,
@@ -6007,11 +6045,12 @@ def run(args: argparse.Namespace) -> int:
             return 0
 
         if args.resource == "report" and args.action == "write-bundle":
+            output_dir = Path(args.output_dir) if args.output_dir else _default_report_bundle_output_dir(paths, args.case_id, args.purpose)
             print_json(
                 write_case_report_bundle(
                     db,
                     args.case_id,
-                    Path(args.output_dir),
+                    output_dir,
                     limit=args.limit,
                     purpose=args.purpose,
                     progress=None if args.no_progress else print_progress,

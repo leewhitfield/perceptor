@@ -8,7 +8,7 @@ from pathlib import Path
 import duckdb
 
 import forensic_orchestrator.report_bundle as report_bundle
-from forensic_orchestrator.cli import write_case_report_bundle, write_handoff_package
+from forensic_orchestrator.cli import _default_report_bundle_output_dir, write_case_report_bundle, write_handoff_package
 from forensic_orchestrator.db import Database
 from forensic_orchestrator.evidence import create_case
 from forensic_orchestrator.paths import WorkspacePaths
@@ -357,6 +357,7 @@ def test_review_bundle_writes_operator_context_and_progress(tmp_path, monkeypatc
 
     names = {item["name"] for item in bundle["reports"]}
     assert {"activity-digest", "next-actions", "workspace-map", "artifact-search-sources", "changed-search-packets"} <= names
+    assert {"usb-summary", "external-storage", "usb-files", "usb-timeline"} <= names
     assert any("report bundle write report name=activity-digest" in message for message in messages)
     assert any("report bundle completed" in message for message in messages)
     report_index = json.loads((tmp_path / "review-bundle" / "report-index.json").read_text(encoding="utf-8"))
@@ -371,6 +372,12 @@ def test_review_bundle_writes_operator_context_and_progress(tmp_path, monkeypatc
     with zipfile.ZipFile(str(handoff["output"])) as archive:
         assert "handoff-manifest.json" in archive.namelist()
         assert "bundle/bundle-manifest.json" in archive.namelist()
+
+
+def test_report_bundle_default_output_dir_is_case_outputs(tmp_path):
+    paths = WorkspacePaths(tmp_path / "analysis")
+
+    assert _default_report_bundle_output_dir(paths, "case-1", "review") == paths.case_dir("case-1") / "outputs" / "reports" / "review-bundle"
 
 
 def test_report_bundle_import_many_warns_when_distinct_rebuild_hits_disk_full(tmp_path, monkeypatch):

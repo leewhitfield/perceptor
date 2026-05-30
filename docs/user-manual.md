@@ -838,7 +838,7 @@ uv run relic --root ROOT report artifact-search-sources --case CASE_ID --format 
 uv run relic --root ROOT report changed-search-packets --case CASE_ID --format md
 uv run relic --root ROOT report review-status --case CASE_ID --format table
 uv run relic --root ROOT report runbook --case CASE_ID --format md
-uv run relic --root ROOT report write-bundle --case CASE_ID --purpose review --output-dir REPORT_DIR
+uv run relic --root ROOT report write-bundle --case CASE_ID --purpose review
 uv run relic --root ROOT report handoff-package --case CASE_ID --bundle-dir REPORT_DIR --output CASE_ID-handoff.zip
 ```
 
@@ -846,8 +846,11 @@ Purpose bundles:
 
 - `review`: MCP/operator review pack with activity digest, next actions,
   workspace map, search-source inventory, lead summaries, saved packet index,
-  and changed search-packet summary.
+  changed search-packet summary, and USB/storage context.
 - `triage`: broad high-signal starting point.
+- `write-bundle` writes to `cases/CASE_ID/outputs/reports/PURPOSE-bundle`
+  by default. Use `--output-dir` only when you intentionally need a different
+  location.
 - `usb`: removable media, shellbags, shortcuts, object IDs, USN lifecycle.
 - `cloud`: cloud artifacts, opened-from-cloud, virtual mounts.
 - `execution`: execution, suspicious execution, provenance, remote access.
@@ -1043,8 +1046,7 @@ uv run relic --root ~/analysis/live-case report dashboard --case CASE_ID --forma
 uv run relic --root ~/analysis/live-case report unmapped-imports --case CASE_ID --format table
 uv run relic --root ~/analysis/live-case report write-bundle \
   --case CASE_ID \
-  --purpose usb \
-  --output-dir ~/analysis/live-case/cases/CASE_ID/outputs/reports/usb-bundle
+  --purpose usb
 ```
 
 ## Common End-to-End Disk Image Workflow
@@ -1069,6 +1071,5 @@ uv run relic --root ~/analysis/disk-case process \
 uv run relic --root ~/analysis/disk-case report dashboard --case CASE_ID --format table
 uv run relic --root ~/analysis/disk-case report write-bundle \
   --case CASE_ID \
-  --purpose full \
-  --output-dir ~/analysis/disk-case/cases/CASE_ID/outputs/reports/full-bundle
+  --purpose full
 ```

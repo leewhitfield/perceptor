@@ -186,8 +186,7 @@ Purpose bundles keep review output focused:
 ```bash
 uv run relic --root /analysis/case-root report write-bundle \
   --case CASE_ID \
-  --purpose review \
-  --output-dir /analysis/case-root/cases/CASE_ID/outputs/reports/review-bundle
+  --purpose review
 ```
 
 Supported purposes are `review`, `triage`, `usb`, `cloud`, `execution`,
