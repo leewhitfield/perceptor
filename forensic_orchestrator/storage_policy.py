@@ -24,6 +24,7 @@ DUCKDB_POLICY = StoragePolicyItem(
     purpose="Auditable analytics store for structured artifact facts, provenance, dedupe keys, and report-ready relationships.",
     examples=(
         "mft_entries",
+        "filesystem_entries",
         "usn_journal_entries",
         "shortcut_items",
         "registry_artifacts",

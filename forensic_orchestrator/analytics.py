@@ -137,6 +137,15 @@ ANALYTICS_TABLE_COLUMNS: dict[str, list[str]] = {
         "row_text", "row_sha256", "parser_status", "parser_error",
         "created_at",
     ],
+    "filesystem_entries": [
+        "id", "case_id", "computer_id", "image_id", "tool_output_id",
+        "tool_name", "source_csv", "row_number", "partition_id",
+        "filesystem_type", "source_root", "file_path", "parent_path",
+        "file_name", "extension", "file_size", "is_directory",
+        "created_utc", "modified_utc", "accessed_utc",
+        "metadata_changed_utc", "mode", "uid", "gid", "scan_status",
+        "error", "created_at",
+    ],
 }
 
 

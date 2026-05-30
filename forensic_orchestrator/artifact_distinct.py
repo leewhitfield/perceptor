@@ -26,6 +26,18 @@ EXTRA_SPECS: tuple[DistinctSpec, ...] = (
         ),
     ),
     DistinctSpec(
+        "filesystem_entries",
+        "filesystem_entries",
+        (
+            "image_id",
+            "partition_id",
+            "file_path",
+            "file_size",
+            "modified_utc",
+            "is_directory",
+        ),
+    ),
+    DistinctSpec(
         "evtx_events",
         "evtx_events",
         (

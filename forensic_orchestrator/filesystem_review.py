@@ -21,6 +21,7 @@ def rebuild_filesystem_review(db: Database, *, case_id: str, image_id: str | Non
         return len(rows)
     db.conn.execute(f"DELETE FROM filesystem_review WHERE {' AND '.join(where)}", params)
     _insert_mft_rows(db, case_id=case_id, image_id=image_id)
+    _insert_filesystem_entry_rows(db, case_id=case_id, image_id=image_id)
     _insert_usn_rows(db, case_id=case_id, image_id=image_id)
     _insert_logfile_rows(db, case_id=case_id, image_id=image_id)
     _insert_index_rows(db, case_id=case_id, image_id=image_id)
@@ -58,6 +59,46 @@ def _insert_mft_rows(db: Database, *, case_id: str, image_id: str | None) -> Non
           CASE WHEN lower(COALESCE(in_use, '')) = 'true' THEN 'mft_in_use' ELSE 'mft_not_in_use' END,
           '{{}}', datetime('now')
         FROM mft_entries
+        WHERE {where}
+        """,
+        params,
+    )
+
+
+def _insert_filesystem_entry_rows(db: Database, *, case_id: str, image_id: str | None) -> None:
+    where, params = _case_image_where("filesystem_entries", case_id, image_id)
+    db.conn.execute(
+        f"""
+        INSERT INTO filesystem_review (
+          id, case_id, computer_id, image_id, source_table, source_id, source_tool,
+          source_row_number, event_type, event_time, file_name, file_path, parent_path,
+          mft_entry_number, mft_sequence_number, parent_entry_number, parent_sequence_number,
+          in_use, is_directory, operation, reason, status, details_json, created_at
+        )
+        SELECT
+          lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-' ||
+          lower(hex(randomblob(2))) || '-' || lower(hex(randomblob(2))) || '-' ||
+          lower(hex(randomblob(6))),
+          case_id, computer_id, image_id, 'filesystem_entries', id, tool_name,
+          row_number, 'filesystem_listing',
+          COALESCE(NULLIF(modified_utc, ''), NULLIF(metadata_changed_utc, ''), NULLIF(accessed_utc, '')),
+          file_name, file_path, parent_path,
+          NULL, NULL, NULL, NULL,
+          'true', is_directory, NULL, 'mounted_filesystem_entry',
+          CASE WHEN scan_status = 'ok' THEN 'filesystem_present' ELSE 'filesystem_stat_error' END,
+          json_object(
+            'filesystem_type', filesystem_type,
+            'partition_id', partition_id,
+            'file_size', file_size,
+            'created_utc', created_utc,
+            'modified_utc', modified_utc,
+            'accessed_utc', accessed_utc,
+            'metadata_changed_utc', metadata_changed_utc,
+            'scan_status', scan_status,
+            'error', error
+          ),
+          datetime('now')
+        FROM filesystem_entries
         WHERE {where}
         """,
         params,
@@ -496,6 +537,49 @@ def _duckdb_filesystem_review_rows(db: Database, *, case_id: str, image_id: str 
                 reason="mft_record_present",
                 status="mft_in_use" if str(row.get("in_use") or "").lower() == "true" else "mft_not_in_use",
                 details={},
+                created_at=now,
+            )
+        )
+
+    for row in query_rows(
+        db,
+        "filesystem_entries",
+        f"""
+        SELECT *
+        FROM filesystem_entries
+        WHERE case_id = ?{image_filter}
+        """,
+        params,
+    ):
+        rows.append(
+            _review_row(
+                row,
+                source_table="filesystem_entries",
+                event_type="filesystem_listing",
+                event_time=_coalesce(row.get("modified_utc"), row.get("metadata_changed_utc"), row.get("accessed_utc")),
+                file_name=row.get("file_name"),
+                file_path=row.get("file_path"),
+                parent_path=row.get("parent_path"),
+                mft_entry_number=None,
+                mft_sequence_number=None,
+                parent_entry_number=None,
+                parent_sequence_number=None,
+                in_use="true",
+                is_directory=row.get("is_directory"),
+                operation=None,
+                reason="mounted_filesystem_entry",
+                status="filesystem_present" if str(row.get("scan_status") or "").lower() == "ok" else "filesystem_stat_error",
+                details={
+                    "filesystem_type": row.get("filesystem_type"),
+                    "partition_id": row.get("partition_id"),
+                    "file_size": row.get("file_size"),
+                    "created_utc": row.get("created_utc"),
+                    "modified_utc": row.get("modified_utc"),
+                    "accessed_utc": row.get("accessed_utc"),
+                    "metadata_changed_utc": row.get("metadata_changed_utc"),
+                    "scan_status": row.get("scan_status"),
+                    "error": row.get("error"),
+                },
                 created_at=now,
             )
         )

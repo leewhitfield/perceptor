@@ -8,6 +8,7 @@ from forensic_orchestrator.db import Database
 from forensic_orchestrator.models import Partition
 from forensic_orchestrator.mounting.bitlocker import BitLockerUnlockOptions, BitLockerUnlockResult, unlock_bitlocker_volume
 from forensic_orchestrator.mounting.workflow import mount_image, unmount_image
+from forensic_orchestrator.mounting.volume_mount import build_filesystem_mount_command
 from forensic_orchestrator.paths import WorkspacePaths
 from forensic_orchestrator.safety import EncryptedImageError, PartitionError
 
@@ -35,6 +36,30 @@ def test_dry_run_mount_records_jobs_without_dependencies(tmp_path):
     assert mount_row["raw_path"] == str(e01)
     assert mount_row["source_type"] == "direct-e01"
     assert mount_row["volume_mount_path"] is None
+
+
+def test_filesystem_mount_command_uses_kernel_mount_for_exfat():
+    command = build_filesystem_mount_command(
+        Path("/evidence/disk.img"),
+        Path("/mnt/volume"),
+        Partition(
+            id="part-001",
+            slot="001",
+            start_sector=2048,
+            end_sector=4096,
+            length=2048,
+            description="exFAT",
+        ),
+        filesystem_type="exfat",
+    )
+
+    assert command == [
+        "mount",
+        "-o",
+        "ro,loop,offset=1048576",
+        "/evidence/disk.img",
+        "/mnt/volume",
+    ]
 
 
 def test_mount_falls_back_to_ewfmount_when_direct_mmls_fails(tmp_path):

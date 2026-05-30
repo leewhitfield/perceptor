@@ -107,6 +107,13 @@ ARTIFACT_SEARCH_SPECS = [
         "timestamp": "modified_si",
     },
     {
+        "table": "filesystem_entries",
+        "category": "filesystem",
+        "fields": ["file_name", "parent_path", "file_path", "extension", "filesystem_type"],
+        "display": ["modified_utc", "file_name", "file_path", "filesystem_type", "file_size"],
+        "timestamp": "modified_utc",
+    },
+    {
         "table": "usn_journal_entries",
         "category": "filesystem",
         "fields": ["file_name", "full_path", "reason", "reason_flags", "source_file"],
@@ -1173,6 +1180,10 @@ def _join_path(parent: Any, name: Any) -> str | None:
 
 def mft_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str, Any]:
     return _table_report(db, case_id, "mft_entries", "mft_entries", limit)
+
+
+def filesystem_entries_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str, Any]:
+    return _table_report(db, case_id, "filesystem_entries", "filesystem_entries", limit)
 
 
 def usn_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str, Any]:
@@ -17448,30 +17459,55 @@ def users_report(db: Database, case_id: str) -> dict[str, Any]:
 
 def files_report(db: Database, case_id: str, *, user: str | None = None, limit: int = 100) -> dict[str, Any]:
     db.get_case(case_id)
-    params: list[Any] = [case_id]
-    user_filter = ""
+    rows: list[dict[str, Any]] = []
+    mft_params: list[Any] = [case_id]
+    mft_user_filter = ""
     if user:
-        user_filter = "AND (mft_entries.parent_path LIKE ? OR mft_entries.file_name LIKE ?)"
-        params.extend([f"%Users/{user}/%", f"%{user}%"])
-    params.append(limit)
-    rows = _query_report_rows(
-        db,
-        case_id,
-        "mft_entries",
-        f"""
-        SELECT *
-        FROM mft_entries
-        WHERE mft_entries.case_id = ? {user_filter}
-        ORDER BY mft_entries.parent_path, mft_entries.file_name
-        LIMIT ?
-        """,
-        params,
+        mft_user_filter = "AND (mft_entries.parent_path LIKE ? OR mft_entries.file_name LIKE ?)"
+        mft_params.extend([f"%Users/{user}/%", f"%{user}%"])
+    mft_params.append(limit)
+    rows.extend(
+        _query_report_rows(
+            db,
+            case_id,
+            "mft_entries",
+            f"""
+            SELECT *, 'mft_entries' AS source_table
+            FROM mft_entries
+            WHERE mft_entries.case_id = ? {mft_user_filter}
+            ORDER BY mft_entries.parent_path, mft_entries.file_name
+            LIMIT ?
+            """,
+            mft_params,
+        )
     )
+    fs_params: list[Any] = [case_id]
+    fs_user_filter = ""
+    if user:
+        fs_user_filter = "AND (filesystem_entries.parent_path LIKE ? OR filesystem_entries.file_name LIKE ?)"
+        fs_params.extend([f"%Users/{user}/%", f"%{user}%"])
+    fs_params.append(limit)
+    rows.extend(
+        _query_report_rows(
+            db,
+            case_id,
+            "filesystem_entries",
+            f"""
+            SELECT *, 'filesystem_entries' AS source_table
+            FROM filesystem_entries
+            WHERE filesystem_entries.case_id = ? {fs_user_filter}
+            ORDER BY filesystem_entries.parent_path, filesystem_entries.file_name
+            LIMIT ?
+            """,
+            fs_params,
+        )
+    )
+    rows = sorted(rows, key=lambda row: (str(row.get("parent_path") or ""), str(row.get("file_name") or "")))[:limit]
     _fill_computer_image_fields(db, case_id, rows)
     files = []
     for row in rows:
         item = dict(row)
-        item["correlations"] = _correlations_for_mft_entry(db, row["id"])
+        item["correlations"] = _correlations_for_mft_entry(db, row["id"]) if item.get("source_table") == "mft_entries" else []
         files.append(item)
     return {"case_id": case_id, "files": files, "total_returned": len(files)}
 
@@ -22351,6 +22387,7 @@ def _memory_extracted_indicators(value: Any) -> dict[str, list[str]]:
 def _memory_disk_reference_rows(db: Database, case_id: str, *, max_rows: int) -> list[dict[str, Any]]:
     specs = [
         ("mft_entries", "file", "id", "file_name", "coalesce(parent_path, '') || '/' || coalesce(file_name, '')", "NULL", "NULL"),
+        ("filesystem_entries", "file", "id", "file_name", "file_path", "NULL", "NULL"),
         ("usn_journal_entries", "file", "id", "file_name", "full_path", "NULL", "NULL"),
         ("windows_search_files", "windows_search", "id", "file_name", "item_path", "item_url", "NULL"),
         ("windows_search_gather_logs", "windows_search", "id", "source_name", "item_path", "item_url", "NULL"),
@@ -24600,6 +24637,7 @@ def _dossier_source_type(source_table: str | None, category: str | None = None) 
     table = source_table or ""
     if table in {
         "mft_entries",
+        "filesystem_entries",
         "usn_journal_entries",
         "ntfs_logfile_entries",
         "ntfs_index_entries",
@@ -24627,7 +24665,7 @@ def _dossier_source_type(source_table: str | None, category: str | None = None) 
 
 def _dossier_category(source_table: str | None) -> str:
     table = source_table or ""
-    if table in {"mft_entries", "usn_journal_entries", "ntfs_logfile_entries", "ntfs_index_entries", "ntfs_namespace_reconciliation", "filesystem_review", "recycle_items", "recycle_children", "zone_identifier_ads"}:
+    if table in {"mft_entries", "filesystem_entries", "usn_journal_entries", "ntfs_logfile_entries", "ntfs_index_entries", "ntfs_namespace_reconciliation", "filesystem_review", "recycle_items", "recycle_children", "zone_identifier_ads"}:
         return "filesystem"
     if table in {"shortcut_items"}:
         return "shortcuts"
@@ -24653,7 +24691,7 @@ def _dossier_confidence(source_table: str | None, *, path_matched: bool = False,
             return text
     if path_matched:
         return "high"
-    if source_table in {"mft_entries", "filesystem_review", "windows_search_files", "file_internal_metadata"}:
+    if source_table in {"mft_entries", "filesystem_entries", "filesystem_review", "windows_search_files", "file_internal_metadata"}:
         return "high"
     if source_table in {"shortcut_items", "windows_activities", "thumbcache_search_correlations", "copied_file_indicators"}:
         return "medium"
@@ -24882,6 +24920,8 @@ def _file_evidence_tags(
         tags.add("internal_metadata_present")
     if source_table == "mft_entries":
         tags.add("mft_entry_present")
+    if source_table == "filesystem_entries":
+        tags.add("filesystem_listing_present")
     if source_table == "shortcut_items":
         tags.add("shortcut_artifact_present")
     if detail and detail.get("content_length"):
@@ -24911,6 +24951,8 @@ def _group_evidence_tags(item: dict[str, Any]) -> list[str]:
         tags.add("internal_metadata_present")
     if "mft_entries" in tables:
         tags.add("mft_entry_present")
+    if "filesystem_entries" in tables:
+        tags.add("filesystem_listing_present")
     if "shortcut_items" in tables:
         tags.add("shortcut_artifact_present")
     return sorted(tags)

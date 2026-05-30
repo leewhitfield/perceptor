@@ -1,0 +1,192 @@
+from __future__ import annotations
+
+import csv
+import hashlib
+import os
+import stat as stat_module
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from forensic_orchestrator.db import Database, utc_now
+from forensic_orchestrator.models import EvidenceImage
+from forensic_orchestrator.paths import WorkspacePaths
+
+
+TOOL_NAME = "MountedFilesystemInventory"
+
+
+def _iso_from_timestamp(value: float | None) -> str | None:
+    if value is None:
+        return None
+    return datetime.fromtimestamp(value, tz=timezone.utc).isoformat()
+
+
+def _relative_path(root: Path, path: Path) -> str:
+    if path == root:
+        return ""
+    return path.relative_to(root).as_posix()
+
+
+def _extension(name: str, is_directory: bool) -> str:
+    if is_directory:
+        return ""
+    return Path(name).suffix.lower().lstrip(".")
+
+
+def _row_from_path(
+    *,
+    case_id: str,
+    image: EvidenceImage,
+    tool_output_id: str,
+    source_csv: Path,
+    row_number: int,
+    mount_path: Path,
+    path: Path,
+    partition_id: str | None,
+    filesystem_type: str | None,
+    created_at: str,
+) -> dict[str, Any]:
+    rel = _relative_path(mount_path, path)
+    parent = Path(rel).parent.as_posix() if rel and Path(rel).parent.as_posix() != "." else ""
+    name = path.name
+    try:
+        stat = path.stat(follow_symlinks=False)
+        is_directory = stat_module.S_ISDIR(stat.st_mode)
+        error = ""
+        status = "ok"
+    except OSError as exc:
+        stat = None
+        is_directory = False
+        error = str(exc)
+        status = "stat_error"
+    birth_time = getattr(stat, "st_birthtime", None) if stat is not None else None
+    return {
+        "id": str(uuid.uuid4()),
+        "case_id": case_id,
+        "computer_id": image.computer_id,
+        "image_id": image.id,
+        "tool_output_id": tool_output_id,
+        "tool_name": TOOL_NAME,
+        "source_csv": str(source_csv),
+        "row_number": row_number,
+        "partition_id": partition_id,
+        "filesystem_type": filesystem_type,
+        "source_root": str(mount_path),
+        "file_path": rel,
+        "parent_path": parent,
+        "file_name": name,
+        "extension": _extension(name, is_directory),
+        "file_size": str(stat.st_size) if stat is not None and not is_directory else "",
+        "is_directory": "true" if is_directory else "false",
+        "created_utc": _iso_from_timestamp(birth_time),
+        "modified_utc": _iso_from_timestamp(stat.st_mtime if stat is not None else None),
+        "accessed_utc": _iso_from_timestamp(stat.st_atime if stat is not None else None),
+        "metadata_changed_utc": _iso_from_timestamp(stat.st_ctime if stat is not None else None),
+        "mode": oct(stat.st_mode) if stat is not None else "",
+        "uid": str(stat.st_uid) if stat is not None else "",
+        "gid": str(stat.st_gid) if stat is not None else "",
+        "scan_status": status,
+        "error": error,
+        "created_at": created_at,
+    }
+
+
+def _write_csv(path: Path, rows: list[dict[str, Any]]) -> str:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    columns = [
+        "id", "case_id", "computer_id", "image_id", "tool_output_id",
+        "tool_name", "source_csv", "row_number", "partition_id",
+        "filesystem_type", "source_root", "file_path", "parent_path",
+        "file_name", "extension", "file_size", "is_directory",
+        "created_utc", "modified_utc", "accessed_utc",
+        "metadata_changed_utc", "mode", "uid", "gid", "scan_status",
+        "error", "created_at",
+    ]
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns)
+        writer.writeheader()
+        for row in rows:
+            output = {column: row.get(column, "") for column in columns}
+            writer.writerow(output)
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def scan_mounted_filesystem(
+    *,
+    db: Database,
+    paths: WorkspacePaths,
+    case_id: str,
+    image: EvidenceImage,
+    mount_path: Path,
+    partition_id: str | None = None,
+    filesystem_type: str | None = None,
+    replace_existing: bool = True,
+) -> dict[str, Any]:
+    if image.computer_id is None:
+        raise ValueError("Mounted filesystem inventory requires an image with a computer_id")
+    output_dir = paths.outputs_dir(case_id) / image.id / TOOL_NAME
+    csv_path = output_dir / "filesystem_entries.csv"
+    tool_output_id = str(uuid.uuid4())
+    created_at = utc_now()
+    rows: list[dict[str, Any]] = []
+    row_number = 0
+    for dirpath, dirnames, filenames in os.walk(mount_path, topdown=True, followlinks=False, onerror=lambda _exc: None):
+        current = Path(dirpath)
+        entries = [current / name for name in sorted(dirnames)] + [current / name for name in sorted(filenames)]
+        for entry in entries:
+            row_number += 1
+            rows.append(
+                _row_from_path(
+                    case_id=case_id,
+                    image=image,
+                    tool_output_id=tool_output_id,
+                    source_csv=csv_path,
+                    row_number=row_number,
+                    mount_path=mount_path,
+                    path=entry,
+                    partition_id=partition_id,
+                    filesystem_type=filesystem_type,
+                    created_at=created_at,
+                )
+            )
+    content_sha256 = _write_csv(csv_path, rows)
+    if replace_existing:
+        db.purge_tool_data(case_id=case_id, image_id=image.id, tool_names=[TOOL_NAME])
+    db.insert_tool_output(
+        {
+            "id": tool_output_id,
+            "case_id": case_id,
+            "computer_id": image.computer_id,
+            "image_id": image.id,
+            "tool_name": TOOL_NAME,
+            "output_type": "csv",
+            "path": csv_path,
+            "content_sha256": content_sha256,
+            "row_count": len(rows),
+        }
+    )
+    db.insert_filesystem_entries(rows)
+    db.log_activity(
+        case_id=case_id,
+        computer_id=image.computer_id,
+        image_id=image.id,
+        event="filesystem.inventory_completed",
+        message="Mounted filesystem inventory completed",
+        details={
+            "mount_path": str(mount_path),
+            "partition_id": partition_id,
+            "filesystem_type": filesystem_type,
+            "row_count": len(rows),
+            "output": str(csv_path),
+        },
+    )
+    return {
+        "case_id": case_id,
+        "image_id": image.id,
+        "tool_name": TOOL_NAME,
+        "filesystem_type": filesystem_type,
+        "row_count": len(rows),
+        "output": str(csv_path),
+    }

@@ -45,6 +45,7 @@ from .common_dialog import rebuild_common_dialog_items
 from .copied_indicators import rebuild_copied_file_indicators
 from .correlation import rebuild_file_correlations
 from .filesystem_review import rebuild_filesystem_review
+from .filesystem_inventory import scan_mounted_filesystem
 from .nested_evidence import rebuild_nested_evidence_inventory
 from .user_file_references import rebuild_user_controlled_file_references
 from .reports import (
@@ -165,6 +166,7 @@ from .reports import (
     file_name_drilldown_report,
     file_names_report,
     filesystem_review_report,
+    filesystem_entries_report,
     firefox_report,
     image_analysis_report,
     investigation_triage_dashboard_markdown,
@@ -2942,6 +2944,9 @@ def build_parser() -> argparse.ArgumentParser:
     report_mft = report_sub.add_parser("mft")
     report_mft.add_argument("--case", required=True, dest="case_id")
     report_mft.add_argument("--limit", type=int, default=100)
+    report_filesystem_entries = report_sub.add_parser("filesystem-entries")
+    report_filesystem_entries.add_argument("--case", required=True, dest="case_id")
+    report_filesystem_entries.add_argument("--limit", type=int, default=100)
     report_ntfs_index = report_sub.add_parser("ntfs-index")
     report_ntfs_index.add_argument("--case", required=True, dest="case_id")
     report_ntfs_index.add_argument("--limit", type=int, default=100)
@@ -4585,10 +4590,27 @@ def run(args: argparse.Namespace) -> int:
                 use_sudo_mount=args.use_sudo_mount,
                 bitlocker_options=_bitlocker_options_from_args(args),
             )
+            filesystem_inventory_result = None
             run_error: Exception | None = None
             memory_profile_result: dict[str, object] | None = None
             unmounted_path = None
             try:
+                mount_row = db.latest_mount(case_id, image.id)
+                if (
+                    volume
+                    and mount_row is not None
+                    and str(mount_row["filesystem_type"] or "").casefold() not in {"", "ntfs"}
+                    and not args.dry_run
+                ):
+                    filesystem_inventory_result = scan_mounted_filesystem(
+                        db=db,
+                        paths=paths,
+                        case_id=case_id,
+                        image=image,
+                        mount_path=volume,
+                        partition_id=mount_row["partition_id"],
+                        filesystem_type=mount_row["filesystem_type"],
+                    )
                 run_profile(
                     db=db,
                     paths=paths,
@@ -4662,6 +4684,7 @@ def run(args: argparse.Namespace) -> int:
                 "volume_mount_path": str(volume) if volume else None,
                 "unmounted_path": str(unmounted_path) if unmounted_path else None,
                 "kept_mounted": bool(args.filesystem and args.keep_mounted),
+                "filesystem_inventory": filesystem_inventory_result,
                 "memory_profile": memory_profile_result,
                 "warning_count": len(warnings),
                 "error_count": len(errors),
@@ -5617,11 +5640,29 @@ def run(args: argparse.Namespace) -> int:
                 use_sudo_mount=args.use_sudo_mount,
                 bitlocker_options=_bitlocker_options_from_args(args),
             )
+            mount_row = db.latest_mount(case.id, image.id)
+            filesystem_inventory_result = None
+            if (
+                volume
+                and mount_row is not None
+                and str(mount_row["filesystem_type"] or "").casefold() not in {"", "ntfs"}
+                and not args.dry_run
+            ):
+                filesystem_inventory_result = scan_mounted_filesystem(
+                    db=db,
+                    paths=paths,
+                    case_id=case.id,
+                    image=image,
+                    mount_path=volume,
+                    partition_id=mount_row["partition_id"],
+                    filesystem_type=mount_row["filesystem_type"],
+                )
             payload = {
                 "case_id": case.id,
                 "image_id": image.id,
                 "dry_run": args.dry_run,
                 "volume_mount_path": str(volume) if volume else None,
+                "filesystem_inventory": filesystem_inventory_result,
                 "processing_mode": (
                     "read-only-filesystem-mount-with-direct-tsk-fallback"
                     if args.filesystem
@@ -7500,6 +7541,10 @@ def run(args: argparse.Namespace) -> int:
 
         if args.resource == "report" and args.action == "mft":
             print_json(mft_report(db, args.case_id, limit=args.limit))
+            return 0
+
+        if args.resource == "report" and args.action == "filesystem-entries":
+            print_json(filesystem_entries_report(db, args.case_id, limit=args.limit))
             return 0
 
         if args.resource == "report" and args.action == "ntfs-index":

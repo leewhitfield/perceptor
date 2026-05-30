@@ -29,7 +29,7 @@ from .partitions import (
     select_windows_partition,
     validate_mmls_available,
 )
-from .volume_mount import build_ntfs_mount_command, validate_mount_available
+from .volume_mount import build_filesystem_mount_command, build_ntfs_mount_command, validate_mount_available
 from .volume_mount import build_umount_command
 
 
@@ -390,6 +390,7 @@ def _record_prepared_source(
     partition: Partition,
     mount_filesystem: bool,
     use_sudo_mount: bool,
+    filesystem_type: str | None = None,
 ) -> Path | None:
     db.log_activity(
         case_id=case_id,
@@ -407,9 +408,19 @@ def _record_prepared_source(
     volume_dir = paths.volume_mount_dir(case_id, partition.id)
     volume_dir.mkdir(parents=True, exist_ok=True)
     volume_mount_path: Path | None = None
-
     if mount_filesystem:
-        validate_mount_available()
+        if filesystem_type is None:
+            fsstat_result = _run_fsstat(
+                db=db,
+                case_id=case_id,
+                image_id=image.id,
+                computer_id=image.computer_id,
+                source=source_path,
+                output_folder=paths.jobs_dir(case_id) / "mount" / "fsstat-mount-selected",
+                offset_sectors=partition.start_sector,
+            )
+            filesystem_type = _filesystem_type_from_fsstat(fsstat_result.stdout) or _filesystem_type_from_partition(partition)
+        validate_mount_available(filesystem_type)
         require_dependency("sudo") if use_sudo_mount else None
         mount_source_path, source_type, cleanup_ewfmount = _ensure_ewf_raw_source(
             db=db,
@@ -421,10 +432,11 @@ def _record_prepared_source(
             use_sudo_mount=use_sudo_mount,
         )
         source_path = mount_source_path
-        command = build_ntfs_mount_command(
+        command = build_filesystem_mount_command(
             source_path,
             volume_dir,
             partition,
+            filesystem_type=filesystem_type,
             use_sudo=use_sudo_mount,
             norecover=True,
         )
@@ -435,7 +447,7 @@ def _record_prepared_source(
                 computer_id=image.computer_id,
                 tool_name="mount",
                 command=command,
-                output_folder=paths.jobs_dir(case_id) / "mount" / "ntfs",
+                output_folder=paths.jobs_dir(case_id) / "mount" / (filesystem_type or "filesystem"),
                 dry_run=False,
             )
         except Exception:
@@ -464,12 +476,13 @@ def _record_prepared_source(
             image_id=image.id,
             computer_id=image.computer_id,
             event="volume.mounted",
-            message="Mounted NTFS volume read-only",
+            message=f"Mounted {filesystem_type or 'filesystem'} volume read-only",
             details={
                 "mount_path": str(volume_dir),
                 "source": str(source_path),
+                "filesystem_type": filesystem_type,
                 "use_sudo": use_sudo_mount,
-                "options": "ro,show_sys_files,streams_interface=windows,norecover",
+                "options": "ro,show_sys_files,streams_interface=windows,norecover" if filesystem_type == "ntfs" else f"ro,loop,offset={partition.offset_bytes}",
             },
         )
 
@@ -484,6 +497,7 @@ def _record_prepared_source(
             "source_type": source_type,
             "volume_mount_path": volume_mount_path,
             "offset_bytes": partition.offset_bytes,
+            "filesystem_type": filesystem_type,
         }
     )
     return volume_mount_path
@@ -491,6 +505,66 @@ def _record_prepared_source(
 
 def _is_ntfs_fsstat_output(result: subprocess.CompletedProcess[str]) -> bool:
     return result.returncode == 0 and "File System Type: NTFS" in result.stdout
+
+
+def _filesystem_type_from_fsstat(stdout: str) -> str | None:
+    for line in stdout.splitlines():
+        if "File System Type:" not in line:
+            continue
+        value = line.split("File System Type:", 1)[1].strip().casefold()
+        if "exfat" in value:
+            return "exfat"
+        if "fat32" in value:
+            return "fat32"
+        if value == "fat" or " fat" in value or "fat" in value:
+            return "fat"
+        if "ntfs" in value:
+            return "ntfs"
+        return value or None
+    return None
+
+
+def _filesystem_type_from_partition(partition: Partition) -> str | None:
+    text = partition.description.casefold()
+    if "ntfs" in text and "exfat" in text:
+        return None
+    if "exfat" in text:
+        return "exfat"
+    if "fat32" in text:
+        return "fat32"
+    if "fat" in text:
+        return "fat"
+    if "ntfs" in text or "basic data" in text or "windows" in text:
+        return "ntfs"
+    return None
+
+
+def _latest_fsstat_stdout(
+    db: Database,
+    *,
+    case_id: str,
+    image_id: str,
+    output_folder: Path,
+) -> str:
+    stdout_path = output_folder / "stdout.txt"
+    if stdout_path.exists():
+        return stdout_path.read_text(errors="ignore")
+    row = db.conn.execute(
+        """
+        SELECT stdout_path
+        FROM jobs
+        WHERE case_id = ? AND image_id = ? AND tool_name = 'fsstat' AND output_folder = ?
+        ORDER BY start_time DESC
+        LIMIT 1
+        """,
+        (case_id, image_id, str(output_folder)),
+    ).fetchone()
+    if row is None:
+        return ""
+    try:
+        return Path(row["stdout_path"]).read_text(errors="ignore")
+    except OSError:
+        return ""
 
 
 def mount_image(
@@ -643,6 +717,7 @@ def mount_image(
             partition=_unlocked_partition(volume_partition),
             mount_filesystem=mount_filesystem,
             use_sudo_mount=use_sudo_mount,
+            filesystem_type="ntfs",
         )
     assert_not_encrypted(
         db=db,
@@ -679,6 +754,7 @@ def mount_image(
             ),
             mount_filesystem=mount_filesystem,
             use_sudo_mount=use_sudo_mount,
+            filesystem_type=_filesystem_type_from_fsstat(fsstat_result.stdout),
         )
 
     mmls_result = _run_mmls(
@@ -785,6 +861,7 @@ def mount_image(
                     partition=_unlocked_partition(volume_partition),
                     mount_filesystem=mount_filesystem,
                     use_sudo_mount=use_sudo_mount,
+                    filesystem_type="ntfs",
                 )
             assert_not_encrypted(
                 db=db,
@@ -821,6 +898,7 @@ def mount_image(
                     ),
                     mount_filesystem=mount_filesystem,
                     use_sudo_mount=use_sudo_mount,
+                    filesystem_type=_filesystem_type_from_fsstat(fsstat_result.stdout),
                 )
             raise PartitionError(f"mmls failed with exit code {mmls_result.returncode}")
 
@@ -882,6 +960,11 @@ def mount_image(
     )
     if unlocked is not None:
         source_path, source_type, partition = unlocked
+        selected_filesystem_type = "ntfs"
+    else:
+        selected_filesystem_type = _filesystem_type_from_fsstat(
+            _latest_fsstat_stdout(db, case_id=case_id, image_id=image.id, output_folder=mount_jobs / "fsstat-selected-partition")
+        ) or _filesystem_type_from_partition(partition)
     return _record_prepared_source(
         db=db,
         paths=paths,
@@ -892,6 +975,7 @@ def mount_image(
         partition=partition,
         mount_filesystem=mount_filesystem,
         use_sudo_mount=use_sudo_mount,
+        filesystem_type=selected_filesystem_type,
     )
 
 

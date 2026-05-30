@@ -243,6 +243,7 @@ TOOL_PURGE_TABLES = {
     },
     "PrefetchParser": {"prefetch_items", "prefetch_run_times", "tool_outputs"},
     "MFTECmd": {"parsed_rows", "mft_entries", "tool_outputs"},
+    "MountedFilesystemInventory": {"filesystem_entries", "tool_outputs"},
     "MFTECmdUSN": {"usn_journal_entries", "tool_outputs"},
     "USNRewind": {"usn_journal_entries", "tool_outputs"},
     "MFTECmdI30": {"ntfs_index_entries", "ntfs_index_bitmaps", "tool_outputs"},
@@ -446,6 +447,7 @@ class Database:
               ewf_mount_path TEXT NOT NULL,
               raw_path TEXT NOT NULL,
               source_type TEXT NOT NULL DEFAULT 'ewfmount',
+              filesystem_type TEXT,
               volume_mount_path TEXT,
               offset_bytes INTEGER,
               created_at TEXT NOT NULL
@@ -1295,6 +1297,42 @@ class Database:
               ON mft_entries(computer_id);
             CREATE INDEX IF NOT EXISTS idx_mft_entries_output
               ON mft_entries(tool_output_id);
+
+            CREATE TABLE IF NOT EXISTS filesystem_entries (
+              id TEXT PRIMARY KEY,
+              case_id TEXT NOT NULL REFERENCES cases(id),
+              computer_id TEXT NOT NULL REFERENCES computers(id),
+              image_id TEXT NOT NULL REFERENCES images(id),
+              tool_output_id TEXT NOT NULL REFERENCES tool_outputs(id),
+              tool_name TEXT NOT NULL,
+              source_csv TEXT NOT NULL,
+              row_number INTEGER NOT NULL,
+              partition_id TEXT,
+              filesystem_type TEXT,
+              source_root TEXT,
+              file_path TEXT,
+              parent_path TEXT,
+              file_name TEXT,
+              extension TEXT,
+              file_size TEXT,
+              is_directory TEXT,
+              created_utc TEXT,
+              modified_utc TEXT,
+              accessed_utc TEXT,
+              metadata_changed_utc TEXT,
+              mode TEXT,
+              uid TEXT,
+              gid TEXT,
+              scan_status TEXT,
+              error TEXT,
+              created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_filesystem_entries_case_path
+              ON filesystem_entries(case_id, file_path);
+            CREATE INDEX IF NOT EXISTS idx_filesystem_entries_case_name
+              ON filesystem_entries(case_id, file_name);
+            CREATE INDEX IF NOT EXISTS idx_filesystem_entries_output
+              ON filesystem_entries(tool_output_id);
 
             CREATE TABLE IF NOT EXISTS usn_journal_entries (
               id TEXT PRIMARY KEY,
@@ -4087,6 +4125,7 @@ class Database:
         )
         self._add_column_if_missing("images", "computer_id", "TEXT REFERENCES computers(id)")
         self._add_column_if_missing("mounts", "source_type", "TEXT NOT NULL DEFAULT 'ewfmount'")
+        self._add_column_if_missing("mounts", "filesystem_type", "TEXT")
         self._add_column_if_missing("jobs", "computer_id", "TEXT")
         self._add_column_if_missing("tool_outputs", "content_sha256", "TEXT")
         self._add_column_if_missing("timeline_events", "is_windows_old", "INTEGER NOT NULL DEFAULT 0")
@@ -4399,6 +4438,14 @@ class Database:
                 "birth_volume_id": "TEXT",
                 "birth_object_id": "TEXT",
                 "birth_domain_id": "TEXT",
+            },
+            "filesystem_entries": {
+                "partition_id": "TEXT", "filesystem_type": "TEXT", "source_root": "TEXT",
+                "file_path": "TEXT", "parent_path": "TEXT", "file_name": "TEXT",
+                "extension": "TEXT", "file_size": "TEXT", "is_directory": "TEXT",
+                "created_utc": "TEXT", "modified_utc": "TEXT", "accessed_utc": "TEXT",
+                "metadata_changed_utc": "TEXT", "mode": "TEXT", "uid": "TEXT",
+                "gid": "TEXT", "scan_status": "TEXT", "error": "TEXT",
             },
             "ntfs_index_entries": {
                 "directory_entry_number": "TEXT", "directory_path": "TEXT",
@@ -5271,8 +5318,8 @@ class Database:
             """
             INSERT INTO mounts (
               id, case_id, image_id, partition_id, ewf_mount_path, raw_path,
-              source_type, volume_mount_path, offset_bytes, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              source_type, filesystem_type, volume_mount_path, offset_bytes, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 values["id"],
@@ -5282,6 +5329,7 @@ class Database:
                 str(values["ewf_mount_path"]),
                 str(values["raw_path"]),
                 values.get("source_type", "ewfmount"),
+                values.get("filesystem_type"),
                 str(values.get("volume_mount_path")) if values.get("volume_mount_path") else None,
                 values.get("offset_bytes"),
                 utc_now(),
@@ -6756,6 +6804,21 @@ class Database:
             rows,
         )
 
+    def insert_filesystem_entries(self, rows: list[dict[str, Any]]) -> None:
+        self._insert_rows(
+            "filesystem_entries",
+            [
+                "id", "case_id", "computer_id", "image_id", "tool_output_id",
+                "tool_name", "source_csv", "row_number", "partition_id",
+                "filesystem_type", "source_root", "file_path", "parent_path",
+                "file_name", "extension", "file_size", "is_directory",
+                "created_utc", "modified_utc", "accessed_utc",
+                "metadata_changed_utc", "mode", "uid", "gid", "scan_status",
+                "error", "created_at",
+            ],
+            rows,
+        )
+
     def insert_usn_journal_entries(self, rows: list[dict[str, Any]]) -> None:
         self._insert_rows(
             "usn_journal_entries",
@@ -8210,6 +8273,8 @@ class Database:
               SELECT case_id, computer_id, image_id, tool_name, tool_output_id FROM shellbag_entries
               UNION ALL
               SELECT case_id, computer_id, image_id, tool_name, tool_output_id FROM usb_devices
+              UNION ALL
+              SELECT case_id, computer_id, image_id, tool_name, tool_output_id FROM filesystem_entries
               UNION ALL
               SELECT case_id, computer_id, image_id, tool_name, tool_output_id FROM mft_entries
               UNION ALL

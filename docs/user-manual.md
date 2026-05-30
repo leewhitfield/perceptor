@@ -235,6 +235,11 @@ Common processing switches:
 - `--include-windows-old`: process Windows.old artifacts into a Windows.old
   namespace.
 
+When `--filesystem` mounts a non-NTFS volume such as FAT32 or exFAT, Relic
+automatically writes a mounted filesystem inventory to
+`filesystem_entries`. This gives removable volumes a file listing even when
+there is no `$MFT`.
+
 Use `--dry-run` before a first profile run:
 
 ```bash
@@ -952,6 +957,8 @@ Within the workspace root, expect:
 - `cases/CASE_ID/`: case tree.
 - `cases/CASE_ID/outputs/`: tool outputs and generated reports.
 - `cases/CASE_ID/outputs/reports/`: markdown/JSON/CSV reports and manifests.
+- `cases/CASE_ID/outputs/IMAGE_ID/MountedFilesystemInventory/`: mounted
+  FAT/exFAT filesystem listings.
 - `cases/CASE_ID/artifacts/`: extracted artifacts.
 - `staging/`: temporary staged imports or zip members.
 - SQLite database at the workspace root.
