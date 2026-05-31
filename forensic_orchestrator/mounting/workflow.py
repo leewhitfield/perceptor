@@ -325,17 +325,17 @@ def _ensure_ewf_raw_source(
     source_type: str,
     use_sudo_mount: bool,
 ) -> tuple[Path, str, bool]:
-    if source_type != "direct-e01":
+    if source_type not in {"direct-e01", "direct-e01-volume"}:
         return source_path, source_type, False
 
     ewf_dir = paths.ewf_mount_dir(case_id)
     raw_path = paths.ewf_raw_path(case_id)
     try:
         if raw_path.exists():
-            return raw_path, "ewfmount", False
+            return raw_path, "ewfmount-volume" if source_type == "direct-e01-volume" else "ewfmount", False
     except PermissionError:
         if use_sudo_mount:
-            return raw_path, "ewfmount", False
+            return raw_path, "ewfmount-volume" if source_type == "direct-e01-volume" else "ewfmount", False
         raise
 
     validate_ewfmount_available()
@@ -355,7 +355,7 @@ def _ensure_ewf_raw_source(
         raw_exists = use_sudo_mount
     if not raw_exists:
         raise MountError(f"ewfmount completed but raw image was not found at {raw_path}")
-    return raw_path, "ewfmount", True
+    return raw_path, "ewfmount-volume" if source_type == "direct-e01-volume" else "ewfmount", True
 
 
 def _cleanup_ewfmount_after_failed_mount(
