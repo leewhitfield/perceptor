@@ -442,6 +442,7 @@ def _run_profile_impl(
     source_image: Path | None = None
     fallback_source_image: Path | None = None
     offset_sectors: int | None = None
+    filesystem_type: str | None = None
     mounted_volume_path = Path(mount_row["volume_mount_path"]) if mount_row and mount_row["volume_mount_path"] else None
     mounted_volume_active = bool(mounted_volume_path and mounted_volume_path.exists() and mounted_volume_path.is_mount())
     if mount_row and mounted_volume_path and not mounted_volume_active and not dry_run:
@@ -458,12 +459,14 @@ def _run_profile_impl(
         mount = Path(mount_row["volume_mount_path"])
         source_image = Path(mount_row["raw_path"])
         fallback_source_image = image.path
+        filesystem_type = mount_row["filesystem_type"]
         if mount_row["offset_bytes"] is not None:
             offset_sectors = int(mount_row["offset_bytes"]) // 512
     elif mount_row and mount_row["offset_bytes"] is not None:
         mount = paths.volume_mount_dir(case_id, mount_row["partition_id"] or "selected-partition")
         source_image = Path(mount_row["raw_path"])
         fallback_source_image = source_image if source_image.exists() else image.path
+        filesystem_type = mount_row["filesystem_type"]
         offset_sectors = int(mount_row["offset_bytes"]) // 512
     elif dry_run:
         mount = paths.volume_mount_dir(case_id, "dry-run-selected-partition")
@@ -624,6 +627,7 @@ def _run_profile_impl(
                     computer_id=image.computer_id,
                     raw_image=fallback_source_image or source_image or paths.ewf_raw_path(case_id),
                     offset_sectors=offset_sectors or 0,
+                    filesystem_type=filesystem_type,
                     output_folder=paths.jobs_dir(case_id) / "tsk" / image_id / "fls-fallback",
                     dry_run=dry_run,
                 )
@@ -648,6 +652,7 @@ def _run_profile_impl(
                 computer_id=image.computer_id,
                 raw_image=fallback_source_image or source_image or paths.ewf_raw_path(case_id),
                 offset_sectors=offset_sectors or 0,
+                filesystem_type=filesystem_type,
                 output_folder=paths.jobs_dir(case_id) / "tsk" / image_id / "fls",
                 dry_run=dry_run,
             )

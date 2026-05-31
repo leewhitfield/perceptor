@@ -29,7 +29,14 @@ from .partitions import (
     select_windows_partition,
     validate_mmls_available,
 )
-from .volume_mount import build_filesystem_mount_command, build_ntfs_mount_command, validate_mount_available
+from .volume_mount import (
+    build_filesystem_mount_command,
+    build_losetup_detach_command,
+    build_losetup_offset_command,
+    build_ntfs_loop_mount_command,
+    build_ntfs_mount_command,
+    validate_mount_available,
+)
 from .volume_mount import build_umount_command
 
 
@@ -89,6 +96,9 @@ def _record_command_job(
     command: list[str],
     output_folder: Path,
     result: subprocess.CompletedProcess[str],
+    nonzero_level: str = "error",
+    nonzero_event: str = "job.finished",
+    nonzero_message: str | None = None,
 ) -> None:
     output_folder.mkdir(parents=True, exist_ok=True)
     (output_folder / "stdout.txt").write_text(result.stdout)
@@ -115,13 +125,18 @@ def _record_command_job(
         case_id=case_id,
         image_id=image_id,
         computer_id=computer_id,
-        event="job.finished",
-        level="error" if result.returncode != 0 else "info",
-        message=f"Finished {tool_name} with exit code {result.returncode}",
+        event=nonzero_event if result.returncode != 0 else "job.finished",
+        level=nonzero_level if result.returncode != 0 else "info",
+        message=(
+            nonzero_message.format(tool_name=tool_name, exit_code=result.returncode)
+            if result.returncode != 0 and nonzero_message
+            else f"Finished {tool_name} with exit code {result.returncode}"
+        ),
         details={
             "command": command,
             "stdout_path": str(output_folder / "stdout.txt"),
             "stderr_path": str(output_folder / "stderr.txt"),
+            "anticipated_nonzero": result.returncode != 0 and nonzero_level != "error",
         },
     )
 
@@ -158,6 +173,7 @@ def _run_fsstat(
     source: Path,
     output_folder: Path,
     offset_sectors: int | None = None,
+    expected_probe_failure: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     command = build_fsstat_command(source, offset_sectors=offset_sectors)
     result = subprocess.run(command, capture_output=True, text=True, check=False)
@@ -170,6 +186,9 @@ def _run_fsstat(
         command=command,
         output_folder=output_folder,
         result=result,
+        nonzero_level="warning" if expected_probe_failure else "error",
+        nonzero_event="job.probe_finished" if expected_probe_failure else "job.finished",
+        nonzero_message="{tool_name} probe returned exit code {exit_code}; trying partition-table fallback" if expected_probe_failure else None,
     )
     return result
 
@@ -379,6 +398,79 @@ def _cleanup_ewfmount_after_failed_mount(
     )
 
 
+def _partition_as_loopback(
+    *,
+    db: Database,
+    paths: WorkspacePaths,
+    case_id: str,
+    image: EvidenceImage,
+    source_path: Path,
+    partition: Partition,
+    use_sudo_mount: bool,
+) -> Path:
+    result = JobRunner(db).run(
+        case_id=case_id,
+        image_id=image.id,
+        computer_id=image.computer_id,
+        tool_name="losetup",
+        command=build_losetup_offset_command(source_path, partition, use_sudo=use_sudo_mount),
+        output_folder=paths.jobs_dir(case_id) / "mount" / "losetup-partition",
+        dry_run=False,
+    )
+    loop_device = result.stdout_path.read_text(encoding="utf-8", errors="replace").strip().splitlines()
+    if not loop_device:
+        raise MountError(f"losetup completed but did not return a loop device; see {result.stdout_path}")
+    return Path(loop_device[-1].strip())
+
+
+def _mount_ntfs_loopback(
+    *,
+    db: Database,
+    paths: WorkspacePaths,
+    case_id: str,
+    image: EvidenceImage,
+    loop_device: Path,
+    volume_dir: Path,
+    use_sudo_mount: bool,
+) -> None:
+    JobRunner(db).run(
+        case_id=case_id,
+        image_id=image.id,
+        computer_id=image.computer_id,
+        tool_name="mount",
+        command=build_ntfs_loop_mount_command(
+            str(loop_device),
+            volume_dir,
+            use_sudo=use_sudo_mount,
+            norecover=True,
+        ),
+        output_folder=paths.jobs_dir(case_id) / "mount" / "ntfs-loop",
+        dry_run=False,
+    )
+
+
+def _detach_loopback(
+    *,
+    db: Database,
+    paths: WorkspacePaths,
+    case_id: str,
+    image: EvidenceImage,
+    loop_device: Path,
+    use_sudo_mount: bool,
+    reason: str,
+) -> None:
+    JobRunner(db).run(
+        case_id=case_id,
+        image_id=image.id,
+        computer_id=image.computer_id,
+        tool_name="losetup",
+        command=build_losetup_detach_command(str(loop_device), use_sudo=use_sudo_mount),
+        output_folder=paths.jobs_dir(case_id) / "mount" / f"losetup-detach-{reason}",
+        dry_run=False,
+        check=False,
+    )
+
+
 def _record_prepared_source(
     *,
     db: Database,
@@ -392,6 +484,7 @@ def _record_prepared_source(
     use_sudo_mount: bool,
     filesystem_type: str | None = None,
 ) -> Path | None:
+    selected_partition_offset_bytes = partition.offset_bytes
     db.log_activity(
         case_id=case_id,
         image_id=image.id,
@@ -440,8 +533,10 @@ def _record_prepared_source(
             use_sudo=use_sudo_mount,
             norecover=True,
         )
+        loop_device: Path | None = None
+        mounted_with_loopback = False
         try:
-            JobRunner(db).run(
+            direct_mount_result = JobRunner(db).run(
                 case_id=case_id,
                 image_id=image.id,
                 computer_id=image.computer_id,
@@ -449,27 +544,116 @@ def _record_prepared_source(
                 command=command,
                 output_folder=paths.jobs_dir(case_id) / "mount" / (filesystem_type or "filesystem"),
                 dry_run=False,
+                check=False,
+                nonzero_level="warning",
+                nonzero_event="job.fallback_probe_finished",
+                nonzero_message="{tool_name} direct partition mount returned exit code {exit_code}; trying loopback partition fallback",
             )
-        except Exception:
-            if "bitlocker" in source_type:
-                cleanup_bitlocker_layers(
+            if direct_mount_result.exit_code not in (0, None):
+                raise ToolError(
+                    f"direct filesystem mount returned exit code {direct_mount_result.exit_code}; "
+                    f"stdout={direct_mount_result.stdout_path} stderr={direct_mount_result.stderr_path}"
+                )
+        except Exception as direct_mount_error:
+            if (
+                use_sudo_mount
+                and (filesystem_type or "").casefold() == "ntfs"
+                and source_type in {"ewfmount", "zip-ewfmount"}
+            ):
+                db.log_activity(
+                    case_id=case_id,
+                    image_id=image.id,
+                    computer_id=image.computer_id,
+                    level="warning",
+                    event="volume.mount_offset_failed",
+                    message="Direct NTFS offset mount failed; retrying with read-only loopback partition view",
+                    details={
+                        "source": str(source_path),
+                        "offset_bytes": partition.offset_bytes,
+                        "error": str(direct_mount_error),
+                    },
+                )
+                try:
+                    loop_device = _partition_as_loopback(
+                        db=db,
+                        paths=paths,
+                        case_id=case_id,
+                        image=image,
+                        source_path=source_path,
+                        partition=partition,
+                        use_sudo_mount=use_sudo_mount,
+                    )
+                    _mount_ntfs_loopback(
+                        db=db,
+                        paths=paths,
+                        case_id=case_id,
+                        image=image,
+                        loop_device=loop_device,
+                        volume_dir=volume_dir,
+                        use_sudo_mount=use_sudo_mount,
+                    )
+                    source_path = loop_device
+                    source_type = f"{source_type}-loop"
+                    partition = Partition(
+                        id=partition.id,
+                        slot=partition.slot,
+                        start_sector=0,
+                        end_sector=partition.length,
+                        length=partition.length,
+                        description=f"Loopback partition view of {partition.description}",
+                        sector_size=partition.sector_size,
+                    )
+                    mounted_with_loopback = True
+                except Exception:
+                    if loop_device is not None:
+                        _detach_loopback(
+                            db=db,
+                            paths=paths,
+                            case_id=case_id,
+                            image=image,
+                            loop_device=loop_device,
+                            use_sudo_mount=use_sudo_mount,
+                            reason="failed-mount",
+                        )
+                    if "bitlocker" in source_type:
+                        cleanup_bitlocker_layers(
+                            db=db,
+                            paths=paths,
+                            case_id=case_id,
+                            image=image,
+                            cleanup=_latest_bitlocker_cleanup(db, case_id=case_id, image_id=image.id),
+                            use_sudo=use_sudo_mount,
+                            dry_run=False,
+                        )
+                    _cleanup_ewfmount_after_failed_mount(
+                        db=db,
+                        paths=paths,
+                        case_id=case_id,
+                        image=image,
+                        source_type=source_type,
+                        cleanup_enabled=cleanup_ewfmount,
+                    )
+                    raise
+            else:
+                if "bitlocker" in source_type:
+                    cleanup_bitlocker_layers(
+                        db=db,
+                        paths=paths,
+                        case_id=case_id,
+                        image=image,
+                        cleanup=_latest_bitlocker_cleanup(db, case_id=case_id, image_id=image.id),
+                        use_sudo=use_sudo_mount,
+                        dry_run=False,
+                    )
+                _cleanup_ewfmount_after_failed_mount(
                     db=db,
                     paths=paths,
                     case_id=case_id,
                     image=image,
-                    cleanup=_latest_bitlocker_cleanup(db, case_id=case_id, image_id=image.id),
-                    use_sudo=use_sudo_mount,
-                    dry_run=False,
+                    source_type=source_type,
+                    cleanup_enabled=cleanup_ewfmount,
                 )
-            _cleanup_ewfmount_after_failed_mount(
-                db=db,
-                paths=paths,
-                case_id=case_id,
-                image=image,
-                source_type=source_type,
-                cleanup_enabled=cleanup_ewfmount,
-            )
-            raise
+                raise
         volume_mount_path = volume_dir
         db.log_activity(
             case_id=case_id,
@@ -482,6 +666,7 @@ def _record_prepared_source(
                 "source": str(source_path),
                 "filesystem_type": filesystem_type,
                 "use_sudo": use_sudo_mount,
+                "loop_device": str(loop_device) if mounted_with_loopback and loop_device is not None else None,
                 "options": "ro,show_sys_files,streams_interface=windows,norecover" if filesystem_type == "ntfs" else f"ro,loop,offset={partition.offset_bytes}",
             },
         )
@@ -496,7 +681,7 @@ def _record_prepared_source(
             "raw_path": source_path,
             "source_type": source_type,
             "volume_mount_path": volume_mount_path,
-            "offset_bytes": partition.offset_bytes,
+            "offset_bytes": selected_partition_offset_bytes,
             "filesystem_type": filesystem_type,
         }
     )
@@ -676,6 +861,7 @@ def mount_image(
         computer_id=image.computer_id,
         source=source_path,
         output_folder=mount_jobs / "fsstat-direct",
+        expected_probe_failure=True,
     )
     direct_evidence = encrypted_filesystem_evidence(stdout=fsstat_result.stdout, stderr=fsstat_result.stderr)
     if is_bitlocker_evidence(direct_evidence) and bitlocker_options and bitlocker_options.enabled and mount_filesystem:
@@ -1036,6 +1222,26 @@ def unmount_image(
             dry_run=dry_run,
         )
     if source_type in {"ewfmount", "ewfmount-volume"} or source_type.startswith(("ewfmount-", "zip-ewfmount-")):
+        if source_type.endswith("-loop"):
+            loop_device = Path(mount_row["raw_path"])
+            if not dry_run:
+                _detach_loopback(
+                    db=db,
+                    paths=paths,
+                    case_id=case_id,
+                    image=image,
+                    loop_device=loop_device,
+                    use_sudo_mount=use_sudo_mount,
+                    reason="unmount",
+                )
+            db.log_activity(
+                case_id=case_id,
+                image_id=image.id,
+                computer_id=image.computer_id,
+                event="loopback.detached" if not dry_run else "loopback.detach_dry_run",
+                message="Detached read-only loopback partition view" if not dry_run else "Dry-run recorded loopback detach",
+                details={"loop_device": str(loop_device), "use_sudo": use_sudo_mount},
+            )
         ewf_mount_path = Path(mount_row["ewf_mount_path"])
         if not dry_run and not (ewf_mount_path.exists() and ewf_mount_path.is_mount()):
             db.log_activity(

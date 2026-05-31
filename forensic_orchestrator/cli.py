@@ -46,7 +46,7 @@ from .common_dialog import rebuild_common_dialog_items
 from .copied_indicators import rebuild_copied_file_indicators
 from .correlation import rebuild_file_correlations
 from .filesystem_review import rebuild_filesystem_review
-from .filesystem_inventory import scan_mounted_filesystem
+from .filesystem_inventory import scan_mounted_filesystem, scan_tsk_filesystem
 from .deleted_file_recovery import recover_deleted_files
 from .nested_evidence import rebuild_nested_evidence_inventory
 from .user_file_references import rebuild_user_controlled_file_references
@@ -361,7 +361,7 @@ from .standalone import (
 from .timeline_dedupe import rebuild_timeline_windows_old_dedupe
 from .tools.profiles import profile_extraction_preview, run_profile
 from .tools.registry import ToolRegistry
-from .tools.cloud_server_import import import_cloud_server_logs_to_csv
+from .tools.cloud_server_import import cloud_server_import_diagnostics, import_cloud_server_logs_to_csv
 from .tools.ingest import ingest_csv_output
 from .tools.carve import (
     scan_range_row,
@@ -428,6 +428,14 @@ def _cloud_or_memory_evidence_ids(
 
 def write_text_output(text: str, output: str | None = None) -> None:
     text = sanitize_report_text(text)
+    if output:
+        Path(output).write_text(text, encoding="utf-8")
+    else:
+        print(text)
+
+
+def write_json_output(value: object, output: str | None = None) -> None:
+    text = json.dumps(sanitize_report_paths(value), indent=2, default=str)
     if output:
         Path(output).write_text(text, encoding="utf-8")
     else:
@@ -571,7 +579,7 @@ def write_report_output(report: dict[str, object], rows: list[dict[str, object]]
     elif fmt == "table":
         write_text_output(generic_table(title, rows, columns), output)
     else:
-        write_text_output(json.dumps(report, indent=2, default=str), output)
+        write_json_output(report, output)
 
 
 def _mount_path_state(path: Path) -> tuple[str, str]:
@@ -599,6 +607,7 @@ def cleanup_stale_mounts(
     case_id: str,
     apply: bool = False,
     use_sudo_mount: bool = False,
+    include_orphan_loops: bool = False,
 ) -> dict[str, object]:
     db.get_case(case_id)
     rows = [
@@ -650,6 +659,13 @@ def cleanup_stale_mounts(
             else:
                 result["status"] = state
             results.append(result)
+    if include_orphan_loops:
+        results.extend(
+            _cleanup_orphan_ewf_loop_devices(
+                apply=apply,
+                use_sudo_mount=use_sudo_mount,
+            )
+        )
     return {
         "case_id": case_id,
         "apply": apply,
@@ -659,6 +675,58 @@ def cleanup_stale_mounts(
         "failed_count": sum(1 for row in results if row.get("status") == "failed"),
         "results": results,
     }
+
+
+def _cleanup_orphan_ewf_loop_devices(*, apply: bool, use_sudo_mount: bool) -> list[dict[str, object]]:
+    losetup = shutil.which("losetup")
+    if not losetup:
+        return []
+    completed = subprocess.run([losetup, "-a"], capture_output=True, text=True, check=False)
+    if completed.returncode != 0:
+        return [
+            {
+                "path_type": "loop_device",
+                "state": "unknown",
+                "action": "none",
+                "status": "failed",
+                "stderr": completed.stderr.strip(),
+            }
+        ]
+    results: list[dict[str, object]] = []
+    pattern = re.compile(r"^(?P<device>/dev/loop\d+):.*\((?P<backing>[^)]+)\)")
+    for line in completed.stdout.splitlines():
+        match = pattern.match(line.strip())
+        if not match:
+            continue
+        backing = match.group("backing")
+        if Path(backing).name not in {"ewf1", "ewf2", "ewf3"}:
+            continue
+        device = match.group("device")
+        command = [losetup, "-d", device]
+        if use_sudo_mount:
+            command = ["sudo", "-n", *command]
+        result: dict[str, object] = {
+            "path_type": "loop_device",
+            "path": device,
+            "backing_file": backing,
+            "state": "orphan_loop",
+            "action": "dry_run",
+            "status": "would_detach",
+            "command": command,
+        }
+        if apply:
+            detached = subprocess.run(command, capture_output=True, text=True, check=False)
+            result.update(
+                {
+                    "action": "detach",
+                    "returncode": detached.returncode,
+                    "stdout": detached.stdout.strip(),
+                    "stderr": detached.stderr.strip(),
+                    "status": "detached" if detached.returncode == 0 else "failed",
+                }
+            )
+        results.append(result)
+    return results
 
 
 def _add_bitlocker_unlock_args(parser: argparse.ArgumentParser) -> None:
@@ -1153,7 +1221,7 @@ def write_case_report_bundle(
         if extension == "md":
             write_text_output(str(payload), str(path))
         else:
-            write_text_output(json.dumps(sanitize_report_paths(payload), indent=2, default=str), str(path))
+            write_json_output(payload, str(path))
         written.append({"name": stem, "title": title, "path": str(path), "format": extension})
     csv_builders: list[tuple[str, str, Callable[[], list[dict[str, object]]]]] = [
         ("user-intent", "User intent artifacts CSV", lambda: user_intent_artifacts_export_rows(user_intent())),
@@ -1183,7 +1251,7 @@ def write_case_report_bundle(
         _progress(progress, "report bundle write quality")
         quality_path = output_dir / "bundle-quality.json"
         quality = _report_bundle_quality_report(case_id=case_id, purpose=purpose, csv_exports=csv_quality_inputs, reports=written, packets=packet_entries)
-        write_text_output(json.dumps(quality, indent=2, default=str), str(quality_path))
+        write_json_output(quality, str(quality_path))
         written.append({"name": "bundle-quality", "title": "Bundle quality", "path": str(quality_path), "format": "json"})
     _progress(progress, "report bundle write index")
     overview_report = overview() if wanted("case-overview") or wanted("executive-summary") else {}
@@ -1254,7 +1322,7 @@ def write_case_report_bundle(
             "total_written": len(written) + 2,
         },
     }
-    write_text_output(json.dumps(sanitize_report_paths(report_index), indent=2, default=str), str(report_index_path))
+    write_json_output(report_index, str(report_index_path))
     manifest_path = output_dir / "bundle-manifest.json"
     manifest = _write_bundle_manifest(output_dir, case_id=case_id, purpose=purpose)
     _progress(progress, f"report bundle completed reports={len(written)} packets={len(packet_entries)}")
@@ -1342,7 +1410,7 @@ def _write_bundle_manifest(output_dir: Path, *, case_id: str, purpose: str) -> d
         },
         "files": files,
     }
-    write_text_output(json.dumps(sanitize_report_paths(manifest), indent=2, default=str), str(output_dir / "bundle-manifest.json"))
+    write_json_output(manifest, str(output_dir / "bundle-manifest.json"))
     return manifest
 
 
@@ -2157,7 +2225,7 @@ def _icat_offset_for_image(db: Database, case_id: str, image_id: str) -> int:
     try:
         row = db.conn.execute(
             """
-            SELECT offset_bytes
+            SELECT offset_bytes, raw_path, source_type
             FROM mounts
             WHERE case_id = ? AND image_id = ? AND offset_bytes IS NOT NULL
             ORDER BY created_at DESC
@@ -2167,12 +2235,54 @@ def _icat_offset_for_image(db: Database, case_id: str, image_id: str) -> int:
         ).fetchone()
     except Exception:
         row = None
-    if not row or row["offset_bytes"] is None:
-        return 0
+    offset = _offset_sectors_from_mount_row(row) if row else None
+    if offset is not None:
+        return offset
+    return _icat_offset_from_partition_activity(db, case_id, image_id)
+
+
+def _offset_sectors_from_mount_row(row: Any) -> int | None:
+    if row is None or row["offset_bytes"] is None:
+        return None
     try:
-        return int(row["offset_bytes"]) // 512
+        offset_bytes = int(row["offset_bytes"])
     except (TypeError, ValueError):
-        return 0
+        return None
+    raw_path = str(row["raw_path"] or "")
+    source_type = str(row["source_type"] or "")
+    if offset_bytes == 0 and (raw_path.startswith("/dev/loop") or source_type.endswith("-loop")):
+        return None
+    return offset_bytes // 512
+
+
+def _icat_offset_from_partition_activity(db: Database, case_id: str, image_id: str) -> int:
+    try:
+        rows = db.conn.execute(
+            """
+            SELECT details_json
+            FROM activity_log
+            WHERE case_id = ? AND image_id = ? AND event = 'partition.selected'
+            ORDER BY created_at DESC
+            LIMIT 10
+            """,
+            (case_id, image_id),
+        ).fetchall()
+    except Exception:
+        rows = []
+    for row in rows:
+        try:
+            details = json.loads(row["details_json"] or "{}")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        for key, divisor in (("offset_sectors", 1), ("offset_bytes", 512)):
+            value = details.get(key)
+            if value in (None, ""):
+                continue
+            try:
+                return int(value) // divisor
+            except (TypeError, ValueError):
+                continue
+    return 0
 
 
 def _safe_memory_extract_name(value: str) -> str:
@@ -2473,6 +2583,18 @@ def build_parser() -> argparse.ArgumentParser:
     image_stale.add_argument("--case", required=True, dest="case_id")
     image_stale.add_argument("--apply", action="store_true", help="Unmount stale mount paths; default is dry-run")
     image_stale.add_argument("--sudo", action="store_true", dest="use_sudo_mount")
+    image_stale.add_argument(
+        "--include-orphan-loops",
+        action="store_true",
+        help="Also report/detach unmounted loop devices backed by temporary EWF files such as /ewf1.",
+    )
+    image_fs_inventory = image_sub.add_parser("filesystem-inventory")
+    image_fs_inventory.add_argument("--case", required=True, dest="case_id")
+    image_fs_inventory.add_argument("--image", required=True, dest="image_id")
+    image_fs_inventory.add_argument("--offset-sectors", type=int, required=True)
+    image_fs_inventory.add_argument("--filesystem-type", required=True)
+    image_fs_inventory.add_argument("--partition-id")
+    image_fs_inventory.add_argument("--append", action="store_true", help="Append instead of replacing this image's prior TSK filesystem inventory")
 
     cloud = subparsers.add_parser("cloud")
     cloud_sub = cloud.add_subparsers(dest="action", required=True)
@@ -2492,6 +2614,11 @@ def build_parser() -> argparse.ArgumentParser:
     memory_strings.add_argument("--image", dest="image_id")
     memory_strings.add_argument("--min-length", type=int, default=6)
     memory_strings.add_argument("--no-decompress-hiberfil", action="store_true")
+    memory_strings.add_argument(
+        "--source-artifact-type",
+        choices=["memory", "pagefile", "hiberfil", "swapfile", "crash_dump", "process_dump", "full_memory_dump"],
+        help="Override memory artifact classification when the filename is ambiguous, such as a full-memory .dmp capture.",
+    )
     memory_crash_dumps = memory_sub.add_parser("crash-dumps")
     memory_crash_dumps.add_argument("--case", required=True, dest="case_id")
     memory_crash_dumps.add_argument("--computer", dest="computer_id")
@@ -5324,7 +5451,9 @@ def run(args: argparse.Namespace) -> int:
             )
             output_dir = paths.case_dir(args.case_id) / "supplemental" / "cloud-server-logs" / str(uuid.uuid4())
             csv_path = import_cloud_server_logs_to_csv(source, output_dir, provider=args.provider, service=args.service)
+            diagnostics = cloud_server_import_diagnostics(source)
             output_id = str(uuid.uuid4())
+            row_count = _count_csv_rows(csv_path)
             db.insert_tool_output(
                 {
                     "id": output_id,
@@ -5335,7 +5464,7 @@ def run(args: argparse.Namespace) -> int:
                     "tool_name": "CloudServerLogImporter",
                     "output_type": "csv",
                     "path": csv_path,
-                    "row_count": _count_csv_rows(csv_path),
+                    "row_count": row_count,
                 }
             )
             imported = ingest_csv_output(
@@ -5347,7 +5476,27 @@ def run(args: argparse.Namespace) -> int:
                 tool_name="CloudServerLogImporter",
                 path=csv_path,
             )
-            print_json({"case_id": args.case_id, "computer_id": computer_id, "image_id": image_id, "output": csv_path, "imported_rows": imported})
+            if row_count == 0 and diagnostics.get("status") != "ok":
+                db.log_activity(
+                    case_id=args.case_id,
+                    computer_id=computer_id,
+                    image_id=image_id,
+                    event="cloud.import_unsupported_layout",
+                    level="warning",
+                    message="Cloud import source did not contain supported audit-log rows",
+                    details={"source_path": str(source), **diagnostics},
+                )
+            print_json(
+                {
+                    "case_id": args.case_id,
+                    "computer_id": computer_id,
+                    "image_id": image_id,
+                    "output": csv_path,
+                    "imported_rows": imported,
+                    "source_status": diagnostics.get("status", "ok") if row_count == 0 else "ok",
+                    "source_status_reason": diagnostics.get("reason", "") if row_count == 0 else "",
+                }
+            )
             return 0
 
         if args.resource == "memory" and args.action == "strings":
@@ -5365,6 +5514,7 @@ def run(args: argparse.Namespace) -> int:
                 output_dir,
                 min_length=args.min_length,
                 decompress_hiberfil=not args.no_decompress_hiberfil,
+                source_artifact_type=args.source_artifact_type,
             )
             output_id = str(uuid.uuid4())
             db.insert_tool_output(
@@ -5851,8 +6001,27 @@ def run(args: argparse.Namespace) -> int:
                     case_id=args.case_id,
                     apply=args.apply,
                     use_sudo_mount=args.use_sudo_mount,
+                    include_orphan_loops=args.include_orphan_loops,
                 )
             )
+            return 0
+
+        if args.resource == "image" and args.action == "filesystem-inventory":
+            case = db.get_case(args.case_id)
+            image = db.get_image(args.image_id, case.id)
+            result = scan_tsk_filesystem(
+                db=db,
+                paths=paths,
+                case_id=case.id,
+                image=image,
+                raw_image=image.path,
+                offset_sectors=args.offset_sectors,
+                partition_id=args.partition_id,
+                filesystem_type=args.filesystem_type,
+                replace_existing=not args.append,
+            )
+            result["filesystem_review_count"] = rebuild_filesystem_review(db, case_id=case.id, image_id=image.id)
+            print_json(result)
             return 0
 
         if args.resource == "vsc" and args.action == "list":

@@ -30,6 +30,7 @@ def scan_memory_strings_to_csv(
     min_length: int = 6,
     context_limit: int = 500,
     decompress_hiberfil: bool = True,
+    source_artifact_type: str | None = None,
 ) -> tuple[Path, dict[str, str]]:
     output_dir.mkdir(parents=True, exist_ok=True)
     terms = terms or DEFAULT_TERMS
@@ -58,6 +59,7 @@ def scan_memory_strings_to_csv(
     output = output_dir / "MemoryStringScanner.csv"
     scanner = "bstrings" if _bstrings_command() else "strings"
     term_file = _write_bstrings_terms(output_dir, terms) if scanner == "bstrings" else None
+    artifact_type = source_artifact_type or memory_artifact_type(source)
     with output.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(
             handle,
@@ -89,7 +91,7 @@ def scan_memory_strings_to_csv(
             ):
                 row.update(
                     {
-                        "source_artifact_type": memory_artifact_type(source),
+                        "source_artifact_type": artifact_type,
                         "source_path": str(source),
                         "scanned_path": str(scanned_path),
                         "decompressed_path": decompressed_path,
@@ -99,7 +101,7 @@ def scan_memory_strings_to_csv(
                 writer.writerow(row)
     return output, {
         "source_path": str(source),
-        "source_artifact_type": memory_artifact_type(source),
+        "source_artifact_type": artifact_type,
         "scanner": scanner,
         "decompress_status": decompress_status,
         "decompress_error": decompress_error,

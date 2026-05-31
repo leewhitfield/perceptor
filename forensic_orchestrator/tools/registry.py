@@ -94,7 +94,11 @@ def _resolve_executable(executable: str | None) -> str | None:
     eztools_root = os.environ.get("EZTOOLS_ROOT")
     default_prefix = "/opt/eztools/"
     if eztools_root and executable.startswith(default_prefix):
-        return str(Path(eztools_root) / executable.removeprefix(default_prefix))
+        candidate = Path(eztools_root) / executable.removeprefix(default_prefix)
+        resolved = _resolve_existing_or_nested(candidate)
+        if resolved is not None:
+            return str(resolved)
+        return str(candidate)
     local_eztools_root = Path.home() / "tools" / "eztools"
     if executable.startswith(default_prefix) and local_eztools_root.exists() and not Path(executable).exists():
         local_candidate = local_eztools_root / executable.removeprefix(default_prefix)
@@ -104,6 +108,15 @@ def _resolve_executable(executable: str | None) -> str | None:
         if nested:
             return str(nested[0])
     return executable
+
+
+def _resolve_existing_or_nested(candidate: Path) -> Path | None:
+    if candidate.exists():
+        return candidate
+    if not candidate.parent.exists():
+        return None
+    matches = sorted(path for path in candidate.parent.rglob(candidate.name) if path.is_file())
+    return matches[0] if matches else None
 
 
 def render_template(

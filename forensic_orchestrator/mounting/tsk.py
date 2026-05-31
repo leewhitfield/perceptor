@@ -26,8 +26,19 @@ class FlsEntry:
         return not self.kind.startswith("-/")
 
 
-def build_fls_command(raw_image: Path, offset_sectors: int) -> list[str]:
-    return ["fls", "-f", "ntfs", "-r", "-p", "-o", str(offset_sectors), str(raw_image)]
+def _tsk_filesystem_type(filesystem_type: str | None) -> str:
+    normalized = (filesystem_type or "ntfs").strip().casefold().replace("_", "").replace("-", "")
+    if normalized in {"fat", "fat12", "fat16", "fat32", "vfat", "msdos"}:
+        return "fat"
+    if normalized in {"exfat"}:
+        return "exfat"
+    if normalized in {"ntfs"}:
+        return "ntfs"
+    return filesystem_type or "ntfs"
+
+
+def build_fls_command(raw_image: Path, offset_sectors: int, *, filesystem_type: str | None = None) -> list[str]:
+    return ["fls", "-f", _tsk_filesystem_type(filesystem_type), "-r", "-p", "-o", str(offset_sectors), str(raw_image)]
 
 
 def build_icat_command(raw_image: Path, offset_sectors: int, inode: str) -> list[str]:
@@ -75,10 +86,11 @@ def list_files(
     computer_id: str | None,
     raw_image: Path,
     offset_sectors: int,
+    filesystem_type: str | None = None,
     output_folder: Path,
     dry_run: bool,
 ) -> list[FlsEntry]:
-    command = build_fls_command(raw_image, offset_sectors)
+    command = build_fls_command(raw_image, offset_sectors, filesystem_type=filesystem_type)
     output_folder.mkdir(parents=True, exist_ok=True)
     stdout_path = output_folder / "stdout.txt"
     stderr_path = output_folder / "stderr.txt"

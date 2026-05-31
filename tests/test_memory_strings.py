@@ -51,6 +51,21 @@ def test_memory_string_scanner_records_targeted_hits(tmp_path):
     assert ("credentials", "token", "pagefile") in [tuple(row) for row in rows]
 
 
+def test_memory_string_scanner_allows_explicit_artifact_type(tmp_path):
+    source = tmp_path / "MAYAS-20251126-192540.dmp"
+    source.write_bytes(b"noise password=alpha123")
+
+    csv_path, metadata = scan_memory_strings_to_csv(
+        source,
+        tmp_path / "out",
+        min_length=6,
+        source_artifact_type="full_memory_dump",
+    )
+
+    assert metadata["source_artifact_type"] == "full_memory_dump"
+    assert "full_memory_dump" in csv_path.read_text(encoding="utf-8")
+
+
 def test_hiberfil_zeroed_source_is_recorded_without_scanning_payload(tmp_path):
     source = tmp_path / "hiberfil.sys"
     source.write_bytes(b"\x00" * 8192)
@@ -245,6 +260,83 @@ def test_memory_profile_extracts_mft_support_file_when_mount_missing(tmp_path, m
     assert "icat -f ntfs -o 2" in report["scans"][0]["extract_command"]
     extracted = paths.case_dir(case.id) / "supplemental" / "extracted-memory-support" / "pagefile.sys"
     assert extracted.exists()
+
+
+def test_memory_profile_fallback_uses_partition_activity_when_latest_mount_is_loopback(tmp_path, monkeypatch):
+    paths = WorkspacePaths(tmp_path / "workspace", live_mount_root=tmp_path / "live-mounts")
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", paths.case_dir("case-1"))
+    paths.ensure_case_tree(case.id)
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    image_path = tmp_path / "disk.e01"
+    image_path.write_bytes(b"image")
+    db.add_image("image-1", case.id, image_path, computer_id="computer-1")
+    db.insert_mount(
+        {
+            "id": "mount-loop",
+            "case_id": case.id,
+            "image_id": "image-1",
+            "partition_id": "p1",
+            "ewf_mount_path": tmp_path / "ewf",
+            "raw_path": "/dev/loop9",
+            "source_type": "ewfmount-loop",
+            "filesystem_type": "ntfs",
+            "offset_bytes": 0,
+        }
+    )
+    db.log_activity(
+        case_id=case.id,
+        image_id="image-1",
+        event="partition.selected",
+        message="Selected partition p1",
+        details={"offset_bytes": 4096},
+    )
+    db.insert_tool_output(
+        {
+            "id": "mft-output",
+            "case_id": case.id,
+            "computer_id": "computer-1",
+            "image_id": "image-1",
+            "job_id": None,
+            "tool_name": "MFTECmd",
+            "output_type": "csv",
+            "path": tmp_path / "mft.csv",
+            "row_count": 1,
+        }
+    )
+    db.insert_mft_entries(
+        [
+            {
+                "id": "mft-1",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "mft-output",
+                "tool_name": "MFTECmd",
+                "source_csv": str(tmp_path / "mft.csv"),
+                "row_number": 1,
+                "entry_number": "42",
+                "sequence_number": "1",
+                "parent_path": "",
+                "file_name": "pagefile.sys",
+                "extension": ".sys",
+                "file_size": "128",
+            }
+        ]
+    )
+    monkeypatch.setattr(cli_module.shutil, "which", lambda name: "/usr/bin/icat" if name == "icat" else None)
+
+    def fake_run(command, stdout=None, stderr=None, text=None, check=None, timeout=None):
+        assert command[:5] == ["/usr/bin/icat", "-f", "ntfs", "-o", "8"]
+        stdout.write(b"token=abcdef123456 C:\\Users\\Maya\\Desktop\\note.txt")
+        return subprocess.CompletedProcess(command, 0, stderr=b"")
+
+    monkeypatch.setattr(cli_module.subprocess, "run", fake_run)
+
+    report = run_memory_processing_profile(db, paths, case_id=case.id, min_length=6)
+
+    assert report["scanned_count"] == 1
+    assert "icat -f ntfs -o 8" in report["scans"][0]["extract_command"]
 
 
 def test_windows_full_profiles_auto_include_memory_profile():

@@ -10,11 +10,13 @@ from pathlib import Path
 from typing import Any
 
 from forensic_orchestrator.db import Database, utc_now
+from forensic_orchestrator.mounting.tsk import FlsEntry, list_files
 from forensic_orchestrator.models import EvidenceImage
 from forensic_orchestrator.paths import WorkspacePaths
 
 
 TOOL_NAME = "MountedFilesystemInventory"
+TSK_TOOL_NAME = "TskFilesystemInventory"
 
 
 def _iso_from_timestamp(value: float | None) -> str | None:
@@ -186,6 +188,141 @@ def scan_mounted_filesystem(
         "case_id": case_id,
         "image_id": image.id,
         "tool_name": TOOL_NAME,
+        "filesystem_type": filesystem_type,
+        "row_count": len(rows),
+        "output": str(csv_path),
+    }
+
+
+def _row_from_fls_entry(
+    *,
+    case_id: str,
+    image: EvidenceImage,
+    tool_output_id: str,
+    source_csv: Path,
+    row_number: int,
+    source_root: str,
+    entry: FlsEntry,
+    partition_id: str | None,
+    filesystem_type: str | None,
+    created_at: str,
+) -> dict[str, Any]:
+    rel = entry.path.replace("\\", "/").lstrip("/")
+    parent = Path(rel).parent.as_posix() if rel and Path(rel).parent.as_posix() != "." else ""
+    name = Path(rel).name
+    active = entry.active_name
+    return {
+        "id": str(uuid.uuid4()),
+        "case_id": case_id,
+        "computer_id": image.computer_id,
+        "image_id": image.id,
+        "tool_output_id": tool_output_id,
+        "tool_name": TSK_TOOL_NAME,
+        "source_csv": str(source_csv),
+        "row_number": row_number,
+        "partition_id": partition_id,
+        "filesystem_type": filesystem_type,
+        "source_root": source_root,
+        "file_path": rel,
+        "parent_path": parent,
+        "file_name": name,
+        "extension": _extension(name, entry.is_directory),
+        "file_size": "",
+        "is_directory": "true" if entry.is_directory else "false",
+        "created_utc": None,
+        "modified_utc": None,
+        "accessed_utc": None,
+        "metadata_changed_utc": None,
+        "mode": "",
+        "uid": "",
+        "gid": "",
+        "scan_status": "ok" if active else "deleted",
+        "error": "",
+        "created_at": created_at,
+    }
+
+
+def scan_tsk_filesystem(
+    *,
+    db: Database,
+    paths: WorkspacePaths,
+    case_id: str,
+    image: EvidenceImage,
+    raw_image: Path,
+    offset_sectors: int,
+    partition_id: str | None = None,
+    filesystem_type: str | None = None,
+    replace_existing: bool = True,
+) -> dict[str, Any]:
+    if image.computer_id is None:
+        raise ValueError("TSK filesystem inventory requires an image with a computer_id")
+    output_dir = paths.outputs_dir(case_id) / image.id / TSK_TOOL_NAME
+    csv_path = output_dir / "filesystem_entries.csv"
+    tool_output_id = str(uuid.uuid4())
+    created_at = utc_now()
+    fls_entries = list_files(
+        db=db,
+        case_id=case_id,
+        image_id=image.id,
+        computer_id=image.computer_id,
+        raw_image=raw_image,
+        offset_sectors=offset_sectors,
+        filesystem_type=filesystem_type,
+        output_folder=paths.jobs_dir(case_id) / "tsk" / image.id / "filesystem-inventory",
+        dry_run=False,
+    )
+    source_root = f"{raw_image}@{offset_sectors}"
+    rows = [
+        _row_from_fls_entry(
+            case_id=case_id,
+            image=image,
+            tool_output_id=tool_output_id,
+            source_csv=csv_path,
+            row_number=index,
+            source_root=source_root,
+            entry=entry,
+            partition_id=partition_id,
+            filesystem_type=filesystem_type,
+            created_at=created_at,
+        )
+        for index, entry in enumerate(fls_entries, start=1)
+    ]
+    content_sha256 = _write_csv(csv_path, rows)
+    if replace_existing:
+        db.purge_tool_data(case_id=case_id, image_id=image.id, tool_names=[TSK_TOOL_NAME])
+    db.insert_tool_output(
+        {
+            "id": tool_output_id,
+            "case_id": case_id,
+            "computer_id": image.computer_id,
+            "image_id": image.id,
+            "tool_name": TSK_TOOL_NAME,
+            "output_type": "csv",
+            "path": csv_path,
+            "content_sha256": content_sha256,
+            "row_count": len(rows),
+        }
+    )
+    db.insert_filesystem_entries(rows)
+    db.log_activity(
+        case_id=case_id,
+        computer_id=image.computer_id,
+        image_id=image.id,
+        event="filesystem.tsk_inventory_completed",
+        message="TSK filesystem inventory completed",
+        details={
+            "source": str(raw_image),
+            "offset_sectors": offset_sectors,
+            "partition_id": partition_id,
+            "filesystem_type": filesystem_type,
+            "row_count": len(rows),
+            "output": str(csv_path),
+        },
+    )
+    return {
+        "case_id": case_id,
+        "image_id": image.id,
+        "tool_name": TSK_TOOL_NAME,
         "filesystem_type": filesystem_type,
         "row_count": len(rows),
         "output": str(csv_path),

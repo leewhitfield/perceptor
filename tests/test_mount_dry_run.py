@@ -5,12 +5,13 @@ from unittest.mock import patch
 import pytest
 
 from forensic_orchestrator.db import Database
+from forensic_orchestrator.jobs import CommandResult
 from forensic_orchestrator.models import Partition
 from forensic_orchestrator.mounting.bitlocker import BitLockerUnlockOptions, BitLockerUnlockResult, unlock_bitlocker_volume
 from forensic_orchestrator.mounting.workflow import mount_image, unmount_image
 from forensic_orchestrator.mounting.volume_mount import build_filesystem_mount_command
 from forensic_orchestrator.paths import WorkspacePaths
-from forensic_orchestrator.safety import EncryptedImageError, PartitionError
+from forensic_orchestrator.safety import EncryptedImageError, PartitionError, ToolError
 
 
 def test_dry_run_mount_records_jobs_without_dependencies(tmp_path):
@@ -148,6 +149,75 @@ Units are in 512-byte sectors
     assert mount_row["offset_bytes"] == 63 * 512
     rows = db.conn.execute("SELECT tool_name FROM jobs ORDER BY start_time").fetchall()
     assert [row["tool_name"] for row in rows] == ["fsstat", "mmls", "fsstat"]
+
+
+def test_sudo_filesystem_mount_falls_back_to_loopback_when_ewf_offset_mount_fails(tmp_path):
+    paths = WorkspacePaths(tmp_path, live_mount_root=tmp_path / "live-mounts")
+    db = Database(paths.db_path())
+    case_id = "case-1"
+    image_id = "image-1"
+    e01 = tmp_path / "disk.E01"
+    e01.write_bytes(b"not a real e01")
+    paths.ensure_case_tree(case_id)
+    raw = paths.ewf_raw_path(case_id)
+    raw.write_bytes(b"raw")
+    db.create_case(case_id, paths.case_dir(case_id))
+    image = db.add_image(image_id, case_id, e01)
+    mmls_stdout = """
+DOS Partition Table
+Offset Sector: 0
+Units are in 512-byte sectors
+
+      Slot      Start        End          Length       Description
+002:  000:000   0000000063   0020948759   0020948697   NTFS / exFAT (0x07)
+"""
+    fsstat_fail = subprocess.CompletedProcess(["fsstat", str(e01)], 1, "", "unsupported")
+    mmls_ok = subprocess.CompletedProcess(["mmls", str(e01)], 0, mmls_stdout, "")
+    partition_fsstat_ok = subprocess.CompletedProcess(
+        ["fsstat", "-o", "63", str(e01)], 0, "FILE SYSTEM INFORMATION\nFile System Type: NTFS\n", ""
+    )
+    loop_stdout = tmp_path / "loop-stdout.txt"
+    loop_stderr = tmp_path / "loop-stderr.txt"
+    loop_stdout.write_text("/dev/loop7\n", encoding="utf-8")
+    loop_stderr.write_text("", encoding="utf-8")
+    ok_stdout = tmp_path / "ok-stdout.txt"
+    ok_stderr = tmp_path / "ok-stderr.txt"
+    ok_stdout.write_text("", encoding="utf-8")
+    ok_stderr.write_text("", encoding="utf-8")
+
+    def fake_job_run(**kwargs):
+        if kwargs["tool_name"] == "mount" and kwargs["output_folder"].name == "ntfs":
+            raise ToolError("direct offset mount failed")
+        if kwargs["tool_name"] == "losetup":
+            return CommandResult("loop-job", 0, loop_stdout, loop_stderr, kwargs["output_folder"])
+        return CommandResult("ok-job", 0, ok_stdout, ok_stderr, kwargs["output_folder"])
+
+    with patch("forensic_orchestrator.mounting.workflow.validate_mmls_available"), patch(
+        "forensic_orchestrator.mounting.workflow.validate_mount_available"
+    ), patch("forensic_orchestrator.mounting.workflow.require_dependency"), patch(
+        "forensic_orchestrator.mounting.workflow.JobRunner.run", side_effect=fake_job_run
+    ), patch(
+        "forensic_orchestrator.mounting.workflow.subprocess.run",
+        side_effect=[fsstat_fail, mmls_ok, partition_fsstat_ok],
+    ):
+        volume = mount_image(
+            db=db,
+            paths=paths,
+            case_id=case_id,
+            image=image,
+            dry_run=False,
+            mount_filesystem=True,
+            use_sudo_mount=True,
+        )
+
+    mount_row = db.latest_mount(case_id, image_id)
+    assert volume == paths.volume_mount_dir(case_id, "part-002_000000")
+    assert mount_row["raw_path"] == "/dev/loop7"
+    assert mount_row["source_type"] == "ewfmount-loop"
+    assert mount_row["offset_bytes"] == 63 * 512
+    events = [row["event"] for row in db.conn.execute("SELECT event FROM activity_log").fetchall()]
+    assert "volume.mount_offset_failed" in events
+    assert "volume.mounted" in events
 
 
 def test_raw_mount_does_not_try_ewfmount_when_mmls_fails(tmp_path):

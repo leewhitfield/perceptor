@@ -35,6 +35,9 @@ class JobRunner:
         computer_id: str | None = None,
         source_scope: str | None = None,
         check: bool = True,
+        nonzero_level: str = "error",
+        nonzero_event: str = "job.finished",
+        nonzero_message: str | None = None,
     ) -> CommandResult:
         job_id = str(uuid.uuid4())
         job_dir = output_folder / "_job"
@@ -96,13 +99,18 @@ class JobRunner:
             computer_id=computer_id,
             image_id=image_id,
             job_id=job_id,
-            level="error" if completed.returncode != 0 else "info",
-            event="job.finished",
-            message=f"Finished {tool_name} with exit code {completed.returncode}",
+            level=nonzero_level if completed.returncode != 0 else "info",
+            event=nonzero_event if completed.returncode != 0 else "job.finished",
+            message=(
+                nonzero_message.format(tool_name=tool_name, exit_code=completed.returncode)
+                if completed.returncode != 0 and nonzero_message
+                else f"Finished {tool_name} with exit code {completed.returncode}"
+            ),
             details={
                 "exit_code": completed.returncode,
                 "stdout_path": str(stdout_path),
                 "stderr_path": str(stderr_path),
+                "anticipated_nonzero": completed.returncode != 0 and nonzero_level != "error",
             },
         )
 

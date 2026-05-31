@@ -255,6 +255,9 @@ def _normalize_path(value: object) -> str:
 
 
 def _common_dialog_connection(db: Any, case_id: str) -> Any | None:
+    analytics = getattr(db, "analytics", None)
+    if analytics is not None and hasattr(analytics, "_connect"):
+        return analytics._connect(case_id)
     if getattr(db, "analytics_only", False):
         row = db.conn.execute("SELECT root FROM cases WHERE id = ?", (case_id,)).fetchone()
         if row is None:

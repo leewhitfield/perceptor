@@ -6,6 +6,7 @@ import json
 import uuid
 from pathlib import Path
 from typing import Any
+import zipfile
 
 
 CONTENT_FIELDS = (
@@ -91,6 +92,29 @@ def import_cloud_server_logs_to_csv(
     return output
 
 
+def cloud_server_import_diagnostics(source: Path) -> dict[str, str]:
+    suffix = source.suffix.lower()
+    if suffix != ".zip":
+        return {"status": "ok", "reason": ""}
+    try:
+        with zipfile.ZipFile(source) as archive:
+            names = archive.namelist()
+    except (OSError, zipfile.BadZipFile) as exc:
+        return {"status": "unsupported_layout", "reason": f"ZIP could not be inspected: {exc}"}
+    lowered = [name.replace("\\", "/").lower() for name in names]
+    if any(name.startswith("takeout/") for name in lowered):
+        has_logs = any(name.endswith((".csv", ".json", ".jsonl", ".ndjson")) for name in lowered)
+        if not has_logs:
+            return {
+                "status": "unsupported_layout",
+                "reason": (
+                    "Google Takeout ZIP contains exported content, not cloud audit logs. "
+                    "Use mailbox import for Gmail mbox exports and filesystem/archive workflows for Drive file exports."
+                ),
+            }
+    return {"status": "ok", "reason": ""}
+
+
 def _load_rows(source: Path) -> list[dict[str, Any]]:
     if source.is_dir():
         rows: list[dict[str, Any]] = []
@@ -99,6 +123,20 @@ def _load_rows(source: Path) -> list[dict[str, Any]]:
                 rows.extend(_load_rows(path))
         return rows
     suffix = source.suffix.lower()
+    if suffix == ".zip":
+        rows: list[dict[str, Any]] = []
+        try:
+            with zipfile.ZipFile(source) as archive:
+                for name in sorted(archive.namelist()):
+                    lower = name.lower()
+                    if not lower.endswith((".csv", ".json", ".jsonl", ".ndjson")):
+                        continue
+                    with archive.open(name) as member:
+                        text = member.read().decode("utf-8-sig", errors="replace")
+                    rows.extend(_load_text_rows(text, suffix=Path(name).suffix.lower()))
+        except (OSError, zipfile.BadZipFile):
+            return []
+        return rows
     if suffix == ".csv":
         with source.open("r", encoding="utf-8-sig", errors="replace", newline="") as handle:
             return [dict(row) for row in csv.DictReader(handle)]
@@ -115,6 +153,32 @@ def _load_rows(source: Path) -> list[dict[str, Any]]:
         return rows
     if suffix == ".json":
         data = json.loads(source.read_text(encoding="utf-8-sig", errors="replace"))
+        if isinstance(data, list):
+            return [item for item in data if isinstance(item, dict)]
+        if isinstance(data, dict):
+            for key in ("value", "records", "items", "events", "data"):
+                value = data.get(key)
+                if isinstance(value, list):
+                    return [item for item in value if isinstance(item, dict)]
+            return [data]
+    return []
+
+
+def _load_text_rows(text: str, *, suffix: str) -> list[dict[str, Any]]:
+    if suffix == ".csv":
+        return [dict(row) for row in csv.DictReader(text.splitlines())]
+    if suffix in {".jsonl", ".ndjson"}:
+        rows = []
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            item = json.loads(line)
+            if isinstance(item, dict):
+                rows.append(item)
+        return rows
+    if suffix == ".json":
+        data = json.loads(text)
         if isinstance(data, list):
             return [item for item in data if isinstance(item, dict)]
         if isinstance(data, dict):

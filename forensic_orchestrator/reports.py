@@ -11859,10 +11859,27 @@ def validation_report(db: Database, case_id: str) -> dict[str, Any]:
     output_by_tool = {row["tool_name"]: dict(row) for row in outputs}
     failed_jobs = db.conn.execute(
         """
-        SELECT id, tool_name, start_time, end_time, exit_code, stderr_path
+        SELECT jobs.id, jobs.tool_name, jobs.start_time, jobs.end_time, jobs.exit_code, jobs.stderr_path
         FROM jobs
-        WHERE case_id = ? AND (exit_code IS NULL OR exit_code != 0)
+        LEFT JOIN activity_log AS error_activity
+          ON error_activity.job_id = jobs.id
+         AND error_activity.level = 'error'
+        WHERE jobs.case_id = ? AND (jobs.exit_code IS NULL OR jobs.exit_code != 0)
+          AND (jobs.exit_code IS NULL OR error_activity.id IS NOT NULL)
         ORDER BY start_time
+        """,
+        (case_id,),
+    ).fetchall()
+    anticipated_nonzero_jobs = db.conn.execute(
+        """
+        SELECT jobs.id, jobs.tool_name, jobs.start_time, jobs.end_time, jobs.exit_code, jobs.stderr_path
+        FROM jobs
+        JOIN activity_log
+          ON activity_log.job_id = jobs.id
+         AND activity_log.level = 'warning'
+         AND activity_log.details_json LIKE '%"anticipated_nonzero": true%'
+        WHERE jobs.case_id = ? AND jobs.exit_code IS NOT NULL AND jobs.exit_code != 0
+        ORDER BY jobs.start_time
         """,
         (case_id,),
     ).fetchall()
@@ -11891,6 +11908,7 @@ def validation_report(db: Database, case_id: str) -> dict[str, Any]:
         "tools_with_outputs": list(output_by_tool.values()),
         "expected_tools_without_outputs": missing,
         "failed_or_unfinished_jobs": [dict(row) for row in failed_jobs],
+        "anticipated_nonzero_jobs": [dict(row) for row in anticipated_nonzero_jobs],
         "issue_counts": {row["level"]: row["count"] for row in issue_counts},
         "skipped_activity": [dict(row) for row in skipped],
         "evtx_recovery": _evtx_recovery_counts(db, case_id),

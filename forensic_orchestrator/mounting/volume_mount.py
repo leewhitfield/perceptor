@@ -44,6 +44,54 @@ def build_ntfs_mount_command(
     return command
 
 
+def build_losetup_offset_command(raw_image: Path, partition: Partition, *, use_sudo: bool = False) -> list[str]:
+    command = [
+        _command_path("losetup", use_sudo=use_sudo),
+        "-f",
+        "--show",
+        "-r",
+        "-o",
+        str(partition.offset_bytes),
+        str(raw_image),
+    ]
+    if use_sudo:
+        return ["sudo", "-n", *command]
+    return command
+
+
+def build_losetup_detach_command(loop_device: str, *, use_sudo: bool = False) -> list[str]:
+    command = [_command_path("losetup", use_sudo=use_sudo), "-d", loop_device]
+    if use_sudo:
+        return ["sudo", "-n", *command]
+    return command
+
+
+def build_ntfs_loop_mount_command(
+    loop_device: str,
+    mount_dir: Path,
+    *,
+    use_sudo: bool = False,
+    norecover: bool = False,
+) -> list[str]:
+    option_parts = [
+        "ro",
+        "show_sys_files",
+        "streams_interface=windows",
+    ]
+    if norecover:
+        option_parts.append("norecover")
+    command = [
+        _command_path("ntfs-3g", use_sudo=use_sudo),
+        "-o",
+        ",".join(option_parts),
+        loop_device,
+        str(mount_dir),
+    ]
+    if use_sudo:
+        return ["sudo", "-n", *command]
+    return command
+
+
 def build_generic_mount_command(
     raw_image: Path,
     mount_dir: Path,
