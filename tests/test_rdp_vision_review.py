@@ -98,6 +98,12 @@ def test_rdp_vision_review_uses_openai_api_without_storing_raw_review(tmp_path, 
             requests.append(json.loads(self.rfile.read(length).decode("utf-8")))
             body = {
                 "id": "resp_test",
+                "usage": {
+                    "input_tokens": 1000,
+                    "output_tokens": 200,
+                    "total_tokens": 1200,
+                    "input_tokens_details": {"cached_tokens": 100},
+                },
                 "output_text": json.dumps(
                     {
                         "summary": "Windows desktop with taskbar visible.",
@@ -137,6 +143,11 @@ def test_rdp_vision_review_uses_openai_api_without_storing_raw_review(tmp_path, 
     details = json.loads(rows[0]["details_json"])
     assert details["provider"] == "openai_api"
     assert details["response_id"] == "resp_test"
+    assert details["openai_usage"]["input_tokens"] == 1000
+    assert details["openai_usage"]["cached_input_tokens"] == 100
+    assert details["openai_usage"]["output_tokens"] == 200
+    assert details["openai_usage"]["total_tokens"] == 1200
+    assert details["openai_usage"]["estimated_cost_usd"] > 0
     assert "raw_review" not in details
     assert requests[0]["input"][0]["content"][1]["type"] == "input_image"
 

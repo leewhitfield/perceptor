@@ -1186,6 +1186,117 @@ def filesystem_entries_report(db: Database, case_id: str, *, limit: int = 100) -
     return _table_report(db, case_id, "filesystem_entries", "filesystem_entries", limit)
 
 
+def filesystem_listing_report(
+    db: Database,
+    case_id: str,
+    *,
+    contains: str | None = None,
+    computer_id: str | None = None,
+    image_id: str | None = None,
+    scan_status: str | None = None,
+    include_deleted: bool = True,
+    include_virtual: bool = False,
+    limit: int = 100,
+) -> dict[str, Any]:
+    db.get_case(case_id)
+    where = ["case_id = ?"]
+    params: list[Any] = [case_id]
+    if contains:
+        where.append(
+            "(file_path LIKE ? OR file_name LIKE ? OR parent_path LIKE ? OR extension LIKE ?)"
+        )
+        like = f"%{contains}%"
+        params.extend([like, like, like, like])
+    if computer_id:
+        where.append("computer_id = ?")
+        params.append(computer_id)
+    if image_id:
+        where.append("image_id = ?")
+        params.append(image_id)
+    if scan_status:
+        where.append("scan_status = ?")
+        params.append(scan_status)
+    if not include_deleted:
+        where.append("COALESCE(scan_status, '') <> 'deleted'")
+    if not include_virtual:
+        where.append("COALESCE(scan_status, '') <> 'virtual'")
+    clause = " AND ".join(where)
+    total_rows = _query_report_rows(
+        db,
+        case_id,
+        "filesystem_entries",
+        f"SELECT COUNT(*) AS count FROM filesystem_entries WHERE {clause}",
+        params,
+    )
+    status_rows = _query_report_rows(
+        db,
+        case_id,
+        "filesystem_entries",
+        f"""
+        SELECT filesystem_type, scan_status, COUNT(*) AS count
+        FROM filesystem_entries
+        WHERE {clause}
+        GROUP BY filesystem_type, scan_status
+        ORDER BY count DESC, filesystem_type, scan_status
+        LIMIT 50
+        """,
+        params,
+    )
+    rows = _query_report_rows(
+        db,
+        case_id,
+        "filesystem_entries",
+        f"""
+        SELECT *
+        FROM filesystem_entries
+        WHERE {clause}
+        ORDER BY COALESCE(modified_utc, created_utc, accessed_utc, created_at, '') DESC,
+                 file_path,
+                 row_number
+        LIMIT ?
+        """,
+        [*params, limit],
+    )
+    duplicate_ids = _duplicate_row_ids(db, "filesystem_entries")
+    source_counts = _source_counts(db, "filesystem_entries")
+    items = []
+    for row in rows:
+        row_id = str(row.get("id") or "")
+        if row_id and row_id in duplicate_ids:
+            continue
+        item = dict(row)
+        item["computer_label"] = None
+        item["image_path"] = None
+        item["source_count"] = source_counts.get(row_id, 0) if row_id else 0
+        items.append(item)
+        if len(items) >= limit:
+            break
+    _fill_computer_image_fields(db, case_id, items)
+    return {
+        "case_id": case_id,
+        "source_of_truth": "filesystem_entries",
+        "guidance": (
+            "Use this generated file listing as the first source for filesystem questions. "
+            "Only run live image tooling when these rows are absent, stale, or insufficient for the requested detail."
+        ),
+        "filters": {
+            "contains": contains,
+            "computer_id": computer_id,
+            "image_id": image_id,
+            "scan_status": scan_status,
+            "include_deleted": include_deleted,
+            "include_virtual": include_virtual,
+        },
+        "summary": {
+            "total_matching_rows": int((total_rows[0] if total_rows else {}).get("count") or 0),
+            "returned_rows": len(items),
+            "filesystem_status_counts": [dict(row) for row in status_rows],
+        },
+        "filesystem_entries": items,
+        "total_returned": len(items),
+    }
+
+
 def usn_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str, Any]:
     return _table_report(db, case_id, "usn_journal_entries", "usn_journal_entries", limit)
 
@@ -5616,6 +5727,29 @@ def _annotate_rdp_visual_observation(row: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
+def _annotate_openai_usage(row: dict[str, Any]) -> dict[str, Any]:
+    details = _json_details(row.get("details_json"))
+    usage = details.get("openai_usage") if isinstance(details.get("openai_usage"), dict) else {}
+    for key in ("input_tokens", "cached_input_tokens", "output_tokens", "total_tokens", "estimated_cost_usd"):
+        row[key] = usage.get(key, 0)
+    row["openai_model"] = details.get("model") or ""
+    row["openai_response_id"] = details.get("response_id") or ""
+    return row
+
+
+def _openai_usage_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    usage_rows = [row for row in rows if row.get("observation_type") == "openai_vision_contact_sheet_review"]
+    return {
+        "request_count": len(usage_rows),
+        "input_tokens": sum(int(row.get("input_tokens") or 0) for row in usage_rows),
+        "cached_input_tokens": sum(int(row.get("cached_input_tokens") or 0) for row in usage_rows),
+        "output_tokens": sum(int(row.get("output_tokens") or 0) for row in usage_rows),
+        "total_tokens": sum(int(row.get("total_tokens") or 0) for row in usage_rows),
+        "estimated_cost_usd": round(sum(float(row.get("estimated_cost_usd") or 0.0) for row in usage_rows), 8),
+        "models": sorted({str(row.get("openai_model") or "") for row in usage_rows if row.get("openai_model")}),
+    }
+
+
 def _timestamp_in_window(value: Any, start: datetime | None, end: datetime | None) -> bool:
     timestamp = _parse_report_timestamp(str(value)) if value else None
     if timestamp is None:
@@ -7811,6 +7945,7 @@ def rdp_visual_observations_report(
         [*params, limit],
     )
     observations = [_annotate_rdp_visual_observation(dict(row)) for row in rows]
+    observations = [_annotate_openai_usage(row) for row in observations]
     counts = _query_report_rows(
         db,
         case_id,
@@ -7828,6 +7963,7 @@ def rdp_visual_observations_report(
     return {
         "case_id": case_id,
         "filters": {"user": user},
+        "openai_usage": _openai_usage_summary(observations),
         "application_counts": [dict(row) for row in counts],
         "rdp_visual_observations": observations,
         "total_returned": len(observations),
@@ -21463,6 +21599,12 @@ def memory_support_files_report(db: Database, case_id: str, *, limit: int = 100)
                 "scanner": scan.get("scanner") or "",
                 "decompress_status": scan.get("decompress_status") or "",
                 "decompress_error": scan.get("decompress_error") or "",
+                "decompress_command": scan.get("decompress_command") or "",
+                "decompress_attempt_count": scan.get("decompress_attempt_count") or "",
+                "extract_status": scan.get("extract_status") or "",
+                "extract_command": scan.get("extract_command") or "",
+                "source_size_bytes": scan.get("source_size_bytes") or "",
+                "scanned_size_bytes": scan.get("scanned_size_bytes") or "",
                 "hiberfil_status": scan.get("hiberfil_status") or artifact.get("hiberfil_status") or "",
                 "hiberfil_note": scan.get("hiberfil_note") or artifact.get("hiberfil_note") or "",
                 "scanned_path": scan.get("scanned_path") or "",
@@ -21489,6 +21631,12 @@ def memory_support_files_report(db: Database, case_id: str, *, limit: int = 100)
                 "scanner": scan.get("scanner") or "",
                 "decompress_status": scan.get("decompress_status") or "",
                 "decompress_error": scan.get("decompress_error") or "",
+                "decompress_command": scan.get("decompress_command") or "",
+                "decompress_attempt_count": scan.get("decompress_attempt_count") or "",
+                "extract_status": scan.get("extract_status") or "",
+                "extract_command": scan.get("extract_command") or "",
+                "source_size_bytes": scan.get("source_size_bytes") or "",
+                "scanned_size_bytes": scan.get("scanned_size_bytes") or "",
                 "hiberfil_status": scan.get("hiberfil_status") or "",
                 "hiberfil_note": scan.get("hiberfil_note") or "",
                 "scanned_path": scan.get("scanned_path") or "",
@@ -21514,6 +21662,12 @@ def memory_support_files_report(db: Database, case_id: str, *, limit: int = 100)
                 "scanner": scan.get("scanner") or "",
                 "decompress_status": scan.get("decompress_status") or "",
                 "decompress_error": scan.get("decompress_error") or "",
+                "decompress_command": scan.get("decompress_command") or "",
+                "decompress_attempt_count": scan.get("decompress_attempt_count") or "",
+                "extract_status": scan.get("extract_status") or "",
+                "extract_command": scan.get("extract_command") or "",
+                "source_size_bytes": scan.get("source_size_bytes") or "",
+                "scanned_size_bytes": scan.get("scanned_size_bytes") or "",
                 "hiberfil_status": scan.get("hiberfil_status") or "",
                 "hiberfil_note": scan.get("hiberfil_note") or "",
                 "scanned_path": scan.get("scanned_path") or "",
@@ -21579,12 +21733,22 @@ def memory_support_files_markdown(report: dict[str, Any]) -> str:
             details.append(f"scanner `{row.get('scanner')}`")
         if row.get("decompress_status"):
             details.append(f"decompress `{row.get('decompress_status')}`")
+        if row.get("extract_status"):
+            details.append(f"extract `{row.get('extract_status')}`")
         if category_text:
             details.append(f"categories `{category_text}`")
         if details:
             lines.append(f"  - {'; '.join(details)}")
+        if row.get("source_size_bytes") or row.get("scanned_size_bytes"):
+            lines.append(
+                f"  - sizes: source `{row.get('source_size_bytes') or ''}` scanned `{row.get('scanned_size_bytes') or ''}`"
+            )
         if row.get("hiberfil_status"):
             lines.append(f"  - hiberfil `{row.get('hiberfil_status')}` {row.get('hiberfil_note') or ''}")
+        if row.get("decompress_command"):
+            lines.append(f"  - decompression command: `{row.get('decompress_command')}`")
+        if row.get("extract_command"):
+            lines.append(f"  - extraction command: `{row.get('extract_command')}`")
         if row.get("decompress_error"):
             lines.append(f"  - decompression caveat: `{str(row.get('decompress_error'))[:180]}`")
     lines.extend(["", "## Caveats", ""])
@@ -22565,21 +22729,42 @@ def _memory_tool_availability() -> list[dict[str, str]]:
     for label, candidates in tools:
         path = next((shutil.which(candidate) for candidate in candidates if shutil.which(candidate)), None)
         if label == "bstrings" and not path:
-            for candidate in ("/home/lee/tools/bstrings/bstrings.dll", "/home/lee/tools/eztools/bstrings/bstrings.dll"):
+            for candidate in _tool_root_candidates(
+                "bstrings/bstrings.dll",
+                "eztools/bstrings/bstrings.dll",
+                "eztools/net9/bstrings.dll",
+            ):
                 if Path(candidate).exists():
                     path = candidate
                     break
         if label == "hibr2bin" and not path:
-            for candidate in (
-                "/home/lee/tools/Hibr2Bin-linux/hibr2bin-linux",
-                "/home/lee/tools/Hibr2Bin-build/Hibr2Bin.exe",
-                "/home/lee/tools/Hibr2Bin/Hibr2Bin.exe",
+            for candidate in _tool_root_candidates(
+                "Hibr2Bin-linux/hibr2bin-linux",
+                "Hibr2Bin-build/Hibr2Bin.exe",
+                "Hibr2Bin/Hibr2Bin.exe",
             ):
                 if Path(candidate).exists():
                     path = candidate
                     break
         rows.append({"tool": label, "status": "available" if path else "missing", "path": path or ""})
     return rows
+
+
+def _tool_root_candidates(*relative_paths: str) -> list[str]:
+    roots: list[Path] = []
+    if os.environ.get("FORENSIC_ORCHESTRATOR_TOOLS_ROOT"):
+        roots.append(Path(os.environ["FORENSIC_ORCHESTRATOR_TOOLS_ROOT"]).expanduser())
+    roots.extend([Path("/opt/relic-tools"), Path.home() / "tools"])
+    output: list[str] = []
+    seen: set[str] = set()
+    for root in roots:
+        for relative_path in relative_paths:
+            candidate = str(root / relative_path)
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            output.append(candidate)
+    return output
 
 
 def _memory_processing_workflow(case_id: str, artifacts: list[dict[str, Any]]) -> list[dict[str, str]]:

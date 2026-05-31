@@ -78,7 +78,7 @@ sudo apt-get install -y \
   git curl python3 python3-venv python3-dev build-essential pkg-config libleveldb-dev \
   sleuthkit ewf-tools qemu-utils ntfs-3g cryptsetup util-linux \
   libesedb-utils exiftool poppler-utils tesseract-ocr \
-  libvshadow-utils dislocker libbde-utils
+  libfsntfs-utils python3-libfsntfs libvshadow-utils dislocker libbde-utils
 
 if ! command -v uv >/dev/null 2>&1; then
   curl -LsSf https://astral.sh/uv/install.sh | sh

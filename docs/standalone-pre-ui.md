@@ -20,7 +20,7 @@ uv run forensic-orchestrator standalone dependencies
 
 Supported target: Linux with Python 3.11 or newer. Windows evidence processing
 expects Linux forensic tooling such as Sleuth Kit, libewf, ntfs-3g, qemu-img,
-and optional memory tooling.
+and default memory coverage tooling.
 
 ## Config File
 
@@ -28,10 +28,10 @@ Use `--config` or `FORENSIC_ORCHESTRATOR_CONFIG` with YAML:
 
 ```yaml
 root: /mnt/forensic-ssd/forensic-orchestrator
-tools_root: /home/lee/forensic-orchestrator-tools
-eztools_root: /home/lee/forensic-orchestrator-tools/eztools
+tools_root: /opt/relic-tools
+eztools_root: /opt/relic-tools/eztools
 plugins:
-  - /home/lee/projects/investigator/forensic_orchestrator/plugins/eztools.yaml
+  - /opt/relic/forensic_orchestrator/plugins/eztools.yaml
 ```
 
 Command-line `--root` and `--plugin` values override the file.
@@ -98,7 +98,7 @@ uv run forensic-orchestrator --config config.yaml standalone tool-status
 - `memory workflow --case CASE_ID`: run memory support-file processing and write
   the memory purpose bundle in one command.
 - `standalone version`: application, Python, OS, root, and plugin paths.
-- `standalone dependencies`: required and optional external tools.
+- `standalone dependencies`: core required and default coverage external tools.
 - `standalone repair-dependencies`: safe install/config repair for Python tools
   and local external-tool env variables.
 - `standalone install-tool`: download or install supported third-party tools
@@ -214,5 +214,7 @@ Credential reports redact values by default. Use `report memory-credentials
   `image cleanup-stale-mounts --apply` only after reviewing the dry-run output.
 - DuckDB: same-case writes are serialized with the case write lock; stale locks
   should only be removed after confirming no processing process is active.
-- Missing tools: run `standalone dependencies`; optional tools reduce coverage
+- Missing tools: run `standalone dependencies`; default coverage tools should be
+  installed during setup, and specialized workflows should still fail gracefully
+  if a tool is unavailable.
   but should not fail normal profiles unless the selected artifact requires them.

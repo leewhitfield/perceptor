@@ -28,7 +28,7 @@ def _base_db(tmp_path: Path):
 
 def test_archive_inventory_lists_zip_members_and_nested_disk_candidates(tmp_path):
     root = tmp_path / "mount"
-    archive = root / "Users" / "lee" / "Desktop" / "case.zip"
+    archive = root / "Users" / "analyst" / "Desktop" / "case.zip"
     archive.parent.mkdir(parents=True)
     with zipfile.ZipFile(archive, "w") as zf:
         zf.writestr("docs/readme.txt", "hello")
@@ -39,14 +39,14 @@ def test_archive_inventory_lists_zip_members_and_nested_disk_candidates(tmp_path
 
     assert {row["member_path"] for row in rows} == {"docs/readme.txt", "vm/disk.vhdx"}
     disk_row = next(row for row in rows if row["member_path"] == "vm/disk.vhdx")
-    assert disk_row["archive_path"] == "/Users/lee/Desktop/case.zip"
+    assert disk_row["archive_path"] == "/Users/analyst/Desktop/case.zip"
     assert disk_row["archive_status"] == "parsed"
     assert disk_row["nested_evidence_format"] == "vhdx"
 
 
 def test_archive_inventory_gracefully_records_damaged_zip(tmp_path):
     root = tmp_path / "mount"
-    archive = root / "Users" / "lee" / "Downloads" / "broken.zip"
+    archive = root / "Users" / "analyst" / "Downloads" / "broken.zip"
     archive.parent.mkdir(parents=True)
     archive.write_bytes(b"not a valid zip")
 
@@ -54,14 +54,14 @@ def test_archive_inventory_gracefully_records_damaged_zip(tmp_path):
     rows = list(csv.DictReader(csv_path.open()))
 
     assert len(rows) == 1
-    assert rows[0]["archive_path"] == "/Users/lee/Downloads/broken.zip"
+    assert rows[0]["archive_path"] == "/Users/analyst/Downloads/broken.zip"
     assert rows[0]["archive_status"] == "damaged"
     assert rows[0]["archive_error"]
 
 
 def test_archive_inventory_flags_split_zip_without_reading_members(tmp_path):
     root = tmp_path / "mount"
-    archive_dir = root / "Users" / "lee" / "Downloads"
+    archive_dir = root / "Users" / "analyst" / "Downloads"
     archive_dir.mkdir(parents=True)
     (archive_dir / "evidence.z01").write_bytes(b"part one")
     (archive_dir / "evidence.zip").write_bytes(b"central directory elsewhere")
@@ -78,7 +78,7 @@ def test_archive_inventory_flags_split_zip_without_reading_members(tmp_path):
 
 def test_archive_inventory_flags_split_7z_parts(tmp_path):
     root = tmp_path / "mount"
-    archive_dir = root / "Users" / "lee" / "Downloads"
+    archive_dir = root / "Users" / "analyst" / "Downloads"
     archive_dir.mkdir(parents=True)
     (archive_dir / "logs.7z.001").write_bytes(b"part one")
     (archive_dir / "logs.7z.002").write_bytes(b"part two")
@@ -92,7 +92,7 @@ def test_archive_inventory_flags_split_7z_parts(tmp_path):
 
 def test_archive_inventory_skips_unreadable_mounted_paths(monkeypatch, tmp_path):
     root = tmp_path / "mount"
-    archive = root / "Users" / "lee" / "Downloads" / "case.zip"
+    archive = root / "Users" / "analyst" / "Downloads" / "case.zip"
     bad_link = root / "Documents and Settings"
     archive.parent.mkdir(parents=True)
     bad_link.write_text("mounted compatibility path")
@@ -112,7 +112,7 @@ def test_archive_inventory_skips_unreadable_mounted_paths(monkeypatch, tmp_path)
     rows = list(csv.DictReader(csv_path.open()))
 
     assert len(rows) == 1
-    assert rows[0]["archive_path"] == "/Users/lee/Downloads/case.zip"
+    assert rows[0]["archive_path"] == "/Users/analyst/Downloads/case.zip"
     assert rows[0]["member_path"] == "report.txt"
 
 
@@ -150,7 +150,7 @@ def test_archive_inventory_ingests_member_metadata_without_content(tmp_path):
         writer.writeheader()
         writer.writerow(
             {
-                "archive_path": "/Users/lee/Desktop/case.zip",
+                "archive_path": "/Users/analyst/Desktop/case.zip",
                 "archive_file_name": "case.zip",
                 "archive_extension": ".zip",
                 "archive_file_size": "100",
@@ -207,7 +207,7 @@ def test_nested_evidence_inventory_lists_disk_images_from_mft(tmp_path):
                 "entry_number": "42",
                 "sequence_number": "1",
                 "in_use": "True",
-                "parent_path": "Users/lee/VMs",
+                "parent_path": "Users/analyst/VMs",
                 "file_name": "lab.vmdk",
                 "extension": ".vmdk",
                 "file_size": "4096",
@@ -227,7 +227,7 @@ def test_nested_evidence_inventory_lists_disk_images_from_mft(tmp_path):
                 "tool_name": "MFTECmd",
                 "source_csv": tmp_path / "mft.csv",
                 "row_number": 2,
-                "parent_path": "Users/lee/Documents",
+                "parent_path": "Users/analyst/Documents",
                 "file_name": "notes.txt",
                 "extension": ".txt",
                 "is_directory": "False",
@@ -239,7 +239,7 @@ def test_nested_evidence_inventory_lists_disk_images_from_mft(tmp_path):
 
     rows = db.conn.execute("SELECT * FROM nested_evidence_items").fetchall()
     assert count == 1
-    assert rows[0]["original_path"] == "/Users/lee/VMs/lab.vmdk"
+    assert rows[0]["original_path"] == "/Users/analyst/VMs/lab.vmdk"
     assert rows[0]["detected_format"] == "vmdk"
     assert rows[0]["parser_status"] == "candidate"
 
@@ -261,7 +261,7 @@ def test_nested_evidence_inventory_groups_multipart_ewf(tmp_path):
                 "entry_number": str(100 + idx),
                 "sequence_number": "1",
                 "in_use": "True",
-                "parent_path": "Users/lee/Evidence",
+                "parent_path": "Users/analyst/Evidence",
                 "file_name": name,
                 "extension": Path(name).suffix.lower(),
                 "file_size": "4096",
@@ -298,7 +298,7 @@ def test_nested_evidence_inventory_rebuilds_in_duckdb_mode(tmp_path, monkeypatch
                 "entry_number": "100",
                 "sequence_number": "1",
                 "in_use": "True",
-                "parent_path": "Users/lee/VMs",
+                "parent_path": "Users/analyst/VMs",
                 "file_name": "lab.vhdx",
                 "extension": ".vhdx",
                 "is_directory": "False",
@@ -311,14 +311,14 @@ def test_nested_evidence_inventory_rebuilds_in_duckdb_mode(tmp_path, monkeypatch
     assert count == 1
     conn = db.analytics._connect(case.id)
     rows = conn.execute("SELECT original_path, detected_format FROM nested_evidence_items").fetchall()
-    assert rows == [("/Users/lee/VMs/lab.vhdx", "vhdx")]
+    assert rows == [("/Users/analyst/VMs/lab.vhdx", "vhdx")]
 
 
 def test_archive_inventory_tool_runs_through_registry_and_ingest(tmp_path):
     db, case, image = _base_db(tmp_path)
     paths = WorkspacePaths(tmp_path / "workspace")
     root = tmp_path / "mount"
-    archive = root / "Users" / "lee" / "Desktop" / "case.zip"
+    archive = root / "Users" / "analyst" / "Desktop" / "case.zip"
     archive.parent.mkdir(parents=True)
     with zipfile.ZipFile(archive, "w") as zf:
         zf.writestr("report.csv", "a,b\n1,2\n")
@@ -338,5 +338,5 @@ def test_archive_inventory_tool_runs_through_registry_and_ingest(tmp_path):
     )
 
     row = db.conn.execute("SELECT archive_path, member_path FROM archive_entries").fetchone()
-    assert row["archive_path"] == "/Users/lee/Desktop/case.zip"
+    assert row["archive_path"] == "/Users/analyst/Desktop/case.zip"
     assert row["member_path"] == "report.csv"

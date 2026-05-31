@@ -5,6 +5,9 @@ Windows disk images, import pre-generated triage/report bundles, normalize many
 artifact outputs into a case database, dedupe derived artifacts, and generate
 investigator-facing reports.
 
+This page is the legacy single-page operator manual. The MkDocs-ready topic
+manual starts at [Documentation Home](index.md).
+
 The executable names are:
 
 - `relic`
@@ -58,10 +61,10 @@ Example `config.yaml`:
 
 ```yaml
 root: /analysis/relic
-tools_root: /home/lee/tools
-eztools_root: /home/lee/tools/eztools
+tools_root: /opt/relic-tools
+eztools_root: /opt/relic-tools/eztools
 plugins:
-  - /home/lee/projects/investigator/forensic_orchestrator/plugins/eztools.yaml
+  - /opt/relic/forensic_orchestrator/plugins/eztools.yaml
 ```
 
 Run with:
@@ -616,7 +619,8 @@ Key standalone switches:
   MCP tool listing.
 - `verify-install`: friendly alias for `smoke-regression`.
 - `dependencies --env-file PATH`: load tool env vars before checking.
-- `repair-dependencies --required-only`: skip optional dependencies.
+- `repair-dependencies --required-only`: repair only core required tools and skip
+  default coverage tools.
 - `install-tool TOOL --force`: force reinstall/rebuild.
 - `install-tool TOOL --dry-run`: preview tool install actions.
 - `benchmark --write-baseline PATH`: save current timing report.
@@ -1028,6 +1032,8 @@ uv run relic --root ROOT standalone benchmark --case CASE_ID --baseline benchmar
   requires enough free space for the uncompressed files plus a 10 GB reserve.
 - External AI review is off by default. Set `FORENSIC_ALLOW_EXTERNAL_AI=1` only
   when uploading RDP contact sheets to the configured model provider is approved.
+  OpenAI-backed review records token usage and estimated cost in RDP visual
+  observation report output.
 - Use credential reveal options only under controlled conditions.
 - Treat memory credential strings as leads unless validated.
 - Treat UserAssist, Amcache, and ShimCache as activity/presence indicators, not

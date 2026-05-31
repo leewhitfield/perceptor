@@ -3,7 +3,7 @@
 Durable case data lives under the configured workspace root, for example:
 
 ```text
-/mnt/forensic-ssd/forensic-orchestrator-rocba-case
+/analysis/relic/example-case
 ```
 
 Do not store evidence, databases, artifacts, reports, logs, or parser output
@@ -24,13 +24,13 @@ that require filesystem access.
 Default sudoers shape:
 
 ```text
-lee ALL=(root) NOPASSWD: /usr/bin/ntfs-3g -o ro\,show_sys_files\,streams_interface\=windows\,norecover\,offset\=* /tmp/forensic-orchestrator-mounts/cases/*/ewf/ewf1 /tmp/forensic-orchestrator-mounts/cases/*/volumes/*, /usr/bin/umount /tmp/forensic-orchestrator-mounts/cases/*/volumes/*
+analyst ALL=(root) NOPASSWD: /usr/bin/ntfs-3g -o ro\,show_sys_files\,streams_interface\=windows\,norecover\,offset\=* /tmp/forensic-orchestrator-mounts/cases/*/ewf/ewf1 /tmp/forensic-orchestrator-mounts/cases/*/volumes/*, /usr/bin/umount /tmp/forensic-orchestrator-mounts/cases/*/volumes/*
 ```
 
 Mount with the normal workflow:
 
 ```bash
-uv run forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator-rocba-case \
+uv run forensic-orchestrator --root /analysis/relic/example-case \
   image mount --case CASE_ID --image IMAGE_ID --filesystem --sudo
 ```
 

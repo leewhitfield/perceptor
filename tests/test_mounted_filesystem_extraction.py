@@ -71,7 +71,7 @@ def test_mounted_filesystem_inventory_feeds_files_and_review_reports(tmp_path):
     paths.ensure_case_tree("case-1")
     case = db.create_case("case-1", paths.case_dir("case-1"))
     db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
-    image = db.add_image("image-1", case.id, Path("/evidence/byebye.E01"), computer_id="computer-1")
+    image = db.add_image("image-1", case.id, Path("/evidence/sample-usb.E01"), computer_id="computer-1")
     mount = tmp_path / "mount"
     folder = mount / "Docs"
     folder.mkdir(parents=True)

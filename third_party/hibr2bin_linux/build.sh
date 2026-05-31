@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-src_root="${HIBR2BIN_SRC:-/home/lee/tools/Hibr2Bin-src/Hibr2Bin}"
-out_dir="${HIBR2BIN_LINUX_OUT:-/home/lee/tools/Hibr2Bin-linux}"
+src_root="${HIBR2BIN_SRC:-/opt/relic-tools/Hibr2Bin-src/Hibr2Bin}"
+out_dir="${HIBR2BIN_LINUX_OUT:-/opt/relic-tools/Hibr2Bin-linux}"
 mkdir -p "$out_dir"
 
 g++ -std=gnu++17 -O2 -DNDEBUG -D_CONSOLE \

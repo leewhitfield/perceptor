@@ -421,7 +421,7 @@ def test_recentdocs_keeps_root_and_extension_times_separate(monkeypatch, tmp_pat
             {"MRUListEx": 3, "83": 3, "127": 3},
             {
                 "MRUListEx": b"\x53\x00\x00\x00\x7f\x00\x00\x00\xff\xff\xff\xff",
-                "83": "ROCBA-SYSTEM\x00".encode("utf-16-le") + b"extra",
+                "83": "TEST-SYSTEM\x00".encode("utf-16-le") + b"extra",
                 "127": "Outlook Files\x00".encode("utf-16-le") + b"extra",
             },
             "2020-11-16T02:32:19.634820Z",
@@ -448,7 +448,7 @@ def test_recentdocs_keeps_root_and_extension_times_separate(monkeypatch, tmp_pat
     by_key_value = {(row["key_path"].split("/")[-1], row["value_name"]): row for row in rows}
 
     root_first = by_key_value["RecentDocs", "83"]
-    assert root_first["display_name"] == "ROCBA-SYSTEM"
+    assert root_first["display_name"] == "TEST-SYSTEM"
     assert root_first["recentdocs_mru_position"] == "1"
     assert root_first["recentdocs_time_utc"] == "2020-11-16T02:32:19.634820Z"
     assert root_first["recentdocs_extension_time_utc"] is None
@@ -484,7 +484,7 @@ def test_registry_artifacts_warn_when_transaction_logs_exist(monkeypatch, tmp_pa
             {"MRUListEx": 3, "83": 3},
             {
                 "MRUListEx": b"\x53\x00\x00\x00\xff\xff\xff\xff",
-                "83": "ROCBA-SYSTEM\x00".encode("utf-16-le"),
+                "83": "TEST-SYSTEM\x00".encode("utf-16-le"),
             },
             "2020-11-16T02:32:19.634820Z",
         ),

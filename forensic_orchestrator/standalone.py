@@ -17,7 +17,7 @@ import zipfile
 from datetime import datetime, timezone
 from importlib import metadata
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .db import Database
 from .paths import WorkspacePaths
@@ -25,7 +25,7 @@ from .reports import case_summary_report, processing_readiness_report
 from .tools.registry import ToolRegistry, resolve_dotnet_runtime
 
 
-REQUIRED_TOOLS = [
+CORE_REQUIRED_TOOLS = [
     ("mmls", "sleuthkit partition discovery"),
     ("fsstat", "sleuthkit filesystem probing"),
     ("fls", "sleuthkit fallback file listing"),
@@ -39,13 +39,14 @@ REQUIRED_TOOLS = [
     ("exiftool", "file metadata extraction"),
 ]
 
-OPTIONAL_TOOLS = [
+DEFAULT_COVERAGE_TOOLS = [
     ("bstrings", "preferred memory string scanner"),
     ("pypykatz", "DPAPI/LSA validation follow-up"),
     ("vol", "Volatility 3 launcher"),
     ("volatility3", "Volatility 3 launcher"),
     ("MemProcFS", "memory filesystem analysis"),
     ("sidr", "Windows Search parser where supported"),
+    ("ual-timeliner", "external UAL/SUM timeline parser"),
     ("pdftotext", "fast PDF text extraction"),
     ("tesseract", "OCR fallback"),
     ("vshadowinfo", "Volume Shadow Copy discovery"),
@@ -57,10 +58,13 @@ OPTIONAL_TOOLS = [
     ("bdemount", "libbde BitLocker unlock fallback"),
 ]
 
+REQUIRED_TOOLS = CORE_REQUIRED_TOOLS
+
 PYTHON_TOOL_REPAIRS = {
     "pypykatz": ["uv", "tool", "install", "pypykatz"],
     "vol": ["uv", "tool", "install", "volatility3"],
     "volatility3": ["uv", "tool", "install", "volatility3"],
+    "ual-timeliner": ["uv", "tool", "install", "git+https://github.com/kev365/ual-timeliner.git@v0.2.0"],
 }
 
 SYSTEM_TOOL_REPAIRS = {
@@ -84,7 +88,7 @@ SYSTEM_TOOL_REPAIRS = {
     "bdemount": "sudo apt-get install -y libbde-utils",
 }
 
-LOCAL_ENV_TOOL_NAMES = {"bstrings", "sidr", "MemProcFS", "dotnet", "usnjrnl-forensic"}
+LOCAL_ENV_TOOL_NAMES = {"bstrings", "sidr", "MemProcFS", "dotnet", "usnjrnl-forensic", "ual-timeliner"}
 
 STANDALONE_BACKLOG = [
     "Package a stable CLI entrypoint and install profile.",
@@ -106,7 +110,7 @@ STANDALONE_BACKLOG = [
     "Add regression fixtures or tiny sample image fixtures.",
     "Add end-to-end smoke command for CI.",
     "Add dependency install docs for Ubuntu/Debian.",
-    "Add optional dependency docs for Volatility, MemProcFS, TSK, libewf, pypykatz, SIDR.",
+    "Add default coverage dependency docs for Volatility, MemProcFS, TSK, libewf, pypykatz, SIDR.",
     "Add standalone release build workflow.",
     "Add version stamping in reports.",
     "Add schema migration/version report.",
@@ -182,7 +186,7 @@ def tool_status_report(*, tools_dir: Path | None = None, env_file: Path | None =
     if env_file:
         _load_env_file(env_file)
     rows = []
-    for name, purpose in [*REQUIRED_TOOLS, *OPTIONAL_TOOLS]:
+    for name, purpose in [*CORE_REQUIRED_TOOLS, *DEFAULT_COVERAGE_TOOLS]:
         path = _which(name)
         rows.append(
             {
@@ -191,7 +195,19 @@ def tool_status_report(*, tools_dir: Path | None = None, env_file: Path | None =
                 "available": bool(path),
                 "path": path or "",
                 "managed_path": str(_managed_tool_path(name, tools_dir)),
-                "installable": name in {"dotnet", "eztools", "bstrings", "sidr", "MemProcFS", "pypykatz", "vol", "volatility3", "usnjrnl-forensic"},
+                "installable": name
+                in {
+                    "dotnet",
+                    "eztools",
+                    "bstrings",
+                    "sidr",
+                    "MemProcFS",
+                    "pypykatz",
+                    "vol",
+                    "volatility3",
+                    "usnjrnl-forensic",
+                    "ual-timeliner",
+                },
             }
         )
     rows.append(
@@ -218,18 +234,24 @@ def tool_status_report(*, tools_dir: Path | None = None, env_file: Path | None =
 def dependency_report(*, env_file: Path | None = None) -> dict[str, Any]:
     if env_file:
         _load_env_file(env_file)
-    required = [_tool_status(name, purpose, required=True) for name, purpose in REQUIRED_TOOLS]
-    optional = [_tool_status(name, purpose, required=False) for name, purpose in OPTIONAL_TOOLS]
+    required = [_tool_status(name, purpose, required=True, tier="core_required") for name, purpose in CORE_REQUIRED_TOOLS]
+    default_coverage = [_tool_status(name, purpose, required=True, tier="default_coverage") for name, purpose in DEFAULT_COVERAGE_TOOLS]
+    core_missing = sum(1 for row in required if not row["available"])
+    coverage_missing = sum(1 for row in default_coverage if not row["available"])
     return {
         "summary": {
-            "required_count": len(required),
-            "required_available": sum(1 for row in required if row["available"]),
-            "required_missing": sum(1 for row in required if not row["available"]),
-            "optional_count": len(optional),
-            "optional_available": sum(1 for row in optional if row["available"]),
+            "core_required_count": len(required),
+            "core_required_available": sum(1 for row in required if row["available"]),
+            "core_required_missing": core_missing,
+            "default_coverage_count": len(default_coverage),
+            "default_coverage_available": sum(1 for row in default_coverage if row["available"]),
+            "default_coverage_missing": coverage_missing,
+            "required_count": len(required) + len(default_coverage),
+            "required_available": sum(1 for row in [*required, *default_coverage] if row["available"]),
+            "required_missing": core_missing + coverage_missing,
         },
         "required": required,
-        "optional": optional,
+        "default_coverage": default_coverage,
     }
 
 
@@ -453,7 +475,7 @@ def doctor_report(
     repair: bool = False,
     repair_env_file: Path | None = None,
     tools_dir: Path | None = None,
-    include_optional_repair: bool = True,
+    include_default_coverage_repair: bool = True,
     smoke: bool = False,
 ) -> dict[str, Any]:
     repair_result = None
@@ -461,7 +483,7 @@ def doctor_report(
         repair_result = repair_dependencies(
             tools_dir=tools_dir,
             env_file=repair_env_file,
-            include_optional=include_optional_repair,
+            include_default_coverage=include_default_coverage_repair,
             apply=True,
         )
     dependencies = dependency_report(env_file=repair_env_file)
@@ -472,7 +494,8 @@ def doctor_report(
         _check("platform_supported", bool(version["os_supported"]), version.get("platform_support")),
         _check("workspace_root_exists", paths.root.exists(), str(paths.root)),
         _check("sqlite_schema", bool((schema.get("schema_version") or {}).get("version")), schema.get("schema_version")),
-        _check("required_dependencies", dependencies["summary"]["required_missing"] == 0, dependencies["summary"]),
+        _check("core_required_dependencies", dependencies["summary"]["core_required_missing"] == 0, dependencies["summary"]),
+        _check("default_coverage_dependencies", dependencies["summary"]["default_coverage_missing"] == 0, dependencies["summary"]),
         _check("profiles_loaded", bool(registry.profiles), {"profile_count": len(registry.profiles)}),
         _check("tools_loaded", bool(registry.tools), {"tool_count": len(registry.tools)}),
     ]
@@ -554,15 +577,15 @@ def repair_dependencies(
     *,
     tools_dir: Path | None = None,
     env_file: Path | None = None,
-    include_optional: bool = True,
+    include_default_coverage: bool = True,
     apply: bool = True,
 ) -> dict[str, Any]:
     tools_dir = _tools_dir(tools_dir)
     env_file = (env_file or tools_dir / "forensic-orchestrator.env").expanduser()
     before = dependency_report(env_file=env_file if env_file.exists() else None)
     targets = [row for row in before["required"] if not row["available"]]
-    if include_optional:
-        targets.extend(row for row in before["optional"] if not row["available"])
+    if include_default_coverage:
+        targets.extend(row for row in before["default_coverage"] if not row["available"])
     repairs: list[dict[str, Any]] = []
     env_updates = _discover_local_env_updates(tools_dir)
     if apply and env_updates:
@@ -596,7 +619,7 @@ def repair_dependencies(
         "tools_dir": str(tools_dir),
         "env_file": str(env_file),
         "applied": apply,
-        "include_optional": include_optional,
+        "include_default_coverage": include_default_coverage,
         "before": before["summary"],
         "after": after["summary"],
         "repairs": repairs,
@@ -615,17 +638,28 @@ def install_third_party_tool(
     env_file: Path | None = None,
     force: bool = False,
     apply: bool = True,
+    progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     tools_dir = _tools_dir(tools_dir)
     env_file = (env_file or tools_dir / "forensic-orchestrator.env").expanduser()
     names = _expand_tool_selection(tool)
     results = []
-    for name in names:
+    total = len(names)
+    _emit_progress(progress, f"install target: {tool}; tools-dir: {tools_dir}; env-file: {env_file}")
+    for index, name in enumerate(names, 1):
+        _emit_progress(progress, f"[{index}/{total}] starting {name}{_install_progress_note(name)}")
         results.append(_install_one_tool(name, tools_dir=tools_dir, env_file=env_file, force=force, apply=apply))
+        result = results[-1]
+        _emit_progress(progress, f"[{index}/{total}] finished {name}: {result.get('status')}")
     env_updates = _discover_local_env_updates(tools_dir)
     if apply and env_updates:
+        _emit_progress(progress, f"writing environment file: {env_file}")
         _write_env_file(env_file, env_updates)
         os.environ.update(env_updates)
+        _emit_progress(progress, f"environment variables updated: {', '.join(sorted(env_updates))}")
+    elif env_updates:
+        _emit_progress(progress, f"environment file would include: {', '.join(sorted(env_updates))}")
+    _emit_progress(progress, "install pass complete")
     return {
         "tools_dir": str(tools_dir),
         "env_file": str(env_file),
@@ -636,22 +670,58 @@ def install_third_party_tool(
     }
 
 
+def _emit_progress(progress: Callable[[str], None] | None, message: str) -> None:
+    if progress:
+        progress(message)
+
+
+def _install_progress_note(name: str) -> str:
+    normalized = _normalize_tool_name(name)
+    notes = {
+        "dotnet": " (download/install may take a few minutes)",
+        "eztools": " (catalog download and extraction may take a few minutes)",
+        "bstrings": " (EZ Tools catalog download may take a few minutes)",
+        "sidr": " (Rust source build may take several minutes)",
+        "memprocfs": " (GitHub release download/extraction may take a few minutes)",
+        "volatility3": " (uv Python tool install may take a few minutes)",
+        "ual-timeliner": " (uv Python tool install may take a few minutes)",
+        "usnjrnl-forensic": " (Rust crate compile may take several minutes)",
+    }
+    return notes.get(normalized, "")
+
+
 def _install_one_tool(tool: str, *, tools_dir: Path, env_file: Path, force: bool, apply: bool) -> dict[str, Any]:
     tool = _normalize_tool_name(tool)
     if tool == "usnjrnl-forensic":
         return _install_usnjrnl_forensic(tools_dir=tools_dir, force=force, apply=apply)
-    if tool in {"pypykatz", "vol", "volatility3"}:
+    if tool in {"pypykatz", "vol", "volatility3", "ual-timeliner"}:
         command = PYTHON_TOOL_REPAIRS.get(tool)
         if not command:
             return {"tool": tool, "status": "manual", "reason": "No installer recipe is configured."}
+        managed_path = _managed_tool_path(tool, tools_dir)
+        if managed_path.exists() and not force:
+            return {"tool": tool, "status": "present", "path": str(managed_path), "command": command}
         if not apply:
-            return {"tool": tool, "status": "would_run", "command": command}
+            return {
+                "tool": tool,
+                "status": "would_run",
+                "command": command,
+                "path": str(managed_path),
+                "environment": {
+                    "UV_TOOL_DIR": str(tools_dir / "uv-tools"),
+                    "UV_TOOL_BIN_DIR": str(tools_dir / "bin"),
+                },
+            }
         if not shutil.which(command[0]):
             return {"tool": tool, "status": "missing_installer", "command": command, "reason": f"{command[0]} is not on PATH"}
-        completed = subprocess.run(command, capture_output=True, text=True, check=False)
+        env = os.environ.copy()
+        env["UV_TOOL_DIR"] = str(tools_dir / "uv-tools")
+        env["UV_TOOL_BIN_DIR"] = str(tools_dir / "bin")
+        completed = subprocess.run(command, capture_output=True, text=True, check=False, env=env)
         return {
             "tool": tool,
-            "status": "installed" if completed.returncode == 0 else "failed",
+            "status": "installed" if completed.returncode == 0 and managed_path.exists() else "failed",
+            "path": str(managed_path) if managed_path.exists() else "",
             "command": command,
             "returncode": completed.returncode,
             "stdout": completed.stdout.strip()[-2000:],
@@ -672,7 +742,11 @@ def _install_one_tool(tool: str, *, tools_dir: Path, env_file: Path, force: bool
         return _install_sidr_from_source(tools_dir=tools_dir, force=force, apply=apply)
     if tool in {"eztools", "bstrings"}:
         return _install_eztools(tools_dir=tools_dir, force=force, apply=apply, wanted_tool=tool)
-    return {"tool": tool, "status": "unknown", "reason": "Supported tools: eztools, bstrings, sidr, memprocfs, dotnet, pypykatz, volatility3, usnjrnl-forensic, all."}
+    return {
+        "tool": tool,
+        "status": "unknown",
+        "reason": "Supported tools: eztools, bstrings, sidr, memprocfs, dotnet, pypykatz, volatility3, ual-timeliner, usnjrnl-forensic, all.",
+    }
 
 
 def _install_usnjrnl_forensic(*, tools_dir: Path, force: bool, apply: bool) -> dict[str, Any]:
@@ -1036,13 +1110,20 @@ def _linux_release() -> dict[str, str]:
 def _expand_tool_selection(tool: str) -> list[str]:
     normalized = _normalize_tool_name(tool)
     if normalized == "all":
-        return ["dotnet", "eztools", "sidr", "memprocfs", "pypykatz", "volatility3", "usnjrnl-forensic"]
+        return ["dotnet", "eztools", "sidr", "memprocfs", "pypykatz", "volatility3", "ual-timeliner", "usnjrnl-forensic"]
     return [normalized]
 
 
 def _normalize_tool_name(tool: str) -> str:
     lowered = tool.strip().casefold()
-    aliases = {"memprocfs": "memprocfs", "volatility": "volatility3", "vol": "vol", "ez": "eztools"}
+    aliases = {
+        "memprocfs": "memprocfs",
+        "volatility": "volatility3",
+        "vol": "vol",
+        "ez": "eztools",
+        "ual": "ual-timeliner",
+        "ual_timeliner": "ual-timeliner",
+    }
     return aliases.get(lowered, lowered)
 
 
@@ -1171,6 +1252,10 @@ def _managed_tool_path(name: str, tools_dir: Path) -> Path:
     normalized = _normalize_tool_name(name)
     if normalized == "dotnet":
         return tools_dir / "dotnet" / "dotnet"
+    if normalized in {"pypykatz", "ual-timeliner"}:
+        return tools_dir / "bin" / normalized
+    if normalized in {"vol", "volatility3"}:
+        return tools_dir / "bin" / "vol"
     if normalized == "memprocfs":
         return tools_dir / "MemProcFS" / "memprocfs"
     if normalized == "sidr":
@@ -1258,18 +1343,27 @@ def _discover_local_env_updates(tools_dir: Path) -> dict[str, str]:
             tools_dir / "cargo" / "bin" / "usnjrnl-forensic",
             Path.home() / ".cargo" / "bin" / "usnjrnl-forensic",
         ],
+        "UAL_TIMELINER_BIN": [
+            tools_dir / "ual-timeliner" / "ual-timeliner",
+            tools_dir / "bin" / "ual-timeliner",
+            Path.home() / ".local" / "bin" / "ual-timeliner",
+        ],
         "FORENSIC_ORCHESTRATOR_DOTNET": [
+            tools_dir / "dotnet" / "dotnet",
             Path.home() / ".dotnet" / "dotnet",
         ],
     }
     updates: dict[str, str] = {}
     for variable, paths in candidates.items():
-        if os.environ.get(variable):
-            continue
+        existing = os.environ.get(variable)
         for path in paths:
             if path.exists():
                 updates[variable] = str(path)
                 break
+        if variable not in updates and existing:
+            continue
+    if tools_dir.exists():
+        updates["FORENSIC_ORCHESTRATOR_TOOLS_ROOT"] = str(tools_dir)
     return updates
 
 
@@ -1309,9 +1403,9 @@ def _shell_quote(value: str) -> str:
     return "'" + value.replace("'", "'\"'\"'") + "'"
 
 
-def _tool_status(name: str, purpose: str, *, required: bool) -> dict[str, Any]:
+def _tool_status(name: str, purpose: str, *, required: bool, tier: str) -> dict[str, Any]:
     path = _which(name)
-    return {"tool": name, "purpose": purpose, "required": required, "available": bool(path), "path": path or ""}
+    return {"tool": name, "purpose": purpose, "tier": tier, "required": required, "available": bool(path), "path": path or ""}
 
 
 def _which(name: str) -> str | None:
@@ -1324,6 +1418,14 @@ def _which(name: str) -> str | None:
         return None
     if name == "usnjrnl-forensic" and os.environ.get("USNJRNL_FORENSIC_BIN"):
         return os.environ["USNJRNL_FORENSIC_BIN"]
+    if name == "ual-timeliner" and os.environ.get("UAL_TIMELINER_BIN"):
+        return os.environ["UAL_TIMELINER_BIN"]
+    if name in {"MemProcFS", "memprocfs"} and os.environ.get("MEMPROCFS_BIN"):
+        return os.environ["MEMPROCFS_BIN"]
+    if name in {"pypykatz", "vol", "volatility3"}:
+        managed = _managed_tool_path(name, _tools_dir(None))
+        if managed.exists():
+            return str(managed)
     if name == "dotnet":
         candidate = resolve_dotnet_runtime()
         if candidate and Path(candidate).exists():
@@ -1341,6 +1443,23 @@ def _which(name: str) -> str | None:
         "memprocfs": [Path.home() / "tools" / "MemProcFS" / "memprocfs"],
         "sidr": [Path.home() / "tools" / "sidr" / "sidr"],
         "usnjrnl-forensic": [Path.home() / "tools" / "cargo" / "bin" / "usnjrnl-forensic"],
+        "pypykatz": [
+            _tools_dir(None) / "bin" / "pypykatz",
+            Path.home() / ".local" / "bin" / "pypykatz",
+        ],
+        "vol": [
+            _tools_dir(None) / "bin" / "vol",
+            Path.home() / ".local" / "bin" / "vol",
+        ],
+        "volatility3": [
+            _tools_dir(None) / "bin" / "vol",
+            Path.home() / ".local" / "bin" / "vol",
+        ],
+        "ual-timeliner": [
+            _tools_dir(None) / "bin" / "ual-timeliner",
+            Path.home() / ".local" / "bin" / "ual-timeliner",
+            Path.home() / "tools" / "ual-timeliner" / "ual-timeliner",
+        ],
     }
     for candidate in local_candidates.get(name, []):
         if candidate.exists():

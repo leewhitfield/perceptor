@@ -53,7 +53,7 @@ def test_timeline_windows_old_dedupe_updates_duckdb_timeline_events(tmp_path: Pa
                 "event_type": "file_open",
                 "timestamp_utc": "2020-01-01T00:00:00Z",
                 "description": "opened file",
-                "details": {"path": "/Users/lee/file.txt"},
+                "details": {"path": "/Users/analyst/file.txt"},
             },
             {
                 "id": "event-old",
@@ -67,7 +67,7 @@ def test_timeline_windows_old_dedupe_updates_duckdb_timeline_events(tmp_path: Pa
                 "event_type": "file_open",
                 "timestamp_utc": "2020-01-01T00:00:00Z",
                 "description": "opened file",
-                "details": {"path": "/Users/lee/file.txt"},
+                "details": {"path": "/Users/analyst/file.txt"},
             },
         ]
     )

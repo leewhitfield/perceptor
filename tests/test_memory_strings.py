@@ -2,6 +2,7 @@ import json
 import subprocess
 
 import forensic_orchestrator.cli as cli_module
+import forensic_orchestrator.tools.memory_strings as memory_strings_module
 from forensic_orchestrator.cli import main as cli_main, run_memory_processing_profile
 from forensic_orchestrator.db import Database
 from forensic_orchestrator.paths import WorkspacePaths
@@ -57,7 +58,7 @@ def test_hiberfil_zeroed_source_is_recorded_without_scanning_payload(tmp_path):
     csv_path, metadata = scan_memory_strings_to_csv(source, tmp_path / "out", min_length=6)
 
     assert metadata["hiberfil_status"] == "zeroed_or_inactive"
-    assert metadata["decompress_status"] in {"decompressor_unavailable_or_failed", "not_applicable"}
+    assert metadata["decompress_status"] in {"decompressor_unavailable", "decompress_failed", "not_applicable"}
     assert csv_path.read_text(encoding="utf-8").count("\n") == 1
 
 
@@ -69,6 +70,29 @@ def test_hiberfil_assessment_detects_active_signature(tmp_path):
 
     assert status == "active_hibernation_header"
     assert "recognized" in note
+
+
+def test_hiberfil_decompression_metadata_and_scanned_payload(tmp_path, monkeypatch):
+    source = tmp_path / "hiberfil.sys"
+    source.write_bytes(b"HIBR" + b"\x00" * 8188)
+
+    monkeypatch.setattr(memory_strings_module, "_hibr2bin_command", lambda: ["hibr2bin"])
+
+    def fake_run(command, capture_output=None, text=None, check=None, timeout=None):
+        output_path = command[command.index("/OUTPUT") + 1]
+        with open(output_path, "wb") as handle:
+            handle.write(b"token=hiberfil-secret C:\\Users\\Maya\\Desktop\\note.txt")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(memory_strings_module.subprocess, "run", fake_run)
+
+    csv_path, metadata = scan_memory_strings_to_csv(source, tmp_path / "out", min_length=6)
+
+    assert metadata["decompress_status"] == "decompressed"
+    assert metadata["decompress_command"].startswith("hibr2bin ")
+    assert int(metadata["scanned_size_bytes"]) > 0
+    text = csv_path.read_text(encoding="utf-8")
+    assert "hiberfil-secret" in text
 
 
 def test_memory_artifact_type_classifies_crash_and_process_dumps(tmp_path):
@@ -156,6 +180,19 @@ def test_memory_profile_extracts_mft_support_file_when_mount_missing(tmp_path, m
     image_path = tmp_path / "disk.e01"
     image_path.write_bytes(b"image")
     db.add_image("image-1", case.id, image_path, computer_id="computer-1")
+    db.insert_mount(
+        {
+            "id": "mount-1",
+            "case_id": case.id,
+            "image_id": "image-1",
+            "partition_id": "p1",
+            "ewf_mount_path": tmp_path / "ewf",
+            "raw_path": image_path,
+            "source_type": "raw",
+            "filesystem_type": "ntfs",
+            "offset_bytes": 1024,
+        }
+    )
     db.insert_tool_output(
         {
             "id": "mft-output",
@@ -193,7 +230,7 @@ def test_memory_profile_extracts_mft_support_file_when_mount_missing(tmp_path, m
     monkeypatch.setattr(cli_module.shutil, "which", lambda name: "/usr/bin/icat" if name == "icat" else None)
 
     def fake_run(command, stdout=None, stderr=None, text=None, check=None, timeout=None):
-        assert command[:2] == ["/usr/bin/icat", "-o"]
+        assert command[:5] == ["/usr/bin/icat", "-f", "ntfs", "-o", "2"]
         stdout.write(b"token=abcdef123456 C:\\Users\\Maya\\Desktop\\note.txt")
         return subprocess.CompletedProcess(command, 0, stderr=b"")
 
@@ -204,6 +241,8 @@ def test_memory_profile_extracts_mft_support_file_when_mount_missing(tmp_path, m
     assert report["scan_task_count"] == 1
     assert report["scanned_count"] == 1
     assert report["imported_rows"] >= 1
+    assert report["scans"][0]["extract_status"] == "extracted"
+    assert "icat -f ntfs -o 2" in report["scans"][0]["extract_command"]
     extracted = paths.case_dir(case.id) / "supplemental" / "extracted-memory-support" / "pagefile.sys"
     assert extracted.exists()
 

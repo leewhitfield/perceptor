@@ -3,8 +3,9 @@ import hashlib
 import zipfile
 
 from forensic_orchestrator import standalone as standalone_module
+import forensic_orchestrator.cli as cli_module
 from forensic_orchestrator.config import load_config
-from forensic_orchestrator.cli import standalone_smoke_regression_report
+from forensic_orchestrator.cli import main as cli_main, standalone_smoke_regression_report
 from forensic_orchestrator.db import Database
 from forensic_orchestrator.paths import WorkspacePaths
 from forensic_orchestrator.standalone import (
@@ -47,6 +48,27 @@ def test_config_file_supplies_root_and_plugins(tmp_path):
     assert loaded.plugin_paths == [plugin]
     assert loaded.tools_root == tools_root
     assert loaded.eztools_root == eztools_root
+
+
+def test_standalone_doctor_reports_unwritable_default_root_without_crashing(tmp_path, monkeypatch, capsys):
+    blocked_root = tmp_path / "blocked-root"
+    blocked_db_path = blocked_root / "orchestrator.sqlite3"
+    real_database = cli_module.Database
+
+    def database_factory(path, *args, **kwargs):
+        if Path(path) == blocked_db_path:
+            raise PermissionError("blocked root")
+        return real_database(path, *args, **kwargs)
+
+    monkeypatch.setattr(cli_module, "Database", database_factory)
+
+    status = cli_main(["--root", str(blocked_root), "standalone", "doctor", "--format", "table"])
+
+    captured = capsys.readouterr()
+    assert status == 1
+    assert "Standalone doctor" in captured.out
+    assert "workspace_root_exists" in captured.out
+    assert "PermissionError" not in captured.err
 
 
 def test_standalone_reports_cover_profiles_schema_jobs_and_backups(tmp_path):
@@ -115,7 +137,7 @@ def test_repair_dependencies_writes_local_tool_env(monkeypatch, tmp_path):
     for key in ("BSTRINGS_BIN", "SIDR_BIN", "MEMPROCFS_BIN"):
         monkeypatch.delenv(key, raising=False)
 
-    report = repair_dependencies(tools_dir=tools, env_file=tmp_path / "tools.env", include_optional=False)
+    report = repair_dependencies(tools_dir=tools, env_file=tmp_path / "tools.env", include_default_coverage=False)
 
     env_text = (tmp_path / "tools.env").read_text(encoding="utf-8")
     assert report["applied"] is True
@@ -130,13 +152,29 @@ def test_repair_dependencies_writes_local_tool_env(monkeypatch, tmp_path):
 def test_tool_status_and_install_dry_run_use_managed_tools_dir(tmp_path):
     report = tool_status_report(tools_dir=tmp_path / "managed")
     sidr = next(row for row in report["tools"] if row["tool"] == "sidr")
+    ual_timeliner = next(row for row in report["tools"] if row["tool"] == "ual-timeliner")
     dry_run = install_third_party_tool("dotnet", tools_dir=tmp_path / "managed", apply=False)
     sidr_dry_run = install_third_party_tool("sidr", tools_dir=tmp_path / "managed", apply=False, force=True)
+    ual_dry_run = install_third_party_tool("ual", tools_dir=tmp_path / "managed", apply=False)
 
     assert sidr["managed_path"].endswith("managed/sidr/sidr")
+    assert ual_timeliner["installable"] is True
     assert dry_run["tools"][0]["status"] == "would_download_and_run"
     assert sidr_dry_run["tools"][0]["status"] == "would_build_from_source"
     assert sidr_dry_run["tools"][0]["repo"] == "https://github.com/strozfriedberg/sidr.git"
+    assert ual_dry_run["tools"][0]["status"] == "would_run"
+    assert "kev365/ual-timeliner" in " ".join(ual_dry_run["tools"][0]["command"])
+
+
+def test_install_tool_reports_progress(tmp_path):
+    messages = []
+
+    report = install_third_party_tool("ual", tools_dir=tmp_path / "managed", apply=False, progress=messages.append)
+
+    assert report["status"] == "completed"
+    assert any("starting ual-timeliner" in message for message in messages)
+    assert any("finished ual-timeliner: would_run" in message for message in messages)
+    assert messages[-1] == "install pass complete"
 
 
 def test_sidr_install_reports_manual_without_build_tools(monkeypatch, tmp_path):

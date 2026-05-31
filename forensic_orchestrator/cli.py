@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -46,6 +47,7 @@ from .copied_indicators import rebuild_copied_file_indicators
 from .correlation import rebuild_file_correlations
 from .filesystem_review import rebuild_filesystem_review
 from .filesystem_inventory import scan_mounted_filesystem
+from .deleted_file_recovery import recover_deleted_files
 from .nested_evidence import rebuild_nested_evidence_inventory
 from .user_file_references import rebuild_user_controlled_file_references
 from .reports import (
@@ -430,6 +432,13 @@ def write_text_output(text: str, output: str | None = None) -> None:
         Path(output).write_text(text, encoding="utf-8")
     else:
         print(text)
+
+
+def _standalone_install_progress(args: argparse.Namespace) -> Callable[[str], None]:
+    def progress(message: str) -> None:
+        print(f"[relic install] {message}", file=sys.stderr, flush=True)
+
+    return progress
 
 
 def write_csv_rows(rows: list[dict[str, object]], output: str | None = None) -> None:
@@ -1899,6 +1908,7 @@ def run_memory_processing_profile(
         if artifact_type in {"crash_dump", "process_dump", "full_memory_dump"} and not include_crash_dumps:
             continue
         source = Path(str(artifact.get("actual_path") or artifact.get("path") or ""))
+        extract_metadata: dict[str, object] = {}
         if not source.exists() or not source.is_file():
             extracted = (
                 _extract_memory_artifact_fallback(
@@ -1920,15 +1930,22 @@ def run_memory_processing_profile(
                         "status": "skipped",
                         "reason": extracted.get("reason") or "No accessible file path.",
                         "extract_status": extracted.get("status"),
+                        "extract_command": extracted.get("command"),
                     }
                 )
                 continue
             source = Path(str(extracted["path"]))
+            extract_metadata = extracted
         task_output_dir = output_base / f"{index:04d}"
         scan_tasks.append(
             ProcessingTask(
                 name=f"memory-profile:{index}",
-                payload={"artifact": artifact, "artifact_type": artifact_type, "source": source},
+                payload={
+                    "artifact": artifact,
+                    "artifact_type": artifact_type,
+                    "source": source,
+                    "extract_metadata": extract_metadata,
+                },
                 worker=lambda source=source, task_output_dir=task_output_dir: scan_memory_strings_to_csv(
                     source,
                     task_output_dir,
@@ -1942,6 +1959,7 @@ def run_memory_processing_profile(
             artifact = result.payload["artifact"]
             artifact_type = str(result.payload["artifact_type"])
             source = Path(result.payload["source"])
+            extract_metadata = result.payload.get("extract_metadata") if isinstance(result.payload.get("extract_metadata"), dict) else {}
             local_computer_id, local_image_id = _cloud_or_memory_evidence_ids(
                 db,
                 case_id=case_id,
@@ -1957,7 +1975,14 @@ def run_memory_processing_profile(
                     event="memory.profile_scan_failed",
                     level="warning",
                     message=f"Memory profile scan failed for {source}",
-                    details={"path": str(source), "error": result.error, "duration_seconds": result.duration_seconds},
+                    details={
+                        "path": str(source),
+                        "error": result.error,
+                        "duration_seconds": result.duration_seconds,
+                        "extract_status": extract_metadata.get("status"),
+                        "extract_command": extract_metadata.get("command"),
+                        "original_source_path": artifact.get("actual_path") or artifact.get("path"),
+                    },
                 )
                 scans.append(
                     {
@@ -1966,6 +1991,9 @@ def run_memory_processing_profile(
                         "status": "failed",
                         "error": result.error,
                         "duration_seconds": result.duration_seconds,
+                        "extract_status": extract_metadata.get("status"),
+                        "extract_command": extract_metadata.get("command"),
+                        "original_source_path": artifact.get("actual_path") or artifact.get("path"),
                     }
                 )
                 continue
@@ -2006,6 +2034,9 @@ def run_memory_processing_profile(
                     "source_path": str(source),
                     "output": str(csv_path),
                     "imported_rows": imported,
+                    "extract_status": extract_metadata.get("status"),
+                    "extract_command": extract_metadata.get("command"),
+                    "original_source_path": artifact.get("actual_path") or artifact.get("path"),
                     **metadata,
                 },
             )
@@ -2017,6 +2048,9 @@ def run_memory_processing_profile(
                     "output": str(csv_path),
                     "imported_rows": imported,
                     "duration_seconds": result.duration_seconds,
+                    "extract_status": extract_metadata.get("status"),
+                    "extract_command": extract_metadata.get("command"),
+                    "original_source_path": artifact.get("actual_path") or artifact.get("path"),
                     **metadata,
                 }
             )
@@ -2070,19 +2104,20 @@ def _extract_memory_artifact_fallback(
     if output_path.exists() and output_path.stat().st_size:
         return {"status": "extracted", "path": str(output_path), "reason": "Existing extracted copy reused."}
     offset = _icat_offset_for_image(db, case_id, str(image["id"]))
-    command = [icat, "-o", str(offset), str(source_image), entry_number]
+    command = [icat, "-f", "ntfs", "-o", str(offset), str(source_image), entry_number]
+    command_text = shlex.join(command)
     try:
         with output_path.open("wb") as handle:
             completed = subprocess.run(command, stdout=handle, stderr=subprocess.PIPE, text=False, check=False, timeout=3600)
     except (OSError, subprocess.TimeoutExpired) as exc:
         output_path.unlink(missing_ok=True)
-        return {"status": "failed", "reason": str(exc)}
+        return {"status": "failed", "reason": str(exc), "command": command_text}
     if completed.returncode != 0:
         output_path.unlink(missing_ok=True)
-        return {"status": "failed", "reason": completed.stderr.decode("utf-8", errors="replace").strip()}
+        return {"status": "failed", "reason": completed.stderr.decode("utf-8", errors="replace").strip(), "command": command_text}
     if not output_path.exists() or output_path.stat().st_size == 0:
         output_path.unlink(missing_ok=True)
-        return {"status": "empty", "reason": "icat produced an empty output file."}
+        return {"status": "empty", "reason": "icat produced an empty output file.", "command": command_text}
     db.log_activity(
         case_id=case_id,
         computer_id=str(artifact.get("computer_id") or computer_id or image.get("computer_id") or "") or None,
@@ -2096,9 +2131,11 @@ def _extract_memory_artifact_fallback(
             "image_path": str(source_image),
             "output_path": str(output_path),
             "icat_offset": offset,
+            "icat_offset_sectors": offset,
+            "icat_command": command_text,
         },
     )
-    return {"status": "extracted", "path": str(output_path)}
+    return {"status": "extracted", "path": str(output_path), "command": command_text}
 
 
 def _image_row_for_memory_artifact(db: Database, case_id: str, image_id: str | None) -> dict[str, object] | None:
@@ -2130,7 +2167,12 @@ def _icat_offset_for_image(db: Database, case_id: str, image_id: str) -> int:
         ).fetchone()
     except Exception:
         row = None
-    return int(row["offset_bytes"]) if row and row["offset_bytes"] is not None else 0
+    if not row or row["offset_bytes"] is None:
+        return 0
+    try:
+        return int(row["offset_bytes"]) // 512
+    except (TypeError, ValueError):
+        return 0
 
 
 def _safe_memory_extract_name(value: str) -> str:
@@ -2372,6 +2414,20 @@ def build_parser() -> argparse.ArgumentParser:
     carve_ese.add_argument("--max-carve-size", type=int, default=512 * 1024 * 1024)
     carve_ese.add_argument("--start-offset", type=int, default=0)
     carve_ese.add_argument("--chunk-size", type=int, default=64 * 1024 * 1024)
+
+    recover = subparsers.add_parser("recover")
+    recover_sub = recover.add_subparsers(dest="action", required=True)
+    recover_deleted = recover_sub.add_parser("deleted-files")
+    recover_deleted.add_argument("--case", required=True, dest="case_id")
+    recover_deleted.add_argument("--image", dest="image_id")
+    recover_deleted.add_argument("--contains")
+    recover_deleted.add_argument("--name")
+    recover_deleted.add_argument("--source", choices=["all", "filesystem_entries", "mft_entries"], default="all")
+    recover_deleted.add_argument("--limit", type=int, default=100)
+    recover_deleted.add_argument("--max-bytes", type=int)
+    recover_deleted.add_argument("--output-dir")
+    recover_deleted.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    recover_deleted.add_argument("--output")
 
     computer = subparsers.add_parser("computer")
     computer_sub = computer.add_subparsers(dest="action", required=True)
@@ -4101,7 +4157,7 @@ def build_parser() -> argparse.ArgumentParser:
     standalone_doctor.add_argument("--repair", action="store_true", help="Attempt safe dependency repairs before running checks")
     standalone_doctor.add_argument("--repair-env-file", help="Write/read repaired tool environment variables from this file")
     standalone_doctor.add_argument("--tools-dir", help="Directory used for locally installed external tools")
-    standalone_doctor.add_argument("--required-only", action="store_true", help="When repairing, skip optional dependencies")
+    standalone_doctor.add_argument("--required-only", action="store_true", help="When repairing, skip default coverage dependencies and repair only core required tools")
     standalone_doctor.add_argument("--smoke", action="store_true", help="Run a tiny isolated workspace smoke test as part of doctor")
     standalone_doctor.add_argument("--format", choices=["json", "table"], default="json")
     standalone_doctor.add_argument("--output")
@@ -4115,7 +4171,7 @@ def build_parser() -> argparse.ArgumentParser:
     standalone_repair = standalone_sub.add_parser("repair-dependencies")
     standalone_repair.add_argument("--env-file", help="Write/read repaired tool environment variables from this file")
     standalone_repair.add_argument("--tools-dir", help="Directory used for locally installed external tools")
-    standalone_repair.add_argument("--required-only", action="store_true", help="Skip optional dependencies")
+    standalone_repair.add_argument("--required-only", action="store_true", help="Skip default coverage dependencies and repair only core required tools")
     standalone_repair.add_argument("--format", choices=["json", "table"], default="json")
     standalone_repair.add_argument("--output")
     standalone_tool_status = standalone_sub.add_parser("tool-status")
@@ -4339,6 +4395,49 @@ def run(args: argparse.Namespace) -> int:
             columns=["label", "prefix", "path", "csv_count", "mapped_count", "unmapped_count", "member_count"],
         )
         return 0
+    if args.resource == "recover" and args.action == "deleted-files":
+        db = Database(paths.db_path())
+        try:
+            output_dir = (
+                Path(args.output_dir).expanduser()
+                if args.output_dir
+                else paths.case_dir(args.case_id) / "outputs" / "recovered-files" / "deleted-files"
+            )
+            report = recover_deleted_files(
+                db,
+                case_id=args.case_id,
+                image_id=args.image_id,
+                contains=args.contains,
+                name=args.name,
+                source=args.source,
+                limit=args.limit,
+                max_bytes=args.max_bytes,
+                output_dir=output_dir,
+                dry_run=args.dry_run,
+            )
+            rows = report["files"]
+            write_report_output(
+                report,
+                rows,
+                args.format,
+                args.output,
+                title=f"Deleted file recovery for case {args.case_id}",
+                columns=[
+                    "status",
+                    "source_table",
+                    "filesystem_type",
+                    "original_path",
+                    "inode",
+                    "original_size",
+                    "recovered_size",
+                    "sha256",
+                    "output_path",
+                    "reason",
+                ],
+            )
+            return 0
+        finally:
+            db.close()
     if args.resource == "standalone" and args.action in {
         "version",
         "dependencies",
@@ -4348,10 +4447,51 @@ def run(args: argparse.Namespace) -> int:
         "profile-catalog",
         "artifact-capability",
         "sample-fixture",
+        "doctor",
         "smoke-regression",
         "verify-install",
         "backlog",
     }:
+        if args.action == "doctor":
+            temp_dir: tempfile.TemporaryDirectory[str] | None = None
+            doctor_db: Database | None = None
+            try:
+                try:
+                    doctor_db = Database(paths.db_path())
+                except PermissionError as exc:
+                    if args.case_id:
+                        raise OrchestratorError(f"Workspace root is not writable: {paths.root}") from exc
+                    temp_dir = tempfile.TemporaryDirectory(prefix="relic-doctor-")
+                    doctor_db = Database(Path(temp_dir.name) / "doctor.sqlite")
+                report = doctor_report(
+                    doctor_db,
+                    paths,
+                    registry,
+                    case_id=args.case_id,
+                    profile=args.profile,
+                    repair=args.repair,
+                    repair_env_file=Path(args.repair_env_file) if args.repair_env_file else None,
+                    tools_dir=Path(args.tools_dir) if args.tools_dir else config.tools_root,
+                    include_default_coverage_repair=not args.required_only,
+                    smoke=args.smoke,
+                )
+            finally:
+                if doctor_db is not None:
+                    doctor_db.close()
+                if temp_dir is not None:
+                    temp_dir.cleanup()
+            if args.format == "table":
+                write_report_output(
+                    report,
+                    report["checks"],
+                    "table",
+                    args.output,
+                    title="Standalone doctor",
+                    columns=["name", "passed", "details"],
+                )
+            else:
+                write_text_output(json.dumps(report, indent=2, default=str), args.output)
+            return 0 if report.get("passed") else 1
         if args.action == "version":
             report = version_report(paths.root, config.plugin_paths)
             if args.format == "table":
@@ -4361,14 +4501,14 @@ def run(args: argparse.Namespace) -> int:
             return 0
         if args.action == "dependencies":
             report = dependency_report(env_file=Path(args.env_file) if args.env_file else None)
-            rows = [*report["required"], *report["optional"]]
-            write_report_output(report, rows, args.format, args.output, title="Standalone dependencies", columns=["tool", "required", "available", "path", "purpose"])
+            rows = [*report["required"], *report["default_coverage"]]
+            write_report_output(report, rows, args.format, args.output, title="Standalone dependencies", columns=["tool", "tier", "required", "available", "path", "purpose"])
             return 1 if report["summary"]["required_missing"] else 0
         if args.action == "repair-dependencies":
             report = repair_dependencies(
                 tools_dir=Path(args.tools_dir) if args.tools_dir else config.tools_root,
                 env_file=Path(args.env_file) if args.env_file else None,
-                include_optional=not args.required_only,
+                include_default_coverage=not args.required_only,
                 apply=not args.dry_run,
             )
             if args.format == "table":
@@ -4384,12 +4524,14 @@ def run(args: argparse.Namespace) -> int:
             write_report_output(report, report["tools"], args.format, args.output, title="Third-party tool status", columns=["tool", "available", "path", "managed_path", "installable", "purpose"])
             return 0
         if args.action == "install-tool":
+            progress = _standalone_install_progress(args)
             report = install_third_party_tool(
                 args.tool,
                 tools_dir=Path(args.tools_dir) if args.tools_dir else config.tools_root,
                 env_file=Path(args.env_file) if args.env_file else None,
                 force=args.force,
                 apply=not args.dry_run,
+                progress=progress,
             )
             if args.format == "table":
                 write_report_output(report, report["tools"], "table", args.output, title="Third-party tool install", columns=["tool", "status", "path", "url", "command", "reason", "prerequisite", "next_step"])
@@ -4433,7 +4575,7 @@ def run(args: argparse.Namespace) -> int:
                 repair=args.repair,
                 repair_env_file=Path(args.repair_env_file) if args.repair_env_file else None,
                 tools_dir=Path(args.tools_dir) if args.tools_dir else config.tools_root,
-                include_optional_repair=not args.required_only,
+                include_default_coverage_repair=not args.required_only,
                 smoke=args.smoke,
             )
             if args.format == "table":
@@ -4459,15 +4601,15 @@ def run(args: argparse.Namespace) -> int:
 
         if args.resource == "standalone" and args.action == "dependencies":
             report = dependency_report(env_file=Path(args.env_file) if args.env_file else None)
-            rows = [*report["required"], *report["optional"]]
-            write_report_output(report, rows, args.format, args.output, title="Standalone dependencies", columns=["tool", "required", "available", "path", "purpose"])
+            rows = [*report["required"], *report["default_coverage"]]
+            write_report_output(report, rows, args.format, args.output, title="Standalone dependencies", columns=["tool", "tier", "required", "available", "path", "purpose"])
             return 1 if report["summary"]["required_missing"] else 0
 
         if args.resource == "standalone" and args.action == "repair-dependencies":
             report = repair_dependencies(
                 tools_dir=Path(args.tools_dir) if args.tools_dir else config.tools_root,
                 env_file=Path(args.env_file) if args.env_file else None,
-                include_optional=not args.required_only,
+                include_default_coverage=not args.required_only,
                 apply=not args.dry_run,
             )
             if args.format == "table":
@@ -4492,12 +4634,14 @@ def run(args: argparse.Namespace) -> int:
             return 0
 
         if args.resource == "standalone" and args.action == "install-tool":
+            progress = _standalone_install_progress(args)
             report = install_third_party_tool(
                 args.tool,
                 tools_dir=Path(args.tools_dir) if args.tools_dir else config.tools_root,
                 env_file=Path(args.env_file) if args.env_file else None,
                 force=args.force,
                 apply=not args.dry_run,
+                progress=progress,
             )
             if args.format == "table":
                 write_report_output(report, report["tools"], "table", args.output, title="Third-party tool install", columns=["tool", "status", "path", "url", "command", "reason", "prerequisite", "next_step"])
@@ -7243,9 +7387,14 @@ def run(args: argparse.Namespace) -> int:
                         "processed_status",
                         "scan_status",
                         "hit_count",
+                        "extract_status",
                         "decompress_status",
                         "hiberfil_status",
+                        "source_size_bytes",
+                        "scanned_size_bytes",
                         "path",
+                        "extract_command",
+                        "decompress_command",
                     ],
                 )
             return 0
@@ -8526,6 +8675,11 @@ def run(args: argparse.Namespace) -> int:
                     "observed_text",
                     "observed_path",
                     "certainty",
+                    "openai_model",
+                    "input_tokens",
+                    "output_tokens",
+                    "total_tokens",
+                    "estimated_cost_usd",
                     "time_basis",
                     "source_cache_path",
                     "contact_sheet_path",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from collections import Counter
@@ -63,11 +64,9 @@ def run_vsc_ntfs_delta_scan(
 
     require_dependency("icat")
     require_dependency("fls")
-    mftecmd = Path("/home/lee/tools/eztools/MFTECmd/MFTECmd.dll")
-    if not mftecmd.is_file():
-        mftecmd = Path("/opt/eztools/MFTECmd/MFTECmd.dll")
-    if not mftecmd.is_file():
-        raise MountError("MFTECmd.dll not found under /home/lee/tools/eztools or /opt/eztools")
+    mftecmd = _resolve_eztool("MFTECmd", "MFTECmd.dll")
+    if not mftecmd:
+        raise MountError("MFTECmd.dll not found. Set EZTOOLS_ROOT or install EZ Tools under /opt/relic-tools/eztools.")
     dotnet = Path(resolve_dotnet_runtime())
 
     db_path = paths.vsc_parsed_db_path(case_id)
@@ -1126,6 +1125,25 @@ def _row(columns: list[str], values: tuple[Any, ...]) -> dict[str, Any]:
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+
+
+def _resolve_eztool(tool_dir: str, dll_name: str) -> Path | None:
+    roots = [
+        Path(os.environ["EZTOOLS_ROOT"]).expanduser() if os.environ.get("EZTOOLS_ROOT") else None,
+        Path(os.environ["FORENSIC_ORCHESTRATOR_TOOLS_ROOT"]).expanduser() / "eztools"
+        if os.environ.get("FORENSIC_ORCHESTRATOR_TOOLS_ROOT")
+        else None,
+        Path("/opt/relic-tools/eztools"),
+        Path("/opt/eztools"),
+        Path.home() / "tools" / "eztools",
+    ]
+    for root in roots:
+        if not root:
+            continue
+        candidate = root / tool_dir / dll_name
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def _md(value: object, limit: int = 160) -> str:

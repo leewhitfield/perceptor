@@ -2,9 +2,10 @@
 
 CLI-first starter repo for lawful forensic processing orchestration.
 
-Operator manual: see `docs/user-manual.md` for setup, workflows, command
-switches, and reporting guidance. Supported install path: Ubuntu 24.04 LTS
-x86_64, bare metal or VM; see `docs/ubuntu-install.md`.
+Operator documentation is organized for MkDocs under `docs/`; start with
+`docs/index.md`. The legacy single-page manual remains at `docs/user-manual.md`.
+Supported install path: Ubuntu 24.04 LTS x86_64, bare metal or VM; see
+`docs/getting-started/ubuntu-install.md`.
 
 Quick Ubuntu bootstrap from a source checkout:
 
@@ -38,8 +39,8 @@ Linux worker packages:
 - `ewf-tools` for `ewfmount` fallback when Sleuth Kit cannot read E01 directly
 - `qemu-utils` for `qemu-img` conversion of VHD, VHDX, and VMDK evidence into
   case-local raw images
-- `ntfs-3g` if using optional read-only filesystem mounts
-- `libfsntfs-utils` and `python3-libfsntfs` for optional recovery of compressed NTFS files
+- `ntfs-3g` for read-only filesystem mounts
+- `libfsntfs-utils` and `python3-libfsntfs` for compressed NTFS recovery support
 - Eric Zimmerman's `SrumECmd` for SRUM parsing. The configured .NET tool runs
   on Windows-capable runtimes; on this Linux MVP worker it may report that
   Windows ESE libraries are unavailable.
@@ -52,11 +53,8 @@ Linux worker packages:
   PDFs, pictures, videos, executables, scripts, and archives.
 - `$LogFile` parsing uses the vendored `ntfs_parse` parser under
   `third_party/ntfs_parse`. No `/tmp` code dependency is required.
-- OneDrive `.dat` parsing can use OneDriveExplorer when available. Set
-  `ONEDRIVE_EXPLORER=/path/to/OneDriveExplorer.py`. On Linux the app uses
-  OneDriveExplorer's `.dat` parser library as a fallback because the upstream
-  CLI imports Windows-only ODL code; ODL/ODLSENT files are still inventoried by
-  the internal cloud parser.
+- OneDrive artifacts are parsed with Relic's internal cloud-sync coverage.
+  ODL/ODLSENT files are inventoried by the internal cloud parser.
 - RDP Bitmap Cache extraction can use BMC Tools when available. Set
   `BMC_TOOLS=/path/to/bmc-tools.py`. Without it, the app still inventories RDP
   cache files and records that fragment extraction was skipped.
@@ -65,8 +63,9 @@ Linux worker packages:
   when `tesseract-ocr` is installed; RDP cache parsing records image metadata
   without OCR by default.
 
-See `docs/dependencies.md` for the maintained dependency checklist, optional
-tool environment variables, and verification commands.
+See `docs/getting-started/dependencies.md` for the maintained dependency
+checklist, default coverage tool environment variables, and verification
+commands.
 
 The default MVP flow does not require a kernel NTFS mount. Image preparation
 accepts E01/EWF, DD/RAW, VHD, VHDX, VMDK, and ZIP-wrapped evidence. VHD, VHDX,
@@ -136,12 +135,6 @@ export EZTOOLS_ROOT=/path/to/eztools
 
 The built-in YAML keeps `/opt/eztools/...` paths for deployment clarity, and the
 CLI rewrites that prefix at runtime when `EZTOOLS_ROOT` is present.
-
-If OneDriveExplorer is installed outside the repo, set:
-
-```bash
-export ONEDRIVE_EXPLORER=/path/to/OneDriveExplorer/OneDriveExplorer.py
-```
 
 ## Operator Run
 
@@ -466,7 +459,9 @@ metadata in `image_analysis_items`. The follow-on `RdpVisionReview` stage uses
 the OpenAI Responses API only when both `OPENAI_API_KEY` and
 `FORENSIC_ALLOW_EXTERNAL_AI=1` are configured to produce bounded semantic
 observations from contact sheets. Otherwise, or if the API call fails, it records
-a Tesseract OCR fallback row instead. `windows-deep` also includes this parser.
+a Tesseract OCR fallback row instead. OpenAI response token usage and estimated
+cost are stored in the observation details and surfaced by
+`report rdp-visual-observations`. `windows-deep` also includes this parser.
 
 `windows-old` scopes the existing Windows artifact parsers to `Windows.old`.
 It stores extracted artifacts and parser output under a `Windows.old` namespace,
@@ -523,7 +518,7 @@ forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report inte
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report interesting-executables --case CASE_ID --rules ./my-interesting-tools.yaml --format table
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report accounts --case CASE_ID
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report users --case CASE_ID
-forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report files --case CASE_ID --user Devon
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report files --case CASE_ID --user USERNAME
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report file-names --case CASE_ID --format table --limit 100
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report file-names --case CASE_ID --contains "GunStar" --format table
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report file-name-drilldown --case CASE_ID --name "GunStar Death Blossom Data.docx" --format table
@@ -546,7 +541,7 @@ forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report usn 
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report prefetch --case CASE_ID --limit 100
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report evtx --case CASE_ID --limit 100
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report evtx-recovery --case CASE_ID
-forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report recycle --case CASE_ID --user Jean
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report recycle --case CASE_ID --user USERNAME
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report deleted-folders --case CASE_ID
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report firefox --case CASE_ID --limit 100
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report browser --case CASE_ID --type history --limit 100
@@ -572,18 +567,18 @@ forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report vpn-
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report web-cloud-correlations --case CASE_ID --category webmail --format table --limit 100
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report web-cloud-correlations --case CASE_ID --provider "Google Drive" --format table --limit 100
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report messaging-artifacts --case CASE_ID --format table --limit 100
-forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report messaging-artifacts --case CASE_ID --application Slack --user fredr --contains frocba --format table
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report messaging-artifacts --case CASE_ID --application Slack --user USERNAME --contains search-term --format table
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report event-interpretation --case CASE_ID --category usb --format table --limit 100
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report email-artifacts --case CASE_ID --format table --limit 100
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report mailbox-messages --case CASE_ID --format table --limit 100
-forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report mailbox-messages --case CASE_ID --user fredr --status parsed --contains SharePoint --format table
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report mailbox-messages --case CASE_ID --user USERNAME --status parsed --contains SharePoint --format table
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report timeline --case CASE_ID --contains "report.docx"
-forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report user-timeline --case CASE_ID --user Jean --format table --limit 250
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report user-timeline --case CASE_ID --user USERNAME --format table --limit 250
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report validate --case CASE_ID
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report registry --case CASE_ID --limit 100
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report registry-artifacts --case CASE_ID --artifact usb_device_history
-forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report registry-activity --case CASE_ID --artifact runmru --user Jean
-forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report registry-activity --case CASE_ID --artifact recentdocs --user Devon
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report registry-activity --case CASE_ID --artifact runmru --user USERNAME
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report registry-activity --case CASE_ID --artifact recentdocs --user USERNAME
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report common-dialog-items --case CASE_ID --limit 100
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report amcache --case CASE_ID --limit 100
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report shimcache --case CASE_ID --limit 100
@@ -599,13 +594,13 @@ forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report expo
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report export --case CASE_ID --preset usb-timeline --output usb-timeline.csv
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report file-metadata --case CASE_ID --user-only --exclude-system --limit 100
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report file-metadata --case CASE_ID --extension .docx --property Creator
-forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report file-metadata --case CASE_ID --source-folder Users/fredr/Downloads
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report file-metadata --case CASE_ID --source-folder Users/USERNAME/Downloads
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report file-metadata-folders --case CASE_ID --tool FileMetadataPicturesUserContent
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report file-metadata-skipped --case CASE_ID --latest
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report file-metadata-skipped-deleted --case CASE_ID --latest
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report file-metadata-unresolved --case CASE_ID --latest
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report file-metadata-summary --case CASE_ID
-forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report activity-summary --case CASE_ID --user Jean
+forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report activity-summary --case CASE_ID --user USERNAME
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report shortcuts --case CASE_ID --type lnk
 forensic-orchestrator --root /mnt/forensic-ssd/forensic-orchestrator report shortcuts --case CASE_ID --type jumplist
 ```
@@ -757,7 +752,7 @@ to one or more tab-delimited lookup files separated by the platform path
 separator. Set `FORENSIC_PREFETCH_HASH_LOOKUP_DIRS` to one or more directories
 to auto-discover files whose names look like Prefetch hash/path lookup lists, or
 place the FOR500 lookup at
-`/home/lee/reference/upload/FOR500_K01/Library/Analysis/prefetch_hashes_lookup.txt`.
+`/path/to/reference/FOR500_K01/Library/Analysis/prefetch_hashes_lookup.txt`.
 Matches populate `resolved_reference_*` fields on `prefetch_items` and should be
 treated as resolver enrichment, not proof of a path on the examined system unless
 other case artifacts corroborate it.
@@ -1033,6 +1028,7 @@ The report commands are intentionally thin JSON views over SQLite:
   `ual-timeliner` when it is on `PATH` or `UAL_TIMELINER_BIN` is set. The
   external output is normalized back into `ual_records`; the internal parser
   remains the fallback if the external parser is unavailable or fails.
+  `standalone install-tool all` installs `ual-timeliner` as default coverage.
 - `report memory-analysis`: investigator-facing memory processing workflow and
   findings report. It combines memory artifact inventory, imported targeted
   string hits, tool availability, MemProcFS/Volatility/bstrings next steps, and
@@ -1045,9 +1041,9 @@ The report commands are intentionally thin JSON views over SQLite:
   `source_origin`, and `source_label` annotations so memory/pagefile/hiberfil/
   swapfile/crash dump leads are visually distinct from live disk artifacts.
   Set `BSTRINGS_BIN` when `bstrings` is installed outside `PATH`; the default
-  local EZ-tools location `/home/lee/tools/bstrings/bstrings.dll` is also
+  local tools location `/opt/relic-tools/bstrings/bstrings.dll` is also
   checked. For hibernation decompression, the scanner checks `HIBR2BIN_BIN`,
-  `PATH`, `/home/lee/tools/Hibr2Bin-linux/hibr2bin-linux`, and known local
+  `PATH`, `/opt/relic-tools/Hibr2Bin-linux/hibr2bin-linux`, and known local
   Hibr2Bin Windows builds.
 - `report memory-string-hits`: reviews targeted memory string leads by category,
   matched term, source artifact, path, and offset. These are leads, not
@@ -1431,7 +1427,7 @@ sudo visudo -f /etc/sudoers.d/forensic-orchestrator
 Default mount namespace rule:
 
 ```text
-lee ALL=(root) NOPASSWD: /usr/bin/ntfs-3g -o ro\,show_sys_files\,streams_interface\=windows\,norecover\,offset\=* /tmp/forensic-orchestrator-mounts/cases/*/ewf/ewf1 /tmp/forensic-orchestrator-mounts/cases/*/volumes/*, /usr/bin/umount /tmp/forensic-orchestrator-mounts/cases/*/volumes/*
+analyst ALL=(root) NOPASSWD: /usr/bin/ntfs-3g -o ro\,show_sys_files\,streams_interface\=windows\,norecover\,offset\=* /tmp/forensic-orchestrator-mounts/cases/*/ewf/ewf1 /tmp/forensic-orchestrator-mounts/cases/*/volumes/*, /usr/bin/umount /tmp/forensic-orchestrator-mounts/cases/*/volumes/*
 ```
 
 The application still validates and records the exact subprocess array it runs.

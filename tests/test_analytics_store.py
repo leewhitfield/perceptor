@@ -75,7 +75,7 @@ def test_default_duckdb_routes_generic_normalized_rows(tmp_path, monkeypatch):
     case_id = "case-1"
     image_id = "image-1"
     db.create_case(case_id, tmp_path / "cases" / case_id)
-    db.create_computer(computer_id="computer-1", case_id=case_id, label="ROCBA")
+    db.create_computer(computer_id="computer-1", case_id=case_id, label="TESTCASE")
     db.add_image(image_id, case_id, tmp_path / "image.e01", computer_id="computer-1")
 
     db.insert_normalized_artifact_rows(
@@ -111,7 +111,7 @@ def test_duckdb_analytics_writes_wait_for_case_lock(tmp_path, monkeypatch):
     case_id = "case-1"
     image_id = "image-1"
     db.create_case(case_id, tmp_path / "cases" / case_id)
-    db.create_computer(computer_id="computer-1", case_id=case_id, label="ROCBA")
+    db.create_computer(computer_id="computer-1", case_id=case_id, label="TESTCASE")
     db.add_image(image_id, case_id, tmp_path / "image.e01", computer_id="computer-1")
     db.close()
 
@@ -171,7 +171,7 @@ def test_default_duckdb_can_drop_empty_sqlite_analytics_tables(tmp_path, monkeyp
     case_id = "case-1"
     image_id = "image-1"
     db.create_case(case_id, tmp_path / "cases" / case_id)
-    db.create_computer(computer_id="computer-1", case_id=case_id, label="ROCBA")
+    db.create_computer(computer_id="computer-1", case_id=case_id, label="TESTCASE")
     db.add_image(image_id, case_id, tmp_path / "image.e01", computer_id="computer-1")
 
     db.insert_normalized_artifact_rows(
@@ -230,7 +230,7 @@ def test_default_duckdb_routes_common_artifact_insert_helpers(tmp_path, monkeypa
     case_id = "case-1"
     image_id = "image-1"
     db.create_case(case_id, tmp_path / "cases" / case_id)
-    db.create_computer(computer_id="computer-1", case_id=case_id, label="ROCBA")
+    db.create_computer(computer_id="computer-1", case_id=case_id, label="TESTCASE")
     db.add_image(image_id, case_id, tmp_path / "image.e01", computer_id="computer-1")
     base = {
         "case_id": case_id,
@@ -287,7 +287,7 @@ def test_default_duckdb_ingest_routes_normalized_rows(tmp_path, monkeypatch):
     case_id = "case-1"
     image_id = "image-1"
     db.create_case(case_id, tmp_path / "cases" / case_id)
-    db.create_computer(computer_id="computer-1", case_id=case_id, label="ROCBA")
+    db.create_computer(computer_id="computer-1", case_id=case_id, label="TESTCASE")
     db.add_image(image_id, case_id, tmp_path / "image.e01", computer_id="computer-1")
     csv_path = tmp_path / "mft.csv"
     csv_path.write_text(
@@ -321,7 +321,7 @@ def test_default_duckdb_purge_removes_normalized_rows(tmp_path, monkeypatch):
     case_id = "case-1"
     image_id = "image-1"
     db.create_case(case_id, tmp_path / "cases" / case_id)
-    db.create_computer(computer_id="computer-1", case_id=case_id, label="ROCBA")
+    db.create_computer(computer_id="computer-1", case_id=case_id, label="TESTCASE")
     db.add_image(image_id, case_id, tmp_path / "image.e01", computer_id="computer-1")
     db.insert_normalized_artifact_rows(
         "mft_entries",
@@ -354,7 +354,7 @@ def test_default_duckdb_routes_rdp_cache_and_image_analysis_reports(tmp_path, mo
     case_id = "case-1"
     image_id = "image-1"
     db.create_case(case_id, tmp_path / "cases" / case_id)
-    db.create_computer(computer_id="computer-1", case_id=case_id, label="ROCBA")
+    db.create_computer(computer_id="computer-1", case_id=case_id, label="TESTCASE")
     db.add_image(image_id, case_id, tmp_path / "image.e01", computer_id="computer-1")
     cache_file = tmp_path / "Cache0000.bin"
     cache_file.write_bytes(b"rdp")
@@ -435,7 +435,7 @@ def test_default_duckdb_purge_removes_rdp_cache_and_image_analysis_rows(tmp_path
     case_id = "case-1"
     image_id = "image-1"
     db.create_case(case_id, tmp_path / "cases" / case_id)
-    db.create_computer(computer_id="computer-1", case_id=case_id, label="ROCBA")
+    db.create_computer(computer_id="computer-1", case_id=case_id, label="TESTCASE")
     db.add_image(image_id, case_id, tmp_path / "image.e01", computer_id="computer-1")
 
     db.insert_rdp_cache_items(
@@ -487,7 +487,7 @@ def test_default_duckdb_does_not_materialize_filesystem_review_in_sqlite(tmp_pat
     case_id = "case-1"
     image_id = "image-1"
     db.create_case(case_id, tmp_path / "cases" / case_id)
-    db.create_computer(computer_id="computer-1", case_id=case_id, label="ROCBA")
+    db.create_computer(computer_id="computer-1", case_id=case_id, label="TESTCASE")
     db.add_image(image_id, case_id, tmp_path / "image.e01", computer_id="computer-1")
     assert rebuild_filesystem_review(db, case_id=case_id, image_id=image_id) == 0
     assert not sqlite_table_exists(db, "filesystem_review")
@@ -501,7 +501,7 @@ def test_duckdb_analytics_mode_routes_high_volume_rows(tmp_path, monkeypatch):
     image_id = "image-1"
     output_id = "output-1"
     db.create_case(case_id, tmp_path / "cases" / case_id)
-    db.create_computer(computer_id="computer-1", case_id=case_id, label="ROCBA")
+    db.create_computer(computer_id="computer-1", case_id=case_id, label="TESTCASE")
     db.add_image(image_id, case_id, tmp_path / "image.e01", computer_id="computer-1")
 
     db.insert_evtx_events(
@@ -536,7 +536,7 @@ def test_mirror_analytics_mode_keeps_sqlite_copy(tmp_path, monkeypatch):
     case_id = "case-1"
     image_id = "image-1"
     db.create_case(case_id, tmp_path / "cases" / case_id)
-    db.create_computer(computer_id="computer-1", case_id=case_id, label="ROCBA")
+    db.create_computer(computer_id="computer-1", case_id=case_id, label="TESTCASE")
     db.add_image(image_id, case_id, tmp_path / "image.e01", computer_id="computer-1")
 
     db.insert_onedrive_log_entries(

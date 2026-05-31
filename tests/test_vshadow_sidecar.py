@@ -618,10 +618,10 @@ def test_evtx_signature_uses_stable_event_identity_not_parser_payload():
         """
         INSERT INTO events VALUES
         ('/case/Windows/System32/winevt/Logs/DifferentPhysicalFile.evtx', 'Microsoft Office 16 Alerts', 'OAlerts', '300', '10',
-         '2020-11-14 04:05:01.2428352', '999', 'ROCBATEST', '', '', '',
+         '2020-11-14 04:05:01.2428352', '999', 'TESTHOST', '', '', '',
          'Program: Microsoft Word', 'Alert: Want to save your changes?\r\n  |', '', ''),
         ('OAlerts.evtx', 'truncated provider', 'oalerts', '300', '10',
-         '2020-11-14 04:05:01.2428352', '1000', 'rocbatest', '', '', '',
+         '2020-11-14 04:05:01.2428352', '1000', 'testhost', '', '', '',
          'Different parser payload', 'Different parser payload', 'Different parser payload', 'different.exe')
         """
     )

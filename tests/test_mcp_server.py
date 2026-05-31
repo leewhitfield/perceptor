@@ -38,10 +38,14 @@ def test_mcp_initialize_and_list_tools(tmp_path):
     assert "relic_case_evidence_map" in names
     assert "relic_workspace_map" in names
     assert "relic_mcp_workflow_guide" in names
+    assert "relic_route_question" in names
     assert "relic_case_readiness" in names
     assert "relic_discover_reports" in names
     assert "relic_discover_report_exports" in names
+    assert "relic_read_existing_report" in names
     assert "relic_file_dossier" in names
+    assert "relic_query_filesystem_listings" in names
+    assert "relic_query_evidence_contents" in names
     assert "relic_usb_dossier" in names
     assert "relic_user_activity" in names
     assert "relic_timeline_window" in names
@@ -61,8 +65,17 @@ def test_mcp_initialize_and_list_tools(tmp_path):
     assert "relic_list_progress_manifests" in names
     assert "relic_list_mcp_jobs" in names
     assert "relic_get_mcp_job_progress" in names
+    assert "relic_recover_deleted_files" in names
     assert "relic_mcp_tool_reference" in names
     assert any(tool["annotations"]["readOnlyHint"] is False for tool in tools)
+    report_tool = next(tool for tool in tools if tool["name"] == "relic_read_existing_report")
+    assert "first source of truth" in report_tool["description"]
+    fs_tool = next(tool for tool in tools if tool["name"] == "relic_query_filesystem_listings")
+    assert "first source of truth" in fs_tool["description"]
+    contents_tool = next(tool for tool in tools if tool["name"] == "relic_query_evidence_contents")
+    assert "stored filesystem_entries only" in contents_tool["description"]
+    route_tool = next(tool for tool in tools if tool["name"] == "relic_route_question")
+    assert "source-of-truth order" in route_tool["description"]
 
 
 def test_mcp_workspace_and_case_summary_tools(tmp_path):
@@ -301,6 +314,33 @@ def test_mcp_discover_reports_returns_resource_uris(tmp_path):
     assert any(item["uri"].startswith("relic://workspace/") for item in discovered["resources"])
     assert any(item["name"] == "opened-from-removable-media" for item in discovered["resources"])
     assert any(item["name"] == "opened-from-removable-media" for item in exports["resources"])
+    read_existing = server.read_existing_report(
+        {"case_id": "case-1", "purpose": "usb", "report_name": "opened-from-removable-media"}
+    )
+    assert read_existing["source_of_truth"] == "existing_reports"
+    assert read_existing["matched"] is True
+    assert read_existing["selected_report"]["name"] == "opened-from-removable-media"
+    assert read_existing["content"]["text"] == "# Opened\n"
+
+
+def test_mcp_generate_report_prefers_existing_report(tmp_path):
+    report = tmp_path / "cases" / "case-1" / "reports" / "usb-bundle" / "usb-files.md"
+    report.parent.mkdir(parents=True)
+    report.write_text("# Existing USB Files\n", encoding="utf-8")
+    (report.parent / "report-index.json").write_text(
+        '{"purpose":"usb","reports":[{"name":"usb-files","filename":"usb-files.md","tags":["usb"]}]}',
+        encoding="utf-8",
+    )
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.close()
+    server = RelicMcpServer(root=tmp_path)
+
+    generated = server.generate_report({"case_id": "case-1", "report_name": "usb-files"})
+
+    assert generated["status"] == "existing_report_returned"
+    assert generated["regenerated"] is False
+    assert generated["content"]["text"] == "# Existing USB Files\n"
 
 
 def test_mcp_write_review_packet_creates_resources(tmp_path):
@@ -408,6 +448,133 @@ def test_mcp_artifact_search_and_progress_manifests(tmp_path, monkeypatch):
     assert workspace["summary"]["case_count"] == 1
     assert guide["summary"]["step_count"] >= 8
     assert any(step["tool"] == "relic_artifact_search_sources" for step in guide["steps"])
+    assert guide["route_first_tool"] == "relic_route_question"
+    assert guide["reports_first_tool"] == "relic_read_existing_report"
+    assert guide["evidence_contents_first_tool"] == "relic_query_evidence_contents"
+    assert guide["filesystem_first_tool"] == "relic_query_filesystem_listings"
+
+
+def test_mcp_route_question_enforces_truth_order(tmp_path):
+    server = RelicMcpServer(root=tmp_path)
+
+    contents = server.route_question({"case_id": "case-1", "question": "Can you pull a list of contents for the USB drive?"})
+    assert contents["intent"] == "evidence_contents"
+    assert contents["first_source"] == "generated_filesystem_listings"
+    assert contents["recommended_tool"] == "relic_query_evidence_contents"
+    assert contents["source_order"][0]["tools"] == ["relic_query_evidence_contents", "relic_query_filesystem_listings"]
+    assert contents["processing_allowed"] is False
+
+    suspicious = server.route_question({"case_id": "case-1", "question": "Show me suspicious executables"})
+    assert suspicious["intent"] == "execution"
+    assert suspicious["first_source"] == "existing_reports"
+    assert suspicious["recommended_tool"] == "relic_read_existing_report"
+    assert "suspicious-executions" in suspicious["report_names"]
+    assert "relic_query_suspicious_executions" in suspicious["fallback_tools"]
+
+    recovery = server.route_question({"case_id": "case-1", "question": "Recover the deleted timeline.docx file"})
+    assert recovery["intent"] == "deleted_file_recovery"
+    assert recovery["recommended_tool"] == "relic_query_evidence_contents"
+    assert recovery["processing_requested"] is True
+    assert recovery["processing_allowed"] is False
+    assert recovery["blocked_actions"][0]["action"] == "processing_or_recovery"
+
+    recovery_allowed = RelicMcpServer(root=tmp_path, allow_processing=True).route_question(
+        {
+            "case_id": "case-1",
+            "question": "Recover the deleted timeline.docx file",
+            "allow_processing": True,
+        }
+    )
+    assert recovery_allowed["processing_allowed"] is True
+    assert "relic_recover_deleted_files" in recovery_allowed["fallback_tools"]
+
+
+def test_mcp_filesystem_listing_uses_generated_inventory(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORENSIC_ANALYTICS_MODE", "sqlite")
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    db.create_case("case-1", tmp_path)
+    computer = db.create_computer(computer_id="computer-1", case_id="case-1", label="HOST01")
+    image = db.add_image("image-1", "case-1", tmp_path / "usb.E01", computer_id=computer.id)
+    db.insert_filesystem_entries(
+        [
+            {
+                "id": "fs-1",
+                "case_id": "case-1",
+                "computer_id": computer.id,
+                "image_id": image.id,
+                "tool_output_id": "tool-1",
+                "tool_name": "MountedFilesystemInventory",
+                "source_csv": "filesystem_entries.csv",
+                "row_number": 1,
+                "partition_id": "part-1",
+                "filesystem_type": "fat32",
+                "source_root": "/mnt/usb",
+                "file_path": "Alex.docx",
+                "parent_path": "",
+                "file_name": "Alex.docx",
+                "extension": ".docx",
+                "file_size": 31055,
+                "is_directory": "false",
+                "created_utc": "2025-11-17T15:47:02Z",
+                "modified_utc": "2025-11-17T15:47:04Z",
+                "accessed_utc": "2025-11-17T00:00:00Z",
+                "metadata_changed_utc": None,
+                "mode": None,
+                "uid": None,
+                "gid": None,
+                "scan_status": "deleted",
+                "error": "",
+                "created_at": "2026-05-30T00:00:00Z",
+            },
+            {
+                "id": "fs-2",
+                "case_id": "case-1",
+                "computer_id": computer.id,
+                "image_id": image.id,
+                "tool_output_id": "tool-1",
+                "tool_name": "MountedFilesystemInventory",
+                "source_csv": "filesystem_entries.csv",
+                "row_number": 2,
+                "partition_id": "part-1",
+                "filesystem_type": "fat32",
+                "source_root": "/mnt/usb",
+                "file_path": "$FAT1",
+                "parent_path": "",
+                "file_name": "$FAT1",
+                "extension": "",
+                "file_size": 1024,
+                "is_directory": "false",
+                "created_utc": None,
+                "modified_utc": None,
+                "accessed_utc": None,
+                "metadata_changed_utc": None,
+                "mode": None,
+                "uid": None,
+                "gid": None,
+                "scan_status": "virtual",
+                "error": "",
+                "created_at": "2026-05-30T00:00:00Z",
+            },
+        ]
+    )
+    db.close()
+    server = RelicMcpServer(root=tmp_path)
+
+    result = server.query_filesystem_listings({"case_id": "case-1", "contains": "Alex"})
+
+    assert result["source_of_truth"] == "filesystem_entries"
+    assert result["summary"]["returned_rows"] == 1
+    assert result["filesystem_entries"][0]["file_path"] == "Alex.docx"
+    assert result["filesystem_entries"][0]["computer_label"] == "HOST01"
+    assert result["filesystem_entries"][0]["image_path"].endswith("usb.E01")
+
+    default_result = server.query_filesystem_listings({"case_id": "case-1"})
+    assert [row["file_name"] for row in default_result["filesystem_entries"]] == ["Alex.docx"]
+
+    contents = server.query_evidence_contents({"case_id": "case-1", "image_id": "image-1"})
+    assert contents["intent"] == "evidence_contents"
+    assert contents["source_of_truth"] == "filesystem_entries"
+    assert [row["file_name"] for row in contents["filesystem_entries"]] == ["Alex.docx"]
 
 
 def test_mcp_tool_reference_and_audit_log(tmp_path):
@@ -443,3 +610,47 @@ def test_mcp_process_image_dry_run_command(tmp_path):
 
     assert "--dry-run" in started["command"]
     assert captured["name"] == "process_image"
+
+
+def test_mcp_recover_deleted_files_requires_processing_and_builds_command(tmp_path):
+    locked = RelicMcpServer(root=tmp_path)
+    denied = locked.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "relic_recover_deleted_files", "arguments": {"case_id": "case-1", "name": "report.docx"}},
+        }
+    )
+    assert denied["error"]["code"] == -32602
+    assert "--allow-processing" in denied["error"]["message"]
+
+    server = RelicMcpServer(root=tmp_path, allow_processing=True)
+    captured = {}
+
+    def fake_start(name, command):
+        captured["name"] = name
+        captured["command"] = command
+        return {"mcp_job_id": "job-1", "name": name, "command": command}
+
+    server._start_mcp_process = fake_start
+    started = server.recover_deleted_files(
+        {
+            "case_id": "case-1",
+            "image_id": "image-1",
+            "name": "report.docx",
+            "source": "mft_entries",
+            "limit": 5,
+            "max_bytes": 1000,
+            "output_dir": "cases/case-1/outputs/recovered-files/test",
+        }
+    )
+
+    assert started["mcp_job_id"] == "job-1"
+    assert captured["name"] == "recover_deleted_files"
+    assert captured["command"][captured["command"].index("recover") : captured["command"].index("--case")] == ["recover", "deleted-files"]
+    assert "--image" in captured["command"]
+    assert "image-1" in captured["command"]
+    assert "--name" in captured["command"]
+    assert "report.docx" in captured["command"]
+    assert "--max-bytes" in captured["command"]

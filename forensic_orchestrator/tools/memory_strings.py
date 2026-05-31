@@ -4,6 +4,7 @@ import csv
 import os
 import hashlib
 import re
+import shlex
 import shutil
 import subprocess
 from collections.abc import Iterator
@@ -37,6 +38,8 @@ def scan_memory_strings_to_csv(
     decompressed_path = ""
     decompress_status = "not_applicable"
     decompress_error = ""
+    decompress_command = ""
+    decompress_attempts = "0"
     hiberfil_status = "not_applicable"
     hiberfil_note = ""
     if decompress_hiberfil and source.name.lower() == "hiberfil.sys":
@@ -45,6 +48,8 @@ def scan_memory_strings_to_csv(
         decompressed = decompress_hiberfil_candidate(source, target)
         decompress_status = decompressed["status"]
         decompress_error = decompressed.get("error", "")
+        decompress_command = decompressed.get("command", "")
+        decompress_attempts = decompressed.get("attempt_count", "0")
         if decompressed.get("path"):
             scanned_path = Path(decompressed["path"])
             decompressed_path = str(scanned_path)
@@ -98,9 +103,13 @@ def scan_memory_strings_to_csv(
         "scanner": scanner,
         "decompress_status": decompress_status,
         "decompress_error": decompress_error,
+        "decompress_command": decompress_command,
+        "decompress_attempt_count": str(decompress_attempts),
         "hiberfil_status": hiberfil_status,
         "hiberfil_note": hiberfil_note,
         "scanned_path": str(scanned_path or source),
+        "source_size_bytes": str(_path_size(source)),
+        "scanned_size_bytes": str(_path_size(scanned_path) if scanned_path else 0),
     }
 
 
@@ -114,21 +123,28 @@ def decompress_hiberfil_candidate(source: Path, target: Path) -> dict[str, str]:
         commands.append(["HibernationRecon", "-f", str(source), "-o", str(target.parent)])
     if shutil.which("HibernationRecon.exe"):
         commands.append(["HibernationRecon.exe", "-f", str(source), "-o", str(target.parent)])
-    for command in commands:
+    if not commands:
+        return {"status": "decompressor_unavailable", "error": "no supported hiberfil decompressor found", "attempt_count": "0"}
+    last_error = ""
+    for attempt_index, command in enumerate(commands, 1):
+        command_text = shlex.join(command)
         try:
             completed = subprocess.run(command, capture_output=True, text=True, check=False, timeout=3600)
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            last_error = str(exc)
+        except subprocess.TimeoutExpired as exc:
+            last_error = f"{command_text}: timed out after {exc.timeout} seconds"
+            continue
+        except OSError as exc:
+            last_error = f"{command_text}: {exc}"
             continue
         if completed.returncode == 0:
             if target.exists() and target.stat().st_size > 0:
-                return {"status": "decompressed", "path": str(target), "command": " ".join(command)}
+                return {"status": "decompressed", "path": str(target), "command": command_text, "attempt_count": str(attempt_index)}
             candidates = sorted(target.parent.glob("*"), key=lambda path: path.stat().st_size if path.is_file() else 0, reverse=True)
             for candidate in candidates:
                 if candidate.is_file() and candidate.stat().st_size > 0 and candidate != source:
-                    return {"status": "decompressed", "path": str(candidate), "command": " ".join(command)}
-        last_error = (completed.stderr or completed.stdout or "").strip()
-    return {"status": "decompressor_unavailable_or_failed", "error": locals().get("last_error", "no supported hiberfil decompressor found")}
+                    return {"status": "decompressed", "path": str(candidate), "command": command_text, "attempt_count": str(attempt_index)}
+        last_error = f"{command_text}: {(completed.stderr or completed.stdout or '').strip()}"
+    return {"status": "decompress_failed", "error": last_error, "attempt_count": str(len(commands))}
 
 
 def assess_hiberfil_source(source: Path, *, sample_size: int = 4096) -> tuple[str, str]:
@@ -169,10 +185,13 @@ def _hibr2bin_command() -> list[str] | None:
         found = shutil.which(name)
         if found:
             candidates.append(found)
-    for candidate in (
-        "/home/lee/tools/Hibr2Bin-linux/hibr2bin-linux",
-        "/home/lee/tools/Hibr2Bin-build/Hibr2Bin.exe",
-        "/home/lee/tools/Hibr2Bin/Hibr2Bin.exe",
+    for candidate in _tool_root_candidates(
+        "Hibr2Bin-linux/hibr2bin-linux",
+        "Hibr2Bin-build/Hibr2Bin.exe",
+        "Hibr2Bin/Hibr2Bin.exe",
+        "hibr2bin-linux/hibr2bin-linux",
+        "hibr2bin/hibr2bin",
+        "hibr2bin/Hibr2Bin.exe",
     ):
         if Path(candidate).exists():
             candidates.append(candidate)
@@ -318,23 +337,51 @@ def _bstrings_command() -> list[str] | None:
     found = shutil.which("bstrings")
     if found:
         candidates.append(found)
-    for candidate in (
-        "/home/lee/tools/bstrings/bstrings.dll",
-        "/home/lee/tools/eztools/bstrings/bstrings.dll",
+    for candidate in _tool_root_candidates(
+        "bstrings/bstrings",
+        "bstrings/bstrings.dll",
+        "eztools/bstrings/bstrings.dll",
+        "EZTools/bstrings/bstrings.dll",
     ):
         if Path(candidate).exists():
             candidates.append(candidate)
-    dotnet = shutil.which("dotnet") or "/home/lee/.dotnet/dotnet"
+    dotnet = os.environ.get("FORENSIC_ORCHESTRATOR_DOTNET") or shutil.which("dotnet")
     for candidate in candidates:
         if not candidate:
             continue
         path = Path(candidate)
         if path.suffix.lower() == ".dll":
-            if Path(dotnet).exists():
+            if dotnet and (Path(dotnet).exists() or shutil.which(dotnet)):
                 return [dotnet, str(path)]
         elif path.exists() or shutil.which(candidate):
             return [str(path)]
     return None
+
+
+def _tool_root_candidates(*relative_paths: str) -> list[str]:
+    roots: list[Path] = []
+    explicit = os.environ.get("FORENSIC_ORCHESTRATOR_TOOLS_ROOT")
+    if explicit:
+        roots.append(Path(explicit).expanduser())
+    roots.extend([Path("/opt/relic-tools"), Path.home() / "tools"])
+    output: list[str] = []
+    seen: set[str] = set()
+    for root in roots:
+        for relative_path in relative_paths:
+            candidate = str(root / relative_path)
+            if candidate not in seen:
+                seen.add(candidate)
+                output.append(candidate)
+    return output
+
+
+def _path_size(path: Path | None) -> int:
+    if path is None:
+        return 0
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
 
 
 def _context_hint(text: str) -> str:

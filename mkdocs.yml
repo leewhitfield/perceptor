@@ -1,0 +1,57 @@
+site_name: Relic
+site_description: Relic forensic processing and reporting operator documentation
+repo_url: https://github.com/example/relic
+edit_uri: ""
+docs_dir: docs
+theme:
+  name: readthedocs
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Overview: getting-started/overview.md
+      - Ubuntu Install: getting-started/ubuntu-install.md
+      - Configuration: getting-started/configuration.md
+      - Dependency Management: getting-started/dependencies.md
+      - First Run Checks: getting-started/first-run.md
+  - Workflows:
+      - Disk Images: workflows/disk-images.md
+      - Live-Case and Report ZIPs: workflows/live-case-zips.md
+      - Report Bundles: workflows/report-bundles.md
+      - File Listings: workflows/file-listings.md
+      - Deleted File Recovery: workflows/deleted-file-recovery.md
+      - Memory and Support Files: workflows/memory.md
+      - Deep Recovery Profiles: workflows/deep-recovery.md
+      - BitLocker Images: workflows/bitlocker.md
+      - Volume Shadow Copies: workflows/vsc.md
+      - Mounted Image Notes: mounted-image-notes.md
+  - Reports:
+      - Report Overview: reference/reports.md
+      - Report Catalog: reference/report-catalog.md
+      - Report Specs: report-specs.md
+      - Artifact Coverage: artifact-coverage-matrix.md
+      - Windows Full Artifacts: windows-full-artifacts.md
+  - MCP:
+      - MCP Overview: mcp/overview.md
+      - Source-of-Truth Routing: mcp/source-of-truth.md
+      - Client Setup: mcp/client-setup.md
+      - MCP Tool Reference: mcp/tools.md
+  - Future:
+      - Future Features: future-features.md
+  - Operations:
+      - Command Reference: reference/commands.md
+      - Security Model: operations/security.md
+      - Troubleshooting: operations/troubleshooting.md
+      - Release Checklist: release-checklist.md
+not_in_nav: |
+  OUTSTANDING_ITEMS.md
+  dependencies.md
+  deep-recovery-profiles.md
+  reference-review-recommendations.md
+  standalone-pre-ui.md
+  ubuntu-install.md
+  user-manual.md
+  vsc-sidecar.md

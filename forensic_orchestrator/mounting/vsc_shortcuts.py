@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -61,7 +62,7 @@ def run_vsc_shortcut_scan(
     image_id: str,
     computer_id: str | None = None,
     snapshot_indexes: list[int] | None = None,
-    eztools_root: Path = Path("/home/lee/tools/eztools"),
+    eztools_root: Path | None = None,
 ) -> dict[str, Any]:
     inventory_path = paths.vsc_work_dir(case_id) / "inventory.json"
     if not inventory_path.exists():
@@ -77,6 +78,7 @@ def run_vsc_shortcut_scan(
     require_dependency("fls")
     require_dependency("icat")
     dotnet = _dotnet_executable()
+    eztools_root = eztools_root or _resolve_eztools_root()
     lecmd = eztools_root / "LECmd" / "LECmd.dll"
     jlecmd = eztools_root / "JLECmd" / "JLECmd.dll"
     if not lecmd.is_file() or not jlecmd.is_file():
@@ -438,6 +440,22 @@ def _dotnet_executable() -> Path:
         return fallback
     require_dependency("dotnet")
     return Path("dotnet")
+
+
+def _resolve_eztools_root() -> Path:
+    candidates = [
+        Path(os.environ["EZTOOLS_ROOT"]).expanduser() if os.environ.get("EZTOOLS_ROOT") else None,
+        Path(os.environ["FORENSIC_ORCHESTRATOR_TOOLS_ROOT"]).expanduser() / "eztools"
+        if os.environ.get("FORENSIC_ORCHESTRATOR_TOOLS_ROOT")
+        else None,
+        Path("/opt/relic-tools/eztools"),
+        Path("/opt/eztools"),
+        Path.home() / "tools" / "eztools",
+    ]
+    for candidate in candidates:
+        if candidate and candidate.exists():
+            return candidate
+    return Path("/opt/relic-tools/eztools")
 
 
 def _shortcut_artifact_type(path: str) -> str | None:

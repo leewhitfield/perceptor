@@ -35,6 +35,7 @@ from .reports import (
     evidence_gaps_report,
     file_movement_identity_report,
     file_dossier_report,
+    filesystem_listing_report,
     memory_analysis_report,
     memory_artifacts_report,
     opened_from_cloud_storage_report,
@@ -160,6 +161,14 @@ class RelicMcpServer:
             "serverInfo": {"name": "relic", "version": _package_version()},
             "instructions": (
                 "Relic MCP exposes forensic workspace tools. Inspection and report-generation tools are available by default. "
+                "For broad questions, call relic_route_question first to classify the request and receive the source-of-truth order. "
+                "For report-backed questions, call relic_read_existing_report or relic_discover_reports first and treat generated reports "
+                "as the source of truth before querying raw artifacts or starting processing. "
+                "For questions phrased as evidence contents, drive contents, files on a volume, or list files, call "
+                "relic_query_evidence_contents; do not start filesystem processing, mounts, or SleuthKit/FLS unless stored "
+                "listings are absent, stale, or the user explicitly requests new processing. "
+                "For filesystem/file-listing questions, call relic_query_filesystem_listings first because it reads generated "
+                "case file listings and avoids slow image tooling. "
                 "Import and processing calls require --allow-processing. Sensitive credential reveal, external AI upload, "
                 "and destructive actions are not implemented in the default MCP surface."
             ),
@@ -241,6 +250,26 @@ class RelicMcpServer:
                 annotations=read_only,
             ),
             McpTool(
+                name="relic_route_question",
+                title="Relic Route Question",
+                description=(
+                    "Classify an examiner question and return the correct Relic source-of-truth order. "
+                    "Use this before answering broad MCP questions, especially filesystem, USB, report, memory, "
+                    "timeline, processing, recovery, credential, or external-AI requests."
+                ),
+                input_schema=_object_schema(
+                    {
+                        "question": _string_schema("Natural-language examiner question to route."),
+                        "case_id": _string_schema("Optional Relic case ID for report candidate discovery."),
+                        "evidence_hint": _string_schema("Optional evidence, image, device, drive, volume, or computer hint."),
+                        "allow_processing": {"type": "boolean", "default": False},
+                    },
+                    required=["question"],
+                ),
+                handler=self.route_question,
+                annotations=read_only,
+            ),
+            McpTool(
                 name="relic_case_readiness",
                 title="Relic Case Readiness",
                 description="Return MCP-friendly doctor, workspace health, processing readiness, progress, and resume signals.",
@@ -258,7 +287,7 @@ class RelicMcpServer:
             McpTool(
                 name="relic_discover_reports",
                 title="Relic Discover Reports",
-                description="Discover report bundle files and resource URIs for a case, optionally narrowed by purpose.",
+                description="Discover existing report bundle files and resource URIs for a case. Use this before raw artifact queries or report generation.",
                 input_schema=_object_schema(
                     {
                         "case_id": _string_schema("Relic case ID."),
@@ -273,17 +302,38 @@ class RelicMcpServer:
             McpTool(
                 name="relic_discover_report_exports",
                 title="Relic Discover Report Exports",
-                description="Discover report bundle exports by purpose and report-index tags.",
+                description="Discover existing report bundle exports by purpose and report-index tags. Use this before raw artifact queries or report generation.",
                 input_schema=_object_schema(
                     {
                         "case_id": _string_schema("Relic case ID."),
-                        "purpose": {"type": "string", "enum": ["full", "usb", "cloud", "execution", "memory", "triage"], "default": "full"},
+                        "purpose": {"type": "string", "enum": ["full", "usb", "cloud", "execution", "memory", "triage", "review"], "default": "full"},
                         "tags": {"type": "array", "items": {"type": "string"}},
                         "limit": _integer_schema("Maximum resources to return.", default=250, minimum=1, maximum=1000),
                     },
                     required=["case_id"],
                 ),
                 handler=self.discover_report_exports,
+                annotations=read_only,
+            ),
+            McpTool(
+                name="relic_read_existing_report",
+                title="Read Existing Relic Report",
+                description=(
+                    "Find and read an existing generated report for a case by report name, purpose, tag, or text. "
+                    "This is the first source of truth for report-backed MCP questions."
+                ),
+                input_schema=_object_schema(
+                    {
+                        "case_id": _string_schema("Relic case ID."),
+                        "report_name": _string_schema("Optional report name or filename stem, for example usb-files or opened-from-removable-media."),
+                        "purpose": {"type": "string", "enum": ["full", "usb", "cloud", "execution", "memory", "triage", "review"], "default": "full"},
+                        "tags": {"type": "array", "items": {"type": "string"}},
+                        "contains": _string_schema("Optional text that must appear in the report contents."),
+                        "max_bytes": _integer_schema("Maximum report bytes to read.", default=200000, minimum=1000, maximum=MCP_RESOURCE_MAX_BYTES),
+                    },
+                    required=["case_id"],
+                ),
+                handler=self.read_existing_report,
                 annotations=read_only,
             ),
             McpTool(
@@ -396,7 +446,7 @@ class RelicMcpServer:
             McpTool(
                 name="relic_file_dossier",
                 title="Relic File Dossier",
-                description="Return a file-centric dossier by path or name.",
+                description="Return a file-centric dossier by path or name. For broad filesystem listings, use relic_query_filesystem_listings first.",
                 input_schema=_object_schema(
                     {
                         "case_id": _string_schema("Relic case ID."),
@@ -407,6 +457,52 @@ class RelicMcpServer:
                     required=["case_id"],
                 ),
                 handler=self.file_dossier,
+                annotations=read_only,
+            ),
+            McpTool(
+                name="relic_query_filesystem_listings",
+                title="Query Filesystem Listings",
+                description=(
+                    "Return generated file listings from filesystem_entries. This is the first source of truth for "
+                    "filesystem questions and should be used before any live image, mount, or SleuthKit processing."
+                ),
+                input_schema=_object_schema(
+                    {
+                        "case_id": _string_schema("Relic case ID."),
+                        "contains": _string_schema("Optional text filter for path, file name, parent path, or extension."),
+                        "computer_id": _string_schema("Optional computer ID filter."),
+                        "image_id": _string_schema("Optional image ID filter."),
+                        "scan_status": _string_schema("Optional scan status filter, for example ok, deleted, virtual, or error."),
+                        "include_deleted": {"type": "boolean", "default": True},
+                        "include_virtual": {"type": "boolean", "default": False},
+                        "limit": _integer_schema("Maximum rows to return.", default=250, minimum=1, maximum=1000),
+                    },
+                    required=["case_id"],
+                ),
+                handler=self.query_filesystem_listings,
+                annotations=read_only,
+            ),
+            McpTool(
+                name="relic_query_evidence_contents",
+                title="Query Evidence Contents",
+                description=(
+                    "Return file contents/listings for any evidence image, drive, volume, or filesystem from stored filesystem_entries only. "
+                    "Use this for questions like 'pull a list of contents' before any FLS, SleuthKit, mount, or image processing."
+                ),
+                input_schema=_object_schema(
+                    {
+                        "case_id": _string_schema("Relic case ID."),
+                        "contains": _string_schema("Optional text filter for path, file name, parent path, or extension."),
+                        "computer_id": _string_schema("Optional computer ID filter."),
+                        "image_id": _string_schema("Optional image ID filter. Use this when the target evidence image is known."),
+                        "scan_status": _string_schema("Optional scan status filter, for example ok, deleted, virtual, or error."),
+                        "include_deleted": {"type": "boolean", "default": True},
+                        "include_virtual": {"type": "boolean", "default": False},
+                        "limit": _integer_schema("Maximum rows to return.", default=500, minimum=1, maximum=1000),
+                    },
+                    required=["case_id"],
+                ),
+                handler=self.query_evidence_contents,
                 annotations=read_only,
             ),
             McpTool(
@@ -614,7 +710,11 @@ class RelicMcpServer:
             McpTool(
                 name="relic_search_artifacts",
                 title="Relic Artifact Search",
-                description="Search parsed artifact tables by text, user, computer, source type, and time bounds without requiring OpenSearch.",
+                description=(
+                    "Search parsed artifact tables by text, user, computer, source type, and time bounds without requiring OpenSearch. "
+                    "Use relic_route_question and existing reports first for broad review questions; for filesystem questions, use "
+                    "relic_query_filesystem_listings first."
+                ),
                 input_schema=_object_schema(
                     {
                         "case_id": _string_schema("Relic case ID."),
@@ -642,7 +742,10 @@ class RelicMcpServer:
             McpTool(
                 name="relic_lead_search",
                 title="Relic Lead Search",
-                description="Run preset artifact searches for execution, USB, cloud, documents, browser, or communications leads.",
+                description=(
+                    "Run preset artifact searches for execution, USB, cloud, documents, browser, or communications leads. "
+                    "Use relic_route_question and existing reports first for broad review questions."
+                ),
                 input_schema=_object_schema(
                     {
                         "case_id": _string_schema("Relic case ID."),
@@ -834,7 +937,7 @@ class RelicMcpServer:
             McpTool(
                 name="relic_generate_report",
                 title="Relic Generate Report",
-                description="Generate a supported report through the Relic CLI and return stdout/stderr metadata.",
+                description="Return an existing generated report when available; regenerate through the Relic CLI only when regenerate=true or no matching report exists.",
                 input_schema=_object_schema(
                     {
                         "case_id": _string_schema("Relic case ID."),
@@ -842,6 +945,7 @@ class RelicMcpServer:
                         "format": {"type": "string", "enum": ["json", "table", "csv", "md"], "default": "json"},
                         "limit": _integer_schema("Maximum rows to return.", default=100, minimum=1, maximum=1000),
                         "output": _string_schema("Optional output path. Must be under the workspace root."),
+                        "regenerate": {"type": "boolean", "default": False},
                     },
                     required=["case_id", "report_name"],
                 ),
@@ -857,7 +961,7 @@ class RelicMcpServer:
                     {
                         "case_id": _string_schema("Relic case ID."),
                         "output_dir": _string_schema("Output directory under the workspace root."),
-                        "purpose": {"type": "string", "enum": ["full", "usb", "cloud", "execution", "memory", "triage"], "default": "full"},
+                        "purpose": {"type": "string", "enum": ["full", "usb", "cloud", "execution", "memory", "triage", "review"], "default": "full"},
                         "limit": _integer_schema("Maximum rows per report.", default=100, minimum=1, maximum=1000),
                     },
                     required=["case_id", "output_dir"],
@@ -940,7 +1044,10 @@ class RelicMcpServer:
             McpTool(
                 name="relic_import_triage_zip",
                 title="Relic Import Triage ZIP",
-                description="Start a gated bulk live-case/report ZIP import as a background MCP job.",
+                description=(
+                    "Start a gated bulk live-case/report ZIP import as a background MCP job. Do not use this to answer review "
+                    "questions when existing reports or parsed artifacts can answer them."
+                ),
                 input_schema=_object_schema(
                     {
                         "path": _string_schema("Path to the live-case/report ZIP or folder."),
@@ -961,7 +1068,10 @@ class RelicMcpServer:
             McpTool(
                 name="relic_import_report_bundle",
                 title="Relic Import Report Bundle",
-                description="Start a gated single-computer report bundle import as a background MCP job.",
+                description=(
+                    "Start a gated single-computer report bundle import as a background MCP job. Do not use this to answer review "
+                    "questions when existing reports or parsed artifacts can answer them."
+                ),
                 input_schema=_object_schema(
                     {
                         "path": _string_schema("Path to report bundle folder."),
@@ -980,7 +1090,10 @@ class RelicMcpServer:
             McpTool(
                 name="relic_process_image",
                 title="Relic Process Image",
-                description="Start a gated image processing run as a background MCP job.",
+                description=(
+                    "Start a gated image processing run as a background MCP job only when the user explicitly asks to process or "
+                    "reprocess evidence. Do not use this for read-only questions; use existing reports and parsed artifact tables first."
+                ),
                 input_schema=_object_schema(
                     {
                         "path": _string_schema("Path to source image."),
@@ -1006,7 +1119,10 @@ class RelicMcpServer:
             McpTool(
                 name="relic_run_profile",
                 title="Relic Run Profile",
-                description="Start a gated profile run against an existing case image as a background MCP job.",
+                description=(
+                    "Start a gated profile run against an existing case image as a background MCP job only when the user explicitly "
+                    "asks to run processing. Do not use this for read-only questions; use existing reports and parsed artifact tables first."
+                ),
                 input_schema=_object_schema(
                     {
                         "case_id": _string_schema("Relic case ID."),
@@ -1018,6 +1134,30 @@ class RelicMcpServer:
                     required=["case_id", "image_id", "profile"],
                 ),
                 handler=self.run_profile,
+                annotations=processing,
+                permission="processing",
+            ),
+            McpTool(
+                name="relic_recover_deleted_files",
+                title="Recover Deleted Files",
+                description=(
+                    "Start a gated deleted-file recovery job from parsed filesystem_entries and mft_entries. Use only when the user "
+                    "explicitly asks to recover deleted files; normal contents questions should use existing reports and listings first."
+                ),
+                input_schema=_object_schema(
+                    {
+                        "case_id": _string_schema("Relic case ID."),
+                        "image_id": _string_schema("Optional image ID filter."),
+                        "contains": _string_schema("Optional text filter for path or file name."),
+                        "name": _string_schema("Optional exact file name filter."),
+                        "source": {"type": "string", "enum": ["all", "filesystem_entries", "mft_entries"], "default": "all"},
+                        "limit": _integer_schema("Maximum deleted files to recover.", default=100, minimum=1, maximum=1000),
+                        "max_bytes": _integer_schema("Optional maximum source file size to recover.", default=0, minimum=0, maximum=10_000_000_000),
+                        "output_dir": _string_schema("Optional output directory under the workspace root."),
+                    },
+                    required=["case_id"],
+                ),
+                handler=self.recover_deleted_files,
                 annotations=processing,
                 permission="processing",
             ),
@@ -1223,6 +1363,40 @@ class RelicMcpServer:
     def mcp_workflow_guide(self, arguments: dict[str, Any]) -> dict[str, Any]:
         return _mcp_workflow_guide()
 
+    def route_question(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        question = _required(arguments, "question")
+        case_id = _optional_text(arguments, "case_id")
+        evidence_hint = _optional_text(arguments, "evidence_hint")
+        allow_processing = bool(arguments.get("allow_processing") or False)
+        route = _route_mcp_question(
+            question,
+            case_id=case_id,
+            evidence_hint=evidence_hint,
+            allow_processing=allow_processing,
+            server_allows_processing=self.allow_processing,
+            server_allows_sensitive=self.allow_sensitive,
+            server_allows_external_ai=self.allow_external_ai,
+        )
+        if case_id and route.get("report_names"):
+            resources: list[dict[str, Any]] = []
+            for report_name in route["report_names"][:8]:
+                resources.extend(
+                    _matching_report_resources(
+                        self.paths.root,
+                        case_id,
+                        purpose=str(route.get("report_purpose") or "full"),
+                        report_name=str(report_name),
+                        tags=[],
+                        contains=None,
+                        max_bytes=200_000,
+                        limit=50,
+                    )[:3]
+                )
+            route["report_candidates"] = _dedupe_resource_rows(resources)[:10]
+        else:
+            route["report_candidates"] = []
+        return route
+
     def case_readiness(self, arguments: dict[str, Any]) -> dict[str, Any]:
         case_id = str(arguments.get("case_id") or "").strip() or None
         profile = str(arguments.get("profile") or "").strip() or None
@@ -1268,8 +1442,8 @@ class RelicMcpServer:
     def discover_reports(self, arguments: dict[str, Any]) -> dict[str, Any]:
         case_id = _required(arguments, "case_id")
         purpose = str(arguments.get("purpose") or "full")
-        if purpose not in {"full", "usb", "cloud", "execution", "memory", "triage"}:
-            raise ValueError("purpose must be one of: full, usb, cloud, execution, memory, triage")
+        if purpose not in {"full", "usb", "cloud", "execution", "memory", "triage", "review"}:
+            raise ValueError("purpose must be one of: full, usb, cloud, execution, memory, triage, review")
         limit = _limit(arguments, default=250)
         resources = _case_report_resources(self.paths.root, case_id, purpose=purpose, limit=limit)
         indexes = [item for item in resources if Path(str(item.get("relative_path") or "")).name in {"index.md", "report-index.json"}]
@@ -1288,8 +1462,8 @@ class RelicMcpServer:
     def discover_report_exports(self, arguments: dict[str, Any]) -> dict[str, Any]:
         case_id = _required(arguments, "case_id")
         purpose = str(arguments.get("purpose") or "full")
-        if purpose not in {"full", "usb", "cloud", "execution", "memory", "triage"}:
-            raise ValueError("purpose must be one of: full, usb, cloud, execution, memory, triage")
+        if purpose not in {"full", "usb", "cloud", "execution", "memory", "triage", "review"}:
+            raise ValueError("purpose must be one of: full, usb, cloud, execution, memory, triage, review")
         requested_tags = _string_list(arguments.get("tags"))
         resources = _case_report_resources(self.paths.root, case_id, purpose=purpose, limit=_limit(arguments, default=250))
         if requested_tags:
@@ -1305,6 +1479,47 @@ class RelicMcpServer:
             "tags": requested_tags,
             "summary": {"resource_count": len(resources), "tag_count": len(requested_tags)},
             "resources": resources,
+        }
+
+    def read_existing_report(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        case_id = _required(arguments, "case_id")
+        purpose = str(arguments.get("purpose") or "full")
+        if purpose not in {"full", "usb", "cloud", "execution", "memory", "triage", "review"}:
+            raise ValueError("purpose must be one of: full, usb, cloud, execution, memory, triage, review")
+        max_bytes = _bounded_int(arguments, "max_bytes", default=200_000, minimum=1_000, maximum=MCP_RESOURCE_MAX_BYTES)
+        resources = _matching_report_resources(
+            self.paths.root,
+            case_id,
+            purpose=purpose,
+            report_name=_optional_text(arguments, "report_name"),
+            tags=_string_list(arguments.get("tags")),
+            contains=_optional_text(arguments, "contains"),
+            max_bytes=max_bytes,
+            limit=250,
+        )
+        if not resources:
+            return {
+                "case_id": case_id,
+                "source_of_truth": "existing_reports",
+                "matched": False,
+                "summary": {"matching_report_count": 0},
+                "guidance": "No existing generated report matched. Use raw artifact tools or regenerate only if the existing reports are absent or stale.",
+                "available_reports": _case_report_resources(self.paths.root, case_id, purpose=purpose, limit=50),
+            }
+        selected = resources[0]
+        path = _path_from_resource_uri(self.paths.root, str(selected["uri"]))
+        size = path.stat().st_size
+        if size > max_bytes:
+            raise ValueError(f"Report exceeds MCP read limit ({size} > {max_bytes} bytes): {selected['uri']}")
+        text = path.read_text(encoding="utf-8", errors="replace")
+        return {
+            "case_id": case_id,
+            "source_of_truth": "existing_reports",
+            "matched": True,
+            "selected_report": selected,
+            "candidate_reports": resources[:25],
+            "summary": {"matching_report_count": len(resources), "selected_size_bytes": size},
+            "content": {"uri": selected["uri"], "mimeType": mimetypes.guess_type(path.name)[0] or "text/plain", "text": text},
         }
 
     def case_dashboard(self, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -1441,6 +1656,33 @@ class RelicMcpServer:
             )
         finally:
             db.close()
+
+    def query_filesystem_listings(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        db = self._db()
+        try:
+            return filesystem_listing_report(
+                db,
+                _required(arguments, "case_id"),
+                contains=_optional_text(arguments, "contains"),
+                computer_id=_optional_text(arguments, "computer_id"),
+                image_id=_optional_text(arguments, "image_id"),
+                scan_status=_optional_text(arguments, "scan_status"),
+                include_deleted=bool(arguments.get("include_deleted", True)),
+                include_virtual=bool(arguments.get("include_virtual") or False),
+                limit=_limit(arguments, default=250),
+            )
+        finally:
+            db.close()
+
+    def query_evidence_contents(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        result = self.query_filesystem_listings(arguments)
+        result["source_of_truth"] = "filesystem_entries"
+        result["intent"] = "evidence_contents"
+        result["guidance"] = (
+            "These rows come from generated evidence file listings. Treat them as the first source for contents questions; "
+            "only run image processing, mounts, or SleuthKit/FLS when the stored listing is absent, stale, or insufficient."
+        )
+        return result
 
     def usb_dossier(self, arguments: dict[str, Any]) -> dict[str, Any]:
         db = self._db()
@@ -1901,11 +2143,28 @@ class RelicMcpServer:
         fmt = str(arguments.get("format") or "json")
         if fmt not in {"json", "table", "csv", "md"}:
             raise ValueError("format must be one of: json, table, csv, md")
+        case_id = _required(arguments, "case_id")
+        if not bool(arguments.get("regenerate") or False):
+            existing = self.read_existing_report(
+                {
+                    "case_id": case_id,
+                    "report_name": report_name,
+                    "purpose": "full",
+                    "max_bytes": MCP_RESOURCE_MAX_BYTES,
+                }
+            )
+            if existing.get("matched"):
+                return {
+                    **existing,
+                    "status": "existing_report_returned",
+                    "regenerated": False,
+                    "guidance": "Existing generated report was returned. Pass regenerate=true to force CLI report regeneration.",
+                }
         command = self._base_cli_command() + [
             "report",
             report_name,
             "--case",
-            _required(arguments, "case_id"),
+            case_id,
             "--format",
             fmt,
             "--limit",
@@ -2092,6 +2351,29 @@ class RelicMcpServer:
             if bool(arguments.get(key) or False):
                 command.append(flag)
         return self._start_mcp_process("run_profile", command)
+
+    def recover_deleted_files(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        command = self._base_cli_command() + [
+            "recover",
+            "deleted-files",
+            "--case",
+            _required(arguments, "case_id"),
+            "--source",
+            _optional_text(arguments, "source") or "all",
+            "--limit",
+            str(_limit(arguments, default=100)),
+            "--format",
+            "json",
+        ]
+        _extend_optional(command, "--image", arguments.get("image_id"))
+        _extend_optional(command, "--contains", arguments.get("contains"))
+        _extend_optional(command, "--name", arguments.get("name"))
+        max_bytes = _bounded_int(arguments, "max_bytes", default=0, minimum=0, maximum=10_000_000_000)
+        if max_bytes:
+            command.extend(["--max-bytes", str(max_bytes)])
+        if arguments.get("output_dir"):
+            command.extend(["--output-dir", str(_workspace_path(self.paths.root, str(arguments["output_dir"])))])
+        return self._start_mcp_process("recover_deleted_files", command)
 
     def _registry(self) -> ToolRegistry:
         return ToolRegistry.from_files(self.plugin_paths)
@@ -2488,6 +2770,66 @@ def _case_report_resources(root: Path, case_id: str, *, purpose: str | None, lim
     return rows
 
 
+def _matching_report_resources(
+    root: Path,
+    case_id: str,
+    *,
+    purpose: str,
+    report_name: str | None,
+    tags: list[str],
+    contains: str | None,
+    max_bytes: int,
+    limit: int,
+) -> list[dict[str, Any]]:
+    resources = _case_report_resources(root, case_id, purpose=purpose, limit=limit)
+    if report_name:
+        wanted = _normalize_report_token(report_name)
+        resources = [
+            row
+            for row in resources
+            if wanted in {
+                _normalize_report_token(str(row.get("name") or "")),
+                _normalize_report_token(str(row.get("filename") or "")),
+                _normalize_report_token(Path(str(row.get("filename") or "")).stem),
+            }
+        ]
+    if tags:
+        wanted_tags = {tag.casefold() for tag in tags}
+        resources = [
+            row
+            for row in resources
+            if wanted_tags <= {str(tag).casefold() for tag in (row.get("tags") or [])}
+        ]
+    if contains:
+        needle = contains.casefold()
+        filtered = []
+        for row in resources:
+            try:
+                path = _path_from_resource_uri(root, str(row["uri"]))
+            except ValueError:
+                continue
+            if path.stat().st_size > max_bytes:
+                continue
+            text = path.read_text(encoding="utf-8", errors="replace")
+            if needle in text.casefold():
+                filtered.append(row)
+        resources = filtered
+    resources.sort(key=lambda row: (_report_format_rank(str(row.get("format") or "")), str(row.get("modified_at") or "")), reverse=True)
+    return resources
+
+
+def _normalize_report_token(value: str) -> str:
+    text = value.casefold().strip()
+    for suffix in (".json", ".md", ".csv", ".txt"):
+        if text.endswith(suffix):
+            text = text[: -len(suffix)]
+    return re.sub(r"[^a-z0-9]+", "-", text).strip("-")
+
+
+def _report_format_rank(fmt: str) -> int:
+    return {"md": 4, "json": 3, "csv": 2, "txt": 1}.get(fmt.casefold(), 0)
+
+
 def _case_packet_resources(root: Path, case_id: str, *, limit: int) -> list[dict[str, Any]]:
     rows = []
     for directory in ("mcp-review-packets", "mcp-search-packets"):
@@ -2762,27 +3104,232 @@ def _search_packet_markdown(payload: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _route_mcp_question(
+    question: str,
+    *,
+    case_id: str | None,
+    evidence_hint: str | None,
+    allow_processing: bool,
+    server_allows_processing: bool,
+    server_allows_sensitive: bool,
+    server_allows_external_ai: bool,
+) -> dict[str, Any]:
+    text = f"{question} {evidence_hint or ''}".casefold()
+    tokens = set(re.findall(r"[a-z0-9$._:-]+", text))
+    requires_sensitive = _contains_any(text, {"credential", "credentials", "password", "secret", "token", "hash", "dpapi", "lsa", "mimikatz"})
+    requires_external_ai = _contains_any(text, {"chatgpt", "claude", "openai", "external ai", "upload to ai", "send to ai"})
+    explicit_processing = _contains_any(
+        text,
+        {
+            "process ",
+            "processing",
+            "parse ",
+            "parsing",
+            "import ",
+            "ingest ",
+            "reprocess",
+            "run profile",
+            "extract from image",
+            "mount ",
+            "fls",
+            "sleuthkit",
+        },
+    )
+    wants_recovery = _contains_any(text, {"recover", "restore", "undelete", "extract deleted", "deleted file", "deleted files"})
+
+    intent = "general_review"
+    report_purpose = "full"
+    report_names: list[str] = []
+    recommended_tool = "relic_read_existing_report"
+    fallback_tools = ["relic_discover_report_exports", "relic_lead_search", "relic_search_artifacts"]
+    first_source = "existing_reports"
+    reason = "Generated reports are the highest-level source of truth for broad case questions."
+    source_order = [
+        {"order": 1, "source": "generated_reports", "tools": ["relic_read_existing_report", "relic_discover_report_exports"]},
+        {"order": 2, "source": "parsed_artifact_tables", "tools": ["relic_lead_search", "relic_search_artifacts", "domain query tools"]},
+        {"order": 3, "source": "case_resources_and_packets", "tools": ["resources/list", "resources/read", "relic_list_review_packets", "relic_list_search_packets"]},
+        {"order": 4, "source": "processing_or_image_access", "tools": ["processing tools"], "requires_explicit_user_request": True},
+    ]
+
+    if wants_recovery:
+        intent = "deleted_file_recovery"
+        first_source = "generated_filesystem_listings"
+        recommended_tool = "relic_query_evidence_contents"
+        fallback_tools = ["relic_query_filesystem_listings", "relic_file_dossier"]
+        if allow_processing and server_allows_processing:
+            fallback_tools.append("relic_recover_deleted_files")
+        report_names = ["opened-from-removable-media", "file-movement-identity"]
+        report_purpose = "usb" if _contains_any(text, {"usb", "removable", "external", "drive"}) else "full"
+        reason = "Deleted-file recovery should first identify the target in parsed listings, then run recovery only on explicit request."
+        source_order = [
+            {"order": 1, "source": "generated_filesystem_listings", "tools": ["relic_query_evidence_contents", "relic_query_filesystem_listings"]},
+            {"order": 2, "source": "file_context_reports", "tools": ["relic_read_existing_report"], "report_names": report_names},
+            {"order": 3, "source": "file_dossier", "tools": ["relic_file_dossier"]},
+            {"order": 4, "source": "deleted_file_recovery", "tools": ["relic_recover_deleted_files"], "requires_explicit_user_request": True},
+        ]
+    elif _contains_any(text, {"contents", "content", "list files", "files on", "folder", "directory", "filesystem", "file listing", "drive contents", "volume contents"}) or "files" in tokens and _contains_any(text, {"usb", "drive", "volume", "image"}):
+        intent = "evidence_contents"
+        first_source = "generated_filesystem_listings"
+        recommended_tool = "relic_query_evidence_contents"
+        fallback_tools = ["relic_query_filesystem_listings", "relic_file_dossier", "relic_search_artifacts"]
+        report_names = ["opened-from-removable-media", "file-movement-identity", "usb-files"]
+        report_purpose = "usb" if _contains_any(text, {"usb", "removable", "external"}) else "full"
+        reason = "Filesystem answers should come from stored filesystem_entries before live image access or SleuthKit."
+        source_order = [
+            {"order": 1, "source": "generated_filesystem_listings", "tools": ["relic_query_evidence_contents", "relic_query_filesystem_listings"]},
+            {"order": 2, "source": "generated_reports", "tools": ["relic_read_existing_report"], "report_names": report_names},
+            {"order": 3, "source": "parsed_artifact_tables", "tools": ["relic_file_dossier", "relic_search_artifacts"]},
+            {"order": 4, "source": "image_processing_or_fls", "tools": ["relic_process_image", "relic_run_profile"], "requires_explicit_user_request": True},
+        ]
+    elif _contains_any(text, {"usb", "removable", "external storage", "thumb drive", "flash drive", "uasp", "usbstor", "volume serial"}):
+        intent = "usb_storage"
+        report_purpose = "usb"
+        report_names = ["external-storage", "usb-files", "usb-timeline", "opened-from-removable-media", "file-movement-identity"]
+        recommended_tool = "relic_read_existing_report"
+        fallback_tools = ["relic_query_external_storage", "relic_query_usb_files", "relic_usb_dossier", "relic_query_evidence_contents"]
+        reason = "USB/storage questions should begin with deduped storage reports, then storage-specific parsed tables."
+    elif _contains_any(text, {"suspicious", "execution", "executed", "executable", "program", "process", "runmru", "userassist", "prefetch"}):
+        intent = "execution"
+        report_purpose = "execution"
+        report_names = ["suspicious-executions", "execution", "execution-correlation", "program-provenance"]
+        recommended_tool = "relic_read_existing_report"
+        fallback_tools = ["relic_query_suspicious_executions", "relic_lead_search", "relic_query_registry_activity"]
+        reason = "Execution questions should start with generated execution and suspicious-execution reports."
+    elif _contains_any(text, {"timeline", "when", "between", "around", "date", "time window"}):
+        intent = "timeline"
+        report_names = ["case-overview", "external-storage", "suspicious-executions", "memory-analysis"]
+        recommended_tool = "relic_read_existing_report"
+        fallback_tools = ["relic_timeline_window", "relic_timeline", "relic_search_artifacts"]
+        reason = "Timeline questions should use generated summaries first, then normalized timeline windows."
+    elif _contains_any(text, {"memory", "ram", "pagefile", "hiberfil", "swapfile", "crash dump", "dump"}):
+        intent = "memory"
+        report_purpose = "memory"
+        report_names = ["memory-analysis", "memory-artifacts", "memory-disk-correlations", "crash-dump-analysis"]
+        recommended_tool = "relic_read_existing_report"
+        fallback_tools = ["relic_query_memory_artifacts", "relic_search_artifacts"]
+        reason = "Memory questions should start with generated memory reports and combined memory/disk artifacts."
+    elif _contains_any(text, {"cloud", "onedrive", "google drive", "dropbox", "sync", "virtual drive"}):
+        intent = "cloud_storage"
+        report_purpose = "cloud"
+        report_names = ["cloud-artifacts", "opened-from-cloud-storage", "cloud-mounts", "cloud-removable-overlap"]
+        recommended_tool = "relic_read_existing_report"
+        fallback_tools = ["relic_query_cloud_artifacts", "relic_query_opened_from_cloud_storage", "relic_lead_search"]
+        reason = "Cloud questions should start with cloud-specific reports because virtual drives can mimic removable media."
+    elif _contains_any(text, {"browser", "download", "history", "cache", "webcache", "firefox", "chrome", "edge"}):
+        intent = "browser"
+        report_names = ["user-intent", "case-overview"]
+        recommended_tool = "relic_read_existing_report"
+        fallback_tools = ["relic_query_browser_activity", "relic_lead_search"]
+        reason = "Browser questions should start with generated review reports, then browser activity tables."
+    elif _contains_any(text, {"email", "mail", "message", "communications", "chat", "teams", "outlook"}):
+        intent = "communications"
+        report_names = ["user-intent", "case-overview"]
+        recommended_tool = "relic_read_existing_report"
+        fallback_tools = ["relic_query_communications", "relic_lead_search"]
+        reason = "Communication questions should start with existing review reports and then communications tables."
+    elif explicit_processing:
+        intent = "processing"
+        first_source = "case_state"
+        recommended_tool = "relic_case_readiness"
+        fallback_tools = ["relic_profile_preview", "relic_process_image", "relic_run_profile", "relic_import_triage_zip"]
+        reason = "Processing requests should verify readiness and workspace health before starting a gated job."
+        source_order = [
+            {"order": 1, "source": "readiness_and_workspace_health", "tools": ["relic_case_readiness", "relic_workspace_health"]},
+            {"order": 2, "source": "case_state", "tools": ["relic_case_evidence_map", "relic_workspace_map"]},
+            {"order": 3, "source": "processing_preview", "tools": ["relic_profile_preview", "relic_doctor"]},
+            {"order": 4, "source": "processing_job", "tools": ["relic_process_image", "relic_run_profile", "relic_import_triage_zip"], "requires_explicit_user_request": True},
+        ]
+
+    processing_requested = explicit_processing or wants_recovery
+    processing_permitted = bool(processing_requested and allow_processing and server_allows_processing)
+    blocked_actions = []
+    if processing_requested and not processing_permitted:
+        blocked_actions.append(
+            {
+                "action": "processing_or_recovery",
+                "reason": "Requires an explicit processing request, route allow_processing=true, and MCP server startup flag --allow-processing.",
+                "server_allows_processing": server_allows_processing,
+                "route_allows_processing": allow_processing,
+            }
+        )
+    if requires_sensitive and not server_allows_sensitive:
+        blocked_actions.append({"action": "sensitive_credential_reveal", "reason": "Requires MCP server startup flag --allow-sensitive."})
+    if requires_external_ai and not server_allows_external_ai:
+        blocked_actions.append({"action": "external_ai_upload", "reason": "Requires MCP server startup flag --allow-external-ai."})
+
+    return {
+        "case_id": case_id,
+        "question": question,
+        "evidence_hint": evidence_hint,
+        "intent": intent,
+        "first_source": first_source,
+        "recommended_tool": recommended_tool,
+        "fallback_tools": fallback_tools,
+        "source_order": source_order,
+        "report_purpose": report_purpose,
+        "report_names": report_names,
+        "processing_requested": processing_requested,
+        "processing_allowed": processing_permitted,
+        "requires_sensitive": requires_sensitive,
+        "sensitive_allowed": server_allows_sensitive,
+        "requires_external_ai": requires_external_ai,
+        "external_ai_allowed": server_allows_external_ai,
+        "blocked_actions": blocked_actions,
+        "reason": reason,
+        "guardrails": [
+            "Use existing generated reports before raw artifact queries when a report can answer the question.",
+            "Use filesystem_entries through relic_query_evidence_contents for any file-listing or drive-contents question.",
+            "Use parsed artifact tables before resources, packet files, or direct image tooling.",
+            "Use processing, mounts, FLS, or recovery tools only after the user explicitly asks for that work and MCP processing is enabled.",
+            "Do not reveal credentials or send data to external AI unless the corresponding MCP startup gate is enabled.",
+        ],
+    }
+
+
+def _contains_any(text: str, needles: set[str]) -> bool:
+    return any(needle in text for needle in needles)
+
+
+def _dedupe_resource_rows(resources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen = set()
+    rows = []
+    for row in resources:
+        key = str(row.get("uri") or row.get("relative_path") or row.get("filename") or "")
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        rows.append(row)
+    return rows
+
+
 def _mcp_workflow_guide() -> dict[str, Any]:
     steps = [
-        {"order": 1, "tool": "relic_case_readiness", "purpose": "Check doctor, workspace health, readiness, progress, and resume signals."},
-        {"order": 2, "tool": "relic_workspace_map", "purpose": "Get cases, evidence, reports, packets, progress manifests, and active jobs."},
-        {"order": 3, "tool": "relic_case_evidence_map", "purpose": "Review computers, images, report resources, memory sources, jobs, and processing state for one case."},
-        {"order": 4, "tool": "relic_case_runbook", "purpose": "Get safe next commands and reasons based on current case state."},
-        {"order": 5, "tool": "relic_artifact_search_sources", "purpose": "Check which source tables, fields, and row counts are available for search."},
-        {"order": 6, "tool": "relic_lead_search", "purpose": "Run preset execution, USB, cloud, document, browser, or communications searches."},
-        {"order": 7, "tool": "relic_search_artifacts", "purpose": "Run ad hoc artifact searches with user, computer, source, and time filters."},
-        {"order": 8, "tool": "drilldown tools", "purpose": "Follow search result drilldown hints into file, USB, user, timeline, registry, cloud, communication, shortcut, or remote-access context."},
-        {"order": 9, "tool": "relic_write_search_packet", "purpose": "Save repeatable searches, result hash sets, case counts, and result sets as examiner work product."},
-        {"order": 10, "tool": "relic_rerun_search_packet", "purpose": "Rerun saved searches and compare added, removed, changed, and unchanged results."},
-        {"order": 11, "tool": "relic_write_review_packet", "purpose": "Save selected findings, notes, timeline slices, and report URIs."},
-        {"order": 12, "tool": "relic_discover_report_exports", "purpose": "Find generated reports and packets by purpose and tags."},
-        {"order": 13, "tool": "relic_write_report_bundle", "purpose": "Export a review bundle for handoff or UI consumption. Use purpose=review for MCP/operator review packs."},
+        {"order": 1, "tool": "relic_route_question", "purpose": "Classify the examiner question and follow the returned source-of-truth order."},
+        {"order": 2, "tool": "relic_case_readiness", "purpose": "Check doctor, workspace health, readiness, progress, and resume signals."},
+        {"order": 3, "tool": "relic_workspace_map", "purpose": "Get cases, evidence, reports, packets, progress manifests, and active jobs."},
+        {"order": 4, "tool": "relic_case_evidence_map", "purpose": "Review computers, images, report resources, memory sources, jobs, and processing state for one case."},
+        {"order": 5, "tool": "relic_read_existing_report", "purpose": "For report-backed questions, read an existing generated report first and treat it as the source of truth."},
+        {"order": 6, "tool": "relic_discover_report_exports", "purpose": "Find generated reports and packets by purpose and tags before querying lower-level artifacts."},
+        {"order": 7, "tool": "relic_case_runbook", "purpose": "Get safe next commands and reasons based on current case state."},
+        {"order": 8, "tool": "relic_artifact_search_sources", "purpose": "Check which source tables, fields, and row counts are available for search."},
+        {"order": 9, "tool": "relic_query_evidence_contents", "purpose": "For evidence contents, drive contents, volume contents, or file-listing questions, query generated filesystem_entries first before considering live image, mount, or SleuthKit processing."},
+        {"order": 10, "tool": "relic_lead_search", "purpose": "Run preset execution, USB, cloud, document, browser, or communications searches after existing reports have been checked."},
+        {"order": 11, "tool": "relic_search_artifacts", "purpose": "Run ad hoc artifact searches with user, computer, source, and time filters after existing reports have been checked."},
+        {"order": 12, "tool": "drilldown tools", "purpose": "Follow search result drilldown hints into file, USB, user, timeline, registry, cloud, communication, shortcut, or remote-access context."},
+        {"order": 13, "tool": "relic_write_search_packet", "purpose": "Save repeatable searches, result hash sets, case counts, and result sets as examiner work product."},
+        {"order": 14, "tool": "relic_rerun_search_packet", "purpose": "Rerun saved searches and compare added, removed, changed, and unchanged results."},
+        {"order": 15, "tool": "relic_write_review_packet", "purpose": "Save selected findings, notes, timeline slices, and report URIs."},
+        {"order": 16, "tool": "relic_write_report_bundle", "purpose": "Export a review bundle for handoff or UI consumption. Use purpose=review for MCP/operator review packs."},
     ]
     return {
         "title": "Relic MCP Workflow Guide",
         "summary": {"step_count": len(steps)},
         "steps": steps,
         "recommended_presets": ["execution", "usb", "cloud", "documents", "browser", "communications"],
+        "route_first_tool": "relic_route_question",
+        "reports_first_tool": "relic_read_existing_report",
+        "evidence_contents_first_tool": "relic_query_evidence_contents",
+        "filesystem_first_tool": "relic_query_filesystem_listings",
         "packet_tools": ["relic_write_search_packet", "relic_list_search_packets", "relic_rerun_search_packet", "relic_write_review_packet", "relic_list_review_packets"],
     }
 

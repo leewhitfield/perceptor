@@ -934,7 +934,7 @@ def test_recmd_detail_outputs_are_normalized_to_artifact_tables(tmp_path):
     recentdocs_csv.write_text(
         "Extension,BatchKeyPath,ValueName,BatchValueName,TargetName,LnkName,MruPosition,OpenedOn,ExtensionLastOpened\n"
         "RecentDocs,ROOT\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RecentDocs,83,83,"
-        "ROCBA-SYSTEM,ROCBA-SYSTEM.lnk,0,2020-11-16 02:32:19.6348205,2020-11-16 02:32:19.6348205\n"
+        "TEST-SYSTEM,TEST-SYSTEM.lnk,0,2020-11-16 02:32:19.6348205,2020-11-16 02:32:19.6348205\n"
     )
     wordwheel_csv = tmp_path / "RECmd_WindowsActivity_WordWheelQuery.csv"
     wordwheel_csv.write_text(
@@ -1007,7 +1007,7 @@ def test_recmd_detail_outputs_are_normalized_to_artifact_tables(tmp_path):
         "user_profile": "fredr",
         "hive_type": "NtUser",
         "value_name": "83",
-        "target_name": "ROCBA-SYSTEM",
+        "target_name": "TEST-SYSTEM",
         "mru_position": "0",
     }
     assert dict(wordwheel) == {"search_term": "backup.pst", "mru_position": "0"}
@@ -1919,10 +1919,10 @@ def test_usb_storage_summary_enriches_missing_volume_serial_from_shortcut_label(
                 "vendor": "CB",
                 "product": "Cellebrite",
                 "serial": "29B1109550240002",
-                "volume_name": "BYEBYE",
+                "volume_name": "SAMPLEVOL",
                 "volume_serial_number": None,
                 "property_name": "FriendlyName",
-                "property_value": "BYEBYE",
+                "property_value": "SAMPLEVOL",
             },
         ]
     )
@@ -1943,8 +1943,8 @@ def test_usb_storage_summary_enriches_missing_volume_serial_from_shortcut_label(
                 "file_name": "The end.docx",
                 "file_location": "D:\\The end.docx",
                 "device_type": "removable",
-                "volume_serial_number": "3304EABA",
-                "volume_name": "BYEBYE",
+                "volume_serial_number": "A1B2C3D4",
+                "volume_name": "SAMPLEVOL",
                 "jumplist_item_number": "1",
             }
         ]
@@ -1962,8 +1962,8 @@ def test_usb_storage_summary_enriches_missing_volume_serial_from_shortcut_label(
     assert dict(summary) == {
         "serial": "29B1109550240002",
         "product": "Cellebrite",
-        "volume_name": "BYEBYE",
-        "volume_serial_number": "3304EABA",
+        "volume_name": "SAMPLEVOL",
+        "volume_serial_number": "A1B2C3D4",
         "source_artifacts": "usb_device_history, usb_volume_history, shortcut_volume_label_enrichment",
     }
 

@@ -8,11 +8,10 @@ from functools import lru_cache
 from pathlib import Path
 
 
-DEFAULT_LOOKUP_PATHS = (
-    Path("/home/lee/reference/upload/FOR500_K01/Library/Analysis/prefetch_hashes_lookup.txt"),
-)
+DEFAULT_LOOKUP_PATHS: tuple[Path, ...] = ()
 DEFAULT_LOOKUP_DIRS = (
-    Path("/home/lee/reference"),
+    Path("/opt/relic-reference"),
+    Path.home() / "reference",
 )
 LOOKUP_FILE_RE = re.compile(r"(?i)(prefetch|pf).*(hash|lookup).*\.(txt|tsv|csv)$")
 

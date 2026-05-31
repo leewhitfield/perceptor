@@ -21,7 +21,7 @@ from forensic_orchestrator.tools.usp import normalized_usp_row
 
 
 def test_report_bundle_detects_vsc_named_mft_by_header(tmp_path):
-    csv_path = tmp_path / "Replaced1-A00521_E_ShadowCopy52_$MFT.csv"
+    csv_path = tmp_path / "Replaced1-SAMPLE001_E_ShadowCopy52_$MFT.csv"
     csv_path.write_text(
         "EntryNumber,SequenceNumber,ParentPath,FileName,Created0x10\n"
         "42,3,C:/Users/test,thing.txt,2023-01-01 00:00:00\n",
