@@ -11,6 +11,7 @@ uv run relic --root ~/analysis/case-root process \
   --computer-label HOST01 \
   --profile windows-full \
   --filesystem \
+  --sudo \
   --workers 4
 ```
 
@@ -51,6 +52,16 @@ sources are converted with `qemu-img` into case-local raw images.
 The normal parser flow does not require a kernel mount for every artifact. When
 `--filesystem` is supplied, Relic mounts read-only and prefers mounted-volume
 access for file inventory and parsers that benefit from filesystem paths.
+
+For normal full-image processing, include `--filesystem`. If `--filesystem` is
+omitted, Relic does not attempt a mounted-volume workflow and will rely on
+Sleuth Kit extraction where possible. That fallback is useful for recovery and
+for systems without mount privileges, but it is slower for broad recursive
+artifact extraction.
+
+Use `--sudo` only after configuring non-interactive sudo for Relic mount and
+unmount commands. The sudoers rule is documented in
+[Mounted Image Notes](../mounted-image-notes.md).
 
 If `ewfmount` uses `allow_other`, `/etc/fuse.conf` must contain:
 

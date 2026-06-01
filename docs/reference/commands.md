@@ -23,10 +23,13 @@ uv run relic standalone sample-fixture --output sample-live-case.zip --format ta
 ## Processing
 
 ```bash
-uv run relic --root ROOT process --path IMAGE --computer-label HOST --profile windows-full --filesystem --workers 4
-uv run relic --root ROOT --dry-run process --path IMAGE --computer-label HOST --profile windows-full --filesystem
+uv run relic --root ROOT process --path IMAGE --computer-label HOST --profile windows-full --filesystem --sudo --workers 4
+uv run relic --root ROOT --dry-run process --path IMAGE --computer-label HOST --profile windows-full --filesystem --sudo
 uv run relic --root ROOT run --case CASE_ID --image IMAGE_ID --profile windows-rdp-cache --replace-existing
 ```
+
+Use `--filesystem` for mounted-volume processing. If it is omitted, Relic will
+not mount the image and will use Sleuth Kit extraction where possible.
 
 ## Ingest
 
@@ -59,6 +62,8 @@ uv run relic --root ROOT recover deleted-files --case CASE_ID --image IMAGE_ID -
 
 ```bash
 uv run relic --root ROOT image cleanup-stale-mounts --format table
+uv run relic --root ROOT image mount --case CASE_ID --image IMAGE_ID --filesystem --sudo
+uv run relic --root ROOT image unmount --case CASE_ID --image IMAGE_ID --sudo
 ```
 
 ## MCP

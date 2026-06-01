@@ -40,8 +40,14 @@ uv run relic --root ~/analysis/case01 --dry-run process \
   --computer-label HOST01 \
   --profile windows-full \
   --filesystem \
+  --sudo \
   --workers 4
 ```
+
+`--filesystem` is the switch that enables mounted-volume processing. If it is
+left out, Relic will not mount the image and will use Sleuth Kit extraction
+where possible. Use `--sudo` only after configuring the passwordless mount rule
+in [Mounted Image Notes](../mounted-image-notes.md).
 
 ## Common Checks
 
