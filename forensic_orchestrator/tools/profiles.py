@@ -858,6 +858,32 @@ def _run_profile_impl(
             tool_timing_id = str(context["tool_timing_id"])
             tool_started = float(context["tool_started"])
             if result.status == "failed":
+                missing_windows_old_source = windows_old_mode and _is_missing_source_error(
+                    Exception(result.error or "")
+                )
+                if missing_windows_old_source:
+                    db.finish_process_timing(
+                        tool_timing_id,
+                        status="source_not_present",
+                        details={"error": result.error, "parallelized": True},
+                    )
+                    _progress(
+                        f"tool source_not_present {tool.name} elapsed={_format_elapsed(tool_started)} "
+                        f"error={result.error}"
+                    )
+                    db.log_activity(
+                        case_id=case_id,
+                        computer_id=image.computer_id,
+                        image_id=image_id,
+                        level="warning",
+                        event="windows_old.source_not_present",
+                        message=(
+                            f"Windows.old source artifact was not present for {tool.name}; "
+                            "continuing with remaining tools"
+                        ),
+                        details={"tool": tool.name, "error": result.error, "parallelized": True},
+                    )
+                    continue
                 db.finish_process_timing(
                     tool_timing_id,
                     status="failed",
@@ -880,6 +906,30 @@ def _run_profile_impl(
                     mount=mount,
                 )
             except Exception as exc:
+                missing_windows_old_source = windows_old_mode and _is_missing_source_error(exc)
+                if missing_windows_old_source:
+                    db.finish_process_timing(
+                        tool_timing_id,
+                        status="source_not_present",
+                        details={"error": str(exc), "parallelized": True},
+                    )
+                    _progress(
+                        f"tool source_not_present {tool.name} elapsed={_format_elapsed(tool_started)} "
+                        f"error={exc}"
+                    )
+                    db.log_activity(
+                        case_id=case_id,
+                        computer_id=image.computer_id,
+                        image_id=image_id,
+                        level="warning",
+                        event="windows_old.source_not_present",
+                        message=(
+                            f"Windows.old source artifact was not present for {tool.name}; "
+                            "continuing with remaining tools"
+                        ),
+                        details={"tool": tool.name, "error": str(exc), "parallelized": True},
+                    )
+                    continue
                 db.finish_process_timing(
                     tool_timing_id,
                     status="failed",
