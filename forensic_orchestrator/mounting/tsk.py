@@ -320,6 +320,15 @@ def _recovery_limits(recovery: dict[str, object] | None) -> dict[str, int]:
     return limits
 
 
+def _extraction_limits(artifact: ArtifactDefinition) -> dict[str, int]:
+    limits = _recovery_limits(artifact.recovery)
+    for key, value in (artifact.extraction_limits or {}).items():
+        number = _positive_int(value)
+        if number is not None and key in {"max_files", "max_bytes", "max_seconds"}:
+            limits.setdefault(key, number)
+    return limits
+
+
 def _recovery_limit_reason(
     limits: dict[str, int],
     *,
@@ -494,7 +503,7 @@ def extract_artifact(
         extracted_bytes = 0
         started = time.monotonic()
         limit_reason = ""
-        limits = _recovery_limits(artifact.recovery)
+        limits = _extraction_limits(artifact)
         for entry in matched:
             limit_reason = _recovery_limit_reason(
                 limits,

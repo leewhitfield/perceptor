@@ -67,6 +67,7 @@ class ArtifactDefinition:
     use_tsk: bool = False
     optional: bool = False
     recovery: dict[str, Any] | None = None
+    extraction_limits: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)

@@ -268,3 +268,48 @@ def test_extract_artifact_stops_at_recovery_file_limit(monkeypatch, tmp_path):
     assert extracted.metadata["extracted_count"] == 1
     assert extracted.metadata["recovery_limited"] is True
     assert extracted.metadata["limit_reason"] == "max_files"
+
+
+def test_extract_artifact_stops_at_non_recovery_extraction_file_limit(monkeypatch, tmp_path):
+    extracted_destinations: list[Path] = []
+
+    def fake_run_icat_to_file(**kwargs):
+        destination = kwargs["destination"]
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text("cache")
+        extracted_destinations.append(destination)
+
+    monkeypatch.setattr("forensic_orchestrator.mounting.tsk._run_icat_to_file", fake_run_icat_to_file)
+    monkeypatch.setattr("forensic_orchestrator.mounting.tsk.read_file_metadata", lambda **kwargs: {})
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+
+    extracted = extract_artifact(
+        db=db,
+        case_id=case.id,
+        image_id="image-1",
+        computer_id="computer-1",
+        raw_image=Path("/evidence/desktop.E01"),
+        offset_sectors=63,
+        artifact=ArtifactDefinition(
+            name="spotify_profiles",
+            source="Users",
+            destination="spotify",
+            recursive=True,
+            extraction_limits={"max_files": 1},
+        ),
+        artifacts_root=tmp_path / "artifacts",
+        dry_run=False,
+        fls_entries=[
+            FlsEntry("200", "Users/Jean/AppData/Roaming/Spotify/first.db", False),
+            FlsEntry("201", "Users/Jean/AppData/Roaming/Spotify/second.db", False),
+        ],
+    )
+
+    assert [path.name for path in extracted_destinations] == ["first.db"]
+    assert extracted.metadata["count"] == 2
+    assert extracted.metadata["extracted_count"] == 1
+    assert extracted.metadata["recovery_limited"] is True
+    assert extracted.metadata["limit_reason"] == "max_files"

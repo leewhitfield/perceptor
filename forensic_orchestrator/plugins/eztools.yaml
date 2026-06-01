@@ -1757,6 +1757,10 @@ tools:
         recursive: true
         process_in_place: true
         optional: true
+        extraction_limits:
+          max_files: 5000
+          max_bytes: 2147483648
+          max_seconds: 900
     command:
       - internal-spotify-parser
       - "{artifact:spotify_profiles}"

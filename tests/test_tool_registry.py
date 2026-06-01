@@ -213,6 +213,16 @@ def test_package_artifacts_parser_is_limited_to_high_value_paths_and_files():
     assert "appcompat/programs" in include_patterns
 
 
+def test_spotify_parser_has_tsk_fallback_extraction_limits():
+    registry = ToolRegistry.from_files([default_plugin_path()])
+    tool = registry.get_tool("SpotifyParser")
+    artifact = {artifact.name: artifact for artifact in tool.artifacts}["spotify_profiles"]
+
+    assert artifact.extraction_limits["max_files"] == 5000
+    assert artifact.extraction_limits["max_bytes"] == 2147483648
+    assert artifact.extraction_limits["max_seconds"] == 900
+
+
 def test_windows_full_includes_complete_current_artifact_set():
     registry = ToolRegistry.from_files([default_plugin_path()])
     assert registry.profiles["windows-full"].get("include_windows_old") is True

@@ -41,6 +41,7 @@ class ToolRegistry:
                         use_tsk=bool(artifact.get("use_tsk", False)),
                         optional=bool(artifact.get("optional", False)),
                         recovery=dict(artifact.get("recovery") or {}),
+                        extraction_limits=dict(artifact.get("extraction_limits") or {}),
                     )
                     for artifact in raw.get("artifacts", [])
                 ]
