@@ -210,7 +210,12 @@ def _row_from_fls_entry(
     rel = entry.path.replace("\\", "/").lstrip("/")
     parent = Path(rel).parent.as_posix() if rel and Path(rel).parent.as_posix() != "." else ""
     name = Path(rel).name
-    active = entry.active_name
+    if entry.system:
+        status = "system"
+    elif entry.active_name:
+        status = "live"
+    else:
+        status = "deleted"
     return {
         "id": str(uuid.uuid4()),
         "case_id": case_id,
@@ -236,7 +241,7 @@ def _row_from_fls_entry(
         "mode": "",
         "uid": "",
         "gid": "",
-        "scan_status": "ok" if active else "deleted",
+        "scan_status": status,
         "error": "",
         "created_at": created_at,
     }

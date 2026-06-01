@@ -1219,7 +1219,7 @@ def filesystem_listing_report(
     if not include_deleted:
         where.append("COALESCE(scan_status, '') <> 'deleted'")
     if not include_virtual:
-        where.append("COALESCE(scan_status, '') <> 'virtual'")
+        where.append("COALESCE(scan_status, '') NOT IN ('virtual', 'system')")
     clause = " AND ".join(where)
     total_rows = _query_report_rows(
         db,

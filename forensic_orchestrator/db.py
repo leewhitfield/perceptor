@@ -145,6 +145,7 @@ DEFAULT_PURGE_TABLES = (
     "shellbag_entries",
     "usb_devices",
     "setupapi_device_events",
+    "filesystem_entries",
     "mft_entries",
     "usn_journal_entries",
     "ntfs_logfile_entries",
@@ -244,6 +245,7 @@ TOOL_PURGE_TABLES = {
     "PrefetchParser": {"prefetch_items", "prefetch_run_times", "tool_outputs"},
     "MFTECmd": {"parsed_rows", "mft_entries", "tool_outputs"},
     "MountedFilesystemInventory": {"filesystem_entries", "tool_outputs"},
+    "TskFilesystemInventory": {"filesystem_entries", "tool_outputs"},
     "MFTECmdUSN": {"usn_journal_entries", "tool_outputs"},
     "USNRewind": {"usn_journal_entries", "tool_outputs"},
     "MFTECmdI30": {"ntfs_index_entries", "ntfs_index_bitmaps", "tool_outputs"},
@@ -7936,7 +7938,17 @@ class Database:
                 reconciliation_params.append(image_id)
             self._delete_sqlite_if_exists("ntfs_namespace_reconciliation", " AND ".join(reconciliation_where), reconciliation_params)
         if not tool_names or any(
-            name in {"MFTECmd", "MFTECmdUSN", "MFTECmdLogFile", "NTFSParseLogFile", "MFTECmdI30", "WindowsSearchGatherParser"}
+            name
+            in {
+                "MFTECmd",
+                "MFTECmdUSN",
+                "MFTECmdLogFile",
+                "NTFSParseLogFile",
+                "MFTECmdI30",
+                "WindowsSearchGatherParser",
+                "MountedFilesystemInventory",
+                "TskFilesystemInventory",
+            }
             for name in tool_names
         ):
             filesystem_where = ["case_id = ?"]

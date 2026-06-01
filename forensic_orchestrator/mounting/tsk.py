@@ -20,10 +20,12 @@ class FlsEntry:
     path: str
     is_directory: bool
     kind: str = ""
+    deleted: bool = False
+    system: bool = False
 
     @property
     def active_name(self) -> bool:
-        return not self.kind.startswith("-/")
+        return not self.deleted and not self.kind.startswith("-/")
 
 
 def _tsk_filesystem_type(filesystem_type: str | None) -> str:
@@ -57,22 +59,30 @@ def validate_tsk_available() -> None:
 
 def parse_fls_output(output: str) -> list[FlsEntry]:
     entries: list[FlsEntry] = []
-    pattern = re.compile(r"^(?P<kind>[-rdv]/[-rdv])\s+(?P<inode>[^:]+):\s*(?P<path>.+)$")
+    pattern = re.compile(
+        r"^(?P<kind>[-rRdDvV]/[-rRdDvV])\s+(?P<deleted>\*)?\s*(?P<inode>[^:]+):\s*(?P<path>.+)$"
+    )
     for line in output.splitlines():
         match = pattern.match(line.strip())
         if not match:
             continue
         path = match.group("path")
+        deleted = bool(match.group("deleted")) or " (deleted)" in path
         if " (deleted)" in path:
             path = path.replace(" (deleted)", "")
         raw_inode = match.group("inode")
         inode = raw_inode if ":" in path else raw_inode.split("-")[0]
+        kind = match.group("kind")
+        normalized_kind = kind.lower()
+        system = "v" in normalized_kind or path.endswith("(Volume Label Entry)")
         entries.append(
             FlsEntry(
                 inode=inode,
                 path=path,
-                is_directory=match.group("kind").startswith("d/") or match.group("kind").endswith("/d"),
-                kind=match.group("kind"),
+                is_directory=normalized_kind.startswith("d/") or normalized_kind.endswith("/d"),
+                kind=kind,
+                deleted=deleted or normalized_kind.startswith("-/"),
+                system=system,
             )
         )
     return entries

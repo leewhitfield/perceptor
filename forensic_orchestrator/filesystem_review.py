@@ -9,6 +9,17 @@ from forensic_orchestrator.analytics_query import query_rows
 from forensic_orchestrator.db import Database
 
 
+def _filesystem_entry_status(scan_status: Any) -> str:
+    normalized = str(scan_status or "").lower()
+    if normalized in {"ok", "live"}:
+        return "filesystem_present"
+    if normalized == "deleted":
+        return "filesystem_deleted"
+    if normalized in {"system", "virtual"}:
+        return "filesystem_system"
+    return "filesystem_stat_error"
+
+
 def rebuild_filesystem_review(db: Database, *, case_id: str, image_id: str | None = None) -> int:
     where = ["case_id = ?"]
     params: list[Any] = [case_id]
@@ -85,7 +96,12 @@ def _insert_filesystem_entry_rows(db: Database, *, case_id: str, image_id: str |
           file_name, file_path, parent_path,
           NULL, NULL, NULL, NULL,
           'true', is_directory, NULL, 'mounted_filesystem_entry',
-          CASE WHEN scan_status = 'ok' THEN 'filesystem_present' ELSE 'filesystem_stat_error' END,
+          CASE
+            WHEN scan_status IN ('ok', 'live') THEN 'filesystem_present'
+            WHEN scan_status = 'deleted' THEN 'filesystem_deleted'
+            WHEN scan_status = 'system' THEN 'filesystem_system'
+            ELSE 'filesystem_stat_error'
+          END,
           json_object(
             'filesystem_type', filesystem_type,
             'partition_id', partition_id,
@@ -568,7 +584,7 @@ def _duckdb_filesystem_review_rows(db: Database, *, case_id: str, image_id: str 
                 is_directory=row.get("is_directory"),
                 operation=None,
                 reason="mounted_filesystem_entry",
-                status="filesystem_present" if str(row.get("scan_status") or "").lower() == "ok" else "filesystem_stat_error",
+                status=_filesystem_entry_status(row.get("scan_status")),
                 details={
                     "filesystem_type": row.get("filesystem_type"),
                     "partition_id": row.get("partition_id"),

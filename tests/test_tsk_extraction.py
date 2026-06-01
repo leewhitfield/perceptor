@@ -84,6 +84,28 @@ d/- * 0:	ProgramData/Microsoft/Windows/WER/ReportArchive/NonCritical
     assert entries[2].is_directory is True
     assert entries[2].active_name is False
     assert entries[3].is_directory is False
+    assert entries[3].deleted is True
+
+
+def test_parse_fls_output_marks_fat_deleted_and_system_entries():
+    output = """
+r/r 3:	BYEBYE      (Volume Label Entry)
+r/r * 9:	timestamps.docx
+v/v 484438275:	$MBR
+v/v 484438276:	$FAT1
+V/V 484438278:	$OrphanFiles
+"""
+    entries = parse_fls_output(output)
+
+    assert entries[0].system is True
+    assert entries[0].deleted is False
+    assert entries[1].path == "timestamps.docx"
+    assert entries[1].inode == "9"
+    assert entries[1].active_name is False
+    assert entries[1].deleted is True
+    assert entries[2].system is True
+    assert entries[3].system is True
+    assert entries[4].system is True
 
 
 def test_lnk_paths_are_parsed_from_fls_output():

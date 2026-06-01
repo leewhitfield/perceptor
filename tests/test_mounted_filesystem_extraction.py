@@ -96,3 +96,63 @@ def test_mounted_filesystem_inventory_feeds_files_and_review_reports(tmp_path):
     assert any(row["source_table"] == "filesystem_entries" and row["file_name"] == "The end.docx" for row in files)
     assert review["total_matching_rows"] == 1
     assert review["filesystem_review"][0]["details"]["filesystem_type"] == "exfat"
+
+
+def test_tsk_filesystem_inventory_purge_replaces_previous_rows(tmp_path):
+    paths = WorkspacePaths(tmp_path / "analysis")
+    db = Database(paths.db_path())
+    paths.ensure_case_tree("case-1")
+    case = db.create_case("case-1", paths.case_dir("case-1"))
+    computer = db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    image = db.add_image("image-1", case.id, Path("/evidence/usb.E01"), computer_id=computer.id)
+    db.insert_tool_output(
+        {
+            "id": "tool-1",
+            "case_id": case.id,
+            "computer_id": computer.id,
+            "image_id": image.id,
+            "tool_name": "TskFilesystemInventory",
+            "output_type": "csv",
+            "path": tmp_path / "filesystem_entries.csv",
+            "content_sha256": "old",
+            "row_count": 1,
+        }
+    )
+    db.insert_filesystem_entries(
+        [
+            {
+                "id": "fs-old",
+                "case_id": case.id,
+                "computer_id": computer.id,
+                "image_id": image.id,
+                "tool_output_id": "tool-1",
+                "tool_name": "TskFilesystemInventory",
+                "source_csv": "filesystem_entries.csv",
+                "row_number": 1,
+                "partition_id": "000:000",
+                "filesystem_type": "fat32",
+                "source_root": "/evidence/usb.E01@240",
+                "file_path": "old.docx",
+                "parent_path": "",
+                "file_name": "old.docx",
+                "extension": "docx",
+                "file_size": "",
+                "is_directory": "false",
+                "created_utc": None,
+                "modified_utc": None,
+                "accessed_utc": None,
+                "metadata_changed_utc": None,
+                "mode": "",
+                "uid": "",
+                "gid": "",
+                "scan_status": "ok",
+                "error": "",
+                "created_at": "2026-05-30T00:00:00Z",
+            }
+        ]
+    )
+
+    assert db.purge_tool_data(case_id=case.id, image_id=image.id, tool_names=["TskFilesystemInventory"]) == 1
+
+    remaining = db.conn.execute("SELECT COUNT(*) AS count FROM filesystem_entries").fetchone()["count"]
+    assert remaining == 0
