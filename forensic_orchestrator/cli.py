@@ -362,6 +362,7 @@ from .timeline_dedupe import rebuild_timeline_windows_old_dedupe
 from .tools.profiles import profile_extraction_preview, run_profile
 from .tools.registry import ToolRegistry
 from .tools.cloud_server_import import cloud_server_import_diagnostics, import_cloud_server_logs_to_csv
+from .tools.google_takeout import google_takeout_diagnostics, import_google_takeout_to_csv
 from .tools.ingest import ingest_csv_output
 from .tools.carve import (
     scan_range_row,
@@ -2604,6 +2605,13 @@ def build_parser() -> argparse.ArgumentParser:
     cloud_import.add_argument("--computer", dest="computer_id")
     cloud_import.add_argument("--provider")
     cloud_import.add_argument("--service")
+    cloud_takeout = cloud_sub.add_parser("import-takeout")
+    cloud_takeout.add_argument("--case", required=True, dest="case_id")
+    cloud_takeout.add_argument("--path", required=True)
+    cloud_takeout.add_argument("--computer", dest="computer_id")
+    cloud_takeout.add_argument("--image", dest="image_id")
+    cloud_takeout.add_argument("--detect-only", action="store_true")
+    cloud_takeout.add_argument("--content-only", action="store_true", help="Extract and index searchable Takeout content without re-importing Drive inventory rows")
 
     memory = subparsers.add_parser("memory")
     memory_sub = memory.add_subparsers(dest="action", required=True)
@@ -5495,6 +5503,113 @@ def run(args: argparse.Namespace) -> int:
                     "imported_rows": imported,
                     "source_status": diagnostics.get("status", "ok") if row_count == 0 else "ok",
                     "source_status_reason": diagnostics.get("reason", "") if row_count == 0 else "",
+                }
+            )
+            return 0
+
+        if args.resource == "cloud" and args.action == "import-takeout":
+            source = Path(args.path)
+            diagnostics = google_takeout_diagnostics(source)
+            if args.detect_only:
+                print_json({"path": source, **diagnostics})
+                return 0
+            computer_id, image_id = _cloud_or_memory_evidence_ids(
+                db,
+                case_id=args.case_id,
+                evidence_path=source,
+                computer_id=args.computer_id,
+                image_id=args.image_id,
+            )
+            output_dir = paths.case_dir(args.case_id) / "supplemental" / "google-takeout" / str(uuid.uuid4())
+            print_progress(f"Inspecting Google Takeout archive: {source}")
+            result = import_google_takeout_to_csv(source, output_dir)
+            imported: dict[str, int] = {}
+            tool_outputs: list[dict[str, object]] = []
+
+            def ingest_takeout_csv(*, tool_name: str, csv_path: Path | None, row_count: int, output_type: str) -> None:
+                if csv_path is None:
+                    return
+                output_id = str(uuid.uuid4())
+                db.insert_tool_output(
+                    {
+                        "id": output_id,
+                        "case_id": args.case_id,
+                        "computer_id": computer_id,
+                        "image_id": image_id,
+                        "job_id": None,
+                        "tool_name": tool_name,
+                        "output_type": output_type,
+                        "path": csv_path,
+                        "row_count": row_count,
+                    }
+                )
+                imported_rows = ingest_csv_output(
+                    db=db,
+                    case_id=args.case_id,
+                    computer_id=computer_id,
+                    image_id=image_id,
+                    tool_output_id=output_id,
+                    tool_name=tool_name,
+                    path=csv_path,
+                )
+                imported[str(csv_path.name)] = imported_rows
+                tool_outputs.append({"tool_name": tool_name, "path": csv_path, "row_count": row_count, "imported_rows": imported_rows})
+
+            if not args.content_only:
+                ingest_takeout_csv(
+                    tool_name="MailboxParser",
+                    csv_path=result.get("mail_messages_csv") if isinstance(result.get("mail_messages_csv"), Path) else None,
+                    row_count=int(result.get("mail_message_rows") or 0),
+                    output_type="google_takeout_mail_messages",
+                )
+                ingest_takeout_csv(
+                    tool_name="MailboxParser",
+                    csv_path=result.get("mail_attachments_csv") if isinstance(result.get("mail_attachments_csv"), Path) else None,
+                    row_count=int(result.get("mail_attachment_rows") or 0),
+                    output_type="google_takeout_mail_attachments",
+                )
+                ingest_takeout_csv(
+                    tool_name="CloudSyncParser",
+                    csv_path=result.get("drive_csv") if isinstance(result.get("drive_csv"), Path) else None,
+                    row_count=int(result.get("drive_rows") or 0),
+                    output_type="google_takeout_drive_inventory",
+                )
+            ingest_takeout_csv(
+                tool_name="UserFileContentParser",
+                csv_path=result.get("drive_content_csv") if isinstance(result.get("drive_content_csv"), Path) else None,
+                row_count=int(result.get("drive_content_rows") or 0),
+                output_type="google_takeout_drive_content",
+            )
+            db.log_activity(
+                case_id=args.case_id,
+                computer_id=computer_id,
+                image_id=image_id,
+                event="cloud.google_takeout_imported",
+                message="Imported Google Takeout content",
+                details={
+                    "source_path": str(source),
+                    "output_dir": str(output_dir),
+                    "diagnostics": result.get("diagnostics"),
+                    "mail_message_rows": result.get("mail_message_rows", 0),
+                    "mail_attachment_rows": result.get("mail_attachment_rows", 0),
+                    "drive_rows": result.get("drive_rows", 0),
+                    "drive_content_rows": result.get("drive_content_rows", 0),
+                },
+            )
+            print_json(
+                {
+                    "case_id": args.case_id,
+                    "computer_id": computer_id,
+                    "image_id": image_id,
+                    "source": source,
+                    "output_dir": output_dir,
+                    "diagnostics": result.get("diagnostics"),
+                    "mail_message_rows": result.get("mail_message_rows", 0),
+                    "mail_attachment_rows": result.get("mail_attachment_rows", 0),
+                    "drive_rows": result.get("drive_rows", 0),
+                    "drive_content_rows": result.get("drive_content_rows", 0),
+                    "tool_outputs": tool_outputs,
+                    "imported_rows": imported,
                 }
             )
             return 0

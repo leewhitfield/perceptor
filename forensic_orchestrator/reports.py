@@ -8626,7 +8626,10 @@ def cloud_artifacts_report(
     db.get_case(case_id)
     cloud_storage_refs = opened_from_cloud_storage_report(db, case_id, limit=limit)
     rows: list[dict[str, Any]] = []
-    for row in db.conn.execute(
+    for row in _query_report_rows(
+        db,
+        case_id,
+        "cloud_sync_artifacts",
         """
         SELECT
           provider,
@@ -8657,6 +8660,7 @@ def cloud_artifacts_report(
         WHERE case_id = ?
         ORDER BY
           CASE WHEN artifact_type IN ('cloud_artifact_file', 'sqlite_inventory') THEN 1 ELSE 0 END,
+          CASE WHEN NULLIF(event_time_utc, '') IS NULL THEN 1 ELSE 0 END,
           COALESCE(event_time_utc, '') DESC,
           provider,
           artifact_path
@@ -8787,7 +8791,19 @@ def cloud_files_report(
         db,
         case_id,
         "cloud_sync_artifacts",
-        "SELECT * FROM cloud_sync_artifacts WHERE case_id = ? LIMIT ?",
+        """
+        SELECT *
+        FROM cloud_sync_artifacts
+        WHERE case_id = ?
+        ORDER BY
+          CASE WHEN NULLIF(event_time_utc, '') IS NULL THEN 1 ELSE 0 END,
+          event_time_utc DESC,
+          created_at DESC,
+          provider,
+          cloud_path,
+          file_name
+        LIMIT ?
+        """,
         (case_id, source_limit),
     ):
         is_deleted = row.get("is_deleted")
@@ -9199,21 +9215,20 @@ def mailbox_messages_report(
         )
         params.extend([f"%{contains}%"] * 3)
     where = " AND ".join(filters)
-    rows = [
-        dict(row)
-        for row in db.conn.execute(
-            f"""
-            SELECT mailbox_messages.*, computers.label AS computer_label, images.path AS image_path
+    rows = _query_report_rows(
+        db,
+        case_id,
+        "mailbox_messages",
+        f"""
+            SELECT mailbox_messages.*, NULL AS computer_label, NULL AS image_path
             FROM mailbox_messages
-            LEFT JOIN computers ON mailbox_messages.computer_id = computers.id
-            LEFT JOIN images ON mailbox_messages.image_id = images.id
             WHERE {where}
             ORDER BY mailbox_messages.message_date_utc DESC, mailbox_messages.subject
             LIMIT ?
             """,
-            [*params, limit],
-        ).fetchall()
-    ]
+        [*params, limit],
+    )
+    _fill_computer_image_fields(db, case_id, rows)
     return {
         "case_id": case_id,
         "filters": {"user": user, "status": status, "contains": contains},
@@ -9256,21 +9271,20 @@ def mailbox_attachments_report(
         )
         params.extend([f"%{contains}%"] * 5)
     where = " AND ".join(filters)
-    rows = [
-        dict(row)
-        for row in db.conn.execute(
-            f"""
-            SELECT mailbox_attachments.*, computers.label AS computer_label, images.path AS image_path
+    rows = _query_report_rows(
+        db,
+        case_id,
+        "mailbox_attachments",
+        f"""
+            SELECT mailbox_attachments.*, NULL AS computer_label, NULL AS image_path
             FROM mailbox_attachments
-            LEFT JOIN computers ON mailbox_attachments.computer_id = computers.id
-            LEFT JOIN images ON mailbox_attachments.image_id = images.id
             WHERE {where}
             ORDER BY mailbox_attachments.message_date_utc DESC, mailbox_attachments.attachment_name
             LIMIT ?
             """,
-            [*params, limit],
-        ).fetchall()
-    ]
+        [*params, limit],
+    )
+    _fill_computer_image_fields(db, case_id, rows)
     return {
         "case_id": case_id,
         "filters": {
