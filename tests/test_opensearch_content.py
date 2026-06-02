@@ -5,10 +5,13 @@ import pytest
 from forensic_orchestrator.analytics_query import query_one
 from forensic_orchestrator.db import Database, utc_now
 from forensic_orchestrator.search.opensearch import (
+    OpenSearchConfig,
+    OpenSearchRestClient,
     mailbox_attachment_document,
     mailbox_message_document,
     messaging_message_document,
     messaging_record_document,
+    search_case_content,
 )
 
 
@@ -65,6 +68,52 @@ def test_opensearch_documents_only_index_body_or_content_fields():
     assert "Author" not in combined
     assert "raw parser string" not in combined
     assert "raw json blob" not in combined
+
+
+def test_content_search_queries_body_title_and_source_path(monkeypatch):
+    captured = {}
+
+    def fake_request(self, method, path, body=None):
+        captured["method"] = method
+        captured["path"] = path
+        captured["body"] = body
+        return {
+            "hits": {
+                "total": {"value": 1, "relation": "eq"},
+                "hits": [
+                    {
+                        "_score": 1.0,
+                        "_source": {
+                            "source_type": "indexed_file_content",
+                            "source_table": "windows_search_indexed_content",
+                            "source_record_id": "row-1",
+                            "computer_id": "computer-1",
+                            "image_id": "image-1",
+                            "content_hash": "abc",
+                            "content_length": 10,
+                        },
+                        "highlight": {"title": ["<em>_WRD0001.tmp</em>"]},
+                    }
+                ],
+            }
+        }
+
+    monkeypatch.setattr(OpenSearchRestClient, "request", fake_request)
+
+    result = search_case_content(
+        case_id="case-1",
+        query="_WRD0001.tmp",
+        config=OpenSearchConfig(url="http://localhost:9200", index="forensic-content"),
+        limit=5,
+        synonym_groups=[],
+    )
+
+    must_fields = captured["body"]["query"]["bool"]["must"][0]["multi_match"]["fields"]
+    highlight_fields = captured["body"]["highlight"]["fields"]
+    assert must_fields == ["content^4", "title^2", "source_path^2", "container_path"]
+    assert "title" in highlight_fields
+    assert "source_path" in highlight_fields
+    assert result["hits"][0]["highlight"] == {"title": ["<em>_WRD0001.tmp</em>"]}
 
 
 def test_content_heavy_db_inserts_keep_only_metadata_references(tmp_path):

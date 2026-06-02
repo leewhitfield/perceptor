@@ -23,6 +23,7 @@ DEFAULT_SYNONYM_GROUPS: tuple[tuple[str, ...], ...] = (
     ("jumplist", "jump list", "jump lists"),
     ("prefetch", "pf"),
 )
+CONTENT_SEARCH_FIELDS = ["content^4", "title^2", "source_path^2", "container_path"]
 
 
 @dataclass(frozen=True)
@@ -333,7 +334,7 @@ def search_case_content(
         {
             "multi_match": {
                 "query": term,
-                "fields": ["content"],
+                "fields": CONTENT_SEARCH_FIELDS,
                 "boost": 0.35,
             }
         }
@@ -345,7 +346,7 @@ def search_case_content(
             {
                 "multi_match": {
                     "query": query,
-                    "fields": ["content"],
+                    "fields": CONTENT_SEARCH_FIELDS,
                 }
             }
         ],
@@ -358,6 +359,8 @@ def search_case_content(
         "highlight": {
             "fields": {
                 "content": {"fragment_size": 180, "number_of_fragments": 3},
+                "title": {"fragment_size": 120, "number_of_fragments": 1},
+                "source_path": {"fragment_size": 180, "number_of_fragments": 1},
             }
         },
     }
