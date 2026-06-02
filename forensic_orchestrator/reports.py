@@ -12236,6 +12236,7 @@ def usb_verbose_report(
     }
     raw_rows = _usb_verbose_raw_rows(db, case_id, device_id)
     file_rows = _usb_verbose_file_rows(db, case_id, device, limit=limit)
+    _annotate_usb_verbose_candidate_volume_serials(device, file_rows)
     return {
         "case_id": case_id,
         "query": {
@@ -12255,6 +12256,38 @@ def usb_verbose_report(
         "total_files_returned": len(file_rows),
         "total_raw_evidence_rows": len(raw_rows),
     }
+
+
+def _annotate_usb_verbose_candidate_volume_serials(device: dict[str, Any], file_rows: list[dict[str, Any]]) -> None:
+    confirmed = {
+        _norm_vsn(value)
+        for value in str(device.get("volume_serial_number") or "").split(",")
+        if _norm_vsn(value)
+    }
+    candidates: set[str] = set()
+    sources: set[str] = set()
+    for row in file_rows:
+        vsn = _norm_vsn(row.get("usb_volume_serial_number") or row.get("matched_volume_serial_number") or row.get("artifact_volume_serial_number"))
+        if not vsn or vsn in confirmed:
+            continue
+        candidates.add(vsn)
+        for value in str(row.get("source_artifact_types") or row.get("source_artifact_type") or "").split(","):
+            if value.strip():
+                sources.add(value.strip())
+    device["candidate_volume_serial_numbers"] = ", ".join(sorted(candidates))
+    device["candidate_volume_serial_sources"] = ", ".join(sorted(sources))
+    if candidates:
+        if confirmed:
+            device["candidate_volume_serial_note"] = (
+                "File activity artifacts reference additional volume serial(s) not present in the storage-device row; "
+                "treat as lower-confidence context unless corroborated by device, registry, Partition Diagnostic, or VBR evidence."
+            )
+        else:
+            device["candidate_volume_serial_note"] = (
+                "No device-derived volume serial was recovered; these candidate serial(s) come from LNK/Jump List/Shellbag file activity."
+            )
+    else:
+        device["candidate_volume_serial_note"] = ""
 
 
 def rebuild_usb_file_correlations(db: Database, case_id: str) -> int:
@@ -13437,23 +13470,35 @@ def _usb_verbose_file_rows(
     *,
     limit: int,
 ) -> list[dict[str, Any]]:
+    clauses = []
+    params: list[Any] = [case_id]
+    serial = _external_storage_serial_key(device.get("serial"), device=device)
+    if serial:
+        clauses.append("UPPER(usb_serial) = UPPER(?)")
+        params.append(serial)
+    vsn = _norm_vsn(device.get("volume_serial_number"))
+    if vsn:
+        clauses.append("UPPER(REPLACE(usb_volume_serial_number, '-', '')) = ?")
+        params.append(vsn)
+    if not clauses:
+        return []
+    params.append(limit)
     return _query_report_rows(
         db,
         case_id,
         "usb_file_correlations",
-        """
+        f"""
         SELECT *
         FROM usb_file_correlations
         WHERE case_id = ?
-          AND usb_serial = ?
-          AND usb_volume_serial_number = ?
+          AND ({' OR '.join(clauses)})
         ORDER BY
           CASE confidence WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
           COALESCE(target_modified, target_created, target_accessed, ''),
           COALESCE(file_location, file_name, '')
         LIMIT ?
         """,
-        (case_id, device["serial"], device["volume_serial_number"], limit),
+        params,
     )
 
 
@@ -13493,6 +13538,9 @@ def _usb_verbose_volume_attributes(device: dict[str, Any], raw_rows: list[dict[s
         "drive_letter": device.get("drive_letter"),
         "volume_guid": device.get("volume_guid"),
         "volume_serial_number": device.get("volume_serial_number"),
+        "candidate_volume_serial_numbers": device.get("candidate_volume_serial_numbers"),
+        "candidate_volume_serial_sources": device.get("candidate_volume_serial_sources"),
+        "candidate_volume_serial_note": device.get("candidate_volume_serial_note"),
         "volume_name": device.get("volume_name"),
         "capacity_bytes": device.get("capacity_bytes"),
         "user_profiles": device.get("user_profiles"),
@@ -13892,6 +13940,9 @@ EXTERNAL_STORAGE_EXPORT_COLUMNS = [
     "vbr_volume_name",
     "alternate_serial",
     "volume_serial_number",
+    "candidate_volume_serial_numbers",
+    "candidate_volume_serial_sources",
+    "candidate_volume_serial_note",
     "volume_name",
     "volume_guid",
     "drive_letter",
@@ -14002,6 +14053,9 @@ def external_storage_export_rows(report: dict[str, Any]) -> list[dict[str, Any]]
                 vbr_volume_name=device.get("vbr_volume_name"),
                 alternate_serial=device.get("alternate_scsi_serial") or device.get("parent_device_serial"),
                 volume_serial_number=device.get("observed_volume_serial_numbers") or device.get("volume_serial_number"),
+                candidate_volume_serial_numbers=device.get("candidate_volume_serial_numbers"),
+                candidate_volume_serial_sources=device.get("candidate_volume_serial_sources"),
+                candidate_volume_serial_note=device.get("candidate_volume_serial_note"),
                 volume_name=device.get("volume_name"),
                 volume_guid=device.get("observed_volume_guids") or device.get("volume_guid"),
                 drive_letter=device.get("observed_drive_letters") or device.get("drive_letter"),
@@ -14034,7 +14088,7 @@ def external_storage_export_rows(report: dict[str, Any]) -> list[dict[str, Any]]
                 id=row.get("id"),
                 device_identity=row.get("usb_product"),
                 serial=row.get("usb_serial"),
-                volume_serial_number=row.get("usb_volume_serial_number"),
+                volume_serial_number=row.get("usb_volume_serial_number") or row.get("matched_volume_serial_number") or row.get("artifact_volume_serial_number"),
                 volume_name=row.get("usb_volume_name"),
                 drive_letter=row.get("usb_drive_letter"),
                 product=row.get("usb_product"),
@@ -14083,7 +14137,7 @@ def external_storage_export_rows(report: dict[str, Any]) -> list[dict[str, Any]]
                 id=row.get("id"),
                 device_identity=row.get("usb_product"),
                 serial=row.get("usb_serial"),
-                volume_serial_number=row.get("usb_volume_serial_number"),
+                volume_serial_number=row.get("usb_volume_serial_number") or row.get("matched_volume_serial_number") or row.get("artifact_volume_serial_number"),
                 volume_name=row.get("usb_volume_name"),
                 drive_letter=row.get("usb_drive_letter"),
                 product=row.get("usb_product"),
@@ -14236,6 +14290,9 @@ def external_storage_markdown(report: dict[str, Any]) -> str:
                     f"- Parent/device serial: `{device.get('parent_device_serial') or ''}`",
                     f"- VID/PID: `{device.get('normalized_vendor_id') or device.get('vendor_id') or ''}` / `{device.get('normalized_product_id') or device.get('product_id') or ''}`",
                     f"- Volume serial: `{device.get('observed_volume_serial_numbers') or device.get('volume_serial_number') or ''}`",
+                    f"- Candidate volume serial from file activity: `{device.get('candidate_volume_serial_numbers') or ''}`",
+                    f"- Candidate volume serial sources: `{device.get('candidate_volume_serial_sources') or ''}`",
+                    f"- Candidate volume serial note: `{device.get('candidate_volume_serial_note') or ''}`",
                     f"- Volume serial format-time assessment: `{device.get('volume_serial_format_time_assessment') or ''}`",
                     f"- Partition/log metadata: `{_external_storage_partition_log_summary(device)}`",
                     f"- VBR metadata: `{_external_storage_vbr_summary(device)}`",
@@ -15690,27 +15747,49 @@ def _annotate_external_storage_file_activity(devices: list[dict[str, Any]], file
         matches = []
         for row in file_activity:
             row_serial = _external_storage_serial_key(row.get("usb_serial")).upper()
-            row_vsn = _norm_vsn(row.get("usb_volume_serial_number"))
+            row_vsn = _norm_vsn(row.get("usb_volume_serial_number") or row.get("matched_volume_serial_number") or row.get("artifact_volume_serial_number"))
             if (row_serial and row_serial in serials) or (row_vsn and row_vsn in volume_serials):
                 matches.append(row)
         sources: set[str] = set()
         users: set[str] = set()
         temporal_statuses: set[str] = set()
+        candidate_vsns: set[str] = set()
+        candidate_sources: set[str] = set()
         for row in matches:
             for value in str(row.get("source_artifact_types") or "").split(","):
                 if value.strip():
                     sources.add(value.strip())
+                    row_vsn = _norm_vsn(row.get("usb_volume_serial_number") or row.get("matched_volume_serial_number") or row.get("artifact_volume_serial_number"))
+                    if row_vsn and row_vsn not in volume_serials:
+                        candidate_sources.add(value.strip())
             for value in str(row.get("user_profiles") or "").split(","):
                 if value.strip():
                     users.add(value.strip())
             for value in str(row.get("temporal_statuses") or "").split(","):
                 if value.strip():
                     temporal_statuses.add(value.strip())
+            row_vsn = _norm_vsn(row.get("usb_volume_serial_number") or row.get("matched_volume_serial_number") or row.get("artifact_volume_serial_number"))
+            if row_vsn and row_vsn not in volume_serials:
+                candidate_vsns.add(row_vsn)
         device["file_activity_detected"] = bool(matches)
         device["file_activity_count"] = len(matches)
         device["file_activity_sources"] = ", ".join(sorted(sources))
         device["file_activity_users"] = ", ".join(sorted(users))
         device["file_activity_temporal_statuses"] = ", ".join(sorted(temporal_statuses))
+        device["candidate_volume_serial_numbers"] = ", ".join(sorted(candidate_vsns))
+        device["candidate_volume_serial_sources"] = ", ".join(sorted(candidate_sources))
+        if candidate_vsns:
+            if volume_serials:
+                device["candidate_volume_serial_note"] = (
+                    "File activity artifacts reference additional volume serial(s) not present in the storage-device row; "
+                    "treat as lower-confidence context unless corroborated by device, registry, Partition Diagnostic, or VBR evidence."
+                )
+            else:
+                device["candidate_volume_serial_note"] = (
+                    "No device-derived volume serial was recovered; these candidate serial(s) come from LNK/Jump List/Shellbag file activity."
+                )
+        else:
+            device["candidate_volume_serial_note"] = ""
 
 
 def _external_storage_unattributed_removable_activity(
@@ -24592,6 +24671,9 @@ def usb_dossier_markdown(report: dict[str, Any]) -> str:
         f"- VID/PID: `{device.get('vendor_id') or ''}` / `{device.get('product_id') or ''}`",
         f"- Product: `{device.get('vendor') or ''}` `{device.get('product') or ''}` `{device.get('revision') or ''}`",
         f"- Volume serial/name: `{device.get('volume_serial_number') or ''}` / `{device.get('volume_name') or ''}`",
+        f"- Candidate volume serial from file activity: `{device.get('candidate_volume_serial_numbers') or ''}`",
+        f"- Candidate volume serial sources: `{device.get('candidate_volume_serial_sources') or ''}`",
+        f"- Candidate volume serial note: `{device.get('candidate_volume_serial_note') or ''}`",
         f"- Volume GUID: `{device.get('volume_guid') or ''}`",
         f"- Drive letter: `{device.get('drive_letter') or ''}`",
         "",

@@ -2797,6 +2797,88 @@ def test_external_storage_report_lists_unattributed_removable_volume_activity(tm
     assert "E:\\New Homework\\Homework.docx" in markdown
 
 
+def test_external_storage_report_surfaces_candidate_volume_serial_from_file_activity(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    db.insert_usb_storage_devices(
+        [
+            {
+                "id": "usb-1",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "serial": "29B1109550240002",
+                "vendor": "CB",
+                "product": "Cellebrite",
+                "revision": "1100",
+                "friendly_name": "Cellebrite",
+                "volume_serial_number": "",
+                "volume_name": "BYEBYE",
+                "file_system": "FAT32",
+                "vbr_file_system": "FAT32",
+                "vbr_parse_status": "mbr_fallback",
+                "evidence_row_count": 4,
+                "source_artifacts": "partition_diagnostic,usb_volume_name",
+                "created_at": "2026-01-01T00:00:00Z",
+            }
+        ]
+    )
+    db.insert_usb_file_correlations(
+        [
+            {
+                "id": "usb-corr-1",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "usb_serial": "29B1109550240002",
+                "usb_volume_serial_number": "3304EABA",
+                "usb_volume_name": "BYEBYE",
+                "usb_drive_letter": "D:",
+                "usb_vendor_id": "",
+                "usb_product_id": "",
+                "usb_vendor": "CB",
+                "usb_product": "Cellebrite",
+                "usb_friendly_name": "Cellebrite",
+                "usb_first_install_date_utc": "",
+                "usb_last_arrival_utc": "",
+                "usb_last_removal_utc": "",
+                "source_artifact_type": "lnk",
+                "source_artifact_id": "lnk-1",
+                "source_artifact_name": "The end.lnk",
+                "source_artifact_path": "Users/mayas/Recent/The end.lnk",
+                "user_profile": "mayas",
+                "jumplist_item_number": "",
+                "file_name": "The end.docx",
+                "file_location": "D:/The end.docx",
+                "target_created": "2025-11-17T05:00:00Z",
+                "target_modified": "2025-11-17T20:44:52Z",
+                "target_accessed": "",
+                "device_type": "removable",
+                "artifact_volume_serial_number": "3304EABA",
+                "artifact_volume_name": "BYEBYE",
+                "artifact_volume_guid": "",
+                "artifact_drive_letter": "D:",
+                "volume_serial_match": "serial",
+                "confidence": "medium",
+            }
+        ]
+    )
+
+    report = external_storage_report(db, case.id, limit=50, rebuild_correlations=False)
+    device = report["devices"][0]
+    assert device["volume_serial_number"] == ""
+    assert device["candidate_volume_serial_numbers"] == "3304EABA"
+    assert device["candidate_volume_serial_sources"] == "lnk"
+    assert "No device-derived volume serial" in device["candidate_volume_serial_note"]
+    export = external_storage_export_rows(report)
+    device_row = next(row for row in export if row["section"] == "device")
+    assert device_row["volume_serial_number"] == ""
+    assert device_row["candidate_volume_serial_numbers"] == "3304EABA"
+    assert "Candidate volume serial from file activity: `3304EABA`" in external_storage_markdown(report)
+
+
 def test_external_storage_report_correlates_files_when_storage_summary_is_absent(tmp_path):
     db = Database(tmp_path / "orchestrator.sqlite3")
     case = db.create_case("case-1", tmp_path / "cases" / "case-1")

@@ -80,7 +80,18 @@ SUPPORTED_MCP_REPORTS = {
 }
 MCP_JOB_INDEX = "index.json"
 MCP_AUDIT_LOG = "audit.jsonl"
+MCP_POLICY_FILE = "mcp-policy.json"
 MCP_RESOURCE_MAX_BYTES = 1_000_000
+SENSITIVE_ARGUMENT_KEYS = {
+    "password",
+    "passphrase",
+    "recovery_key",
+    "token",
+    "api_key",
+    "secret",
+    "credential",
+    "credentials",
+}
 
 
 @dataclass(frozen=True)
@@ -92,15 +103,27 @@ class McpTool:
     handler: Callable[[dict[str, Any]], dict[str, Any]]
     annotations: dict[str, Any]
     permission: str = "read"
+    category: str = ""
+    tags: tuple[str, ...] = ()
+    output_type: str = "object"
+    version: str = "1.0"
+    examples: tuple[dict[str, Any], ...] = ()
+    dependencies: tuple[str, ...] = ()
+    source_priority: tuple[str, ...] = ()
 
     def definition(self) -> dict[str, Any]:
+        metadata = self.metadata()
         return {
             "name": self.name,
             "title": self.title,
             "description": self.description,
             "inputSchema": self.input_schema,
             "annotations": self.annotations,
+            "metadata": metadata,
         }
+
+    def metadata(self) -> dict[str, Any]:
+        return _tool_metadata(self)
 
 
 class RelicMcpServer:
@@ -118,6 +141,7 @@ class RelicMcpServer:
         self.allow_sensitive = allow_sensitive
         self.allow_external_ai = allow_external_ai
         self.plugin_paths = plugin_paths or [default_plugin_path()]
+        self.policy = self._load_mcp_policy()
         self._mcp_jobs: dict[str, dict[str, Any]] = self._load_mcp_job_index()
         self.tools = {tool.name: tool for tool in self._build_tools()}
 
@@ -141,12 +165,12 @@ class RelicMcpServer:
             if method == "tools/list":
                 return self._response(request_id, {"tools": [tool.definition() for tool in self.tools.values()]})
             if method == "tools/call":
-                return self._response(request_id, self._call_tool(message.get("params") or {}))
+                return self._response(request_id, self._call_tool(message.get("params") or {}, request_id=request_id))
             return self._error(request_id, -32601, f"Method not found: {method}")
         except ValueError as exc:
-            return self._error(request_id, -32602, str(exc))
+            return self._error(request_id, -32602, str(exc), _error_details(exc))
         except Exception as exc:  # pragma: no cover - defensive protocol boundary
-            return self._error(request_id, -32603, str(exc))
+            return self._error(request_id, -32603, str(exc), _error_details(exc))
 
     def _handle_notification(self, method: str) -> None:
         if method in {"notifications/initialized", "notifications/cancelled"}:
@@ -174,7 +198,7 @@ class RelicMcpServer:
             ),
         }
 
-    def _call_tool(self, params: dict[str, Any]) -> dict[str, Any]:
+    def _call_tool(self, params: dict[str, Any], *, request_id: object | None = None) -> dict[str, Any]:
         name = str(params.get("name") or "")
         arguments = params.get("arguments") or {}
         if not isinstance(arguments, dict):
@@ -182,14 +206,19 @@ class RelicMcpServer:
         tool = self.tools.get(name)
         if tool is None:
             raise ValueError(f"Unknown tool: {name}")
+        correlation_id = str(uuid.uuid4())
+        started = datetime.now(timezone.utc)
         self._require_permission(tool.permission)
+        self._require_policy(tool, arguments)
         try:
             result = tool.handler(arguments)
-            self._audit_tool_call(tool, arguments, status="ok", error=None)
-            return _tool_result(result)
+            duration_ms = _duration_ms(started)
+            self._audit_tool_call(tool, arguments, status="ok", error=None, correlation_id=correlation_id, request_id=request_id, duration_ms=duration_ms)
+            return _tool_result(result, tool=tool, correlation_id=correlation_id, duration_ms=duration_ms)
         except Exception as exc:
-            self._audit_tool_call(tool, arguments, status="error", error=str(exc))
-            return _tool_result({"error": str(exc), "tool": name}, is_error=True)
+            duration_ms = _duration_ms(started)
+            self._audit_tool_call(tool, arguments, status="error", error=str(exc), correlation_id=correlation_id, request_id=request_id, duration_ms=duration_ms)
+            return _tool_result(_tool_error_payload(tool, exc, correlation_id=correlation_id), is_error=True, tool=tool, correlation_id=correlation_id, duration_ms=duration_ms)
 
     def _build_tools(self) -> list[McpTool]:
         read_only = {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True}
@@ -2124,17 +2153,40 @@ class RelicMcpServer:
     def mcp_tool_reference(self, arguments: dict[str, Any]) -> dict[str, Any]:
         tools = []
         for tool in self.tools.values():
+            metadata = tool.metadata()
             tools.append(
                 {
                     "name": tool.name,
                     "title": tool.title,
                     "description": tool.description,
                     "permission": tool.permission,
+                    "category": metadata["category"],
+                    "tags": metadata["tags"],
+                    "version": metadata["version"],
+                    "output_type": metadata["output_type"],
+                    "dependencies": metadata["dependencies"],
+                    "source_priority": metadata["source_priority"],
+                    "examples": metadata["examples"],
+                    "error_handling": metadata["error_handling"],
                     "annotations": tool.annotations,
                     "input_schema": tool.input_schema,
                 }
             )
-        return {"tools": tools, "total_returned": len(tools), "permissions": self._permissions()}
+        categories: dict[str, int] = {}
+        permissions: dict[str, int] = {}
+        for tool in tools:
+            categories[str(tool["category"])] = categories.get(str(tool["category"]), 0) + 1
+            permissions[str(tool["permission"])] = permissions.get(str(tool["permission"]), 0) + 1
+        return {
+            "tools": tools,
+            "total_returned": len(tools),
+            "summary": {
+                "categories": [{"category": key, "count": value} for key, value in sorted(categories.items())],
+                "permissions": [{"permission": key, "count": value} for key, value in sorted(permissions.items())],
+            },
+            "permissions": self._permissions(),
+            "policy": self._public_policy(),
+        }
 
     def generate_report(self, arguments: dict[str, Any]) -> dict[str, Any]:
         report_name = _required(arguments, "report_name")
@@ -2424,6 +2476,7 @@ class RelicMcpServer:
             "status": "running",
             "pid": process.pid,
             "command": command,
+            "command_display": _redacted_command(command),
             "stdout_path": str(stdout_path),
             "stderr_path": str(stderr_path),
             "started_at": _now(),
@@ -2435,14 +2488,33 @@ class RelicMcpServer:
         self._save_mcp_job_index()
         return _public_job(job)
 
-    def _audit_tool_call(self, tool: McpTool, arguments: dict[str, Any], *, status: str, error: str | None) -> None:
+    def _audit_tool_call(
+        self,
+        tool: McpTool,
+        arguments: dict[str, Any],
+        *,
+        status: str,
+        error: str | None,
+        correlation_id: str,
+        request_id: object | None,
+        duration_ms: int,
+    ) -> None:
+        details = _error_details(ValueError(error)) if error else {}
         row = {
             "timestamp": _now(),
+            "correlation_id": correlation_id,
+            "request_id": request_id,
             "tool": tool.name,
+            "title": tool.title,
+            "category": tool.metadata()["category"],
+            "tags": tool.metadata()["tags"],
             "permission": tool.permission,
             "status": status,
             "error": error,
+            "error_details": details,
+            "duration_ms": duration_ms,
             "argument_keys": sorted(arguments.keys()),
+            "arguments_redacted": _redact_arguments(arguments),
             "case_id": arguments.get("case_id"),
             "image_id": arguments.get("image_id"),
             "path": _summarize_path(arguments.get("path")),
@@ -2499,6 +2571,26 @@ class RelicMcpServer:
         tmp.write_text(json.dumps({"jobs": rows}, indent=2, default=str), encoding="utf-8")
         tmp.replace(path)
 
+    def _load_mcp_policy(self) -> dict[str, Any]:
+        candidates = [self.paths.root / MCP_POLICY_FILE, self.paths.root / "config" / MCP_POLICY_FILE]
+        for path in candidates:
+            if not path.exists():
+                continue
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                return {"status": "invalid", "path": str(path)}
+            if isinstance(data, dict):
+                return {"status": "loaded", "path": str(path), **data}
+        return {"status": "not_configured"}
+
+    def _public_policy(self) -> dict[str, Any]:
+        policy = dict(self.policy)
+        for key in ("allowed_tools", "blocked_tools", "allowed_categories", "blocked_categories", "allowed_permissions", "blocked_permissions", "allowed_case_ids", "blocked_case_ids"):
+            if key in policy and not isinstance(policy[key], list):
+                policy[key] = list(policy[key]) if isinstance(policy[key], (set, tuple)) else policy[key]
+        return policy
+
     def _require_permission(self, permission: str) -> None:
         if permission == "processing" and not self.allow_processing:
             raise ValueError("Tool requires MCP server startup flag: --allow-processing")
@@ -2507,12 +2599,42 @@ class RelicMcpServer:
         if permission == "external_ai" and not self.allow_external_ai:
             raise ValueError("Tool requires MCP server startup flag: --allow-external-ai")
 
+    def _require_policy(self, tool: McpTool, arguments: dict[str, Any]) -> None:
+        if self.policy.get("status") == "invalid":
+            raise ValueError(f"MCP policy file is invalid: {self.policy.get('path')}")
+        metadata = tool.metadata()
+        category = str(metadata.get("category") or "")
+        case_id = str(arguments.get("case_id") or "").strip()
+        checks = (
+            ("allowed_tools", tool.name, True),
+            ("blocked_tools", tool.name, False),
+            ("allowed_categories", category, True),
+            ("blocked_categories", category, False),
+            ("allowed_permissions", tool.permission, True),
+            ("blocked_permissions", tool.permission, False),
+        )
+        for key, value, allowlist in checks:
+            configured = _policy_values(self.policy.get(key))
+            if not configured:
+                continue
+            if allowlist and value not in configured:
+                raise ValueError(f"MCP policy does not allow {_policy_label(key)}: {value}")
+            if not allowlist and value in configured:
+                raise ValueError(f"MCP policy blocks {_policy_label(key)}: {value}")
+        allowed_cases = _policy_values(self.policy.get("allowed_case_ids"))
+        blocked_cases = _policy_values(self.policy.get("blocked_case_ids"))
+        if case_id and allowed_cases and case_id not in allowed_cases:
+            raise ValueError(f"MCP policy does not allow case_id: {case_id}")
+        if case_id and blocked_cases and case_id in blocked_cases:
+            raise ValueError(f"MCP policy blocks case_id: {case_id}")
+
     def _permissions(self) -> dict[str, bool]:
         return {
             "read_only": True,
             "processing": self.allow_processing,
             "sensitive": self.allow_sensitive,
             "external_ai": self.allow_external_ai,
+            "policy_configured": self.policy.get("status") == "loaded",
         }
 
     @staticmethod
@@ -2567,7 +2689,29 @@ def run_mcp_server(
     return 0
 
 
-def _tool_result(result: dict[str, Any], *, is_error: bool = False) -> dict[str, Any]:
+def _tool_result(
+    result: dict[str, Any],
+    *,
+    is_error: bool = False,
+    tool: McpTool | None = None,
+    correlation_id: str | None = None,
+    duration_ms: int | None = None,
+) -> dict[str, Any]:
+    if isinstance(result, dict):
+        result = dict(result)
+        result.setdefault(
+            "_mcp",
+            {
+                "status": "error" if is_error else "ok",
+                "correlation_id": correlation_id,
+                "tool": tool.name if tool else None,
+                "category": tool.metadata()["category"] if tool else None,
+                "permission": tool.permission if tool else None,
+                "generated_at": _now(),
+                "duration_ms": duration_ms,
+                "response_version": "1.0",
+            },
+        )
     return {
         "content": [{"type": "text", "text": json.dumps(result, indent=2, default=str)}],
         "structuredContent": result,
@@ -2576,7 +2720,244 @@ def _tool_result(result: dict[str, Any], *, is_error: bool = False) -> dict[str,
 
 
 def _public_job(job: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in job.items() if key != "process"}
+    public = {key: value for key, value in job.items() if key != "process"}
+    if "command" in public:
+        public["command_display"] = public.get("command_display") or _redacted_command(public["command"])
+    public["duration_seconds"] = _job_duration_seconds(public)
+    public["output_sizes"] = {
+        "stdout_bytes": _path_size(public.get("stdout_path")),
+        "stderr_bytes": _path_size(public.get("stderr_path")),
+    }
+    progress = _job_progress_summary(public)
+    if progress:
+        public["progress"] = progress
+    return public
+
+
+def _tool_metadata(tool: McpTool) -> dict[str, Any]:
+    category = tool.category or _infer_tool_category(tool.name)
+    tags = sorted(set(tool.tags or _infer_tool_tags(tool.name, category, tool.permission)))
+    dependencies = sorted(set(tool.dependencies or _infer_tool_dependencies(tool.name, tool.permission)))
+    source_priority = list(tool.source_priority or _infer_source_priority(tool.name, category))
+    examples = list(tool.examples or [_default_tool_example(tool)])
+    return {
+        "category": category,
+        "tags": tags,
+        "version": tool.version,
+        "output_type": tool.output_type,
+        "dependencies": dependencies,
+        "source_priority": source_priority,
+        "examples": examples,
+        "error_handling": {
+            "error_shape": {"error": "string", "error_code": "string", "retryable": "boolean", "suggested_fix": "string"},
+            "permission_errors": "Processing, sensitive, and external-AI tools require matching server startup flags and policy allowances.",
+            "retry_guidance": "Retry only when retryable=true or when the suggested_fix identifies a corrected parameter or missing generated artifact.",
+        },
+    }
+
+
+def _infer_tool_category(name: str) -> str:
+    if "mcp_job" in name or name.startswith("relic_mcp_") or "progress" in name or "readiness" in name or "doctor" in name:
+        return "operations"
+    if "report" in name or "packet" in name or "review" in name or "dashboard" in name or "digest" in name or "runbook" in name:
+        return "reports"
+    if "filesystem" in name or "evidence_contents" in name or "file_" in name or "recover_deleted" in name:
+        return "filesystem"
+    if "usb" in name or "removable" in name:
+        return "external_storage"
+    if "cloud" in name:
+        return "cloud"
+    if "memory" in name:
+        return "memory"
+    if "browser" in name:
+        return "browser"
+    if "registry" in name or "shortcut" in name or "execution" in name:
+        return "windows_artifacts"
+    if "communication" in name:
+        return "communications"
+    if "import" in name or "process" in name or "profile" in name:
+        return "processing"
+    return "workspace"
+
+
+def _infer_tool_tags(name: str, category: str, permission: str) -> tuple[str, ...]:
+    tags = {category, permission}
+    for token in ("source_of_truth", "filesystem", "cloud", "usb", "memory", "timeline", "report", "processing", "recovery"):
+        if token.replace("_", "-") in name or token in name:
+            tags.add(token)
+    if name in {"relic_read_existing_report", "relic_discover_reports", "relic_query_filesystem_listings", "relic_query_evidence_contents"}:
+        tags.add("source_of_truth")
+    return tuple(tags)
+
+
+def _infer_tool_dependencies(name: str, permission: str) -> tuple[str, ...]:
+    deps = ["orchestrator.sqlite3"]
+    if permission == "processing":
+        deps.append("relic CLI")
+    if "report" in name:
+        deps.append("generated reports")
+    if "filesystem" in name or "evidence_contents" in name:
+        deps.append("filesystem_entries")
+    if "mcp_job" in name:
+        deps.append("mcp-jobs/index.json")
+    if "doctor" in name:
+        deps.append("third-party dependency registry")
+    return tuple(deps)
+
+
+def _infer_source_priority(name: str, category: str) -> tuple[str, ...]:
+    if name in {"relic_read_existing_report", "relic_discover_reports", "relic_generate_report"} or category == "reports":
+        return ("existing_reports", "parsed_artifacts", "processing")
+    if category == "filesystem":
+        return ("filesystem_entries", "mft_entries", "mounted_image_or_tsk")
+    if category == "cloud":
+        return ("existing_cloud_reports", "cloud_sync_artifacts", "opened_from_cloud_storage", "raw_processing")
+    if category == "external_storage":
+        return ("existing_usb_reports", "usb_storage_devices", "usb_connection_events", "filesystem_entries")
+    return ("parsed_artifacts", "existing_reports", "processing")
+
+
+def _default_tool_example(tool: McpTool) -> dict[str, Any]:
+    properties = tool.input_schema.get("properties") if isinstance(tool.input_schema, dict) else {}
+    required = tool.input_schema.get("required") if isinstance(tool.input_schema, dict) else []
+    arguments: dict[str, Any] = {}
+    for key in required or []:
+        if key == "case_id":
+            arguments[key] = "case-id"
+        elif key == "image_id":
+            arguments[key] = "image-id"
+        elif key == "mcp_job_id":
+            arguments[key] = "mcp-job-id"
+        elif key == "uri":
+            arguments[key] = "relic://reports/case-id/full/report.json"
+        elif key == "path":
+            arguments[key] = "/path/to/evidence"
+        else:
+            arguments[key] = f"<{key}>"
+    if "limit" in (properties or {}) and "limit" not in arguments:
+        arguments["limit"] = properties["limit"].get("default", 100)
+    return {"description": f"Call {tool.name}.", "arguments": arguments}
+
+
+def _duration_ms(started: datetime) -> int:
+    return max(0, int((datetime.now(timezone.utc) - started).total_seconds() * 1000))
+
+
+def _tool_error_payload(tool: McpTool, exc: Exception, *, correlation_id: str) -> dict[str, Any]:
+    details = _error_details(exc)
+    return {
+        "error": str(exc),
+        "tool": tool.name,
+        "error_code": details["error_code"],
+        "cause": details["cause"],
+        "retryable": details["retryable"],
+        "suggested_fix": details["suggested_fix"],
+        "correlation_id": correlation_id,
+        "related_jobs": [],
+    }
+
+
+def _error_details(exc: Exception) -> dict[str, Any]:
+    text = str(exc)
+    lower = text.lower()
+    if "requires mcp server startup flag" in lower or "policy" in lower:
+        return {"error_code": "permission_denied", "cause": "permission", "retryable": False, "suggested_fix": text}
+    if "not found" in lower or "missing" in lower:
+        return {"error_code": "not_found", "cause": "missing_resource", "retryable": False, "suggested_fix": "Verify the case ID, resource URI, path, or generated report exists."}
+    if "timeout" in lower or "tempor" in lower or "locked" in lower:
+        return {"error_code": "transient_failure", "cause": "transient", "retryable": True, "suggested_fix": "Retry after checking active jobs and available disk space."}
+    if "unsupported" in lower:
+        return {"error_code": "unsupported", "cause": "unsupported_input", "retryable": False, "suggested_fix": "Use a supported report, profile, artifact type, or input layout."}
+    return {"error_code": "tool_error", "cause": type(exc).__name__, "retryable": False, "suggested_fix": "Inspect the MCP audit log and job output for context."}
+
+
+def _redact_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
+    redacted: dict[str, Any] = {}
+    for key, value in arguments.items():
+        key_lower = str(key).lower()
+        if any(token in key_lower for token in SENSITIVE_ARGUMENT_KEYS):
+            redacted[key] = "<redacted>"
+        elif isinstance(value, dict):
+            redacted[key] = _redact_arguments(value)
+        elif isinstance(value, list):
+            redacted[key] = ["<list>", len(value)]
+        else:
+            redacted[key] = value
+    return redacted
+
+
+def _redacted_command(command: Any) -> list[str]:
+    if not isinstance(command, list):
+        return []
+    redacted: list[str] = []
+    redact_next = False
+    for part in command:
+        text = str(part)
+        if redact_next:
+            redacted.append("<redacted>")
+            redact_next = False
+            continue
+        redacted.append(text)
+        if any(token in text.lower().lstrip("-").replace("-", "_") for token in SENSITIVE_ARGUMENT_KEYS):
+            redact_next = True
+    return redacted
+
+
+def _policy_values(value: Any) -> set[str]:
+    if value is None:
+        return set()
+    if isinstance(value, str):
+        return {value}
+    if isinstance(value, (list, tuple, set)):
+        return {str(item) for item in value}
+    return set()
+
+
+def _policy_label(key: str) -> str:
+    labels = {
+        "allowed_tools": "tool",
+        "blocked_tools": "tool",
+        "allowed_categories": "category",
+        "blocked_categories": "category",
+        "allowed_permissions": "permission",
+        "blocked_permissions": "permission",
+    }
+    return labels.get(key, key)
+
+
+def _path_size(path: Any) -> int:
+    try:
+        candidate = Path(str(path))
+        return candidate.stat().st_size if candidate.exists() else 0
+    except OSError:
+        return 0
+
+
+def _job_duration_seconds(job: dict[str, Any]) -> float | None:
+    started = _parse_iso(str(job.get("started_at") or ""))
+    ended = _parse_iso(str(job.get("ended_at") or "")) or datetime.now(timezone.utc)
+    if not started:
+        return None
+    return round(max(0.0, (ended - started).total_seconds()), 3)
+
+
+def _job_progress_summary(job: dict[str, Any]) -> dict[str, Any]:
+    text = "\n".join(
+        [
+            _read_tail(Path(str(job.get("stderr_path") or "")), 50_000),
+            _read_tail(Path(str(job.get("stdout_path") or "")), 50_000),
+        ]
+    )
+    return _parse_mcp_progress(text)
+
+
+def _parse_iso(value: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 def _pid_is_running(pid: int) -> bool:

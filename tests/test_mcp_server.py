@@ -76,6 +76,12 @@ def test_mcp_initialize_and_list_tools(tmp_path):
     assert "stored filesystem_entries only" in contents_tool["description"]
     route_tool = next(tool for tool in tools if tool["name"] == "relic_route_question")
     assert "source-of-truth order" in route_tool["description"]
+    process_tool = next(tool for tool in tools if tool["name"] == "relic_process_image")
+    assert process_tool["metadata"]["version"] == "1.0"
+    assert "relic CLI" in process_tool["metadata"]["dependencies"]
+    assert process_tool["metadata"]["examples"]
+    assert process_tool["metadata"]["category"] == "processing"
+    assert process_tool["metadata"]["error_handling"]["error_shape"]["retryable"] == "boolean"
 
 
 def test_mcp_workspace_and_case_summary_tools(tmp_path):
@@ -589,11 +595,87 @@ def test_mcp_tool_reference_and_audit_log(tmp_path):
     )
 
     tools = response["result"]["structuredContent"]["tools"]
-    assert any(tool["name"] == "relic_process_image" and tool["permission"] == "processing" for tool in tools)
+    process_tool = next(tool for tool in tools if tool["name"] == "relic_process_image")
+    assert process_tool["permission"] == "processing"
+    assert process_tool["category"] == "processing"
+    assert process_tool["dependencies"]
+    assert response["result"]["structuredContent"]["summary"]["categories"]
+    assert response["result"]["structuredContent"]["_mcp"]["status"] == "ok"
     audit = tmp_path / "mcp-jobs" / "audit.jsonl"
     assert audit.exists()
     row = json.loads(audit.read_text(encoding="utf-8").splitlines()[0])
     assert row["tool"] == "relic_mcp_tool_reference"
+    assert row["correlation_id"]
+    assert row["category"] == "operations"
+    assert row["duration_ms"] >= 0
+    assert row["arguments_redacted"] == {}
+
+
+def test_mcp_error_payload_and_audit_redacts_sensitive_arguments(tmp_path):
+    server = RelicMcpServer(root=tmp_path)
+    response = server.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "relic_case_summary",
+                "arguments": {"case_id": "missing-case", "api_key": "secret-value"},
+            },
+        }
+    )
+
+    structured = response["result"]["structuredContent"]
+    assert response["result"]["isError"] is True
+    assert structured["error_code"] == "not_found"
+    assert structured["retryable"] is False
+    assert structured["_mcp"]["status"] == "error"
+    audit = tmp_path / "mcp-jobs" / "audit.jsonl"
+    row = json.loads(audit.read_text(encoding="utf-8").splitlines()[0])
+    assert row["status"] == "error"
+    assert row["arguments_redacted"]["api_key"] == "<redacted>"
+    assert row["error_details"]["error_code"] == "not_found"
+
+
+def test_mcp_policy_blocks_tool_category_and_case(tmp_path):
+    (tmp_path / "mcp-policy.json").write_text(
+        json.dumps({"blocked_tools": ["relic_list_cases"], "blocked_categories": ["processing"], "blocked_case_ids": ["case-blocked"]}),
+        encoding="utf-8",
+    )
+    server = RelicMcpServer(root=tmp_path, allow_processing=True)
+
+    blocked_tool = server.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "relic_list_cases", "arguments": {}},
+        }
+    )
+    assert blocked_tool["error"]["code"] == -32602
+    assert "policy blocks tool" in blocked_tool["error"]["message"]
+
+    blocked_category = server.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {"name": "relic_process_image", "arguments": {"path": str(tmp_path / "disk.E01")}},
+        }
+    )
+    assert blocked_category["error"]["code"] == -32602
+    assert "policy blocks category" in blocked_category["error"]["message"]
+
+    blocked_case = server.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {"name": "relic_case_summary", "arguments": {"case_id": "case-blocked"}},
+        }
+    )
+    assert blocked_case["error"]["code"] == -32602
+    assert "policy blocks case_id" in blocked_case["error"]["message"]
 
 
 def test_mcp_process_image_dry_run_command(tmp_path):
