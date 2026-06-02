@@ -592,12 +592,22 @@ class RelicMcpServer:
             McpTool(
                 name="relic_query_usb_files",
                 title="Query USB Files",
-                description="Return USB/removable-media file correlations.",
+                description=(
+                    "Return USB/removable-media file correlations from LNK, Jump List, and Shellbag artifacts. "
+                    "Use this for questions about files opened from a USB device or volume; filter by any device name, "
+                    "volume name, serial, volume serial, file name, or path before falling back to broader searches."
+                ),
                 input_schema=_object_schema(
                     {
                         "case_id": _string_schema("Relic case ID."),
                         "limit": _integer_schema("Maximum rows to return.", default=500, minimum=1, maximum=1000),
                         "grouped": {"type": "boolean", "default": False},
+                        "contains": _string_schema("Optional text filter across file name, file path, source artifact, device serial, volume name, and volume serial."),
+                        "serial": _string_schema("Optional physical USB/device serial filter."),
+                        "volume_serial_number": _string_schema("Optional volume serial filter. Matches both device-side and file-artifact-derived volume serials."),
+                        "volume_name": _string_schema("Optional volume label/name filter, for example BYEBYE."),
+                        "source_artifact_type": _string_schema("Optional source type filter, for example lnk, jumplist, or shellbag."),
+                        "include_drive_roots": {"type": "boolean", "default": False},
                     },
                     required=["case_id"],
                 ),
@@ -1762,12 +1772,25 @@ class RelicMcpServer:
     def query_usb_files(self, arguments: dict[str, Any]) -> dict[str, Any]:
         db = self._db()
         try:
-            return usb_file_correlation_report(
+            result = usb_file_correlation_report(
                 db,
                 _required(arguments, "case_id"),
                 limit=_limit(arguments, default=500),
+                persist=False,
                 grouped=bool(arguments.get("grouped") or False),
+                contains=_optional_text(arguments, "contains"),
+                serial=_optional_text(arguments, "serial"),
+                volume_serial_number=_optional_text(arguments, "volume_serial_number"),
+                volume_name=_optional_text(arguments, "volume_name"),
+                source_artifact_type=_optional_text(arguments, "source_artifact_type"),
+                include_drive_roots=bool(arguments.get("include_drive_roots") or False),
             )
+            result["source_of_truth"] = "usb_file_correlations"
+            result["guidance"] = (
+                "For USB file questions, use items/files from this report before broad text search or filesystem listing. "
+                "When usb_volume_serial_number is blank, use matched_volume_serial_number or artifact_volume_serial_number for the file-artifact-derived volume serial."
+            )
+            return result
         finally:
             db.close()
 

@@ -74,6 +74,10 @@ def test_mcp_initialize_and_list_tools(tmp_path):
     assert "first source of truth" in fs_tool["description"]
     contents_tool = next(tool for tool in tools if tool["name"] == "relic_query_evidence_contents")
     assert "stored filesystem_entries only" in contents_tool["description"]
+    usb_files_tool = next(tool for tool in tools if tool["name"] == "relic_query_usb_files")
+    assert "volume name" in usb_files_tool["description"]
+    assert "contains" in usb_files_tool["inputSchema"]["properties"]
+    assert "volume_name" in usb_files_tool["inputSchema"]["properties"]
     route_tool = next(tool for tool in tools if tool["name"] == "relic_route_question")
     assert "source-of-truth order" in route_tool["description"]
     process_tool = next(tool for tool in tools if tool["name"] == "relic_process_image")
@@ -224,6 +228,109 @@ def test_mcp_artifact_queries_and_case_review_are_structured(tmp_path):
     assert structured["case_id"] == "case-1"
     assert "dashboard" in structured
     assert "external_storage" in structured
+
+
+def test_mcp_usb_files_filters_existing_report_rows(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path)
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, tmp_path / "desktop.E01", computer_id="computer-1")
+    db.insert_usb_file_correlations(
+        [
+            {
+                "id": "usb-corr-root",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "usb_serial": "USB123",
+                "usb_volume_serial_number": "",
+                "usb_volume_name": "ANYVOL",
+                "usb_drive_letter": "D:",
+                "usb_vendor_id": "",
+                "usb_product_id": "",
+                "usb_vendor": "",
+                "usb_product": "Example USB",
+                "usb_friendly_name": "",
+                "usb_first_install_date_utc": "",
+                "usb_last_arrival_utc": "",
+                "usb_last_removal_utc": "",
+                "source_artifact_type": "lnk",
+                "source_artifact_id": "lnk-root",
+                "source_artifact_name": "ANYVOL (D).lnk",
+                "source_artifact_path": "Users/example/Recent/ANYVOL (D).lnk",
+                "user_profile": "example",
+                "jumplist_item_number": "",
+                "file_name": "D:",
+                "file_location": "D:\\",
+                "target_created": "",
+                "target_modified": "",
+                "target_accessed": "",
+                "device_type": "removable",
+                "artifact_volume_serial_number": "1122AABB",
+                "artifact_volume_name": "ANYVOL",
+                "artifact_volume_guid": "",
+                "artifact_drive_letter": "D:",
+                "volume_serial_match": "volume_name",
+                "confidence": "medium",
+            },
+            {
+                "id": "usb-corr-doc",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "usb_serial": "USB123",
+                "usb_volume_serial_number": "",
+                "usb_volume_name": "ANYVOL",
+                "usb_drive_letter": "D:",
+                "usb_vendor_id": "",
+                "usb_product_id": "",
+                "usb_vendor": "",
+                "usb_product": "Example USB",
+                "usb_friendly_name": "",
+                "usb_first_install_date_utc": "",
+                "usb_last_arrival_utc": "",
+                "usb_last_removal_utc": "",
+                "source_artifact_type": "lnk",
+                "source_artifact_id": "lnk-doc",
+                "source_artifact_name": "Report.docx.lnk",
+                "source_artifact_path": "Users/example/Recent/Report.docx.lnk",
+                "user_profile": "example",
+                "jumplist_item_number": "",
+                "file_name": "Report.docx",
+                "file_location": "D:\\Report.docx",
+                "target_created": "2025-01-01T00:00:00Z",
+                "target_modified": "2025-01-01T00:00:01Z",
+                "target_accessed": "",
+                "device_type": "removable",
+                "artifact_volume_serial_number": "1122AABB",
+                "artifact_volume_name": "ANYVOL",
+                "artifact_volume_guid": "",
+                "artifact_drive_letter": "D:",
+                "volume_serial_match": "volume_name",
+                "confidence": "medium",
+            },
+        ]
+    )
+    db.close()
+
+    server = RelicMcpServer(root=tmp_path)
+    response = server.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "relic_query_usb_files",
+                "arguments": {"case_id": case.id, "contains": "ANYVOL", "volume_name": "ANYVOL"},
+            },
+        }
+    )
+
+    structured = response["result"]["structuredContent"]
+    assert structured["source_of_truth"] == "usb_file_correlations"
+    assert structured["total_returned"] == 1
+    assert structured["items"][0]["file_name"] == "Report.docx"
+    assert structured["items"][0]["artifact_volume_serial_number"] == "1122AABB"
 
 
 def test_mcp_job_persists_and_output_can_be_read(tmp_path):

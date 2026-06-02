@@ -2877,6 +2877,17 @@ def test_external_storage_report_surfaces_candidate_volume_serial_from_file_acti
     assert device_row["volume_serial_number"] == ""
     assert device_row["candidate_volume_serial_numbers"] == "3304EABA"
     assert "Candidate volume serial from file activity: `3304EABA`" in external_storage_markdown(report)
+    usb_files = usb_file_correlation_report(
+        db,
+        case.id,
+        persist=False,
+        contains="BYEBYE",
+        volume_name="BYEBYE",
+        include_drive_roots=False,
+    )
+    assert usb_files["total_returned"] == 1
+    assert usb_files["items"][0]["file_name"] == "The end.docx"
+    assert usb_files["items"][0]["artifact_volume_serial_number"] == "3304EABA"
 
 
 def test_external_storage_report_correlates_files_when_storage_summary_is_absent(tmp_path):

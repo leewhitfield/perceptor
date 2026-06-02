@@ -12330,27 +12330,77 @@ def usb_file_correlation_report(
     limit: int = 500,
     persist: bool = True,
     grouped: bool = False,
+    contains: str | None = None,
+    serial: str | None = None,
+    volume_serial_number: str | None = None,
+    volume_name: str | None = None,
+    source_artifact_type: str | None = None,
+    include_drive_roots: bool = True,
 ) -> dict[str, Any]:
     db.get_case(case_id)
     if persist:
         rebuild_usb_file_correlations(db, case_id)
+    filters = ["case_id = ?"]
+    params: list[Any] = [case_id]
+    if contains:
+        filters.append(
+            """
+            LOWER(
+              COALESCE(file_name, '') || ' ' ||
+              COALESCE(file_location, '') || ' ' ||
+              COALESCE(source_artifact_name, '') || ' ' ||
+              COALESCE(source_artifact_path, '') || ' ' ||
+              COALESCE(usb_volume_name, '') || ' ' ||
+              COALESCE(artifact_volume_name, '') || ' ' ||
+              COALESCE(usb_serial, '') || ' ' ||
+              COALESCE(usb_volume_serial_number, '') || ' ' ||
+              COALESCE(artifact_volume_serial_number, '')
+            ) LIKE LOWER(?)
+            """
+        )
+        params.append(f"%{contains}%")
+    if serial:
+        filters.append("UPPER(usb_serial) = UPPER(?)")
+        params.append(serial)
+    if volume_serial_number:
+        filters.append(
+            "(UPPER(REPLACE(usb_volume_serial_number, '-', '')) = UPPER(REPLACE(?, '-', '')) "
+            "OR UPPER(REPLACE(artifact_volume_serial_number, '-', '')) = UPPER(REPLACE(?, '-', '')))"
+        )
+        params.extend([volume_serial_number, volume_serial_number])
+    if volume_name:
+        filters.append("(LOWER(usb_volume_name) = LOWER(?) OR LOWER(artifact_volume_name) = LOWER(?))")
+        params.extend([volume_name, volume_name])
+    if source_artifact_type:
+        filters.append("LOWER(source_artifact_type) = LOWER(?)")
+        params.append(source_artifact_type)
+    if not include_drive_roots:
+        filters.append(
+            """
+            NOT (
+              LENGTH(TRIM(COALESCE(file_location, file_name, ''))) <= 3
+              AND SUBSTR(TRIM(COALESCE(file_location, file_name, '')), 2, 1) = ':'
+            )
+            """
+        )
+    params.append(limit)
     rows = _query_report_rows(
         db,
         case_id,
         "usb_file_correlations",
-        """
+        f"""
         SELECT *
         FROM usb_file_correlations
-        WHERE case_id = ?
+        WHERE {' AND '.join(filters)}
         ORDER BY
-          usb_volume_serial_number,
+          COALESCE(NULLIF(usb_volume_serial_number, ''), artifact_volume_serial_number),
           source_artifact_type,
           file_location,
           file_name,
           source_artifact_path
         LIMIT ?
         """,
-        (case_id, limit),
+        params,
     )
     files = _dedupe_usb_file_items(rows)
     counts_by_device: dict[tuple[str, str | None, str | None, str | None], dict[str, Any]] = {}
@@ -12402,9 +12452,18 @@ def usb_file_correlation_report(
         "notes": [
             "LNK and Jump List rows are matched to USB storage devices by volume serial number.",
             "When USB device evidence lacks a volume serial number, LNK and Jump List rows can fall back to a non-generic matching volume label.",
+            "Rows include artifact_volume_serial_number and matched_volume_serial_number so file-activity-derived serials remain visible when device-side USB volume serials are blank.",
             "Shellbag rows participate when volume serial data is available in shellbag_entries.",
             "Suffix matching is used when USB evidence has a wider NTFS-style serial and shortcut evidence has the lower 32-bit serial.",
         ],
+        "filters": {
+            "contains": contains or "",
+            "serial": serial or "",
+            "volume_serial_number": volume_serial_number or "",
+            "volume_name": volume_name or "",
+            "source_artifact_type": source_artifact_type or "",
+            "include_drive_roots": include_drive_roots,
+        },
         "shellbag_rows_available": shellbag_rows,
         "devices": list(counts_by_device.values()),
         "files": files,
