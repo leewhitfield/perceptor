@@ -22,6 +22,7 @@ CONTENT_FIELDS = [
 
 TEXT_EXTENSIONS = {".txt", ".csv", ".tsv", ".log", ".json", ".xml", ".html", ".htm", ".md", ".rtf", ".v2c"}
 OFFICE_EXTENSIONS = {".docx", ".docm", ".pptx", ".pptm", ".ppsx", ".xlsx", ".xlsm"}
+OFFICE_TEMP_EXTENSIONS = {".tmp"}
 PDF_EXTENSIONS = {".pdf"}
 SUPPORTED_EXTENSIONS = TEXT_EXTENSIONS | OFFICE_EXTENSIONS | PDF_EXTENSIONS
 CONTENT_LIMIT = 1_000_000
@@ -42,14 +43,23 @@ def parse_file_content_to_csv(source: Path, output: Path) -> Path:
 
 def _iter_supported_files(source: Path) -> list[Path]:
     if source.is_file():
-        return [source] if source.suffix.lower() in SUPPORTED_EXTENSIONS else []
+        return [source] if _is_supported_file(source) else []
     return sorted(
         path
         for path in source.rglob("*")
         if path.is_file()
-        and path.suffix.lower() in SUPPORTED_EXTENSIONS
+        and _is_supported_file(path)
         and "_extract_jobs" not in path.parts
     )
+
+
+def _is_supported_file(path: Path) -> bool:
+    suffix = path.suffix.lower()
+    if suffix in SUPPORTED_EXTENSIONS:
+        return True
+    if suffix in OFFICE_TEMP_EXTENSIONS:
+        return bool(_office_members(path))
+    return False
 
 
 def _content_row(root: Path, path: Path) -> dict[str, object]:
@@ -81,7 +91,7 @@ def _extract_text(path: Path) -> tuple[str, str, str]:
         return _text_file(path)
     if suffix == ".pdf":
         return _pdf_text(path)
-    if suffix in OFFICE_EXTENSIONS:
+    if suffix in OFFICE_EXTENSIONS or suffix in OFFICE_TEMP_EXTENSIONS:
         return _office_text(path)
     return "", "unsupported", ""
 
@@ -138,19 +148,11 @@ def _pdf_text_pypdf(path: Path) -> tuple[str, str, str]:
 
 
 def _office_text(path: Path) -> tuple[str, str, str]:
-    suffix = path.suffix.lower()
-    if suffix in {".docx", ".docm"}:
-        members = ["word/document.xml"]
-    elif suffix in {".xlsx", ".xlsm"}:
-        members = ["xl/sharedStrings.xml"]
-    elif suffix in {".pptx", ".pptm", ".ppsx"}:
-        members = []
-    else:
+    members = _office_members(path)
+    if members is None:
         return "", "unsupported", ""
     try:
         with zipfile.ZipFile(path) as archive:
-            if suffix in {".pptx", ".pptm", ".ppsx"}:
-                members = sorted(name for name in archive.namelist() if name.startswith("ppt/slides/slide") and name.endswith(".xml"))
             chunks = []
             for member in members:
                 try:
@@ -161,6 +163,35 @@ def _office_text(path: Path) -> tuple[str, str, str]:
         return "", "parse_failed", str(exc)
     text = "\n".join(part for part in chunks if part)
     return text, "text_extracted" if text.strip() else "empty", ""
+
+
+def _office_members(path: Path) -> list[str] | None:
+    suffix = path.suffix.lower()
+    if suffix in {".docx", ".docm"}:
+        return ["word/document.xml"]
+    if suffix in {".xlsx", ".xlsm"}:
+        return ["xl/sharedStrings.xml"]
+    if suffix in {".pptx", ".pptm", ".ppsx"}:
+        return _office_zip_members(path, family="ppt")
+    if suffix not in OFFICE_TEMP_EXTENSIONS:
+        return None
+    return _office_zip_members(path)
+
+
+def _office_zip_members(path: Path, *, family: str | None = None) -> list[str] | None:
+    try:
+        with zipfile.ZipFile(path) as archive:
+            names = set(archive.namelist())
+    except (OSError, zipfile.BadZipFile):
+        return None
+    if family == "ppt" or (family is None and any(name.startswith("ppt/") for name in names)):
+        slides = sorted(name for name in names if name.startswith("ppt/slides/slide") and name.endswith(".xml"))
+        return slides or None
+    if family is None and "word/document.xml" in names:
+        return ["word/document.xml"]
+    if family is None and "xl/sharedStrings.xml" in names:
+        return ["xl/sharedStrings.xml"]
+    return None
 
 
 def _xml_text(payload: bytes) -> str:

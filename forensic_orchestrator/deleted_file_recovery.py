@@ -365,7 +365,10 @@ def _deleted_inode_map(fls_output: str) -> dict[str, str]:
 
 
 def _offset_from_source_root(value: Any) -> int | None:
-    match = re.search(r"(?:^|[:;,])offset=(\d+)", str(value or ""))
+    text = str(value or "")
+    match = re.search(r"(?:^|[:;,])offset=(\d+)", text)
+    if not match:
+        match = re.search(r"@(\d+)$", text)
     return int(match.group(1)) if match else None
 
 
