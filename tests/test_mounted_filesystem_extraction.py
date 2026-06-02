@@ -1,10 +1,11 @@
 from pathlib import Path
 
 from forensic_orchestrator.db import Database
-from forensic_orchestrator.filesystem_inventory import scan_mounted_filesystem
+from forensic_orchestrator.filesystem_inventory import scan_mounted_filesystem, scan_tsk_filesystem
 from forensic_orchestrator.filesystem_review import rebuild_filesystem_review
 from forensic_orchestrator.models import ArtifactDefinition
 from forensic_orchestrator.mounting.filesystem import extract_artifact_from_mount
+from forensic_orchestrator.mounting.tsk import FlsEntry
 from forensic_orchestrator.paths import WorkspacePaths
 from forensic_orchestrator.reports import files_report, filesystem_review_report
 
@@ -156,3 +157,47 @@ def test_tsk_filesystem_inventory_purge_replaces_previous_rows(tmp_path):
 
     remaining = db.conn.execute("SELECT COUNT(*) AS count FROM filesystem_entries").fetchone()["count"]
     assert remaining == 0
+
+
+def test_tsk_filesystem_inventory_enriches_fat_file_sizes(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORENSIC_ANALYTICS_MODE", "sqlite")
+    paths = WorkspacePaths(tmp_path / "analysis")
+    db = Database(paths.db_path())
+    paths.ensure_case_tree("case-1")
+    case = db.create_case("case-1", paths.case_dir("case-1"))
+    computer = db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    image = db.add_image("image-1", case.id, Path("/evidence/usb.E01"), computer_id=computer.id)
+
+    monkeypatch.setattr(
+        "forensic_orchestrator.filesystem_inventory.list_files",
+        lambda **_kwargs: [
+            FlsEntry(inode="9", path="The end.docx", is_directory=False, deleted=True),
+            FlsEntry(inode="484438276", path="$FAT1", is_directory=False, kind="v/v", system=True),
+        ],
+    )
+
+    def fake_metadata(**kwargs):
+        assert kwargs["filesystem_type"] == "fat32"
+        assert kwargs["inode"] == "9"
+        return {"file_size": "31055"}
+
+    monkeypatch.setattr("forensic_orchestrator.filesystem_inventory.read_file_metadata", fake_metadata)
+
+    scan_tsk_filesystem(
+        db=db,
+        paths=paths,
+        case_id=case.id,
+        image=image,
+        raw_image=Path("/evidence/usb.E01"),
+        offset_sectors=240,
+        partition_id="000:000",
+        filesystem_type="fat32",
+    )
+
+    rows = db.conn.execute(
+        "SELECT file_name, file_size, scan_status FROM filesystem_entries ORDER BY row_number"
+    ).fetchall()
+    assert [dict(row) for row in rows] == [
+        {"file_name": "The end.docx", "file_size": "31055", "scan_status": "deleted"},
+        {"file_name": "$FAT1", "file_size": "", "scan_status": "system"},
+    ]

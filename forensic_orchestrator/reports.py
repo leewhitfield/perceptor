@@ -12306,12 +12306,15 @@ def rebuild_usb_file_correlations(db: Database, case_id: str) -> int:
     correlation_rows = []
     for row in rows:
         item = dict(row)
+        _normalize_usb_file_access_precision(item)
         item.update(_usb_file_temporal_context(item, connection_rows))
         item["usb_serial"] = item.get("usb_serial") or ""
         item["usb_volume_serial_number"] = item.get("usb_volume_serial_number") or ""
         item["source_artifact_type"] = item.get("source_artifact_type") or ""
         item["volume_serial_match"] = item.get("volume_serial_match") or ""
         item["confidence"] = item.get("confidence") or ""
+        item["target_accessed_precision"] = item.get("target_accessed_precision") or ""
+        item["target_accessed_note"] = item.get("target_accessed_note") or ""
         item["id"] = str(uuid.uuid4())
         item["created_at"] = created_at
         if not item.get("user_profile"):
@@ -12402,6 +12405,7 @@ def usb_file_correlation_report(
         """,
         params,
     )
+    _annotate_usb_file_rows_access_precision(db, case_id, rows)
     files = _dedupe_usb_file_items(rows)
     counts_by_device: dict[tuple[str, str | None, str | None, str | None], dict[str, Any]] = {}
     for row in rows:
@@ -12471,6 +12475,66 @@ def usb_file_correlation_report(
         "total_files": len(files),
         "total_returned": len(files) if grouped else len(rows),
     }
+
+
+def _annotate_usb_file_rows_access_precision(db: Database, case_id: str, rows: list[dict[str, Any]]) -> None:
+    if not rows:
+        return
+    devices = _query_report_rows(
+        db,
+        case_id,
+        "usb_storage_devices",
+        """
+        SELECT serial, volume_serial_number, volume_name, file_system, vbr_file_system
+        FROM usb_storage_devices
+        WHERE case_id = ?
+        """,
+        (case_id,),
+    )
+    devices.extend(
+        _query_report_rows(
+            db,
+            case_id,
+            "usb_devices",
+            """
+            SELECT serial, volume_serial_number, volume_name, file_system, vbr_file_system
+            FROM usb_devices
+            WHERE case_id = ?
+              AND (
+                COALESCE(file_system, '') <> ''
+                OR COALESCE(vbr_file_system, '') <> ''
+              )
+            """,
+            (case_id,),
+        )
+    )
+    by_serial: dict[str, dict[str, Any]] = {}
+    by_vsn: dict[str, dict[str, Any]] = {}
+    by_volume_name: dict[str, dict[str, Any]] = {}
+    for device in devices:
+        serial_key = _external_storage_serial_key(device.get("serial")).upper()
+        vsn_key = _norm_vsn(device.get("volume_serial_number"))
+        volume_name_key = _normalize_usb_volume_name(device.get("volume_name"))
+        for mapping, key in ((by_serial, serial_key), (by_vsn, vsn_key), (by_volume_name, volume_name_key)):
+            if key and (key not in mapping or _usb_device_has_more_filesystem_metadata(device, mapping[key])):
+                mapping[key] = device
+    for row in rows:
+        device = (
+            by_serial.get(_external_storage_serial_key(row.get("usb_serial")).upper())
+            or by_vsn.get(_norm_vsn(row.get("usb_volume_serial_number") or row.get("artifact_volume_serial_number")))
+            or by_volume_name.get(_normalize_usb_volume_name(row.get("usb_volume_name") or row.get("artifact_volume_name")))
+        )
+        if device:
+            row["usb_file_system"] = row.get("usb_file_system") or device.get("file_system") or ""
+            row["usb_vbr_file_system"] = row.get("usb_vbr_file_system") or device.get("vbr_file_system") or ""
+        _normalize_usb_file_access_precision(row)
+
+
+def _usb_device_has_more_filesystem_metadata(candidate: dict[str, Any], current: dict[str, Any]) -> bool:
+    return bool(
+        (candidate.get("file_system") and not current.get("file_system"))
+        or (candidate.get("vbr_file_system") and not current.get("vbr_file_system"))
+    )
 
 
 def _usb_file_correlation_rows(db: Database, case_id: str, *, limit: int | None) -> list[dict[str, Any]]:
@@ -12755,6 +12819,8 @@ def _usb_file_correlation_rows(db: Database, case_id: str, *, limit: int | None)
               scored.vendor AS usb_vendor,
               scored.product AS usb_product,
               scored.friendly_name AS usb_friendly_name,
+              scored.file_system AS usb_file_system,
+              scored.vbr_file_system AS usb_vbr_file_system,
               scored.first_install_date_utc AS usb_first_install_date_utc,
               scored.last_arrival_utc AS usb_last_arrival_utc,
               scored.last_removal_utc AS usb_last_removal_utc,
@@ -12929,6 +12995,8 @@ def _usb_file_correlation_rows_duckdb(db: Database, case_id: str, *, limit: int 
                     "usb_vendor": usb.get("vendor"),
                     "usb_product": usb.get("product"),
                     "usb_friendly_name": usb.get("friendly_name"),
+                    "usb_file_system": usb.get("file_system"),
+                    "usb_vbr_file_system": usb.get("vbr_file_system"),
                     "usb_first_install_date_utc": usb.get("first_install_date_utc"),
                     "usb_last_arrival_utc": usb.get("last_arrival_utc"),
                     "usb_last_removal_utc": usb.get("last_removal_utc"),
@@ -13008,6 +13076,8 @@ def _usb_file_correlation_rows_duckdb(db: Database, case_id: str, *, limit: int 
                     "usb_vendor": usb.get("vendor"),
                     "usb_product": usb.get("product"),
                     "usb_friendly_name": usb.get("friendly_name"),
+                    "usb_file_system": usb.get("file_system"),
+                    "usb_vbr_file_system": usb.get("vbr_file_system"),
                     "usb_first_install_date_utc": usb.get("first_install_date_utc"),
                     "usb_last_arrival_utc": usb.get("last_arrival_utc"),
                     "usb_last_removal_utc": usb.get("last_removal_utc"),
@@ -13126,7 +13196,7 @@ def _usb_file_temporal_context(row: dict[str, Any], connection_rows: list[dict[s
         for timestamp in (
             _parse_report_timestamp(row.get("target_created")),
             _parse_report_timestamp(row.get("target_modified")),
-            _parse_report_timestamp(row.get("target_accessed")),
+            None if row.get("target_accessed_precision") == "date" else _parse_report_timestamp(row.get("target_accessed")),
         )
         if timestamp is not None
     ]
@@ -13161,6 +13231,41 @@ def _usb_file_temporal_context(row: dict[str, Any], connection_rows: list[dict[s
     else:
         status = "outside_known_connection"
     return _usb_temporal_result(status, sessions=sessions, target_times=target_times)
+
+
+def _normalize_usb_file_access_precision(row: dict[str, Any]) -> None:
+    accessed = str(row.get("target_accessed") or "").strip()
+    row["target_accessed_original"] = row.get("target_accessed_original") or ""
+    row["target_accessed_precision"] = row.get("target_accessed_precision") or ("timestamp" if accessed else "")
+    row["target_accessed_note"] = row.get("target_accessed_note") or ""
+    if not accessed or not _usb_file_row_is_fat_family(row):
+        return
+    access_date = _usb_access_date(accessed)
+    if not access_date:
+        return
+    row["target_accessed_original"] = row.get("target_accessed_original") or accessed
+    row["target_accessed"] = access_date
+    row["target_accessed_precision"] = "date"
+    row["target_accessed_note"] = (
+        "FAT stores last access as a date only; source tool supplied a synthetic time component, so Relic reports the access value as date-only."
+    )
+
+
+def _usb_file_row_is_fat_family(row: dict[str, Any]) -> bool:
+    values = [
+        str(row.get(field) or "").strip().upper()
+        for field in ("usb_file_system", "usb_vbr_file_system")
+        if str(row.get(field) or "").strip()
+    ]
+    return any(value in {"FAT", "FAT12", "FAT16", "FAT32"} for value in values)
+
+
+def _usb_access_date(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    match = re.match(r"^(\d{4}-\d{2}-\d{2})", text)
+    return match.group(1) if match else ""
 
 
 def _usb_temporal_result(

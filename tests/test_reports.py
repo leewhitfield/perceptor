@@ -2890,6 +2890,112 @@ def test_external_storage_report_surfaces_candidate_volume_serial_from_file_acti
     assert usb_files["items"][0]["artifact_volume_serial_number"] == "3304EABA"
 
 
+def test_usb_file_correlation_trims_fat_access_time_to_date_only(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    db.insert_usb_storage_devices(
+        [
+            {
+                "id": "usb-fat",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "serial": "USB-FAT",
+                "vendor": "Vendor",
+                "product": "FAT Drive",
+                "volume_name": "FATVOL",
+                "volume_serial_number": "",
+                "file_system": "FAT32",
+                "vbr_file_system": "FAT32",
+                "evidence_row_count": 1,
+                "source_artifacts": "test",
+                "created_at": "2026-01-01T00:00:00Z",
+            },
+            {
+                "id": "usb-exfat",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "serial": "USB-EXFAT",
+                "vendor": "Vendor",
+                "product": "exFAT Drive",
+                "volume_name": "EXFATVOL",
+                "volume_serial_number": "",
+                "file_system": "exFAT",
+                "vbr_file_system": "exFAT",
+                "evidence_row_count": 1,
+                "source_artifacts": "test",
+                "created_at": "2026-01-01T00:00:00Z",
+            },
+        ]
+    )
+    db.insert_shortcut_items(
+        [
+            {
+                "id": "shortcut-fat",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "output-1",
+                "tool_name": "LECmd",
+                "source_csv": tmp_path / "LECmd.csv",
+                "row_number": 1,
+                "artifact_type": "lnk",
+                "artifact_name": "fat.docx.lnk",
+                "artifact_path": "/artifacts/lnk/fat.docx.lnk",
+                "file_name": "fat.docx",
+                "file_location": "D:\\fat.docx",
+                "target_created": "2025-11-17 20:44:51",
+                "target_modified": "2025-11-17 20:44:52",
+                "target_accessed": "2025-11-17 05:00:00",
+                "device_type": "removable",
+                "volume_serial_number": "3304EABA",
+                "volume_name": "FATVOL",
+                "lnk_created": "",
+                "lnk_modified": "",
+                "lnk_accessed": "",
+                "jumplist_item_number": "",
+            },
+            {
+                "id": "shortcut-exfat",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "output-1",
+                "tool_name": "LECmd",
+                "source_csv": tmp_path / "LECmd.csv",
+                "row_number": 2,
+                "artifact_type": "lnk",
+                "artifact_name": "exfat.docx.lnk",
+                "artifact_path": "/artifacts/lnk/exfat.docx.lnk",
+                "file_name": "exfat.docx",
+                "file_location": "E:\\exfat.docx",
+                "target_created": "2025-11-17 20:44:51",
+                "target_modified": "2025-11-17 20:44:52",
+                "target_accessed": "2025-11-17 05:00:00",
+                "device_type": "removable",
+                "volume_serial_number": "AA55BB66",
+                "volume_name": "EXFATVOL",
+                "lnk_created": "",
+                "lnk_modified": "",
+                "lnk_accessed": "",
+                "jumplist_item_number": "",
+            },
+        ]
+    )
+
+    report = usb_file_correlation_report(db, case.id)
+    rows = {row["file_name"]: row for row in report["items"]}
+    assert rows["fat.docx"]["target_accessed"] == "2025-11-17"
+    assert rows["fat.docx"]["target_accessed_original"] == "2025-11-17 05:00:00"
+    assert rows["fat.docx"]["target_accessed_precision"] == "date"
+    assert "FAT stores last access as a date only" in rows["fat.docx"]["target_accessed_note"]
+    assert rows["exfat.docx"]["target_accessed"] == "2025-11-17 05:00:00"
+    assert rows["exfat.docx"]["target_accessed_precision"] == "timestamp"
+
+
 def test_external_storage_report_correlates_files_when_storage_summary_is_absent(tmp_path):
     db = Database(tmp_path / "orchestrator.sqlite3")
     case = db.create_case("case-1", tmp_path / "cases" / "case-1")

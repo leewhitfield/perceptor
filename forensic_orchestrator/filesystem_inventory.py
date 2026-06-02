@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from forensic_orchestrator.db import Database, utc_now
-from forensic_orchestrator.mounting.tsk import FlsEntry, list_files
+from forensic_orchestrator.mounting.tsk import FlsEntry, list_files, read_file_metadata
+from forensic_orchestrator.safety import ToolError
 from forensic_orchestrator.models import EvidenceImage
 from forensic_orchestrator.paths import WorkspacePaths
 
@@ -206,6 +207,7 @@ def _row_from_fls_entry(
     partition_id: str | None,
     filesystem_type: str | None,
     created_at: str,
+    metadata: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     rel = entry.path.replace("\\", "/").lstrip("/")
     parent = Path(rel).parent.as_posix() if rel and Path(rel).parent.as_posix() != "." else ""
@@ -216,6 +218,7 @@ def _row_from_fls_entry(
         status = "live"
     else:
         status = "deleted"
+    metadata = metadata or {}
     return {
         "id": str(uuid.uuid4()),
         "case_id": case_id,
@@ -232,7 +235,7 @@ def _row_from_fls_entry(
         "parent_path": parent,
         "file_name": name,
         "extension": _extension(name, entry.is_directory),
-        "file_size": "",
+        "file_size": metadata.get("file_size", ""),
         "is_directory": "true" if entry.is_directory else "false",
         "created_utc": None,
         "modified_utc": None,
@@ -245,6 +248,27 @@ def _row_from_fls_entry(
         "error": "",
         "created_at": created_at,
     }
+
+
+def _fls_entry_metadata(
+    *,
+    raw_image: Path,
+    offset_sectors: int,
+    filesystem_type: str | None,
+    entry: FlsEntry,
+) -> dict[str, str]:
+    if entry.is_directory or entry.system or not entry.inode:
+        return {}
+    try:
+        return read_file_metadata(
+            raw_image=raw_image,
+            offset_sectors=offset_sectors,
+            inode=entry.inode,
+            filesystem_type=filesystem_type,
+            dry_run=False,
+        )
+    except ToolError:
+        return {}
 
 
 def scan_tsk_filesystem(
@@ -277,21 +301,29 @@ def scan_tsk_filesystem(
         dry_run=False,
     )
     source_root = f"{raw_image}@{offset_sectors}"
-    rows = [
-        _row_from_fls_entry(
-            case_id=case_id,
-            image=image,
-            tool_output_id=tool_output_id,
-            source_csv=csv_path,
-            row_number=index,
-            source_root=source_root,
-            entry=entry,
-            partition_id=partition_id,
+    rows = []
+    for index, entry in enumerate(fls_entries, start=1):
+        metadata = _fls_entry_metadata(
+            raw_image=raw_image,
+            offset_sectors=offset_sectors,
             filesystem_type=filesystem_type,
-            created_at=created_at,
+            entry=entry,
         )
-        for index, entry in enumerate(fls_entries, start=1)
-    ]
+        rows.append(
+            _row_from_fls_entry(
+                case_id=case_id,
+                image=image,
+                tool_output_id=tool_output_id,
+                source_csv=csv_path,
+                row_number=index,
+                source_root=source_root,
+                entry=entry,
+                metadata=metadata,
+                partition_id=partition_id,
+                filesystem_type=filesystem_type,
+                created_at=created_at,
+            )
+        )
     content_sha256 = _write_csv(csv_path, rows)
     if replace_existing:
         db.purge_tool_data(case_id=case_id, image_id=image.id, tool_names=[TSK_TOOL_NAME])

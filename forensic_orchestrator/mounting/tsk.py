@@ -43,12 +43,12 @@ def build_fls_command(raw_image: Path, offset_sectors: int, *, filesystem_type: 
     return ["fls", "-f", _tsk_filesystem_type(filesystem_type), "-r", "-p", "-o", str(offset_sectors), str(raw_image)]
 
 
-def build_icat_command(raw_image: Path, offset_sectors: int, inode: str) -> list[str]:
-    return ["icat", "-f", "ntfs", "-o", str(offset_sectors), str(raw_image), inode]
+def build_icat_command(raw_image: Path, offset_sectors: int, inode: str, *, filesystem_type: str | None = None) -> list[str]:
+    return ["icat", "-f", _tsk_filesystem_type(filesystem_type), "-o", str(offset_sectors), str(raw_image), inode]
 
 
-def build_istat_command(raw_image: Path, offset_sectors: int, inode: str) -> list[str]:
-    return ["istat", "-f", "ntfs", "-o", str(offset_sectors), str(raw_image), inode]
+def build_istat_command(raw_image: Path, offset_sectors: int, inode: str, *, filesystem_type: str | None = None) -> list[str]:
+    return ["istat", "-f", _tsk_filesystem_type(filesystem_type), "-o", str(offset_sectors), str(raw_image), inode]
 
 
 def validate_tsk_available() -> None:
@@ -274,11 +274,12 @@ def read_file_metadata(
     raw_image: Path,
     offset_sectors: int,
     inode: str,
+    filesystem_type: str | None = None,
     dry_run: bool,
 ) -> dict[str, str]:
     if dry_run:
         return {}
-    command = build_istat_command(raw_image, offset_sectors, inode)
+    command = build_istat_command(raw_image, offset_sectors, inode, filesystem_type=filesystem_type)
     completed = subprocess.run(command, capture_output=True, text=True, check=False)
     if completed.returncode != 0:
         raise ToolError(f"istat failed for inode {inode}: {completed.stderr.strip()}")
@@ -290,6 +291,12 @@ def parse_istat_metadata(output: str) -> dict[str, str]:
     in_standard_information = False
     for line in output.splitlines():
         stripped = line.strip()
+        if ":" in stripped:
+            key, value = stripped.split(":", 1)
+            normalized_key = key.strip().lower()
+            normalized_value = value.strip()
+            if normalized_key in {"size", "file size"} and normalized_value:
+                metadata["file_size"] = normalized_value.split()[0]
         if stripped == "$STANDARD_INFORMATION Attribute Values:":
             in_standard_information = True
             continue

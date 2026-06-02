@@ -19,12 +19,14 @@ def test_tsk_commands_are_arrays():
     assert build_fls_command(raw, 63) == ["fls", "-f", "ntfs", "-r", "-p", "-o", "63", str(raw)]
     assert build_icat_command(raw, 63, "0") == ["icat", "-f", "ntfs", "-o", "63", str(raw), "0"]
     assert build_istat_command(raw, 63, "200") == ["istat", "-f", "ntfs", "-o", "63", str(raw), "200"]
+    assert build_istat_command(raw, 240, "9", filesystem_type="fat32") == ["istat", "-f", "fat", "-o", "240", str(raw), "9"]
 
 
 def test_parse_istat_metadata_uses_standard_information_timestamps():
     output = """
 MFT Entry Header Values:
 Entry: 200
+File Size: 4096
 
 $STANDARD_INFORMATION Attribute Values:
 Created:\t2008-07-06 07:54:26.000000000 (UTC)
@@ -37,11 +39,23 @@ Created:\t1999-01-01 00:00:00.000000000 (UTC)
 """
 
     assert parse_istat_metadata(output) == {
+        "file_size": "4096",
         "mft_created": "2008-07-06 07:54:26.000000000 (UTC)",
         "mft_modified": "2008-07-06 07:54:18.000000000 (UTC)",
         "mft_record_modified": "2008-07-06 07:54:20.000000000 (UTC)",
         "mft_accessed": "2008-07-06 07:54:27.000000000 (UTC)",
     }
+
+
+def test_parse_istat_metadata_reads_file_size_outside_ntfs_standard_information():
+    output = """
+Directory Entry: 9
+File Name: timestamps.docx
+Size: 31055
+Created: 2025-11-17 20:44:51 (UTC)
+"""
+
+    assert parse_istat_metadata(output)["file_size"] == "31055"
 
 
 def test_parse_fls_output_preserves_paths_and_inodes():
