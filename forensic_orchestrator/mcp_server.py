@@ -56,6 +56,7 @@ from .reports import (
     user_activity_report,
     workspace_health_report,
 )
+from .search.opensearch import OpenSearchConfig, search_case_content
 from .standalone import doctor_report, job_status_report
 from .tools.profiles import profile_extraction_preview
 from .tools.registry import ToolRegistry
@@ -193,6 +194,8 @@ class RelicMcpServer:
                 "listings are absent, stale, or the user explicitly requests new processing. "
                 "For filesystem/file-listing questions, call relic_query_filesystem_listings first because it reads generated "
                 "case file listings and avoids slow image tooling. "
+                "For file-content, document-text, body-text, or indexed-content search questions, call relic_search_content after "
+                "checking relevant generated reports; it queries OpenSearch indexed content and does not start image processing. "
                 "Import and processing calls require --allow-processing. Sensitive credential reveal, external AI upload, "
                 "and destructive actions are not implemented in the default MCP surface."
             ),
@@ -800,6 +803,41 @@ class RelicMcpServer:
                 ),
                 handler=self.lead_search,
                 annotations=read_only,
+            ),
+            McpTool(
+                name="relic_search_content",
+                title="Relic OpenSearch Content Search",
+                description=(
+                    "Search full-text content indexed in OpenSearch, including extracted document text, mailbox bodies, "
+                    "attachments, Windows Search indexed content, and other large text stores. Use existing generated reports "
+                    "and filesystem listings first for report-backed or file-listing questions; use this tool when the examiner "
+                    "asks to search file contents, body text, document text, or indexed content. Credentials are read from "
+                    "FORENSIC_OPENSEARCH_* environment variables and are not accepted as MCP arguments."
+                ),
+                input_schema=_object_schema(
+                    {
+                        "case_id": _string_schema("Relic case ID."),
+                        "query": _string_schema("Required full-text content query."),
+                        "limit": _integer_schema("Maximum content hits to return.", default=25, minimum=1, maximum=1000),
+                        "url": _string_schema("Optional OpenSearch URL. Defaults to FORENSIC_OPENSEARCH_URL or http://localhost:9200."),
+                        "index": _string_schema("Optional OpenSearch index. Defaults to FORENSIC_OPENSEARCH_INDEX or forensic-content."),
+                        "insecure": {"type": "boolean", "default": False, "description": "Disable TLS certificate verification for this request."},
+                        "no_synonyms": {"type": "boolean", "default": False, "description": "Disable built-in synonym expansion."},
+                    },
+                    required=["case_id", "query"],
+                ),
+                handler=self.search_content,
+                annotations=read_only,
+                category="search",
+                tags=("search", "content", "opensearch", "read"),
+                dependencies=("orchestrator.sqlite3", "OpenSearch", "FORENSIC_OPENSEARCH_* environment variables when authentication is required"),
+                source_priority=("existing_reports", "opensearch_content_index", "parsed_artifact_tables"),
+                examples=(
+                    {
+                        "description": "Search indexed file and message content for a phrase.",
+                        "arguments": {"case_id": "case-id", "query": "confidential project notes", "limit": 25},
+                    },
+                ),
             ),
             McpTool(
                 name="relic_case_activity_digest",
@@ -1967,6 +2005,41 @@ class RelicMcpServer:
             )
         finally:
             db.close()
+
+    def search_content(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        query = _required(arguments, "query").strip()
+        if not query:
+            raise ValueError("query is required")
+        config = OpenSearchConfig.from_values(
+            url=_optional_text(arguments, "url"),
+            index=_optional_text(arguments, "index"),
+            insecure=bool(arguments.get("insecure") or False),
+        )
+        synonym_groups = [] if bool(arguments.get("no_synonyms") or False) else None
+        result = search_case_content(
+            case_id=_required(arguments, "case_id"),
+            query=query,
+            config=config,
+            limit=_limit(arguments, default=25),
+            synonym_groups=synonym_groups,
+        )
+        for hit in result.get("hits", []):
+            if not isinstance(hit, dict):
+                continue
+            source_table = str(hit.get("source_table") or "")
+            source_record_id = str(hit.get("source_record_id") or "")
+            hit["drilldown"] = {
+                "tool": "relic_file_dossier" if source_table in {"windows_search_indexed_content", "mailbox_attachments"} else "relic_search_artifacts",
+                "source_table": source_table,
+                "source_record_id": source_record_id,
+                "note": "Use source_table and source_record_id to pivot into parsed metadata or related reports.",
+            }
+        result["source_of_truth"] = "opensearch_content_index"
+        result["guidance"] = (
+            "These hits come from OpenSearch indexed content. Use generated reports/listings for high-level conclusions, "
+            "then pivot from source_table/source_record_id into parsed metadata for provenance."
+        )
+        return result
 
     def case_activity_digest(self, arguments: dict[str, Any]) -> dict[str, Any]:
         db = self._db()
@@ -3571,6 +3644,20 @@ def _route_mcp_question(
             {"order": 3, "source": "file_dossier", "tools": ["relic_file_dossier"]},
             {"order": 4, "source": "deleted_file_recovery", "tools": ["relic_recover_deleted_files"], "requires_explicit_user_request": True},
         ]
+    elif _is_content_search_question(text):
+        intent = "content_search"
+        first_source = "generated_reports"
+        recommended_tool = "relic_search_content"
+        fallback_tools = ["relic_search_artifacts", "relic_file_dossier", "relic_artifact_search_sources"]
+        report_names = ["user-intent", "communications", "cloud-files", "windows-search", "case-overview"]
+        report_purpose = "documents"
+        reason = "File-content and body-text search should query the OpenSearch content index after checking generated report context."
+        source_order = [
+            {"order": 1, "source": "generated_reports", "tools": ["relic_read_existing_report", "relic_discover_report_exports"], "report_names": report_names},
+            {"order": 2, "source": "opensearch_content_index", "tools": ["relic_search_content"]},
+            {"order": 3, "source": "parsed_artifact_tables", "tools": ["relic_search_artifacts", "relic_file_dossier"]},
+            {"order": 4, "source": "processing_or_reindexing", "tools": ["relic_process_image", "relic_run_profile"], "requires_explicit_user_request": True},
+        ]
     elif _contains_any(text, {"contents", "content", "list files", "files on", "folder", "directory", "filesystem", "file listing", "drive contents", "volume contents"}) or "files" in tokens and _contains_any(text, {"usb", "drive", "volume", "image"}):
         intent = "evidence_contents"
         first_source = "generated_filesystem_listings"
@@ -3683,11 +3770,39 @@ def _route_mcp_question(
         "guardrails": [
             "Use existing generated reports before raw artifact queries when a report can answer the question.",
             "Use filesystem_entries through relic_query_evidence_contents for any file-listing or drive-contents question.",
+            "Use relic_search_content for file-content, document-text, body-text, attachment-text, or indexed-content search questions.",
             "Use parsed artifact tables before resources, packet files, or direct image tooling.",
             "Use processing, mounts, FLS, or recovery tools only after the user explicitly asks for that work and MCP processing is enabled.",
             "Do not reveal credentials or send data to external AI unless the corresponding MCP startup gate is enabled.",
         ],
     }
+
+
+def _is_content_search_question(text: str) -> bool:
+    wants_search = _contains_any(text, {"search", "find", "look for", "contains", "contained", "mention", "mentions", "keyword"})
+    content_target = _contains_any(
+        text,
+        {
+            "file content",
+            "file contents",
+            "document text",
+            "doc text",
+            "body text",
+            "message body",
+            "email body",
+            "attachment text",
+            "indexed content",
+            "full text",
+            "full-text",
+            "ocr text",
+            "text inside",
+            "within files",
+            "inside files",
+            "inside documents",
+            "contents of files",
+        },
+    )
+    return wants_search and content_target
 
 
 def _contains_any(text: str, needles: set[str]) -> bool:
@@ -3718,12 +3833,13 @@ def _mcp_workflow_guide() -> dict[str, Any]:
         {"order": 8, "tool": "relic_artifact_search_sources", "purpose": "Check which source tables, fields, and row counts are available for search."},
         {"order": 9, "tool": "relic_query_evidence_contents", "purpose": "For evidence contents, drive contents, volume contents, or file-listing questions, query generated filesystem_entries first before considering live image, mount, or SleuthKit processing."},
         {"order": 10, "tool": "relic_lead_search", "purpose": "Run preset execution, USB, cloud, document, browser, or communications searches after existing reports have been checked."},
-        {"order": 11, "tool": "relic_search_artifacts", "purpose": "Run ad hoc artifact searches with user, computer, source, and time filters after existing reports have been checked."},
-        {"order": 12, "tool": "drilldown tools", "purpose": "Follow search result drilldown hints into file, USB, user, timeline, registry, cloud, communication, shortcut, or remote-access context."},
-        {"order": 13, "tool": "relic_write_search_packet", "purpose": "Save repeatable searches, result hash sets, case counts, and result sets as examiner work product."},
-        {"order": 14, "tool": "relic_rerun_search_packet", "purpose": "Rerun saved searches and compare added, removed, changed, and unchanged results."},
-        {"order": 15, "tool": "relic_write_review_packet", "purpose": "Save selected findings, notes, timeline slices, and report URIs."},
-        {"order": 16, "tool": "relic_write_report_bundle", "purpose": "Export a review bundle for handoff or UI consumption. Use purpose=review for MCP/operator review packs."},
+        {"order": 11, "tool": "relic_search_content", "purpose": "Search OpenSearch indexed file contents, document text, message bodies, attachments, and Windows Search indexed content after report context has been checked."},
+        {"order": 12, "tool": "relic_search_artifacts", "purpose": "Run ad hoc artifact searches with user, computer, source, and time filters after existing reports have been checked."},
+        {"order": 13, "tool": "drilldown tools", "purpose": "Follow search result drilldown hints into file, USB, user, timeline, registry, cloud, communication, shortcut, or remote-access context."},
+        {"order": 14, "tool": "relic_write_search_packet", "purpose": "Save repeatable searches, result hash sets, case counts, and result sets as examiner work product."},
+        {"order": 15, "tool": "relic_rerun_search_packet", "purpose": "Rerun saved searches and compare added, removed, changed, and unchanged results."},
+        {"order": 16, "tool": "relic_write_review_packet", "purpose": "Save selected findings, notes, timeline slices, and report URIs."},
+        {"order": 17, "tool": "relic_write_report_bundle", "purpose": "Export a review bundle for handoff or UI consumption. Use purpose=review for MCP/operator review packs."},
     ]
     return {
         "title": "Relic MCP Workflow Guide",
@@ -3734,6 +3850,7 @@ def _mcp_workflow_guide() -> dict[str, Any]:
         "reports_first_tool": "relic_read_existing_report",
         "evidence_contents_first_tool": "relic_query_evidence_contents",
         "filesystem_first_tool": "relic_query_filesystem_listings",
+        "content_search_tool": "relic_search_content",
         "packet_tools": ["relic_write_search_packet", "relic_list_search_packets", "relic_rerun_search_packet", "relic_write_review_packet", "relic_list_review_packets"],
     }
 

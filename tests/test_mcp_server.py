@@ -62,6 +62,7 @@ def test_mcp_initialize_and_list_tools(tmp_path):
     assert "relic_list_search_packets" in names
     assert "relic_read_search_packet" in names
     assert "relic_rerun_search_packet" in names
+    assert "relic_search_content" in names
     assert "relic_list_progress_manifests" in names
     assert "relic_list_mcp_jobs" in names
     assert "relic_get_mcp_job_progress" in names
@@ -78,6 +79,10 @@ def test_mcp_initialize_and_list_tools(tmp_path):
     assert "volume name" in usb_files_tool["description"]
     assert "contains" in usb_files_tool["inputSchema"]["properties"]
     assert "volume_name" in usb_files_tool["inputSchema"]["properties"]
+    content_search_tool = next(tool for tool in tools if tool["name"] == "relic_search_content")
+    assert "OpenSearch" in content_search_tool["description"]
+    assert "password" not in content_search_tool["inputSchema"]["properties"]
+    assert content_search_tool["metadata"]["category"] == "search"
     route_tool = next(tool for tool in tools if tool["name"] == "relic_route_question")
     assert "source-of-truth order" in route_tool["description"]
     process_tool = next(tool for tool in tools if tool["name"] == "relic_process_image")
@@ -565,6 +570,7 @@ def test_mcp_artifact_search_and_progress_manifests(tmp_path, monkeypatch):
     assert guide["reports_first_tool"] == "relic_read_existing_report"
     assert guide["evidence_contents_first_tool"] == "relic_query_evidence_contents"
     assert guide["filesystem_first_tool"] == "relic_query_filesystem_listings"
+    assert guide["content_search_tool"] == "relic_search_content"
 
 
 def test_mcp_route_question_enforces_truth_order(tmp_path):
@@ -584,6 +590,11 @@ def test_mcp_route_question_enforces_truth_order(tmp_path):
     assert "suspicious-executions" in suspicious["report_names"]
     assert "relic_query_suspicious_executions" in suspicious["fallback_tools"]
 
+    content = server.route_question({"case_id": "case-1", "question": "Search file contents for confidential notes"})
+    assert content["intent"] == "content_search"
+    assert content["recommended_tool"] == "relic_search_content"
+    assert content["source_order"][1]["source"] == "opensearch_content_index"
+
     recovery = server.route_question({"case_id": "case-1", "question": "Recover the deleted timeline.docx file"})
     assert recovery["intent"] == "deleted_file_recovery"
     assert recovery["recommended_tool"] == "relic_query_evidence_contents"
@@ -600,6 +611,57 @@ def test_mcp_route_question_enforces_truth_order(tmp_path):
     )
     assert recovery_allowed["processing_allowed"] is True
     assert "relic_recover_deleted_files" in recovery_allowed["fallback_tools"]
+
+
+def test_mcp_search_content_wraps_opensearch_without_password_argument(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_search_case_content(**kwargs):
+        captured.update(kwargs)
+        return {
+            "case_id": kwargs["case_id"],
+            "index": kwargs["config"].index,
+            "query": kwargs["query"],
+            "synonym_expansions": ["confidential"],
+            "total": {"value": 1, "relation": "eq"},
+            "hits": [
+                {
+                    "score": 2.5,
+                    "source_type": "indexed_file_content",
+                    "source_table": "windows_search_indexed_content",
+                    "source_record_id": "wic-1",
+                    "computer_id": "computer-1",
+                    "image_id": "image-1",
+                    "content_hash": "abc",
+                    "content_length": 123,
+                    "highlight": {"content": ["...confidential notes..."]},
+                }
+            ],
+            "total_returned": 1,
+        }
+
+    monkeypatch.setattr("forensic_orchestrator.mcp_server.search_case_content", fake_search_case_content)
+    server = RelicMcpServer(root=tmp_path)
+
+    result = server.search_content(
+        {
+            "case_id": "case-1",
+            "query": "confidential",
+            "url": "http://localhost:9200",
+            "index": "case-content",
+            "limit": 5,
+            "no_synonyms": True,
+        }
+    )
+
+    assert captured["case_id"] == "case-1"
+    assert captured["query"] == "confidential"
+    assert captured["limit"] == 5
+    assert captured["synonym_groups"] == []
+    assert captured["config"].url == "http://localhost:9200"
+    assert captured["config"].index == "case-content"
+    assert result["source_of_truth"] == "opensearch_content_index"
+    assert result["hits"][0]["drilldown"]["source_table"] == "windows_search_indexed_content"
 
 
 def test_mcp_filesystem_listing_uses_generated_inventory(tmp_path, monkeypatch):
