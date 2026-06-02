@@ -87,6 +87,11 @@ def test_content_search_queries_body_title_and_source_path(monkeypatch):
                             "source_type": "indexed_file_content",
                             "source_table": "windows_search_indexed_content",
                             "source_record_id": "row-1",
+                            "title": "_WRD0001.tmp",
+                            "source_path": "/_WRD0001.tmp",
+                            "container_path": "",
+                            "timestamp": "2026-06-02T16:08:57Z",
+                            "user_profile": "",
                             "computer_id": "computer-1",
                             "image_id": "image-1",
                             "content_hash": "abc",
@@ -114,6 +119,9 @@ def test_content_search_queries_body_title_and_source_path(monkeypatch):
     assert "title" in highlight_fields
     assert "source_path" in highlight_fields
     assert result["hits"][0]["highlight"] == {"title": ["<em>_WRD0001.tmp</em>"]}
+    assert result["hits"][0]["title"] == "_WRD0001.tmp"
+    assert result["hits"][0]["source_path"] == "/_WRD0001.tmp"
+    assert result["hits"][0]["timestamp"] == "2026-06-02T16:08:57Z"
 
 
 def test_content_heavy_db_inserts_keep_only_metadata_references(tmp_path):
