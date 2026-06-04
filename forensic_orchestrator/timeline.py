@@ -58,15 +58,26 @@ def timeline_events_from_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]
     return events
 
 
-def _base(row: dict[str, Any], event_type: str, raw_timestamp: str | None, description: str | None, details: dict[str, Any]) -> dict[str, Any] | None:
+def _base(
+    row: dict[str, Any],
+    event_type: str,
+    raw_timestamp: str | None,
+    description: str | None,
+    details: dict[str, Any],
+    *,
+    raw_end_timestamp: str | None = None,
+) -> dict[str, Any] | None:
     timestamp_utc = normalize_timestamp(raw_timestamp)
     if timestamp_utc is None:
         return None
+    end_timestamp_utc = normalize_timestamp(raw_end_timestamp)
+    duration_ms = _timeline_duration_ms(timestamp_utc, end_timestamp_utc)
     details = dict(details or {})
     source_scope = _source_scope(row)
     source_origin = _source_origin(row, source_scope)
     details.setdefault("source_scope", source_scope)
     details.setdefault("source_origin", source_origin)
+    description = _timeline_description(description, event_type, details)
     return {
         "id": str(uuid.uuid4()),
         "case_id": row["case_id"],
@@ -79,9 +90,49 @@ def _base(row: dict[str, Any], event_type: str, raw_timestamp: str | None, descr
         "event_type": event_type,
         "raw_timestamp": raw_timestamp,
         "timestamp_utc": timestamp_utc,
+        "end_timestamp_utc": end_timestamp_utc,
+        "duration_ms": duration_ms,
         "description": description,
         "details": details,
     }
+
+
+def _timeline_description(description: str | None, event_type: str, details: dict[str, Any]) -> str:
+    value = str(description or "").strip()
+    if value:
+        return value
+    for key in (
+        "url",
+        "target_path",
+        "local_path",
+        "item_path",
+        "source_path",
+        "path",
+        "file_name",
+        "cache_file",
+        "host",
+        "provider",
+        "channel",
+        "event_id",
+        "category",
+    ):
+        candidate = str(details.get(key) or "").strip()
+        if candidate:
+            if key == "event_id":
+                return f"{event_type}: event {candidate}"
+            return candidate
+    return event_type
+
+
+def _timeline_duration_ms(start_timestamp: str | None, end_timestamp: str | None) -> int | None:
+    if not start_timestamp or not end_timestamp:
+        return None
+    start = parse_timestamp(start_timestamp)
+    end = parse_timestamp(end_timestamp)
+    if start is None or end is None:
+        return None
+    duration = int((end - start).total_seconds() * 1000)
+    return duration if duration >= 0 else None
 
 
 def _source_scope(row: dict[str, Any]) -> str:
@@ -501,6 +552,9 @@ def _browser_history_events(row: dict[str, Any]) -> list[dict[str, Any]]:
             "title": row.get("title"),
             "visit_count": row.get("visit_count"),
             "typed_count": row.get("typed_count"),
+            "visit_source": row.get("visit_source"),
+            "visit_source_label": row.get("visit_source_label"),
+            "local_vs_synced": row.get("local_vs_synced"),
             "profile_path": row.get("profile_path"),
         },
     )
@@ -529,6 +583,7 @@ def _browser_download_events(row: dict[str, Any]) -> list[dict[str, Any]]:
                 "state": row.get("state"),
                 "profile_path": row.get("profile_path"),
             },
+            raw_end_timestamp=row.get("end_time_utc") if field == "start_time_utc" else None,
         )
         if event:
             events.append(event)
@@ -661,6 +716,7 @@ def _windows_activity_events(row: dict[str, Any]) -> list[dict[str, Any]]:
                 "platform_device_id": row.get("platform_device_id"),
                 "payload_json": row.get("payload_json"),
             },
+            raw_end_timestamp=row.get("end_time_utc") if field == "start_time_utc" else None,
         )
         if event:
             events.append(event)

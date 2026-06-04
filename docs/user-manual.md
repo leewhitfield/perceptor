@@ -260,10 +260,18 @@ whichever reads more clearly for your workflow.
 ```bash
 uv run relic --root ROOT case create
 uv run relic --root ROOT case status CASE_ID
+uv run relic --root ROOT case describe CASE_ID
+uv run relic --root ROOT case describe CASE_ID --description "Brief matter context"
+uv run relic --root ROOT case describe CASE_ID --description-file ./case-description.md --write-notes
 uv run relic --root ROOT case activity CASE_ID
 uv run relic --root ROOT case activity CASE_ID --level warning
 uv run relic --root ROOT case activity CASE_ID --level error
 ```
+
+`case describe` stores short matter context in SQLite so reports and MCP case
+summary tools can surface it. `--write-notes` also writes the supplied text to
+`case-description.md` in the case directory and records that file as the longer
+notes reference.
 
 Post-processing rebuilds:
 
@@ -276,6 +284,10 @@ uv run relic --root ROOT case rebuild-sessions CASE_ID
 uv run relic --root ROOT case rebuild-derived-timeline CASE_ID
 uv run relic --root ROOT project rebuild-distinct-artifacts CASE_ID
 ```
+
+`rebuild-derived-timeline` adds normalized correlation/session events such as
+Wi-Fi sessions, SRUM observations, USB connection events, removable/cloud file
+references, and file-identity correlations to the master timeline.
 
 Destructive cleanup:
 
@@ -771,6 +783,11 @@ Case-navigation MCP tools:
 - `relic_file_dossier`, `relic_usb_dossier`, `relic_user_activity`, and
   `relic_timeline_window`: focused drilldowns for following leads without
   knowing the matching CLI report names.
+- `relic_timeline_window` is the first source for “what happened during this
+  time/window/session?” questions. It accepts `start` and `end` and matches
+  interval events by overlap where the source has an end time. Use domain tools
+  such as `relic_query_wifi_activity` or USB reports to resolve session/window
+  bounds, then query the master timeline with those bounds.
 - `relic_case_next_actions`: ranks likely next investigative steps from
   readiness, evidence gaps, unmapped imports, suspicious execution, and storage
   findings.
@@ -926,6 +943,8 @@ High-value report families:
   `user-timeline`, `derived-timeline-events`, `artifact-sources`,
   `artifact-correlations`, `correlation-groups`, `correlation-group`,
   `correlations`, `artifact-summary`.
+  `timeline` accepts `--start` and `--end`; interval events are matched by
+  overlap when an end timestamp is available.
 - Special topics: `downloaded-files`, `uninstalled-app-artifacts`, `tor-usage`,
   `encrypted-volumes`, `phone-link`, `virtualization`, `thumbcache`,
   `cd-burning`, `brute-force`, `data-exfiltration`, `account-compromise`,

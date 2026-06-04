@@ -9,6 +9,7 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 from forensic_orchestrator.db import utc_now
+from forensic_orchestrator.timestamps import normalize_timestamp
 
 
 EMAIL_RE = re.compile(
@@ -44,17 +45,17 @@ def normalized_sam_account_row(
         "rid": _text(row.get("rid")),
         "rid_hex": _text(row.get("rid_hex")),
         "account_category": _text(row.get("account_category")),
-        "last_login_utc": _text(row.get("last_login_utc")),
-        "password_last_set_utc": _text(row.get("password_last_set_utc")),
-        "last_bad_password_utc": _text(row.get("last_bad_password_utc")),
-        "account_expires_utc": _text(row.get("account_expires_utc")),
+        "last_login_utc": _timestamp(row.get("last_login_utc")),
+        "password_last_set_utc": _timestamp(row.get("password_last_set_utc")),
+        "last_bad_password_utc": _timestamp(row.get("last_bad_password_utc")),
+        "account_expires_utc": _timestamp(row.get("account_expires_utc")),
         "logon_count": _text(row.get("logon_count")),
         "bad_password_count": _text(row.get("bad_password_count")),
         "account_flags_hex": _text(row.get("account_flags_hex")),
         "account_flags": _text(row.get("account_flags")),
         "account_flags_unknown_hex": _text(row.get("account_flags_unknown_hex")),
         "registry_path": _text(row.get("registry_path")),
-        "account_key_last_write_utc": _text(row.get("account_key_last_write_utc")),
+        "account_key_last_write_utc": _timestamp(row.get("account_key_last_write_utc")),
     }
 
 
@@ -97,14 +98,14 @@ def normalized_mft_entry_row(
         "birth_object_id": _first_text(row, "BirthObjectId", "BirthObjectID", "Birth Object Id", "Birth Object ID"),
         "birth_domain_id": _first_text(row, "BirthDomainId", "BirthDomainID", "Birth Domain Id", "Birth Domain ID", "DomainId", "Domain ID"),
         "si_fn_copied": _text(row.get("SI<FN") or row.get("Copied")),
-        "created_si": _text(row.get("Created0x10")),
-        "created_fn": _text(row.get("Created0x30")),
-        "modified_si": _text(row.get("LastModified0x10")),
-        "modified_fn": _text(row.get("LastModified0x30")),
-        "record_changed_si": _text(row.get("LastRecordChange0x10")),
-        "record_changed_fn": _text(row.get("LastRecordChange0x30")),
-        "accessed_si": _text(row.get("LastAccess0x10")),
-        "accessed_fn": _text(row.get("LastAccess0x30")),
+        "created_si": _timestamp(row.get("Created0x10")),
+        "created_fn": _timestamp(row.get("Created0x30")),
+        "modified_si": _timestamp(row.get("LastModified0x10")),
+        "modified_fn": _timestamp(row.get("LastModified0x30")),
+        "record_changed_si": _timestamp(row.get("LastRecordChange0x10")),
+        "record_changed_fn": _timestamp(row.get("LastRecordChange0x30")),
+        "accessed_si": _timestamp(row.get("LastAccess0x10")),
+        "accessed_fn": _timestamp(row.get("LastAccess0x30")),
         "source_file": _text(row.get("SourceFile")),
     }
 
@@ -133,7 +134,7 @@ def normalized_usn_journal_entry_row(
         "row_number": row_number,
         "source_file": _first_text(row, "SourceFile", "Source File"),
         "update_sequence_number": _first_text(row, "UpdateSequenceNumber", "USN", "Usn"),
-        "update_timestamp": _first_text(row, "UpdateTimestamp", "Timestamp", "TimeStamp", "TimeCreated"),
+        "update_timestamp": _first_timestamp(row, "UpdateTimestamp", "Timestamp", "TimeStamp", "TimeCreated"),
         "file_name": file_name,
         "extension": _first_text(row, "Extension"),
         "file_reference_number": _first_text(row, "FileReferenceNumber", "EntryNumber", "FileReference"),
@@ -214,7 +215,7 @@ def normalized_zone_identifier_ads_row(
         "referrer_host": _first_text(row, "referrer_host", "ReferrerHost"),
         "host_url": _first_text(row, "host_url", "HostUrl"),
         "host": _first_text(row, "host", "Host"),
-        "timestamp_utc": _first_text(row, "timestamp_utc", "TimestampUtc"),
+        "timestamp_utc": _first_timestamp(row, "timestamp_utc", "TimestampUtc"),
         "details_json": _first_text(row, "details_json", "DetailsJson") or "{}",
     }
 
@@ -251,9 +252,9 @@ def normalized_setupapi_device_event_row(
         "service": _first_text(row, "service", "Service"),
         "inf_path": _first_text(row, "inf_path", "InfPath"),
         "driver_package": _first_text(row, "driver_package", "DriverPackage"),
-        "start_time_utc": _first_text(row, "start_time_utc", "StartTimeUtc"),
-        "end_time_utc": _first_text(row, "end_time_utc", "EndTimeUtc"),
-        "event_time_utc": _first_text(row, "event_time_utc", "EventTimeUtc"),
+        "start_time_utc": _first_timestamp(row, "start_time_utc", "StartTimeUtc"),
+        "end_time_utc": _first_timestamp(row, "end_time_utc", "EndTimeUtc"),
+        "event_time_utc": _first_timestamp(row, "event_time_utc", "EventTimeUtc"),
         "status": _first_text(row, "status", "Status"),
         "confidence": _first_text(row, "confidence", "Confidence"),
         "details_json": _first_text(row, "details_json", "DetailsJson") or "{}",
@@ -294,7 +295,7 @@ def normalized_thumbcache_entry_row(
         "thumbnail_size": _first_text(row, "thumbnail_size", "ThumbnailSize"),
         "thumbnail_type": _first_text(row, "thumbnail_type", "ThumbnailType"),
         "thumbnail_sha256": _first_text(row, "thumbnail_sha256", "ThumbnailSha256"),
-        "source_mtime_utc": _first_text(row, "source_mtime_utc", "SourceMtimeUtc"),
+        "source_mtime_utc": _first_timestamp(row, "source_mtime_utc", "SourceMtimeUtc"),
         "parser_status": _first_text(row, "parser_status", "ParserStatus"),
         "parser_note": _first_text(row, "parser_note", "ParserNote"),
         "details_json": _first_text(row, "details_json", "DetailsJson") or "{}",
@@ -322,7 +323,7 @@ def normalized_ntfs_logfile_entry_row(
         "source_csv": source_csv,
         "row_number": row_number,
         "source_file": _first_text(row, "SourceFile", "Source File", "_file", "File"),
-        "event_time": _first_text(row, "Timestamp", "TimeStamp", "EventTime", "TimeCreated", "UpdateTimestamp"),
+        "event_time": _first_timestamp(row, "Timestamp", "TimeStamp", "EventTime", "TimeCreated", "UpdateTimestamp"),
         "operation": _first_text(row, "Operation", "Action", "Event", "Type", "derived record type"),
         "redo_operation": _first_text(row, "RedoOperation", "Redo", "Redo Op", "RedoOperationName", "deriv redo"),
         "undo_operation": _first_text(row, "UndoOperation", "Undo", "Undo Op", "UndoOperationName", "deriv undo"),
@@ -382,10 +383,10 @@ def normalized_ntfs_index_entry_row(
         "file_name": _first_text(row, "file_name"),
         "name_type": _first_text(row, "name_type"),
         "name_type_label": _first_text(row, "name_type_label"),
-        "created_fn": _first_text(row, "created_fn"),
-        "modified_fn": _first_text(row, "modified_fn"),
-        "record_changed_fn": _first_text(row, "record_changed_fn"),
-        "accessed_fn": _first_text(row, "accessed_fn"),
+        "created_fn": _first_timestamp(row, "created_fn"),
+        "modified_fn": _first_timestamp(row, "modified_fn"),
+        "record_changed_fn": _first_timestamp(row, "record_changed_fn"),
+        "accessed_fn": _first_timestamp(row, "accessed_fn"),
         "allocated_size": _first_text(row, "allocated_size"),
         "real_size": _first_text(row, "real_size"),
         "file_flags": _first_text(row, "file_flags"),
@@ -528,7 +529,7 @@ def normalized_rdp_visual_observation_row(
         "user_profile": _first_text(row, "user_profile", "UserProfile"),
         "source_cache_path": _first_text(row, "source_cache_path", "SourceCachePath"),
         "contact_sheet_path": _first_text(row, "contact_sheet_path", "ContactSheetPath"),
-        "observation_time_utc": _first_text(row, "observation_time_utc", "ObservationTimeUtc"),
+        "observation_time_utc": _first_timestamp(row, "observation_time_utc", "ObservationTimeUtc"),
         "time_basis": _first_text(row, "time_basis", "TimeBasis"),
         "observation_type": _first_text(row, "observation_type", "ObservationType"),
         "observed_application": _first_text(row, "observed_application", "ObservedApplication"),
@@ -570,7 +571,7 @@ def normalized_cloud_sync_artifact_row(
         "source_name": _first_text(row, "source_name", "SourceName"),
         "database_name": _first_text(row, "database_name", "Database", "FileName"),
         "table_name": _first_text(row, "table_name", "Table", "TableName"),
-        "event_time_utc": _first_text(row, "event_time_utc", "timestamp", "Timestamp", "Modified", "Created", "LastModified"),
+        "event_time_utc": _first_timestamp(row, "event_time_utc", "timestamp", "Timestamp", "Modified", "Created", "LastModified"),
         "local_path": _first_text(row, "local_path", "LocalPath", "Local Path", "Path"),
         "cloud_path": _first_text(row, "cloud_path", "CloudPath", "Cloud Path", "ServerPath", "Server Path", "DisplayPath"),
         "file_name": _first_text(row, "file_name", "FileName", "Filename", "Name", "LocalTitle"),
@@ -627,8 +628,8 @@ def normalized_browser_session_entry_row(
         "title": _first_text(row, "title", "Title"),
         "referrer_url": _first_text(row, "referrer_url", "Referrer"),
         "host": _first_text(row, "host") or _url_host(url),
-        "timestamp_utc": _first_text(row, "timestamp_utc", "Timestamp"),
-        "last_active_time_utc": _first_text(row, "last_active_time_utc"),
+        "timestamp_utc": _first_timestamp(row, "timestamp_utc", "Timestamp"),
+        "last_active_time_utc": _first_timestamp(row, "last_active_time_utc"),
         "is_current": _first_text(row, "is_current"),
         "is_pinned": _first_text(row, "is_pinned"),
         "parser": _first_text(row, "parser"),
@@ -666,8 +667,8 @@ def normalized_browser_site_setting_row(
         "host": _first_text(row, "host") or _url_host(origin),
         "setting_name": _first_text(row, "setting_name"),
         "setting_value": _first_text(row, "setting_value"),
-        "last_modified_utc": _first_text(row, "last_modified_utc"),
-        "expiration_utc": _first_text(row, "expiration_utc"),
+        "last_modified_utc": _first_timestamp(row, "last_modified_utc"),
+        "expiration_utc": _first_timestamp(row, "expiration_utc"),
         "details_json": _text(row.get("details_json")) or _row_json({}),
         "created_at": utc_now(),
     }
@@ -705,11 +706,11 @@ def normalized_browser_notification_row(
         "tag": _first_text(row, "tag"),
         "icon": _first_text(row, "icon"),
         "badge": _first_text(row, "badge"),
-        "created_utc": _first_text(row, "created_utc"),
-        "notification_timestamp_utc": _first_text(row, "notification_timestamp_utc"),
-        "first_click_utc": _first_text(row, "first_click_utc"),
-        "last_click_utc": _first_text(row, "last_click_utc"),
-        "closed_utc": _first_text(row, "closed_utc"),
+        "created_utc": _first_timestamp(row, "created_utc"),
+        "notification_timestamp_utc": _first_timestamp(row, "notification_timestamp_utc"),
+        "first_click_utc": _first_timestamp(row, "first_click_utc"),
+        "last_click_utc": _first_timestamp(row, "last_click_utc"),
+        "closed_utc": _first_timestamp(row, "closed_utc"),
         "num_clicks": _first_text(row, "num_clicks"),
         "closed_reason": _first_text(row, "closed_reason"),
         "details_json": _text(row.get("details_json")) or _row_json({}),
@@ -789,9 +790,9 @@ def normalized_onedrive_item_row(
         "spo_permissions": _first_text(row, "spo_permissions"),
         "volume_id": _first_text(row, "volume_id"),
         "item_index": _first_text(row, "item_index"),
-        "last_change_utc": _first_text(row, "last_change_utc"),
-        "disk_last_access_utc": _first_text(row, "disk_last_access_utc"),
-        "disk_creation_utc": _first_text(row, "disk_creation_utc"),
+        "last_change_utc": _first_timestamp(row, "last_change_utc"),
+        "disk_last_access_utc": _first_timestamp(row, "disk_last_access_utc"),
+        "disk_creation_utc": _first_timestamp(row, "disk_creation_utc"),
         "size": _first_text(row, "size"),
         "local_hash_digest": _first_text(row, "local_hash_digest"),
         "local_hash_algorithm": _first_text(row, "local_hash_algorithm"),
@@ -800,7 +801,7 @@ def normalized_onedrive_item_row(
         "hydration_json": _first_text(row, "hydration_json"),
         "metadata_json": _first_text(row, "metadata_json"),
         "is_deleted": _first_text(row, "is_deleted"),
-        "delete_time_utc": _first_text(row, "delete_time_utc"),
+        "delete_time_utc": _first_timestamp(row, "delete_time_utc"),
         "deleting_process": _first_text(row, "deleting_process"),
         "error": _first_text(row, "error"),
     }
@@ -835,7 +836,7 @@ def normalized_onedrive_log_entry_row(
         "odl_version": _first_text(row, "odl_version"),
         "one_drive_version": _first_text(row, "one_drive_version"),
         "windows_version": _first_text(row, "windows_version"),
-        "timestamp_utc": _first_text(row, "timestamp_utc"),
+        "timestamp_utc": _first_timestamp(row, "timestamp_utc"),
         "code_file": _first_text(row, "code_file"),
         "function": _first_text(row, "function"),
         "flags": _first_text(row, "flags"),
@@ -908,12 +909,12 @@ def normalized_srum_record_row(
         "source_table": _first_text(row, "source_table", "SourceTable"),
         "record_type": _first_text(row, "record_type") or _srum_record_type(source_csv),
         "srum_id": _first_text(row, "srum_id", "Id", "ID", "AutoIncId"),
-        "timestamp": _first_text(row, "timestamp", "Timestamp", "TimeStamp", "EventTimestamp"),
+        "timestamp": _first_timestamp(row, "timestamp", "Timestamp", "TimeStamp", "EventTimestamp"),
         "app_id": _first_text(row, "app_id", "AppId", "App ID"),
         "app_name": _first_text(row, "app_name", "AppName", "App", "Name"),
         "app_path": _first_text(row, "app_path", "AppPath", "Path", "FullPath"),
         "app_description": _first_text(row, "app_description", "ExeInfoDescription"),
-        "exe_timestamp": _first_text(row, "exe_timestamp", "ExeTimestamp"),
+        "exe_timestamp": _first_timestamp(row, "exe_timestamp", "ExeTimestamp"),
         "user_id": _first_text(row, "user_id", "UserId", "User ID"),
         "user_sid": _first_text(row, "user_sid", "UserSid", "SID", "Sid"),
         "user_name": _first_text(row, "user_name", "UserName", "User"),
@@ -925,8 +926,8 @@ def normalized_srum_record_row(
         "l2_profile_name": _first_text(row, "l2_profile_name", "L2ProfileName", "ProfileName"),
         "l2_profile_flags": _first_text(row, "l2_profile_flags", "L2ProfileFlags"),
         "connected_time": _first_text(row, "connected_time", "ConnectedTime"),
-        "connect_start_time": _first_text(row, "connect_start_time", "ConnectStartTime"),
-        "connect_end_time": _first_text(row, "connect_end_time", "ConnectEndTime"),
+        "connect_start_time": _first_timestamp(row, "connect_start_time", "ConnectStartTime"),
+        "connect_end_time": _first_timestamp(row, "connect_end_time", "ConnectEndTime"),
         "notification_type": _first_text(row, "notification_type", "NotificationType"),
         "payload_size": _first_text(row, "payload_size", "PayloadSize"),
         "network_type": _first_text(row, "network_type", "NetworkType"),
@@ -946,12 +947,12 @@ def normalized_srum_record_row(
         "foreground_flushes": _first_text(row, "foreground_flushes", "ForegroundNumberOfFlushes"),
         "background_flushes": _first_text(row, "background_flushes", "BackgroundNumberOfFlushes"),
         "flags": _first_text(row, "flags", "Flags"),
-        "start_time": _first_text(row, "start_time", "StartTime"),
-        "end_time": _first_text(row, "end_time", "EndTime"),
+        "start_time": _first_timestamp(row, "start_time", "StartTime"),
+        "end_time": _first_timestamp(row, "end_time", "EndTime"),
         "duration_ms": _first_text(row, "duration_ms", "DurationMS"),
         "span_ms": _first_text(row, "span_ms", "SpanMS"),
         "timeline_end": _first_text(row, "timeline_end", "TimelineEnd"),
-        "event_timestamp": _first_text(row, "event_timestamp", "EventTimestamp"),
+        "event_timestamp": _first_timestamp(row, "event_timestamp", "EventTimestamp"),
         "state_transition": _first_text(row, "state_transition", "StateTransition"),
         "charge_level": _first_text(row, "charge_level", "ChargeLevel"),
         "cycle_count": _first_text(row, "cycle_count", "CycleCount"),
@@ -1013,10 +1014,10 @@ def normalized_ual_record_row(
         "client_name": _first_text(row, "client_name", "ClientName", "Client", "HostName"),
         "client_ip": _first_text(row, "client_ip", "ClientIp", "ClientIP", "IpAddress", "IPAddress"),
         "client_id": _first_text(row, "client_id", "ClientId", "ClientID", "DeviceId", "DeviceID"),
-        "first_seen": _first_text(row, "first_seen", "FirstSeen", "FirstAccess"),
-        "last_seen": _first_text(row, "last_seen", "LastSeen", "LastAccess"),
-        "insert_date": _first_text(row, "insert_date", "InsertDate"),
-        "last_access": _first_text(row, "last_access", "LastAccessDate", "LastAccess"),
+        "first_seen": _first_timestamp(row, "first_seen", "FirstSeen", "FirstAccess"),
+        "last_seen": _first_timestamp(row, "last_seen", "LastSeen", "LastAccess"),
+        "insert_date": _first_timestamp(row, "insert_date", "InsertDate"),
+        "last_access": _first_timestamp(row, "last_access", "LastAccessDate", "LastAccess"),
         "access_count": _first_text(row, "access_count", "AccessCount", "TotalAccesses", "Count"),
         "activity_count": _first_text(row, "activity_count", "ActivityCount", "TotalCount"),
         "day_count": _first_text(row, "day_count", "DayCount", "Days"),
@@ -1047,17 +1048,17 @@ def normalized_windows_search_file_row(
         "source_csv": source_csv,
         "row_number": row_number,
         "work_id": _first_text(row, "WorkId", "Work ID"),
-        "gather_time": _first_text(row, "System_Search_GatherTime"),
+        "gather_time": _first_timestamp(row, "System_Search_GatherTime"),
         "item_path": _first_text(row, "System_ItemPathDisplay", "System_ItemPathDisplayNarrow"),
         "item_url": _first_text(row, "System_ItemUrl"),
         "folder_path": _first_text(row, "System_ItemFolderPathDisplay", "System_ItemFolderPathDisplayNarrow"),
         "file_name": _first_text(row, "System_FileName", "System_ItemNameDisplay", "System_ItemName"),
         "file_extension": _first_text(row, "System_FileExtension"),
         "item_type": _first_text(row, "System_ItemType", "System_ItemTypeText", "System_KindText"),
-        "date_created": _first_text(row, "System_DateCreated", "System_Document_DateCreated"),
-        "date_modified": _first_text(row, "System_DateModified", "System_Document_DateSaved"),
-        "date_accessed": _first_text(row, "System_DateAccessed"),
-        "date_imported": _first_text(row, "System_DateImported"),
+        "date_created": _first_timestamp(row, "System_DateCreated", "System_Document_DateCreated"),
+        "date_modified": _first_timestamp(row, "System_DateModified", "System_Document_DateSaved"),
+        "date_accessed": _first_timestamp(row, "System_DateAccessed"),
+        "date_imported": _first_timestamp(row, "System_DateImported"),
         "size": _first_text(row, "System_Size") or _extra_text(extras, 0),
         "owner": _first_text(row, "System_FileOwner") or _extra_text(extras, 2),
         "computer_name": _first_text(row, "System_ComputerName") or _extra_text(extras, 1),
@@ -1101,10 +1102,10 @@ def windows_search_indexed_content_rows(
         fields.append(("_extra[3]", extra_content))
 
     timestamp = (
-        _text(normalized_row.get("gather_time"))
-        or _text(normalized_row.get("date_modified"))
-        or _text(normalized_row.get("date_accessed"))
-        or _text(normalized_row.get("start_time"))
+        _timestamp(normalized_row.get("gather_time"))
+        or _timestamp(normalized_row.get("date_modified"))
+        or _timestamp(normalized_row.get("date_accessed"))
+        or _timestamp(normalized_row.get("start_time"))
     )
     item_path = (
         _text(normalized_row.get("item_path"))
@@ -1141,7 +1142,7 @@ def windows_search_indexed_content_rows(
                 "source_record_id": source_record_id,
                 "row_number": row_number,
                 "work_id": _text(normalized_row.get("work_id")),
-                "gather_time": _text(normalized_row.get("gather_time")),
+                "gather_time": _timestamp(normalized_row.get("gather_time")),
                 "item_path": item_path,
                 "item_name": item_name,
                 "item_type": _text(normalized_row.get("item_type")),
@@ -1424,7 +1425,7 @@ def normalized_mailbox_message_row(
         "recipients": _text(row.get("recipients")),
         "cc": _text(row.get("cc")),
         "bcc": _text(row.get("bcc")),
-        "message_date_utc": _text(row.get("message_date_utc")),
+        "message_date_utc": _timestamp(row.get("message_date_utc")),
         "body_text": "",
         "body_html": "",
         "_opensearch_body_text": body_text,
@@ -1475,7 +1476,7 @@ def normalized_mailbox_attachment_row(
         "subject": _text(row.get("subject")),
         "sender": _text(row.get("sender")),
         "recipients": _text(row.get("recipients")),
-        "message_date_utc": _text(row.get("message_date_utc")),
+        "message_date_utc": _timestamp(row.get("message_date_utc")),
         "attachment_name": _text(row.get("attachment_name")),
         "attachment_path": _text(row.get("attachment_path")),
         "content_type": _text(row.get("content_type")),
@@ -1526,8 +1527,8 @@ def normalized_windows_mail_store_row(
         "source_record_id": _text(row.get("source_record_id")),
         "parent_record_id": _text(row.get("parent_record_id")),
         "display_name": _text(row.get("display_name")),
-        "primary_time_utc": _text(row.get("primary_time_utc")),
-        "secondary_time_utc": _text(row.get("secondary_time_utc")),
+        "primary_time_utc": _timestamp(row.get("primary_time_utc")),
+        "secondary_time_utc": _timestamp(row.get("secondary_time_utc")),
         "row_json": _text(row.get("row_json")),
     }
 
@@ -1565,7 +1566,7 @@ def normalized_messaging_record_row(
         "url": _text(row.get("url")),
         "host": _text(row.get("host")),
         "email": _text(row.get("email")),
-        "timestamp_utc": _text(row.get("timestamp_utc")),
+        "timestamp_utc": _timestamp(row.get("timestamp_utc")),
         "message_text": "",
         "raw_text": "",
         "_opensearch_message_text": message_text,
@@ -1615,7 +1616,7 @@ def normalized_messaging_message_row(
         "sender_name": _text(row.get("sender_name")),
         "sender_email": _text(row.get("sender_email")),
         "recipient": _text(row.get("recipient")),
-        "timestamp_utc": _text(row.get("timestamp_utc")),
+        "timestamp_utc": _timestamp(row.get("timestamp_utc")),
         "message_type": _text(row.get("message_type")),
         "message_text": "",
         "message_html": "",
@@ -1650,10 +1651,10 @@ def windows_search_email_indicator_rows(
     row: dict[str, Any],
 ) -> list[dict[str, Any]]:
     timestamp = (
-        _text(normalized_row.get("gather_time"))
-        or _text(normalized_row.get("start_time"))
-        or _text(normalized_row.get("date_modified"))
-        or _text(normalized_row.get("date_accessed"))
+        _timestamp(normalized_row.get("gather_time"))
+        or _timestamp(normalized_row.get("start_time"))
+        or _timestamp(normalized_row.get("date_modified"))
+        or _timestamp(normalized_row.get("date_accessed"))
     )
     context_path = (
         _text(normalized_row.get("item_path"))
@@ -1778,10 +1779,10 @@ def normalized_registry_artifact_row(
         "artifact": _text(row.get("artifact")),
         "category": _text(row.get("category")),
         "key_path": _text(row.get("key_path")),
-        "key_last_write_utc": _text(row.get("key_last_write_utc")),
-        "event_time_utc": _text(row.get("event_time_utc")),
-        "recentdocs_time_utc": _text(row.get("recentdocs_time_utc")),
-        "recentdocs_extension_time_utc": _text(row.get("recentdocs_extension_time_utc")),
+        "key_last_write_utc": _timestamp(row.get("key_last_write_utc")),
+        "event_time_utc": _timestamp(row.get("event_time_utc")),
+        "recentdocs_time_utc": _timestamp(row.get("recentdocs_time_utc")),
+        "recentdocs_extension_time_utc": _timestamp(row.get("recentdocs_extension_time_utc")),
         "mru_position": _text(row.get("mru_position")),
         "recentdocs_mru_position": _text(row.get("recentdocs_mru_position")),
         "recentdocs_extension_mru_position": _text(row.get("recentdocs_extension_mru_position")),
@@ -1794,7 +1795,7 @@ def normalized_registry_artifact_row(
         "run_counter": _text(row.get("run_counter")),
         "focus_count": _text(row.get("focus_count")),
         "focus_time": _text(row.get("focus_time")),
-        "last_executed": _text(row.get("last_executed")),
+        "last_executed": _timestamp(row.get("last_executed")),
         "value_data_hex": _text(row.get("value_data_hex")),
         "transaction_logs_detected": _text(row.get("transaction_logs_detected")),
         "transaction_logs_applied": _text(row.get("transaction_logs_applied")),
@@ -1845,8 +1846,8 @@ def normalized_office_trust_row_from_registry_artifact(
         "application": application,
         "location_id": location_id,
         "key_path": key_path,
-        "key_last_write_utc": _text(row.get("key_last_write_utc")),
-        "event_time_utc": _text(row.get("event_time_utc")) or _text(row.get("key_last_write_utc")),
+        "key_last_write_utc": _timestamp(row.get("key_last_write_utc")),
+        "event_time_utc": _timestamp(row.get("event_time_utc")) or _timestamp(row.get("key_last_write_utc")),
         "value_name": value_name,
         "value_type": _text(row.get("value_type")),
         "value_data": value_data,
@@ -1892,8 +1893,8 @@ def normalized_taskbar_feature_usage_row_from_registry_artifact(
         "artifact": _text(row.get("artifact")),
         "feature": _taskbar_feature_from_key(key_path),
         "key_path": key_path,
-        "key_last_write_utc": _text(row.get("key_last_write_utc")),
-        "event_time_utc": _text(row.get("event_time_utc")) or _text(row.get("key_last_write_utc")),
+        "key_last_write_utc": _timestamp(row.get("key_last_write_utc")),
+        "event_time_utc": _timestamp(row.get("event_time_utc")) or _timestamp(row.get("key_last_write_utc")),
         "value_name": value_name,
         "value_type": _text(row.get("value_type")),
         "value_data": value_data,
@@ -1976,7 +1977,7 @@ def normalized_etl_event_row(
         "source_name": _text(row.get("source_name")),
         "parser_status": _text(row.get("parser_status")),
         "parser_error": _text(row.get("parser_error")),
-        "timestamp_utc": _text(row.get("timestamp_utc")),
+        "timestamp_utc": _timestamp(row.get("timestamp_utc")),
         "provider_name": _text(row.get("provider_name")),
         "provider_id": _text(row.get("provider_id")),
         "provider_label": _text(row.get("provider_label")),
@@ -2028,13 +2029,13 @@ def normalized_recycle_row(
         "child_relative_path": _text(row.get("child_relative_path")),
         "display_name": _text(row.get("display_name")),
         "original_path": _text(row.get("original_path")),
-        "deletion_time_utc": _text(row.get("deletion_time_utc")),
+        "deletion_time_utc": _timestamp(row.get("deletion_time_utc")),
         "file_size": _text(row.get("file_size")),
         "is_directory": _text(row.get("is_directory")),
-        "mft_created": _text(row.get("mft_created")),
-        "mft_modified": _text(row.get("mft_modified")),
-        "mft_accessed": _text(row.get("mft_accessed")),
-        "mft_record_modified": _text(row.get("mft_record_modified")),
+        "mft_created": _timestamp(row.get("mft_created")),
+        "mft_modified": _timestamp(row.get("mft_modified")),
+        "mft_accessed": _timestamp(row.get("mft_accessed")),
+        "mft_record_modified": _timestamp(row.get("mft_record_modified")),
     }
 
 
@@ -2062,7 +2063,7 @@ def normalized_firefox_history_row(
         "profile_path": _text(row.get("profile_path")),
         "url": _text(row.get("url")),
         "title": _text(row.get("title")),
-        "visit_time_utc": _text(row.get("visit_time_utc")),
+        "visit_time_utc": _timestamp(row.get("visit_time_utc")),
         "visit_type": _text(row.get("visit_type")),
         "visit_count": _text(row.get("visit_count")),
         "typed": _text(row.get("typed")),
@@ -2100,9 +2101,9 @@ def normalized_firefox_cookie_row(
         "name": _text(row.get("name")),
         "value": _text(row.get("value")),
         "path": _text(row.get("path")),
-        "created_utc": _text(row.get("created_utc")),
-        "last_accessed_utc": _text(row.get("last_accessed_utc")),
-        "expires_utc": _text(row.get("expires_utc")),
+        "created_utc": _timestamp(row.get("created_utc")),
+        "last_accessed_utc": _timestamp(row.get("last_accessed_utc")),
+        "expires_utc": _timestamp(row.get("expires_utc")),
         "is_secure": _text(row.get("is_secure")),
         "is_http_only": _text(row.get("is_http_only")),
     }
@@ -2133,7 +2134,7 @@ def normalized_browser_history_row(
         "profile_path": _text(row.get("profile_path")),
         "url": _text(row.get("url")),
         "title": _text(row.get("title")),
-        "visit_time_utc": _text(row.get("visit_time_utc")),
+        "visit_time_utc": _timestamp(row.get("visit_time_utc")),
         "visit_count": _text(row.get("visit_count")),
         "typed_count": _text(row.get("typed_count")),
         "visit_source": _text(row.get("visit_source")),
@@ -2169,8 +2170,8 @@ def normalized_browser_download_row(
         "tab_url": _text(row.get("tab_url")),
         "site_url": _text(row.get("site_url")),
         "referrer": _text(row.get("referrer")),
-        "start_time_utc": _text(row.get("start_time_utc")),
-        "end_time_utc": _text(row.get("end_time_utc")),
+        "start_time_utc": _timestamp(row.get("start_time_utc")),
+        "end_time_utc": _timestamp(row.get("end_time_utc")),
         "received_bytes": _text(row.get("received_bytes")),
         "total_bytes": _text(row.get("total_bytes")),
         "state": _text(row.get("state")),
@@ -2205,9 +2206,9 @@ def normalized_browser_cookie_row(
         "host": _text(row.get("host")),
         "name": _text(row.get("name")),
         "path": _text(row.get("path")),
-        "created_utc": _text(row.get("created_utc")),
-        "last_accessed_utc": _text(row.get("last_accessed_utc")),
-        "expires_utc": _text(row.get("expires_utc")),
+        "created_utc": _timestamp(row.get("created_utc")),
+        "last_accessed_utc": _timestamp(row.get("last_accessed_utc")),
+        "expires_utc": _timestamp(row.get("expires_utc")),
         "is_secure": _text(row.get("is_secure")),
         "is_http_only": _text(row.get("is_http_only")),
     }
@@ -2241,7 +2242,7 @@ def normalized_browser_cache_entry_row(
         "host": _text(row.get("host")),
         "cache_file": _text(row.get("cache_file")),
         "cache_file_size": _text(row.get("cache_file_size")),
-        "cache_file_modified_utc": _text(row.get("cache_file_modified_utc")),
+        "cache_file_modified_utc": _timestamp(row.get("cache_file_modified_utc")),
     }
 
 
@@ -2275,7 +2276,7 @@ def normalized_browser_artifact_row(
         "title": _text(row.get("title")),
         "host": _text(row.get("host")),
         "local_path": _text(row.get("local_path")),
-        "timestamp_utc": _text(row.get("timestamp_utc")),
+        "timestamp_utc": _timestamp(row.get("timestamp_utc")),
         "details_json": _text(row.get("details_json")) or "{}",
     }
 
@@ -2309,7 +2310,7 @@ def normalized_office_backstage_row(
         "path": _text(row.get("path")),
         "url": _text(row.get("url")),
         "host": _text(row.get("host")),
-        "timestamp_utc": _text(row.get("timestamp_utc")),
+        "timestamp_utc": _timestamp(row.get("timestamp_utc")),
         "details_json": _text(row.get("details_json")) or "{}",
     }
 
@@ -2342,7 +2343,7 @@ def normalized_user_dictionary_word_row(
         "dictionary_name": _text(row.get("dictionary_name")),
         "word": _text(row.get("word")),
         "word_index": _int(row.get("word_index")),
-        "timestamp_utc": _text(row.get("timestamp_utc")),
+        "timestamp_utc": _timestamp(row.get("timestamp_utc")),
         "details_json": _text(row.get("details_json")) or "{}",
     }
 
@@ -2379,7 +2380,7 @@ def normalized_package_cache_entry_row(
         "response_status": _text(row.get("response_status")),
         "response_type": _text(row.get("response_type")),
         "response_headers": _text(row.get("response_headers")),
-        "response_date_utc": _text(row.get("response_date_utc")),
+        "response_date_utc": _timestamp(row.get("response_date_utc")),
         "content_type": _text(row.get("content_type")),
         "content_length": _text(row.get("content_length")),
         "source_body_path": _text(row.get("source_body_path")),
@@ -2421,8 +2422,8 @@ def normalized_package_artifact_row(
         "file_name": _text(row.get("file_name")),
         "file_extension": _text(row.get("file_extension")),
         "file_size": _text(row.get("file_size")),
-        "modified_utc": _text(row.get("modified_utc")),
-        "event_time_utc": _text(row.get("event_time_utc")),
+        "modified_utc": _timestamp(row.get("modified_utc")),
+        "event_time_utc": _timestamp(row.get("event_time_utc")),
         "url": _text(row.get("url")),
         "host": _text(row.get("host")),
         "title": _text(row.get("title")),
@@ -2459,7 +2460,7 @@ def normalized_spotify_artifact_row(
         "source_name": _text(row.get("source_name")),
         "source_file": _text(row.get("source_file")),
         "file_size": _text(row.get("file_size")),
-        "modified_utc": _text(row.get("modified_utc")),
+        "modified_utc": _timestamp(row.get("modified_utc")),
         "account_user_id": _text(row.get("account_user_id")),
         "spotify_user_id": _text(row.get("spotify_user_id")),
         "spotify_user_uri": _text(row.get("spotify_user_uri")),
@@ -2501,8 +2502,8 @@ def normalized_telemetry_artifact_row(
         "file_name": _text(row.get("file_name")),
         "file_extension": _text(row.get("file_extension")),
         "file_size": _text(row.get("file_size")),
-        "modified_utc": _text(row.get("modified_utc")),
-        "event_time_utc": _text(row.get("event_time_utc")),
+        "modified_utc": _timestamp(row.get("modified_utc")),
+        "event_time_utc": _timestamp(row.get("event_time_utc")),
         "identifier": _text(row.get("identifier")),
         "path": _text(row.get("path")),
         "url": _text(row.get("url")),
@@ -2541,7 +2542,7 @@ def normalized_windows_search_gather_log_row(
         "source_name": _text(row.get("source_name")),
         "log_type": _text(row.get("log_type")),
         "line_number": _text(row.get("line_number")),
-        "timestamp_utc": _text(row.get("timestamp_utc")),
+        "timestamp_utc": _timestamp(row.get("timestamp_utc")),
         "filetime_hex": _text(row.get("filetime_hex")),
         "time_low_hex": _text(row.get("time_low_hex")),
         "time_high_hex": _text(row.get("time_high_hex")),
@@ -2590,10 +2591,10 @@ def normalized_windows_activity_row(
         "content_uri": _text(row.get("content_uri")),
         "activation_uri": _text(row.get("activation_uri")),
         "fallback_uri": _text(row.get("fallback_uri")),
-        "start_time_utc": _text(row.get("start_time_utc")),
-        "end_time_utc": _text(row.get("end_time_utc")),
-        "last_modified_utc": _text(row.get("last_modified_utc")),
-        "expiration_time_utc": _text(row.get("expiration_time_utc")),
+        "start_time_utc": _timestamp(row.get("start_time_utc")),
+        "end_time_utc": _timestamp(row.get("end_time_utc")),
+        "last_modified_utc": _timestamp(row.get("last_modified_utc")),
+        "expiration_time_utc": _timestamp(row.get("expiration_time_utc")),
         "platform_device_id": _text(row.get("platform_device_id")),
         "payload_json": _text(row.get("payload_json")),
         "raw_json": _text(row.get("raw_json")),
@@ -2638,11 +2639,11 @@ def normalized_webcache_entry_row(
         "file_name": _text(row.get("file_name")),
         "content_type": _text(row.get("content_type")),
         "http_status": _text(row.get("http_status")),
-        "created_utc": _text(row.get("created_utc")),
-        "accessed_utc": _text(row.get("accessed_utc")),
-        "modified_utc": _text(row.get("modified_utc")),
-        "expires_utc": _text(row.get("expires_utc")),
-        "synced_utc": _text(row.get("synced_utc")),
+        "created_utc": _timestamp(row.get("created_utc")),
+        "accessed_utc": _timestamp(row.get("accessed_utc")),
+        "modified_utc": _timestamp(row.get("modified_utc")),
+        "expires_utc": _timestamp(row.get("expires_utc")),
+        "synced_utc": _timestamp(row.get("synced_utc")),
         "request_headers": _text(row.get("request_headers")),
         "response_headers": _text(row.get("response_headers")),
         "raw_metadata_json": _text(row.get("raw_metadata_json")),
@@ -2796,6 +2797,13 @@ def _text(value: Any) -> str | None:
     return normalized or None
 
 
+def _timestamp(value: Any) -> str | None:
+    text = _text(value)
+    if text is None:
+        return None
+    return normalize_timestamp(text) or text
+
+
 def _int(value: Any) -> int | None:
     if value in (None, ""):
         return None
@@ -2808,6 +2816,14 @@ def _int(value: Any) -> int | None:
 def _first_text(row: dict[str, Any], *names: str) -> str | None:
     for name in names:
         value = _text(row.get(name))
+        if value is not None:
+            return value
+    return None
+
+
+def _first_timestamp(row: dict[str, Any], *names: str) -> str | None:
+    for name in names:
+        value = _timestamp(row.get(name))
         if value is not None:
             return value
     return None
@@ -2952,8 +2968,8 @@ def normalized_windows_error_report_row(
         "source_name": _text(row.get("source_name")),
         "report_folder": _text(row.get("report_folder")),
         "event_type": _text(row.get("event_type")),
-        "event_time_utc": _text(row.get("event_time_utc")),
-        "upload_time_utc": _text(row.get("upload_time_utc")),
+        "event_time_utc": _timestamp(row.get("event_time_utc")),
+        "upload_time_utc": _timestamp(row.get("upload_time_utc")),
         "report_type": _text(row.get("report_type")),
         "consent": _text(row.get("consent")),
         "report_status": _text(row.get("report_status")),
@@ -3004,7 +3020,7 @@ def normalized_windows_defender_event_row(
         "source_name": _text(row.get("source_name")),
         "artifact_type": _text(row.get("artifact_type")),
         "line_number": _text(row.get("line_number")),
-        "event_time_utc": _text(row.get("event_time_utc")),
+        "event_time_utc": _timestamp(row.get("event_time_utc")),
         "event_type": _text(row.get("event_type")),
         "component": _text(row.get("component")),
         "severity": _text(row.get("severity")),
@@ -3014,7 +3030,7 @@ def normalized_windows_defender_event_row(
         "resource": _text(row.get("resource")),
         "message": _text(row.get("message")),
         "file_size": _text(row.get("file_size")),
-        "modified_time_utc": _text(row.get("modified_time_utc")),
+        "modified_time_utc": _timestamp(row.get("modified_time_utc")),
         "sha256_first_mb": _text(row.get("sha256_first_mb")),
         "raw_json": _text(row.get("raw_json")),
         "created_at": utc_now(),
@@ -3045,7 +3061,7 @@ def normalized_archive_entry_row(
         "archive_file_name": _text(row.get("archive_file_name")),
         "archive_extension": _text(row.get("archive_extension")),
         "archive_file_size": _text(row.get("archive_file_size")),
-        "archive_modified_time_utc": _text(row.get("archive_modified_time_utc")),
+        "archive_modified_time_utc": _timestamp(row.get("archive_modified_time_utc")),
         "archive_status": _text(row.get("archive_status")),
         "archive_error": _text(row.get("archive_error")),
         "member_path": _text(row.get("member_path")),
@@ -3054,7 +3070,7 @@ def normalized_archive_entry_row(
         "member_size": _text(row.get("member_size")),
         "member_compressed_size": _text(row.get("member_compressed_size")),
         "member_crc": _text(row.get("member_crc")),
-        "member_modified_time_utc": _text(row.get("member_modified_time_utc")),
+        "member_modified_time_utc": _timestamp(row.get("member_modified_time_utc")),
         "member_is_dir": _text(row.get("member_is_dir")),
         "member_is_encrypted": _text(row.get("member_is_encrypted")),
         "nested_evidence_format": _text(row.get("nested_evidence_format")),
@@ -3090,7 +3106,7 @@ def normalized_cloud_server_event_row(
         "provider": _text(row.get("provider")),
         "service": _text(row.get("service")),
         "event_type": _text(row.get("event_type")),
-        "event_time_utc": _text(row.get("event_time_utc")),
+        "event_time_utc": _timestamp(row.get("event_time_utc")),
         "actor": _text(row.get("actor")),
         "actor_id": _text(row.get("actor_id")),
         "actor_ip": _text(row.get("actor_ip")),

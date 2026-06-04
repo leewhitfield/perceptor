@@ -4,6 +4,7 @@ import fnmatch
 import re
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 import subprocess
 import time
@@ -191,8 +192,9 @@ def _run_icat_to_file(
     inode: str,
     destination: Path,
     dry_run: bool,
+    filesystem_type: str | None = None,
 ) -> None:
-    command = build_icat_command(raw_image, offset_sectors, inode)
+    command = build_icat_command(raw_image, offset_sectors, inode, filesystem_type=filesystem_type)
     output_folder = destination.parent / "_extract_jobs" / destination.name
     if dry_run:
         runner.run(
@@ -297,6 +299,17 @@ def parse_istat_metadata(output: str) -> dict[str, str]:
             normalized_value = value.strip()
             if normalized_key in {"size", "file size"} and normalized_value:
                 metadata["file_size"] = normalized_value.split()[0]
+            if normalized_value:
+                timestamp = _normalize_istat_timestamp(normalized_value)
+                if timestamp:
+                    if normalized_key == "created":
+                        metadata.setdefault("created_utc", timestamp)
+                    elif normalized_key == "file modified":
+                        metadata.setdefault("modified_utc", timestamp)
+                    elif normalized_key == "accessed":
+                        metadata.setdefault("accessed_utc", timestamp)
+                    elif normalized_key in {"metadata modified", "metadata changed", "mft modified"}:
+                        metadata.setdefault("metadata_changed_utc", timestamp)
         if stripped == "$STANDARD_INFORMATION Attribute Values:":
             in_standard_information = True
             continue
@@ -310,13 +323,38 @@ def parse_istat_metadata(output: str) -> dict[str, str]:
         value = value.strip()
         if key == "created":
             metadata["mft_created"] = value
+            metadata["created_utc"] = _normalize_istat_timestamp(value) or value
         elif key == "file modified":
             metadata["mft_modified"] = value
+            metadata["modified_utc"] = _normalize_istat_timestamp(value) or value
         elif key == "accessed":
             metadata["mft_accessed"] = value
+            metadata["accessed_utc"] = _normalize_istat_timestamp(value) or value
         elif key == "mft modified":
             metadata["mft_record_modified"] = value
+            metadata["metadata_changed_utc"] = _normalize_istat_timestamp(value) or value
     return metadata
+
+
+def _normalize_istat_timestamp(value: str) -> str | None:
+    text = value.strip()
+    if not text:
+        return None
+    text = re.sub(r"\s*\((UTC|GMT)\)\s*$", "", text, flags=re.IGNORECASE).strip()
+    match = re.match(
+        r"^(?P<date>\d{4}-\d{2}-\d{2})[ T](?P<time>\d{2}:\d{2}:\d{2})(?:\.(?P<fraction>\d+))?$",
+        text,
+    )
+    if not match:
+        return None
+    fraction = match.group("fraction") or ""
+    microsecond = int((fraction + "000000")[:6]) if fraction else 0
+    parsed = datetime.strptime(f"{match.group('date')} {match.group('time')}", "%Y-%m-%d %H:%M:%S")
+    parsed = parsed.replace(microsecond=microsecond, tzinfo=timezone.utc)
+    iso = parsed.isoformat().replace("+00:00", "Z")
+    if ".000000Z" in iso:
+        iso = iso.replace(".000000Z", "Z")
+    return iso
 
 
 def _positive_int(value: object) -> int | None:
@@ -413,6 +451,7 @@ def extract_artifact(
     dry_run: bool,
     fls_entries: list[FlsEntry] | None = None,
     ignore_exclude_patterns: bool = False,
+    filesystem_type: str | None = None,
 ) -> ExtractedArtifact:
     runner = JobRunner(db)
     destination = artifacts_root / artifact.destination
@@ -429,6 +468,7 @@ def extract_artifact(
             inode=artifact.inode,
             destination=destination,
             dry_run=dry_run,
+            filesystem_type=filesystem_type,
         )
         db.insert_artifact(
             {
@@ -544,6 +584,7 @@ def extract_artifact(
                     inode=entry.inode,
                     destination=extracted_path,
                     dry_run=dry_run,
+                    filesystem_type=filesystem_type,
                 )
             except ToolError as exc:
                 failed_count += 1
@@ -751,6 +792,7 @@ def extract_artifact(
         inode=matches[0].inode,
         destination=destination,
         dry_run=dry_run,
+        filesystem_type=filesystem_type,
     )
     db.insert_artifact(
         {

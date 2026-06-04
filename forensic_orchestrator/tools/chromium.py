@@ -329,7 +329,8 @@ def _chromium_visit_source_label(value: object) -> str:
         3: "firefox_imported",
         4: "ie_imported",
         5: "safari_imported",
-    }.get(source, "" if source is None else str(source))
+        8: "chromium_edge_internal_or_generated_source_8",
+    }.get(source, "" if source is None else f"unknown_source_{source}")
 
 
 def _chromium_local_vs_synced(value: object) -> str:
@@ -340,6 +341,8 @@ def _chromium_local_vs_synced(value: object) -> str:
         return "local"
     if source in {2, 3, 4, 5}:
         return "imported_or_external"
+    if source == 8:
+        return "internal_or_generated_unknown"
     return "unknown"
 
 

@@ -234,6 +234,7 @@ from .reports import (
     rerun_search_packet_markdown,
     rerun_search_packet_report,
     rebuild_derived_timeline_events,
+    rebuild_timeline_events,
     rdp_visual_observations_report,
     registry_artifacts_report,
     registry_activity_report,
@@ -2418,6 +2419,12 @@ def build_parser() -> argparse.ArgumentParser:
     case = subparsers.add_parser("case")
     case_sub = case.add_subparsers(dest="action", required=True)
     case_sub.add_parser("create")
+    case_describe = case_sub.add_parser("describe")
+    case_describe.add_argument("case_id")
+    case_describe.add_argument("--description", help="Brief case description/context to store in case metadata")
+    case_describe.add_argument("--description-file", help="Read brief case description/context from a text or Markdown file")
+    case_describe.add_argument("--notes-path", help="Optional path to a longer case notes Markdown file")
+    case_describe.add_argument("--write-notes", action="store_true", help="Write the description to case-description.md in the case directory and store that path")
     case_status = case_sub.add_parser("status")
     case_status.add_argument("case_id")
     case_activity = case_sub.add_parser("activity")
@@ -2433,6 +2440,11 @@ def build_parser() -> argparse.ArgumentParser:
     case_rebuild_timeline_dedupe.add_argument("case_id")
     case_rebuild_timeline_dedupe.add_argument("--image", dest="image_id")
     case_rebuild_timeline_dedupe.add_argument("--max-windows-old-output-rows", type=int, default=100_000)
+    case_rebuild_timeline = case_sub.add_parser("rebuild-timeline")
+    case_rebuild_timeline.add_argument("case_id")
+    case_rebuild_timeline.add_argument("--image", dest="image_id")
+    case_rebuild_timeline.add_argument("--batch-size", type=int, default=50_000)
+    case_rebuild_timeline.add_argument("--no-derived", action="store_true")
     case_rebuild_artifact_dedupe = case_sub.add_parser("rebuild-artifact-dedupe")
     case_rebuild_artifact_dedupe.add_argument("case_id")
     case_rebuild_artifact_dedupe.add_argument("--image", dest="image_id")
@@ -2445,7 +2457,7 @@ def build_parser() -> argparse.ArgumentParser:
     case_rebuild_derived_timeline = case_sub.add_parser("rebuild-derived-timeline")
     case_rebuild_derived_timeline.add_argument("case_id")
     case_rebuild_derived_timeline.add_argument("--image", dest="image_id")
-    case_rebuild_derived_timeline.add_argument("--limit", type=int, default=5000)
+    case_rebuild_derived_timeline.add_argument("--limit", type=int, default=100_000)
     case_rebuild_postprocess = case_sub.add_parser("rebuild-postprocess")
     case_rebuild_postprocess.add_argument("case_id")
     case_rebuild_postprocess.add_argument("--image", dest="image_id")
@@ -2454,6 +2466,12 @@ def build_parser() -> argparse.ArgumentParser:
     project = subparsers.add_parser("project")
     project_sub = project.add_subparsers(dest="action", required=True)
     project_sub.add_parser("create")
+    project_describe = project_sub.add_parser("describe")
+    project_describe.add_argument("case_id")
+    project_describe.add_argument("--description", help="Brief case description/context to store in project metadata")
+    project_describe.add_argument("--description-file", help="Read brief project description/context from a text or Markdown file")
+    project_describe.add_argument("--notes-path", help="Optional path to a longer project notes Markdown file")
+    project_describe.add_argument("--write-notes", action="store_true", help="Write the description to case-description.md in the case directory and store that path")
     project_status = project_sub.add_parser("status")
     project_status.add_argument("case_id")
     project_activity = project_sub.add_parser("activity")
@@ -2469,6 +2487,11 @@ def build_parser() -> argparse.ArgumentParser:
     project_rebuild_timeline_dedupe.add_argument("case_id")
     project_rebuild_timeline_dedupe.add_argument("--image", dest="image_id")
     project_rebuild_timeline_dedupe.add_argument("--max-windows-old-output-rows", type=int, default=100_000)
+    project_rebuild_timeline = project_sub.add_parser("rebuild-timeline")
+    project_rebuild_timeline.add_argument("case_id")
+    project_rebuild_timeline.add_argument("--image", dest="image_id")
+    project_rebuild_timeline.add_argument("--batch-size", type=int, default=50_000)
+    project_rebuild_timeline.add_argument("--no-derived", action="store_true")
     project_rebuild_artifact_dedupe = project_sub.add_parser("rebuild-artifact-dedupe")
     project_rebuild_artifact_dedupe.add_argument("case_id")
     project_rebuild_artifact_dedupe.add_argument("--image", dest="image_id")
@@ -2484,7 +2507,7 @@ def build_parser() -> argparse.ArgumentParser:
     project_rebuild_derived_timeline = project_sub.add_parser("rebuild-derived-timeline")
     project_rebuild_derived_timeline.add_argument("case_id")
     project_rebuild_derived_timeline.add_argument("--image", dest="image_id")
-    project_rebuild_derived_timeline.add_argument("--limit", type=int, default=5000)
+    project_rebuild_derived_timeline.add_argument("--limit", type=int, default=100_000)
     project_rebuild_postprocess = project_sub.add_parser("rebuild-postprocess")
     project_rebuild_postprocess.add_argument("case_id")
     project_rebuild_postprocess.add_argument("--image", dest="image_id")
@@ -3561,6 +3584,8 @@ def build_parser() -> argparse.ArgumentParser:
     report_timeline.add_argument("--event-type")
     report_timeline.add_argument("--source-tool")
     report_timeline.add_argument("--contains")
+    report_timeline.add_argument("--start")
+    report_timeline.add_argument("--end")
     report_timeline_sources = report_sub.add_parser("timeline-sources")
     report_timeline_sources.add_argument("--case", required=True, dest="case_id")
     report_timeline_sources.add_argument("--limit", type=int, default=100)
@@ -5054,6 +5079,46 @@ def run(args: argparse.Namespace) -> int:
             print_json({"project_id": case_id, "case_id": case_id, "root": str(paths.case_dir(case_id))})
             return 0
 
+        if args.resource in {"case", "project"} and args.action == "describe":
+            case = db.get_case(args.case_id)
+            description = args.description
+            if args.description_file:
+                description_path = Path(args.description_file)
+                if not description_path.exists():
+                    raise OrchestratorError(f"Description file does not exist: {description_path}")
+                description = description_path.read_text(encoding="utf-8").strip()
+            notes_path = args.notes_path
+            if args.write_notes:
+                if description is None:
+                    raise OrchestratorError("--write-notes requires --description or --description-file")
+                notes_file = case.root / "case-description.md"
+                notes_file.parent.mkdir(parents=True, exist_ok=True)
+                notes_file.write_text(description.strip() + "\n", encoding="utf-8")
+                notes_path = str(notes_file)
+            if description is not None or notes_path is not None:
+                case = db.update_case_description(
+                    args.case_id,
+                    description=description,
+                    notes_path=notes_path,
+                )
+                db.log_activity(
+                    case_id=args.case_id,
+                    level="info",
+                    event="case.description_updated",
+                    message="Updated case description metadata",
+                    details={"notes_path": case.notes_path},
+                )
+            print_json(
+                {
+                    "case_id": case.id,
+                    "root": str(case.root),
+                    "description": case.description,
+                    "notes_path": case.notes_path,
+                    "created_at": case.created_at,
+                }
+            )
+            return 0
+
         if args.resource in {"case", "project"} and args.action == "status":
             print_json(db.case_status(args.case_id))
             return 0
@@ -5099,6 +5164,17 @@ def run(args: argparse.Namespace) -> int:
                 max_windows_old_output_rows=args.max_windows_old_output_rows,
             )
             print_json({"case_id": args.case_id, "image_id": args.image_id, **stats})
+            return 0
+
+        if args.resource in {"case", "project"} and args.action == "rebuild-timeline":
+            stats = rebuild_timeline_events(
+                db,
+                case_id=args.case_id,
+                image_id=args.image_id,
+                batch_size=args.batch_size,
+                include_derived=not args.no_derived,
+            )
+            print_json(stats)
             return 0
 
         if args.resource in {"case", "project"} and args.action == "rebuild-artifact-dedupe":
@@ -9730,6 +9806,8 @@ def run(args: argparse.Namespace) -> int:
                     event_type=args.event_type,
                     source_tool=args.source_tool,
                     contains=args.contains,
+                    start=args.start,
+                    end=args.end,
                 )
             )
             return 0

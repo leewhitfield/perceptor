@@ -28,6 +28,7 @@ from .interesting_executables import load_interesting_executable_rules
 from .report_paths import display_evidence_path
 from .storage_policy import CONTENT_HEAVY_TABLES, storage_policy_items
 from .timestamps import normalize_timestamp, parse_timestamp
+from .timeline import timeline_events_from_rows
 from .tools.memory_strings import assess_hiberfil_source, memory_artifact_type as _classify_memory_artifact_type
 from .tools.usb_partition import usb_rows_from_partition_diagnostic_event
 from .tools.usb_summary import enrich_usb_storage_device_volume_serials
@@ -179,6 +180,7 @@ ARTIFACT_SEARCH_SPECS = [
         "fields": ["provider_name", "record_type", "source_table", "app_id", "app_name", "app_path", "app_description", "user_name", "user_sid", "l2_profile_name", "network_type"],
         "display": ["timestamp", "record_type", "app_name", "user_name"],
         "timestamp": "timestamp",
+        "end_timestamp": "end_time",
         "user": "user_name",
     },
     {
@@ -233,6 +235,7 @@ ARTIFACT_SEARCH_SPECS = [
         "fields": ["target_path", "tab_url", "site_url", "referrer", "browser", "source_path", "profile_path"],
         "display": ["start_time_utc", "browser", "target_path", "tab_url"],
         "timestamp": "start_time_utc",
+        "end_timestamp": "end_time_utc",
         "user": "profile_path",
     },
     {
@@ -249,6 +252,7 @@ ARTIFACT_SEARCH_SPECS = [
         "fields": ["user_profile", "app_id", "app_display_name", "activity_type", "display_text", "file_name", "content_uri", "activation_uri", "fallback_uri", "payload_json"],
         "display": ["start_time_utc", "user_profile", "app_display_name", "display_text"],
         "timestamp": "start_time_utc",
+        "end_timestamp": "end_time_utc",
         "user": "user_profile",
     },
     {
@@ -457,6 +461,10 @@ def case_overview_report(
     return {
         "case_id": case_id,
         "case": summary.get("case"),
+        "case_context": {
+            "description": ((summary.get("case") or {}).get("description") if isinstance(summary.get("case"), dict) else None) or "",
+            "notes_path": ((summary.get("case") or {}).get("notes_path") if isinstance(summary.get("case"), dict) else None) or "",
+        },
         "summary": {
             "computers": (summary.get("counts") or {}).get("computers", 0),
             "images": (summary.get("counts") or {}).get("images", 0),
@@ -495,14 +503,22 @@ def case_overview_report(
 
 def case_overview_markdown(report: dict[str, Any]) -> str:
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    context = report.get("case_context") if isinstance(report.get("case_context"), dict) else {}
     lines = [
         "# Case Overview",
         "",
         f"Case: `{report.get('case_id') or ''}`",
         "",
-        "## Summary",
-        "",
     ]
+    if context.get("description") or context.get("notes_path"):
+        lines.extend(["## Case Context", ""])
+        if context.get("description"):
+            lines.append(str(context.get("description")))
+            lines.append("")
+        if context.get("notes_path"):
+            lines.append(f"Notes: `{context.get('notes_path')}`")
+            lines.append("")
+    lines.extend(["## Summary", ""])
     for key in (
         "computers",
         "images",
@@ -874,6 +890,215 @@ def accounts_report(db: Database, case_id: str) -> dict[str, Any]:
             }
         )
     return {"case_id": case_id, "accounts": accounts, "total_accounts": len(accounts)}
+
+
+def system_users_report(
+    db: Database,
+    case_id: str,
+    *,
+    computer_id: str | None = None,
+    include_builtin: bool = True,
+    limit: int = 500,
+) -> dict[str, Any]:
+    db.get_case(case_id)
+    filters = ["case_id = ?"]
+    params: list[Any] = [case_id]
+    if computer_id:
+        filters.append("computer_id = ?")
+        params.append(computer_id)
+    rows = _query_report_rows(
+        db,
+        case_id,
+        "sam_accounts",
+        f"""
+        SELECT *
+        FROM sam_accounts
+        WHERE {' AND '.join(filters)}
+        ORDER BY image_id, TRY_CAST(rid AS INTEGER), username
+        LIMIT ?
+        """,
+        [*params, max(limit * 4, limit)],
+    )
+    computer_labels = _computer_labels(db, case_id)
+    image_paths = _image_paths(db, case_id)
+    sid_by_key = _system_user_sid_lookup(db, case_id, computer_id=computer_id)
+    cloud_by_key = _system_user_cloud_account_lookup(db, case_id, computer_id=computer_id)
+    users: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for row in rows:
+        rid = str(row.get("rid") or "").strip()
+        username = str(row.get("username") or "").strip()
+        if not username:
+            continue
+        category = str(row.get("account_category") or "").strip() or _sam_account_category(rid)
+        if not include_builtin and category == "builtin":
+            continue
+        key = (str(row.get("computer_id") or ""), str(row.get("image_id") or ""), rid, username.casefold())
+        if key in seen:
+            continue
+        seen.add(key)
+        lookup_key = (str(row.get("computer_id") or ""), str(row.get("image_id") or ""), rid)
+        cloud = cloud_by_key.get(lookup_key) or cloud_by_key.get(("", "", rid)) or {}
+        sid = sid_by_key.get(lookup_key) or sid_by_key.get((str(row.get("computer_id") or ""), "", rid)) or sid_by_key.get(("", "", rid))
+        internet_username = cloud.get("internet_username")
+        account_type = "microsoft_account" if internet_username else ("builtin" if category == "builtin" else "local_account")
+        users.append(
+            {
+                "computer_id": row.get("computer_id"),
+                "computer_label": computer_labels.get(str(row.get("computer_id") or "")),
+                "image_id": row.get("image_id"),
+                "image_path": image_paths.get(str(row.get("image_id") or "")),
+                "username": username,
+                "first_name": None,
+                "last_name": None,
+                "sid": sid,
+                "rid": rid,
+                "rid_hex": row.get("rid_hex") or _rid_hex(rid),
+                "account_type": account_type,
+                "account_category": category,
+                "internet_username": internet_username,
+                "internet_provider": cloud.get("internet_provider"),
+                "last_login_utc": row.get("last_login_utc"),
+                "password_last_set_utc": row.get("password_last_set_utc"),
+                "last_bad_password_utc": row.get("last_bad_password_utc"),
+                "logon_count": row.get("logon_count"),
+                "account_flags": row.get("account_flags"),
+                "profile_path": _profile_path_for_username(username),
+                "evidence_sources": [
+                    {
+                        "source_table": "sam_accounts",
+                        "source_row_id": row.get("id"),
+                        "source_tool": row.get("tool_name"),
+                        "field_basis": ["username", "rid", "account_category", "last_login_utc", "account_flags"],
+                    },
+                    *cloud.get("evidence_sources", []),
+                    *(
+                        [
+                            {
+                                "source_table": "registry_artifacts",
+                                "field_basis": ["user_sid"],
+                                "note": "SID inferred by matching RID suffix from registry artifacts.",
+                            }
+                        ]
+                        if sid
+                        else []
+                    ),
+                ],
+            }
+        )
+        if len(users) >= limit:
+            break
+    return {
+        "case_id": case_id,
+        "filters": {"computer_id": computer_id, "include_builtin": include_builtin, "limit": limit},
+        "users": users,
+        "total_returned": len(users),
+        "source_of_truth": ["sam_accounts", "registry_artifacts cloud_account_details", "registry_artifacts user_sid"],
+        "caveats": [
+            "First and last names are only populated when a parsed artifact provides them; SAM usernames are not split into names.",
+            "Microsoft account attribution is based on cloud_account_details InternetUserName values keyed to the SAM RID.",
+        ],
+    }
+
+
+def _system_user_sid_lookup(db: Database, case_id: str, *, computer_id: str | None) -> dict[tuple[str, str, str], str]:
+    filters = ["case_id = ?", "COALESCE(user_sid, '') != ''"]
+    params: list[Any] = [case_id]
+    if computer_id:
+        filters.append("computer_id = ?")
+        params.append(computer_id)
+    rows = _query_report_rows(
+        db,
+        case_id,
+        "registry_artifacts",
+        f"""
+        SELECT DISTINCT computer_id, image_id, user_sid
+        FROM registry_artifacts
+        WHERE {' AND '.join(filters)}
+        """,
+        params,
+    )
+    lookup: dict[tuple[str, str, str], str] = {}
+    for row in rows:
+        sid = str(row.get("user_sid") or "")
+        rid = sid.rsplit("-", 1)[-1] if "-" in sid else ""
+        if not rid.isdigit():
+            continue
+        lookup.setdefault((str(row.get("computer_id") or ""), str(row.get("image_id") or ""), rid), sid)
+        lookup.setdefault((str(row.get("computer_id") or ""), "", rid), sid)
+        lookup.setdefault(("", "", rid), sid)
+    return lookup
+
+
+def _system_user_cloud_account_lookup(db: Database, case_id: str, *, computer_id: str | None) -> dict[tuple[str, str, str], dict[str, Any]]:
+    filters = ["case_id = ?", "artifact = 'cloud_account_details'"]
+    params: list[Any] = [case_id]
+    if computer_id:
+        filters.append("computer_id = ?")
+        params.append(computer_id)
+    rows = _query_report_rows(
+        db,
+        case_id,
+        "registry_artifacts",
+        f"""
+        SELECT id, computer_id, image_id, key_path, value_name, value_data, key_last_write_utc
+        FROM registry_artifacts
+        WHERE {' AND '.join(filters)}
+        ORDER BY key_last_write_utc DESC, row_number
+        """,
+        params,
+    )
+    grouped: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for row in rows:
+        rid = _rid_from_sam_user_key(row.get("key_path"))
+        if not rid:
+            continue
+        key = (str(row.get("computer_id") or ""), str(row.get("image_id") or ""), rid)
+        item = grouped.setdefault(key, {"evidence_sources": []})
+        value_name = str(row.get("value_name") or "")
+        value_data = str(row.get("value_data") or "")
+        if value_name == "InternetUserName" and value_data:
+            item["internet_username"] = value_data
+        elif value_name == "InternetProviderName" and value_data:
+            item["internet_provider"] = value_data
+        item["evidence_sources"].append(
+            {
+                "source_table": "registry_artifacts",
+                "source_row_id": row.get("id"),
+                "field_basis": [value_name],
+                "key_path": row.get("key_path"),
+                "key_last_write_utc": row.get("key_last_write_utc"),
+            }
+        )
+    return grouped
+
+
+def _rid_from_sam_user_key(value: Any) -> str | None:
+    text = str(value or "")
+    match = re.search(r"Users[\\/]+([0-9A-Fa-f]{8})\b", text)
+    if not match:
+        return None
+    return str(int(match.group(1), 16))
+
+
+def _rid_hex(value: Any) -> str | None:
+    rid = _safe_int(value, -1)
+    if rid < 0:
+        return None
+    return f"{rid:08X}"
+
+
+def _sam_account_category(rid: str) -> str:
+    rid_int = _safe_int(rid, -1)
+    if 0 <= rid_int < 1000:
+        return "builtin"
+    return "local"
+
+
+def _profile_path_for_username(username: str) -> str | None:
+    if not username:
+        return None
+    return f"C:\\Users\\{username}"
 
 
 def prefetch_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str, Any]:
@@ -2915,6 +3140,26 @@ def _parse_report_timestamp(value: str | None) -> datetime | None:
     return None
 
 
+def _normalize_report_timestamp(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    return normalize_timestamp(text) or text
+
+
+def _timestamp_sql_bound(value: Any) -> str | None:
+    normalized = _normalize_report_timestamp(value)
+    if not normalized:
+        return None
+    return normalized.replace("T", " ").replace("Z", "").replace("+00:00", "")
+
+
+def _timestamp_sql_expr(expression: str) -> str:
+    return f"replace(replace(replace(coalesce({expression}, ''), 'T', ' '), 'Z', ''), '+00:00', '')"
+
+
 def usn_bursts_report(db: Database, case_id: str, *, minutes: int = 5, limit: int = 100) -> dict[str, Any]:
     db.get_case(case_id)
     seconds = max(minutes, 1) * 60
@@ -3480,6 +3725,447 @@ def srum_networks_report(db: Database, case_id: str, *, include_zero: bool = Fal
         "networks": [dict(row) for row in rows],
         "total_returned": len(rows),
     }
+
+
+def wifi_activity_report(
+    db: Database,
+    case_id: str,
+    *,
+    start: str | None = None,
+    end: str | None = None,
+    ssid: str | None = None,
+    limit: int = 100,
+) -> dict[str, Any]:
+    db.get_case(case_id)
+    limit = max(1, min(int(limit), 1000))
+    ssid = (ssid or "").strip()
+    normalized_start = _normalize_report_timestamp(start)
+    normalized_end = _normalize_report_timestamp(end)
+    start_bound = _timestamp_sql_bound(start)
+    end_bound = _timestamp_sql_bound(end)
+    if ssid:
+        source_limit = max(limit * 10, 1000)
+    elif start_bound or end_bound:
+        source_limit = max(limit * 50, 5000)
+    else:
+        source_limit = max(limit * 100, 100_000)
+    event_filters = [
+        "case_id = ?",
+        "("
+        "lower(coalesce(provider, '')) like '%wlan%' OR "
+        "lower(coalesce(channel, '')) like '%wlan%' OR "
+        "lower(coalesce(provider, '')) like '%networkprofile%' OR "
+        "lower(coalesce(channel, '')) like '%networkprofile%' OR "
+        "lower(coalesce(map_description, '')) like '%wifi%' OR "
+        "lower(coalesce(payload, '')) like '%wifi%' OR "
+        "lower(coalesce(payload, '')) like '%wireless%'"
+        ")",
+    ]
+    event_params: list[Any] = [case_id]
+    if start_bound:
+        event_filters.append(f"{_timestamp_sql_expr('time_created')} >= ?")
+        event_params.append(start_bound)
+    if end_bound:
+        event_filters.append(f"{_timestamp_sql_expr('time_created')} < ?")
+        event_params.append(end_bound)
+    if ssid:
+        event_filters.append(
+            "("
+            "lower(coalesce(map_description, '')) like ? OR "
+            "lower(coalesce(payload_data1, '')) like ? OR "
+            "lower(coalesce(payload_data2, '')) like ? OR "
+            "lower(coalesce(payload_data3, '')) like ? OR "
+            "lower(coalesce(payload, '')) like ?"
+            ")"
+        )
+        event_params.extend([f"%{ssid.casefold()}%"] * 5)
+    evtx_rows = _query_report_rows(
+        db,
+        case_id,
+        "evtx_events",
+        f"""
+        SELECT id, case_id, computer_id, image_id, tool_output_id, time_created, provider, event_id, channel,
+               computer, map_description, payload_data1, payload_data2, payload_data3,
+               payload_data4, source_file, payload, NULL AS computer_label, NULL AS image_path
+        FROM evtx_events
+        WHERE {' AND '.join(event_filters)}
+        ORDER BY time_created, event_id
+        LIMIT ?
+        """,
+        [*event_params, source_limit],
+    )
+    for row in evtx_rows:
+        row["network_name"] = _wifi_network_name_from_row(row)
+        row["wifi_event_class"] = _wifi_event_class(row)
+        row["source_table"] = "evtx_events"
+        if row.get("payload") and len(str(row["payload"])) > 1000:
+            row["payload"] = str(row["payload"])[:1000]
+
+    srum_filters = ["case_id = ?", "record_type = 'network_connectivity'", "(interface_type = '71' OR coalesce(l2_profile_name, '') != '')"]
+    srum_params: list[Any] = [case_id]
+    if start_bound:
+        srum_filters.append(f"({_timestamp_sql_expr('timestamp')} >= ? OR {_timestamp_sql_expr('connect_start_time')} >= ?)")
+        srum_params.extend([start_bound, start_bound])
+    if end_bound:
+        srum_filters.append(f"({_timestamp_sql_expr('timestamp')} < ? OR {_timestamp_sql_expr('connect_start_time')} < ?)")
+        srum_params.extend([end_bound, end_bound])
+    if ssid:
+        srum_filters.append("lower(coalesce(l2_profile_name, '')) like ?")
+        srum_params.append(f"%{ssid.casefold()}%")
+    srum_rows = _query_report_rows(
+        db,
+        case_id,
+        "srum_records",
+        f"""
+        SELECT id, case_id, computer_id, image_id, timestamp, l2_profile_name, interface_type,
+               l2_profile_id, interface_luid, connected_time, connect_start_time, connect_end_time,
+               user_name, app_name, source_csv, NULL AS computer_label, NULL AS image_path
+        FROM srum_records
+        WHERE {' AND '.join(srum_filters)}
+        ORDER BY COALESCE(timestamp, connect_start_time), l2_profile_name
+        LIMIT ?
+        """,
+        [*srum_params, source_limit],
+    )
+    for row in srum_rows:
+        row["network_name"] = row.get("l2_profile_name") or "(unknown)"
+        row["connection_type"] = "Wi-Fi" if str(row.get("interface_type") or "") == "71" else str(row.get("interface_type") or "(unknown)")
+        row["source_table"] = "srum_records"
+
+    registry_filters = ["case_id = ?", "artifact = 'connected_networks'"]
+    registry_params: list[Any] = [case_id]
+    if start_bound:
+        registry_filters.append(f"{_timestamp_sql_expr('COALESCE(event_time_utc, key_last_write_utc)')} >= ?")
+        registry_params.append(start_bound)
+    if end_bound:
+        registry_filters.append(f"{_timestamp_sql_expr('COALESCE(event_time_utc, key_last_write_utc)')} < ?")
+        registry_params.append(end_bound)
+    if ssid:
+        registry_filters.append(
+            "("
+            "lower(coalesce(display_name, '')) like ? OR "
+            "lower(coalesce(value_data, '')) like ? OR "
+            "lower(coalesce(key_path, '')) like ?"
+            ")"
+        )
+        registry_params.extend([f"%{ssid.casefold()}%"] * 3)
+    registry_rows = _query_report_rows(
+        db,
+        case_id,
+        "registry_artifacts",
+        f"""
+        SELECT id, case_id, computer_id, image_id, key_last_write_utc, event_time_utc,
+               user_profile, key_path, value_name, value_type, value_data, display_name,
+               source_path, NULL AS computer_label, NULL AS image_path
+        FROM registry_artifacts
+        WHERE {' AND '.join(registry_filters)}
+        ORDER BY COALESCE(event_time_utc, key_last_write_utc), display_name, value_name
+        LIMIT ?
+        """,
+        [*registry_params, source_limit],
+    )
+    for row in registry_rows:
+        row["network_name"] = _wifi_network_name_from_row(row)
+        row["source_table"] = "registry_artifacts"
+
+    _fill_computer_image_fields(db, case_id, evtx_rows)
+    _fill_computer_image_fields(db, case_id, srum_rows)
+    _fill_computer_image_fields(db, case_id, registry_rows)
+    reconciled = _reconcile_wifi_networks(evtx_rows, srum_rows, registry_rows)
+    all_connection_sessions = _public_wifi_connection_sessions(evtx_rows, ssid=ssid or None, limit=max(limit, 1000))
+    _attach_wifi_sessions_to_networks(reconciled, all_connection_sessions)
+    connection_sessions = all_connection_sessions[:limit]
+    session_activity_plan = _wifi_session_activity_plan(connection_sessions, case_id=case_id)
+    return {
+        "case_id": case_id,
+        "filters": {"start": normalized_start, "end": normalized_end, "ssid": ssid or None, "limit": limit},
+        "activity_scope": {
+            "matching_session_count": len(all_connection_sessions),
+            "default_for_network_activity_questions": "all_matching_sessions",
+            "selection_rule": "If the user asks what happened while connected to this network, evaluate every connection_session unless they specify one session or exact start/end.",
+            "warning": "Do not answer from only the first connection_session when multiple sessions are present.",
+        },
+        "session_activity_plan": session_activity_plan,
+        "summary": {
+            "network_count": len(reconciled),
+            "connection_session_count": len(all_connection_sessions),
+            "evtx_event_count": len(evtx_rows),
+            "srum_observation_count": len(srum_rows),
+            "registry_row_count": len(registry_rows),
+            "returned_evtx_event_count": min(len(evtx_rows), limit),
+            "returned_srum_observation_count": min(len(srum_rows), limit),
+            "returned_registry_row_count": min(len(registry_rows), limit),
+            "interpretation_notes": [
+                "EVTX WLAN 8001 and NetworkProfile 10000 are stronger evidence of a successful connection than SRUM alone.",
+                "SRUM network_connectivity can show historical or cumulative network state; use EVTX and NetworkList rows to anchor a specific connection date.",
+                "EVTX WLAN 8002 is failure evidence and should not be counted as a successful connection.",
+                "For questions about what happened while connected to a network, use every connection_sessions row unless the user specifies one session or exact start/end.",
+            ],
+        },
+        "reconciled_networks": reconciled,
+        "connection_sessions": connection_sessions,
+        "evtx_wifi_events": evtx_rows[:limit],
+        "srum_wifi_connectivity": srum_rows[:limit],
+        "registry_connected_networks": registry_rows[:limit],
+    }
+
+
+def _wifi_network_name_from_row(row: dict[str, Any]) -> str:
+    for key in ("l2_profile_name", "display_name", "value_data"):
+        value = str(row.get(key) or "").strip()
+        if value and value not in {"(default)"}:
+            return value
+    if str(row.get("provider") or "").casefold().endswith("networkprofile"):
+        value = str(row.get("payload_data1") or "").strip()
+        if value and ":" not in value and len(value) < 100:
+            return value
+    for key in ("payload_data3", "payload_data2", "payload_data1", "map_description", "payload"):
+        value = str(row.get(key) or "")
+        match = re.search(r"(?:SSID|ProfileName|Name|NetworkHintString)[:\"#= ]+([^,\"}\r\n]+)", value, flags=re.IGNORECASE)
+        if match:
+            candidate = match.group(1).strip()
+            candidate = re.sub(r"^(?:#text|text)[:\"= ]+", "", candidate, flags=re.IGNORECASE).strip()
+            if candidate:
+                return candidate
+    return "(unknown)"
+
+
+def _wifi_event_class(row: dict[str, Any]) -> str:
+    event_id = str(row.get("event_id") or "")
+    text = " ".join(str(row.get(key) or "") for key in ("map_description", "payload_data1", "payload_data2", "payload_data3", "payload")).casefold()
+    if event_id == "8001" or "connection was successful" in text or "connect to the internet" in text:
+        return "connected"
+    if event_id == "8002" or "connection was failed" in text or "failed to connect" in text:
+        return "failed"
+    if event_id == "8000" or "connection was attempted" in text:
+        return "attempted"
+    if event_id in {"8011", "11000", "11001", "11005", "11010", "50067"}:
+        return "diagnostic"
+    return "observed"
+
+
+def _reconcile_wifi_networks(
+    evtx_rows: list[dict[str, Any]],
+    srum_rows: list[dict[str, Any]],
+    registry_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    grouped: dict[str, dict[str, Any]] = {}
+
+    def bucket(name: str) -> dict[str, Any]:
+        normalized = (name or "(unknown)").strip() or "(unknown)"
+        key = normalized.casefold()
+        if key not in grouped:
+            grouped[key] = {
+                "network_name": normalized,
+                "first_seen_utc": None,
+                "last_seen_utc": None,
+                "sources": [],
+                "successful_connection_events": 0,
+                "failed_connection_events": 0,
+                "attempted_connection_events": 0,
+                "diagnostic_events": 0,
+                "srum_observations": 0,
+                "registry_observations": 0,
+                "assessment": "observed",
+            }
+        return grouped[key]
+
+    def observe(item: dict[str, Any], when: Any, source: str) -> None:
+        if when:
+            text = str(when)
+            if item["first_seen_utc"] is None or text < item["first_seen_utc"]:
+                item["first_seen_utc"] = text
+            if item["last_seen_utc"] is None or text > item["last_seen_utc"]:
+                item["last_seen_utc"] = text
+        if source not in item["sources"]:
+            item["sources"].append(source)
+
+    for row in evtx_rows:
+        network_name = str(row.get("network_name") or "(unknown)")
+        event_class = str(row.get("wifi_event_class") or "observed")
+        if not _meaningful_wifi_network_name(network_name) and event_class not in {"connected", "failed", "attempted"}:
+            continue
+        item = bucket(network_name)
+        if event_class == "connected":
+            item["successful_connection_events"] += 1
+        elif event_class == "failed":
+            item["failed_connection_events"] += 1
+        elif event_class == "attempted":
+            item["attempted_connection_events"] += 1
+        elif event_class == "diagnostic":
+            item["diagnostic_events"] += 1
+        observe(item, row.get("time_created"), "evtx_events")
+    for row in srum_rows:
+        network_name = str(row.get("network_name") or "(unknown)")
+        if not _meaningful_wifi_network_name(network_name):
+            continue
+        item = bucket(network_name)
+        item["srum_observations"] += 1
+        observe(item, row.get("timestamp") or row.get("connect_start_time"), "srum_records")
+    for row in registry_rows:
+        network_name = str(row.get("network_name") or "(unknown)")
+        if not _meaningful_wifi_network_name(network_name):
+            continue
+        item = bucket(network_name)
+        item["registry_observations"] += 1
+        observe(item, row.get("event_time_utc") or row.get("key_last_write_utc"), "registry_artifacts")
+    for item in grouped.values():
+        if item["successful_connection_events"]:
+            item["assessment"] = "connected"
+        elif item["failed_connection_events"] and not item["successful_connection_events"]:
+            item["assessment"] = "attempted_failed"
+        elif item["srum_observations"] or item["registry_observations"]:
+            item["assessment"] = "historical_or_observed"
+        item["sources"] = sorted(item["sources"])
+        item["first_seen"] = item["first_seen_utc"]
+        item["last_seen"] = item["last_seen_utc"]
+    return sorted(
+        grouped.values(),
+        key=lambda row: (
+            _wifi_assessment_rank(row.get("assessment")),
+            0 if _meaningful_wifi_network_name(row.get("network_name")) else 1,
+            row.get("network_name") or "",
+            row.get("first_seen_utc") or "",
+        ),
+    )
+
+
+def _wifi_assessment_rank(value: Any) -> int:
+    return {
+        "connected": 0,
+        "attempted_failed": 1,
+        "historical_or_observed": 2,
+        "observed": 3,
+    }.get(str(value or ""), 9)
+
+
+def _public_wifi_connection_sessions(
+    evtx_rows: list[dict[str, Any]],
+    *,
+    ssid: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    ssid_text = (ssid or "").strip().casefold()
+    sessions: list[dict[str, Any]] = []
+    for session in _wifi_session_rows(evtx_rows):
+        network_name = str(session.get("network_name") or "").strip()
+        if ssid_text and ssid_text not in network_name.casefold() and ssid_text not in json.dumps(session, default=str).casefold():
+            continue
+        start = normalize_timestamp(session.get("start"))
+        end = normalize_timestamp(session.get("end"))
+        if not start:
+            continue
+        start_row = session.get("start_row") if isinstance(session.get("start_row"), dict) else {}
+        end_row = session.get("end_row") if isinstance(session.get("end_row"), dict) else {}
+        row = {
+            "network_name": network_name or start_row.get("network_name") or "(unknown)",
+            "start": start,
+            "end": end,
+            "duration_ms": _timeline_duration_ms(start, end),
+            "start_event_id": start_row.get("event_id"),
+            "end_event_id": end_row.get("event_id"),
+            "start_basis": start_row.get("map_description") or start_row.get("provider") or "wifi_connected",
+            "end_basis": end_row.get("map_description") or session.get("end_basis"),
+            "supporting_event_count": session.get("supporting_event_count"),
+            "source_table": "evtx_events",
+            "timeline_window_tool": {
+                "tool": "relic_timeline_window",
+                "arguments": {
+                    "start": start,
+                    "end": end,
+                    "limit": 250,
+                },
+            },
+            "guidance": "Use relic_timeline_window with this start/end to answer what happened during the connection.",
+        }
+        sessions.append(row)
+        if len(sessions) >= limit:
+            break
+    return sessions
+
+
+def _wifi_session_activity_plan(sessions: list[dict[str, Any]], *, case_id: str) -> dict[str, Any]:
+    calls = []
+    windows = []
+    for index, session in enumerate(sessions, start=1):
+        start = session.get("start")
+        end = session.get("end")
+        if not start:
+            continue
+        windows.append({"label": f"{session.get('network_name') or 'Wi-Fi'} session {index}", "start": start, "end": end})
+        calls.append(
+            {
+                "session_index": index,
+                "network_name": session.get("network_name"),
+                "start": start,
+                "end": end,
+                "tool": "relic_timeline_window",
+                "arguments": {
+                    "case_id": case_id,
+                    "start": start,
+                    "end": end,
+                    "limit": 250,
+                },
+            }
+        )
+    return {
+        "mode": "all_matching_sessions",
+        "session_count": len(calls),
+        "aggregate_tool": {
+            "tool": "relic_activity_windows",
+            "arguments": {
+                "case_id": case_id,
+                "windows": windows,
+                "limit": 250,
+            },
+        },
+        "calls": calls,
+        "aggregation_guidance": "Call aggregate_tool first. Use per-session calls only for drilldown. Combine browser, file, email, USB, execution, communication, direct_activity, and timeline findings across sessions before answering.",
+    }
+
+
+def _attach_wifi_sessions_to_networks(networks: list[dict[str, Any]], sessions: list[dict[str, Any]]) -> None:
+    sessions_by_name: dict[str, list[dict[str, Any]]] = {}
+    for session in sessions:
+        key = str(session.get("network_name") or "").strip().casefold()
+        if not key:
+            continue
+        sessions_by_name.setdefault(key, []).append(session)
+    for network in networks:
+        key = str(network.get("network_name") or "").strip().casefold()
+        matched = sessions_by_name.get(key, [])
+        network["connection_session_count"] = len(matched)
+        network["connection_sessions"] = matched[:10]
+        network["timeline_window_tools"] = [row.get("timeline_window_tool") for row in matched[:10] if row.get("timeline_window_tool")]
+
+
+def _meaningful_wifi_network_name(value: Any) -> bool:
+    text = str(value or "").strip()
+    if not text or text in {"(unknown)", "<none>", "(none)"}:
+        return False
+    lowered = text.casefold()
+    if lowered in {
+        "adapter",
+        "ansistringtemplate",
+        "callerusersid",
+        "interfaceguid",
+        "message1",
+        "networkhintstring",
+        "newconsentvalue",
+        "newinternetconnectionprofile",
+        "usersid",
+        "id",
+    }:
+        return False
+    if re.fullmatch(r"\{[0-9a-f-]{32,40}\}", lowered):
+        return False
+    if re.fullmatch(r"[0-9a-f]{12,}", lowered):
+        return False
+    if re.fullmatch(r"\d+\s+\(0x[0-9a-f]+\)", lowered):
+        return False
+    if re.fullmatch(r"\d+", lowered):
+        return False
+    return True
 
 
 def srum_app_network_usage_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str, Any]:
@@ -4928,7 +5614,9 @@ def _merge_vpn_windows(windows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _vpn_window_usb_devices(db: Database, case_id: str, window: dict[str, Any], *, limit: int) -> list[dict[str, Any]]:
     start = _format_report_window_time(window.get("window_start_utc"))
     end = _format_report_window_time(window.get("window_end_utc"))
-    if not start or not end:
+    start_bound = _timestamp_sql_bound(start)
+    end_bound = _timestamp_sql_bound(end)
+    if not start_bound or not end_bound:
         return []
     has_storage_devices = db.analytics_mode == "sqlite" or _duckdb_table_available(db, case_id, "usb_storage_devices")
     storage_select = (
@@ -4944,6 +5632,24 @@ def _vpn_window_usb_devices(db: Database, case_id: str, window: dict[str, Any], 
         if has_storage_devices
         else ""
     )
+    removal_after_start_expr = (
+        f"{_timestamp_sql_expr('end_event.event_time_utc')} >= "
+        f"{_timestamp_sql_expr('start_event.event_time_utc')}"
+    )
+    session_end_expr = f"""
+        COALESCE(
+          (
+            SELECT MIN(end_event.event_time_utc)
+            FROM usb_connection_events end_event
+            WHERE end_event.case_id = start_event.case_id
+              AND end_event.image_id = start_event.image_id
+              AND COALESCE(end_event.serial, '') = COALESCE(start_event.serial, '')
+              AND end_event.event_type = 'removal'
+              AND {removal_after_start_expr}
+          ),
+          ?
+        )
+    """
     rows = _query_report_rows(
         db,
         case_id,
@@ -4951,41 +5657,19 @@ def _vpn_window_usb_devices(db: Database, case_id: str, window: dict[str, Any], 
         f"""
         SELECT start_event.serial, start_event.volume_serial_number, start_event.volume_guid,
                start_event.drive_letter, start_event.event_time_utc AS session_start,
-               COALESCE(
-                 (
-                   SELECT MIN(end_event.event_time_utc)
-                   FROM usb_connection_events end_event
-                   WHERE end_event.case_id = start_event.case_id
-                     AND end_event.image_id = start_event.image_id
-                     AND COALESCE(end_event.serial, '') = COALESCE(start_event.serial, '')
-                     AND end_event.event_type = 'removal'
-                     AND end_event.event_time_utc >= start_event.event_time_utc
-                 ),
-                 ?
-               ) AS session_end,
+               {session_end_expr} AS session_end,
                start_event.event_source,
                {storage_select}
         FROM usb_connection_events start_event
         {storage_join}
         WHERE start_event.case_id = ?
           AND start_event.event_type IN ('arrival', 'first_connected', 'partition_seen')
-          AND start_event.event_time_utc <= ?
-          AND COALESCE(
-                (
-                  SELECT MIN(end_event.event_time_utc)
-                  FROM usb_connection_events end_event
-                  WHERE end_event.case_id = start_event.case_id
-                    AND end_event.image_id = start_event.image_id
-                    AND COALESCE(end_event.serial, '') = COALESCE(start_event.serial, '')
-                    AND end_event.event_type = 'removal'
-                    AND end_event.event_time_utc >= start_event.event_time_utc
-                ),
-                ?
-              ) >= ?
+          AND {_timestamp_sql_expr('start_event.event_time_utc')} <= ?
+          AND {_timestamp_sql_expr(session_end_expr)} >= ?
         ORDER BY start_event.event_time_utc DESC
         LIMIT ?
         """,
-        (end, case_id, end, end, start, limit * 5),
+        (end_bound, case_id, end_bound, end_bound, start_bound, limit * 5),
     )
     devices: dict[tuple[str, str, str], dict[str, Any]] = {}
     for row in rows:
@@ -8119,6 +8803,92 @@ def browser_hosts_report(
     }
 
 
+def _browser_history_attribution_warnings(db: Database, case_id: str, *, limit: int = 25) -> list[dict[str, Any]]:
+    rows = _query_report_rows(
+        db,
+        case_id,
+        "browser_history",
+        """
+        WITH mirrored AS (
+          SELECT LOWER(url) AS url_key,
+                 visit_time_utc,
+                 COUNT(*) AS row_count,
+                 COUNT(DISTINCT LOWER(browser)) AS browser_count,
+                 SUM(CASE WHEN LOWER(browser) = 'edge' AND COALESCE(visit_source, '') = '8' THEN 1 ELSE 0 END) AS edge_source_8_count
+          FROM browser_history
+          WHERE case_id = ?
+            AND COALESCE(url, '') != ''
+            AND COALESCE(visit_time_utc, '') != ''
+          GROUP BY LOWER(url), visit_time_utc
+          HAVING COUNT(DISTINCT LOWER(browser)) > 1
+             AND SUM(CASE WHEN LOWER(browser) = 'edge' AND COALESCE(visit_source, '') = '8' THEN 1 ELSE 0 END) > 0
+          ORDER BY edge_source_8_count DESC, row_count DESC, visit_time_utc DESC
+          LIMIT ?
+        )
+        SELECT h.id,
+               h.browser,
+               h.profile_path,
+               h.source_path,
+               h.url,
+               h.title,
+               h.visit_time_utc,
+               h.visit_source,
+               h.visit_source_label,
+               h.local_vs_synced,
+               mirrored.row_count,
+               mirrored.browser_count,
+               mirrored.edge_source_8_count
+        FROM mirrored
+        JOIN browser_history h
+          ON LOWER(h.url) = mirrored.url_key
+         AND h.visit_time_utc = mirrored.visit_time_utc
+         AND h.case_id = ?
+        ORDER BY mirrored.visit_time_utc DESC, mirrored.url_key, LOWER(h.browser), h.profile_path
+        """,
+        (case_id, limit, case_id),
+    )
+    grouped: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in rows:
+        key = ((row.get("url") or "").lower(), row.get("visit_time_utc") or "")
+        warning = grouped.setdefault(
+            key,
+            {
+                "warning_type": "cross_browser_mirrored_history",
+                "url": row.get("url"),
+                "title": row.get("title"),
+                "visit_time_utc": row.get("visit_time_utc"),
+                "row_count": int(row.get("row_count") or 0),
+                "browser_count": int(row.get("browser_count") or 0),
+                "edge_source_8_count": int(row.get("edge_source_8_count") or 0),
+                "browsers": [],
+                "interpretation": (
+                    "Identical URL and timestamp appear in multiple Chromium histories, and at least one Edge row "
+                    "uses visit_source=8. Treat the Edge row as internal/generated/sync-like unless corroborated "
+                    "by Edge session state, navigation chain, execution timing, or other Edge-specific evidence."
+                ),
+                "rows": [],
+            },
+        )
+        browser = row.get("browser") or "unknown"
+        if browser not in warning["browsers"]:
+            warning["browsers"].append(browser)
+        warning["rows"].append(
+            {
+                "id": row.get("id"),
+                "browser": browser,
+                "profile_path": row.get("profile_path"),
+                "source_path": row.get("source_path"),
+                "visit_source": row.get("visit_source"),
+                "visit_source_label": row.get("visit_source_label"),
+                "local_vs_synced": row.get("local_vs_synced"),
+            }
+        )
+    warnings = list(grouped.values())
+    for warning in warnings:
+        warning["browsers"] = sorted(warning["browsers"], key=lambda value: str(value).lower())
+    return warnings[:limit]
+
+
 def browser_activity_report(
     db: Database,
     case_id: str,
@@ -8139,10 +8909,18 @@ def browser_activity_report(
     cache_correlations = browser_cache_correlations_report(
         db, case_id, limit=limit, browser=browser, exclude_noise=exclude_noise
     )["correlations"]
+    attribution_warnings = _browser_history_attribution_warnings(db, case_id, limit=min(limit, 25))
     return {
         "case_id": case_id,
         "filters": {"browser": browser, "user": user, "exclude_noise": exclude_noise},
         "memory_corroboration": _memory_domain_corroboration(db, case_id, "browser", limit=min(limit, 50), memory_disk_report=memory_disk_report),
+        "attribution_warnings": attribution_warnings,
+        "attribution_guidance": (
+            "When the same Chromium URL and timestamp appears in multiple browser histories, prefer corroborated "
+            "activity evidence such as session entries, navigation chain, prefetch/run timing, and profile-specific "
+            "artifacts before saying which browser was actively used. Edge visit_source=8 should not be treated "
+            "alone as proof of active Edge browsing."
+        ),
         "top_hosts": hosts,
         "downloads": downloads[:limit],
         "webcache_file_accesses": webcache_files[:limit],
@@ -11133,10 +11911,15 @@ def timeline_report(
     event_type: str | None = None,
     source_tool: str | None = None,
     contains: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
 ) -> dict[str, Any]:
     db.get_case(case_id)
     where = ["timeline_events.case_id = ?", "(timeline_events.dedupe_status IS NULL OR timeline_events.dedupe_status != 'duplicate')"]
     params: list[Any] = [case_id]
+    timeline_columns = _report_table_columns(db, case_id, "timeline_events")
+    start_bound = _timestamp_sql_bound(start)
+    end_bound = _timestamp_sql_bound(end)
     if event_type:
         where.append("timeline_events.event_type = ?")
         params.append(event_type)
@@ -11144,52 +11927,456 @@ def timeline_report(
         where.append("timeline_events.source_tool = ?")
         params.append(source_tool)
     if contains:
-        where.append("(timeline_events.description LIKE ? OR timeline_events.details_json LIKE ?)")
-        params.extend([f"%{contains}%", f"%{contains}%"])
+        where.append("(lower(coalesce(timeline_events.description, '')) LIKE ? OR lower(coalesce(timeline_events.details_json, '')) LIKE ?)")
+        params.extend([f"%{contains.casefold()}%", f"%{contains.casefold()}%"])
+    if start_bound:
+        if "end_timestamp_utc" in timeline_columns:
+            where.append(
+                f"COALESCE(NULLIF({_timestamp_sql_expr('timeline_events.end_timestamp_utc')}, ''), {_timestamp_sql_expr('timeline_events.timestamp_utc')}) >= ?"
+            )
+        else:
+            where.append(f"{_timestamp_sql_expr('timeline_events.timestamp_utc')} >= ?")
+        params.append(start_bound)
+    if end_bound:
+        where.append(f"{_timestamp_sql_expr('timeline_events.timestamp_utc')} <= ?")
+        params.append(end_bound)
+    query_where = [clause.replace("timeline_events.", "") for clause in where]
+    filter_params = list(params)
+    window_summary = (
+        _timeline_window_activity_summary(db, case_id, query_where, filter_params, start_bound=start_bound, end_bound=end_bound)
+        if start_bound or end_bound
+        else None
+    )
     params.append(limit)
-    rows = [
-        dict(row)
-        for row in db.conn.execute(
+    rows = _query_report_rows(
+        db,
+        case_id,
+        "timeline_events",
         f"""
-        SELECT timeline_events.*, computers.label AS computer_label, images.path AS image_path,
-               (
-                 SELECT COUNT(*)
-                 FROM timeline_event_sources
-                 WHERE timeline_event_sources.primary_event_id = timeline_events.id
-               ) AS source_count
+        SELECT *, 0 AS source_count
         FROM timeline_events
-        LEFT JOIN computers ON timeline_events.computer_id = computers.id
-        LEFT JOIN images ON timeline_events.image_id = images.id
-        WHERE {' AND '.join(where)}
-        ORDER BY timeline_events.timestamp_utc
+        WHERE {' AND '.join(query_where)}
+        ORDER BY timestamp_utc
         LIMIT ?
         """,
         params,
-        ).fetchall()
+    )
+    _fill_computer_image_fields(db, case_id, rows)
+    events = _rows_with_details(rows)
+    for event in events:
+        _annotate_timeline_source(event)
+    return {
+        "case_id": case_id,
+        "filters": {
+            "event_type": event_type,
+            "source_tool": source_tool,
+            "contains": contains,
+            "start": _normalize_report_timestamp(start) or "",
+            "end": _normalize_report_timestamp(end) or "",
+            "time_match": "interval_overlap",
+        },
+        "events": events,
+        "total_returned": len(rows),
+        "window_summary": window_summary,
+    }
+
+
+def _timeline_window_activity_summary(
+    db: Database,
+    case_id: str,
+    where: list[str],
+    params: list[Any],
+    *,
+    start_bound: str | None,
+    end_bound: str | None,
+) -> dict[str, Any]:
+    where_sql = " AND ".join(where)
+    total_row = _query_report_rows(
+        db,
+        case_id,
+        "timeline_events",
+        f"""
+        SELECT COUNT(*) AS total_events,
+               MIN(timestamp_utc) AS first_event_utc,
+               MAX(timestamp_utc) AS last_event_utc
+        FROM timeline_events
+        WHERE {where_sql}
+        """,
+        params,
+    )[0]
+    event_type_counts = _query_report_rows(
+        db,
+        case_id,
+        "timeline_events",
+        f"""
+        SELECT event_type, COUNT(*) AS count
+        FROM timeline_events
+        WHERE {where_sql}
+        GROUP BY event_type
+        ORDER BY count DESC, event_type
+        LIMIT 20
+        """,
+        params,
+    )
+    source_table_counts = _query_report_rows(
+        db,
+        case_id,
+        "timeline_events",
+        f"""
+        SELECT source_table, COUNT(*) AS count
+        FROM timeline_events
+        WHERE {where_sql}
+        GROUP BY source_table
+        ORDER BY count DESC, source_table
+        LIMIT 20
+        """,
+        params,
+    )
+    notable = _query_report_rows(
+        db,
+        case_id,
+        "timeline_events",
+        f"""
+        SELECT *,
+               CASE
+                 WHEN lower(coalesce(event_type, '') || ' ' || coalesce(source_table, '') || ' ' || coalesce(description, '') || ' ' || coalesce(details_json, '')) LIKE '%browser%'
+                   OR lower(coalesce(event_type, '') || ' ' || coalesce(source_table, '') || ' ' || coalesce(description, '') || ' ' || coalesce(details_json, '')) LIKE '%youtube%'
+                   OR lower(coalesce(event_type, '') || ' ' || coalesce(source_table, '') || ' ' || coalesce(description, '') || ' ' || coalesce(details_json, '')) LIKE '%url%'
+                   THEN 0
+                 WHEN lower(coalesce(event_type, '') || ' ' || coalesce(source_table, '') || ' ' || coalesce(description, '') || ' ' || coalesce(details_json, '')) LIKE '%usb%'
+                   OR lower(coalesce(event_type, '') || ' ' || coalesce(source_table, '') || ' ' || coalesce(description, '') || ' ' || coalesce(details_json, '')) LIKE '%removable%'
+                   THEN 1
+                 WHEN lower(coalesce(event_type, '') || ' ' || coalesce(source_table, '') || ' ' || coalesce(description, '') || ' ' || coalesce(details_json, '')) LIKE '%lnk%'
+                   OR lower(coalesce(event_type, '') || ' ' || coalesce(source_table, '') || ' ' || coalesce(description, '') || ' ' || coalesce(details_json, '')) LIKE '%jumplist%'
+                   OR lower(coalesce(event_type, '') || ' ' || coalesce(source_table, '') || ' ' || coalesce(description, '') || ' ' || coalesce(details_json, '')) LIKE '%shellbag%'
+                   THEN 2
+                 WHEN lower(coalesce(event_type, '') || ' ' || coalesce(source_table, '') || ' ' || coalesce(description, '') || ' ' || coalesce(details_json, '')) LIKE '%execution%'
+                   OR lower(coalesce(event_type, '') || ' ' || coalesce(source_table, '') || ' ' || coalesce(description, '') || ' ' || coalesce(details_json, '')) LIKE '%prefetch%'
+                   OR lower(coalesce(event_type, '') || ' ' || coalesce(source_table, '') || ' ' || coalesce(description, '') || ' ' || coalesce(details_json, '')) LIKE '%userassist%'
+                   OR lower(coalesce(event_type, '') || ' ' || coalesce(source_table, '') || ' ' || coalesce(description, '') || ' ' || coalesce(details_json, '')) LIKE '%runmru%'
+                   THEN 3
+                 WHEN lower(coalesce(event_type, '') || ' ' || coalesce(source_table, '') || ' ' || coalesce(description, '') || ' ' || coalesce(details_json, '')) LIKE '%mail%'
+                   OR lower(coalesce(event_type, '') || ' ' || coalesce(source_table, '') || ' ' || coalesce(description, '') || ' ' || coalesce(details_json, '')) LIKE '%message%'
+                   THEN 4
+                 WHEN lower(coalesce(event_type, '') || ' ' || coalesce(source_table, '') || ' ' || coalesce(description, '') || ' ' || coalesce(details_json, '')) LIKE '%wifi%'
+                   OR lower(coalesce(event_type, '') || ' ' || coalesce(source_table, '') || ' ' || coalesce(description, '') || ' ' || coalesce(details_json, '')) LIKE '%network%'
+                   THEN 5
+                 ELSE 9
+               END AS activity_priority
+        FROM timeline_events
+        WHERE {where_sql}
+        ORDER BY activity_priority, timestamp_utc
+        LIMIT 30
+        """,
+        params,
+    )
+    _fill_computer_image_fields(db, case_id, notable)
+    notable_events = _rows_with_details(notable)
+    for event in notable_events:
+        _annotate_timeline_source(event)
+    activity_highlights = _timeline_window_activity_highlights(db, case_id, where_sql, params)
+    direct_activity = _timeline_window_direct_activity(db, case_id, start_bound, end_bound)
+    return {
+        "total_events": int(total_row.get("total_events") or 0),
+        "first_event_utc": total_row.get("first_event_utc"),
+        "last_event_utc": total_row.get("last_event_utc"),
+        "event_type_counts": event_type_counts,
+        "source_table_counts": source_table_counts,
+        "notable_events": notable_events,
+        "activity_highlights": activity_highlights,
+        "direct_activity": direct_activity,
+        "guidance": "Use this summary to avoid mistaking the first chronological page for all activity in a long window.",
+    }
+
+
+def _timeline_window_direct_activity(
+    db: Database,
+    case_id: str,
+    start_bound: str | None,
+    end_bound: str | None,
+    *,
+    per_source_limit: int = 50,
+) -> dict[str, Any]:
+    sources = [
+        {
+            "key": "browser_history",
+            "category": "browser_activity",
+            "table": "browser_history",
+            "time": "visit_time_utc",
+            "fields": ("id", "case_id", "computer_id", "image_id", "tool_output_id", "browser", "source_path", "profile_path", "url", "title", "visit_time_utc", "visit_count", "typed_count", "visit_source", "visit_source_label", "local_vs_synced"),
+            "description": "COALESCE(title, url, '')",
+        },
+        {
+            "key": "email_messages",
+            "category": "email_activity",
+            "table": "mailbox_messages",
+            "time": "message_date_utc",
+            "fields": ("id", "case_id", "computer_id", "image_id", "tool_output_id", "source_format", "user_profile", "subject", "sender", "recipients", "cc", "bcc", "message_date_utc", "attachment_names", "attachment_count", "message_status"),
+            "description": "COALESCE(subject, sender, recipients, '')",
+        },
+        {
+            "key": "usb_connections",
+            "category": "device_activity",
+            "table": "usb_connection_events",
+            "time": "event_time_utc",
+            "fields": ("id", "case_id", "computer_id", "image_id", "usb_device_id", "serial", "volume_serial_number", "volume_guid", "drive_letter", "event_time_utc", "event_type", "event_source", "event_id", "source_path"),
+            "description": "COALESCE(event_type, serial, volume_serial_number, drive_letter, '')",
+        },
+        {
+            "key": "prefetch_execution",
+            "category": "application_execution",
+            "table": "prefetch_items",
+            "time": "last_run_time_utc",
+            "fields": ("id", "case_id", "computer_id", "image_id", "tool_output_id", "prefetch_name", "artifact_path", "original_path", "executable_name", "run_count", "last_run_time_utc", "last_run_times_utc", "referenced_string_count", "resolved_reference_path"),
+            "description": "COALESCE(executable_name, prefetch_name, artifact_path, '')",
+        },
+        {
+            "key": "shortcuts",
+            "category": "file_open_reference",
+            "table": "shortcut_items",
+            "time": "target_accessed",
+            "fields": ("id", "case_id", "computer_id", "image_id", "tool_output_id", "artifact_type", "artifact_name", "artifact_path", "file_name", "file_location", "target_created", "target_modified", "target_accessed", "volume_serial_number", "volume_name", "local_path", "target_path", "app_id_description"),
+            "description": "COALESCE(file_location, target_path, local_path, file_name, artifact_path, '')",
+        },
+        {
+            "key": "windows_search_files",
+            "category": "file_index_activity",
+            "table": "windows_search_files",
+            "time": "gather_time",
+            "fields": ("id", "case_id", "computer_id", "image_id", "tool_output_id", "work_id", "gather_time", "item_path", "item_url", "folder_path", "file_name", "file_extension", "item_type", "date_created", "date_modified", "date_accessed", "size", "owner", "is_deleted", "is_folder"),
+            "description": "COALESCE(item_path, item_url, file_name, '')",
+        },
+        {
+            "key": "windows_search_gather",
+            "category": "file_index_activity",
+            "table": "windows_search_gather_logs",
+            "time": "timestamp_utc",
+            "fields": ("id", "case_id", "computer_id", "image_id", "tool_output_id", "source_file", "source_name", "log_type", "line_number", "timestamp_utc", "item_url", "item_path", "item_scheme", "is_deleted_path", "status_hex", "crawl_code_hex"),
+            "description": "COALESCE(item_path, item_url, source_name, '')",
+        },
+        {
+            "key": "filesystem_created",
+            "category": "file_activity",
+            "table": "filesystem_entries",
+            "time": "created_utc",
+            "fields": ("id", "case_id", "computer_id", "image_id", "tool_output_id", "partition_id", "filesystem_type", "source_root", "file_path", "parent_path", "file_name", "extension", "file_size", "is_directory", "created_utc", "modified_utc", "accessed_utc", "metadata_changed_utc", "scan_status"),
+            "description": "COALESCE(file_path, file_name, '')",
+        },
+        {
+            "key": "filesystem_modified",
+            "category": "file_activity",
+            "table": "filesystem_entries",
+            "time": "modified_utc",
+            "fields": ("id", "case_id", "computer_id", "image_id", "tool_output_id", "partition_id", "filesystem_type", "source_root", "file_path", "parent_path", "file_name", "extension", "file_size", "is_directory", "created_utc", "modified_utc", "accessed_utc", "metadata_changed_utc", "scan_status"),
+            "description": "COALESCE(file_path, file_name, '')",
+        },
+        {
+            "key": "filesystem_accessed",
+            "category": "file_activity",
+            "table": "filesystem_entries",
+            "time": "accessed_utc",
+            "fields": ("id", "case_id", "computer_id", "image_id", "tool_output_id", "partition_id", "filesystem_type", "source_root", "file_path", "parent_path", "file_name", "extension", "file_size", "is_directory", "created_utc", "modified_utc", "accessed_utc", "metadata_changed_utc", "scan_status"),
+            "description": "COALESCE(file_path, file_name, '')",
+        },
+        {
+            "key": "filesystem_metadata_changed",
+            "category": "file_activity",
+            "table": "filesystem_entries",
+            "time": "metadata_changed_utc",
+            "fields": ("id", "case_id", "computer_id", "image_id", "tool_output_id", "partition_id", "filesystem_type", "source_root", "file_path", "parent_path", "file_name", "extension", "file_size", "is_directory", "created_utc", "modified_utc", "accessed_utc", "metadata_changed_utc", "scan_status"),
+            "description": "COALESCE(file_path, file_name, '')",
+        },
+        {
+            "key": "srum",
+            "category": "application_resource_usage",
+            "table": "srum_records",
+            "time": "timestamp",
+            "fields": ("id", "case_id", "computer_id", "image_id", "tool_output_id", "record_type", "timestamp", "app_name", "app_path", "user_name", "bytes_received", "bytes_sent", "l2_profile_name", "connected_time", "connect_start_time", "connect_end_time", "start_time", "end_time", "timeline_end"),
+            "description": "COALESCE(app_name, app_path, l2_profile_name, record_type, '')",
+        },
+        {
+            "key": "registry_activity",
+            "category": "registry_activity",
+            "table": "registry_artifacts",
+            "time": "COALESCE(event_time_utc, key_last_write_utc)",
+            "fields": ("id", "case_id", "computer_id", "image_id", "tool_output_id", "artifact", "category", "user_profile", "key_path", "value_name", "value_data", "display_name", "normalized_path", "key_last_write_utc", "event_time_utc", "last_executed", "run_counter"),
+            "description": "COALESCE(display_name, normalized_path, value_data, value_name, artifact, '')",
+        },
     ]
-    if not rows and _duckdb_table_available(db, case_id, "timeline_events"):
-        duck_where = [clause.replace("timeline_events.", "") for clause in where]
+    results: dict[str, Any] = {}
+    totals: dict[str, int] = {}
+    for source in sources:
+        table = str(source["table"])
+        columns = _report_table_columns(db, case_id, table)
+        wanted_fields = [field for field in source["fields"] if field in columns]
+        if not wanted_fields:
+            continue
+        time_expr = str(source["time"])
+        if time_expr not in columns and not time_expr.startswith("COALESCE("):
+            continue
+        where = ["case_id = ?"]
+        query_params: list[Any] = [case_id]
+        if start_bound:
+            where.append(f"{_timestamp_sql_expr(time_expr)} >= ?")
+            query_params.append(start_bound)
+        if end_bound:
+            where.append(f"{_timestamp_sql_expr(time_expr)} <= ?")
+            query_params.append(end_bound)
+        count_row = _query_report_rows(
+            db,
+            case_id,
+            table,
+            f"SELECT COUNT(*) AS count FROM {table} WHERE {' AND '.join(where)}",
+            query_params,
+        )[0]
+        select_fields = ", ".join(wanted_fields)
+        rows = _query_report_rows(
+            db,
+            case_id,
+            table,
+            f"""
+            SELECT {select_fields},
+                   {_timestamp_sql_expr(time_expr)} AS activity_time_utc,
+                   {source["description"]} AS activity_description
+            FROM {table}
+            WHERE {' AND '.join(where)}
+            ORDER BY {_timestamp_sql_expr(time_expr)}
+            LIMIT ?
+            """,
+            [*query_params, per_source_limit],
+        )
+        _fill_computer_image_fields(db, case_id, rows)
+        for row in rows:
+            row["source_table"] = table
+            row["activity_category"] = source["category"]
+        results[str(source["key"])] = {
+            "category": source["category"],
+            "count": int(count_row.get("count") or 0),
+            "rows": rows,
+        }
+        totals[str(source["category"])] = totals.get(str(source["category"]), 0) + int(count_row.get("count") or 0)
+    return {"summary_counts": totals, "sources": results}
+
+
+def _timeline_window_activity_highlights(
+    db: Database,
+    case_id: str,
+    where_sql: str,
+    params: list[Any],
+) -> dict[str, Any]:
+    blob = "lower(coalesce(event_type, '') || ' ' || coalesce(source_table, '') || ' ' || coalesce(description, '') || ' ' || coalesce(details_json, ''))"
+    categories = [
+        (
+            "browser_activity",
+            f"({blob} LIKE '%browser%' OR {blob} LIKE '%youtube%' OR {blob} LIKE '%url%' OR {blob} LIKE '%http%' OR source_table IN ('browser_history', 'browser_downloads', 'browser_cache'))",
+        ),
+        (
+            "usb_activity",
+            f"({blob} LIKE '%usb%' OR {blob} LIKE '%removable%' OR {blob} LIKE '%usbstor%' OR {blob} LIKE '%uasp%' OR source_table LIKE 'usb_%')",
+        ),
+        (
+            "file_activity",
+            f"({blob} LIKE '%lnk%' OR {blob} LIKE '%jumplist%' OR {blob} LIKE '%shellbag%' OR {blob} LIKE '%mft%' OR {blob} LIKE '%usn%' OR {blob} LIKE '%windows_search%' OR {blob} LIKE '%docx%' OR {blob} LIKE '%file%')",
+        ),
+        (
+            "execution_activity",
+            f"({blob} LIKE '%execution%' OR {blob} LIKE '%prefetch%' OR {blob} LIKE '%userassist%' OR {blob} LIKE '%runmru%' OR {blob} LIKE '%.exe%')",
+        ),
+        (
+            "communication_activity",
+            f"({blob} LIKE '%mail%' OR {blob} LIKE '%message%' OR {blob} LIKE '%email%' OR {blob} LIKE '%outlook%')",
+        ),
+        (
+            "network_activity",
+            f"({blob} LIKE '%wifi%' OR {blob} LIKE '%wi-fi%' OR {blob} LIKE '%network%' OR {blob} LIKE '%wlan%' OR {blob} LIKE '%srum_network%')",
+        ),
+    ]
+    highlights: dict[str, Any] = {}
+    for name, condition in categories:
+        order_sql = "timestamp_utc"
+        if name == "browser_activity":
+            order_sql = (
+                "CASE "
+                "WHEN source_table IN ('browser_history', 'browser_downloads', 'browser_cache') OR lower(coalesce(event_type, '')) LIKE '%browser%' THEN 0 "
+                "WHEN lower(coalesce(description, '')) LIKE '%youtube%' OR lower(coalesce(description, '')) LIKE '%http%' THEN 1 "
+                "ELSE 2 END, timestamp_utc"
+            )
+        count_row = _query_report_rows(
+            db,
+            case_id,
+            "timeline_events",
+            f"""
+            SELECT COUNT(*) AS count
+            FROM timeline_events
+            WHERE {where_sql} AND {condition}
+            """,
+            params,
+        )[0]
         rows = _query_report_rows(
             db,
             case_id,
             "timeline_events",
             f"""
-            SELECT *, 0 AS source_count
+            SELECT *
             FROM timeline_events
-            WHERE {' AND '.join(duck_where)}
-            ORDER BY timestamp_utc
-            LIMIT ?
+            WHERE {where_sql} AND {condition}
+            ORDER BY {order_sql}
+            LIMIT 15
             """,
             params,
         )
-    events = _rows_with_details(rows)
-    for event in events:
-        _annotate_timeline_source(event)
-    return {"case_id": case_id, "events": events, "total_returned": len(rows)}
+        _fill_computer_image_fields(db, case_id, rows)
+        events = _rows_with_details(rows)
+        for event in events:
+            _annotate_timeline_source(event)
+        highlights[name] = {
+            "count": int(count_row.get("count") or 0),
+            "events": events,
+        }
+    folder_categories = [
+        ("onedrive_file_activity", f"({blob} LIKE '%onedrive%')"),
+        ("desktop_file_activity", f"({blob} LIKE '%\\\\desktop\\\\%' OR {blob} LIKE '%/desktop/%')"),
+        ("onedrive_desktop_file_activity", f"({blob} LIKE '%onedrive%' AND ({blob} LIKE '%\\\\desktop\\\\%' OR {blob} LIKE '%/desktop/%'))"),
+        ("usb_file_interaction", f"({blob} LIKE '%byebye%' OR {blob} LIKE '%removable%' OR {blob} LIKE '%usb%' OR {blob} LIKE '%usbstor%' OR {blob} LIKE '%uasp%' OR source_table LIKE 'usb_%')"),
+    ]
+    folder_activity: dict[str, Any] = {}
+    for name, condition in folder_categories:
+        count_row = _query_report_rows(
+            db,
+            case_id,
+            "timeline_events",
+            f"""
+            SELECT COUNT(*) AS count
+            FROM timeline_events
+            WHERE {where_sql} AND {condition}
+            """,
+            params,
+        )[0]
+        rows = _query_report_rows(
+            db,
+            case_id,
+            "timeline_events",
+            f"""
+            SELECT *
+            FROM timeline_events
+            WHERE {where_sql} AND {condition}
+            ORDER BY timestamp_utc
+            LIMIT 25
+            """,
+            params,
+        )
+        _fill_computer_image_fields(db, case_id, rows)
+        events = _rows_with_details(rows)
+        for event in events:
+            _annotate_timeline_source(event)
+        folder_activity[name] = {"count": int(count_row.get("count") or 0), "events": events}
+    highlights["folder_activity"] = folder_activity
+    return highlights
 
 
 def _annotate_timeline_source(event: dict[str, Any]) -> None:
     details = event.get("details") if isinstance(event.get("details"), dict) else {}
+    event["description"] = _timeline_event_description(event, details)
     source_scope = str(details.get("source_scope") or "").strip()
     source_origin = str(details.get("source_origin") or "").strip()
     if not source_scope:
@@ -11204,6 +12391,99 @@ def _annotate_timeline_source(event: dict[str, Any]) -> None:
     event["source_scope"] = source_scope
     event["source_origin"] = source_origin
     event["source_label"] = label
+    event["artifact_reference"] = _timeline_artifact_reference(event)
+    event["report_hints"] = _timeline_report_hints(event, details)
+
+
+def _timeline_event_description(event: dict[str, Any], details: dict[str, Any]) -> str:
+    value = str(event.get("description") or "").strip()
+    if value:
+        return value
+    event_type = str(event.get("event_type") or "timeline_event")
+    for key in (
+        "url",
+        "target_path",
+        "local_path",
+        "item_path",
+        "path",
+        "source_path",
+        "cache_file",
+        "host",
+        "provider",
+        "channel",
+        "event_id",
+        "category",
+    ):
+        candidate = str(details.get(key) or "").strip()
+        if candidate:
+            if key == "event_id":
+                return f"{event_type}: event {candidate}"
+            return candidate
+    return event_type
+
+
+def _timeline_artifact_reference(event: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "source_tool": event.get("source_tool"),
+        "source_table": event.get("source_table"),
+        "source_row_id": event.get("source_row_id"),
+        "tool_output_id": event.get("tool_output_id"),
+        "computer_id": event.get("computer_id"),
+        "computer_label": event.get("computer_label"),
+        "image_id": event.get("image_id"),
+        "image_path": event.get("image_path"),
+        "timestamp_utc": event.get("timestamp_utc"),
+        "event_type": event.get("event_type"),
+    }
+
+
+def _timeline_report_hints(event: dict[str, Any], details: dict[str, Any]) -> list[dict[str, Any]]:
+    source_table = str(event.get("source_table") or "").strip()
+    event_type = str(event.get("event_type") or "").strip()
+    text = " ".join(
+        str(value or "")
+        for value in (
+            source_table,
+            event_type,
+            event.get("description"),
+            details.get("url"),
+            details.get("target_path"),
+            details.get("local_path"),
+            details.get("item_path"),
+            details.get("source_path"),
+            details.get("key_path"),
+            details.get("volume_serial_number"),
+            details.get("drive_letter"),
+            details.get("volume_name"),
+        )
+    ).lower()
+    hints: list[dict[str, Any]] = []
+
+    def add(report: str, reason: str, *, tool: str | None = None) -> None:
+        if any(existing.get("report") == report for existing in hints):
+            return
+        hints.append({"report": report, "tool": tool or report, "reason": reason})
+
+    if source_table in {"memory_string_hits"} or event.get("source_origin") == "memory":
+        add("memory_artifacts", "Review memory/pagefile/hiberfil/crash-dump context and caveats.", tool="relic_query_memory_artifacts")
+    if source_table in {"browser_history", "browser_downloads", "browser_cache_entries", "webcache_entries", "webcache_file_accesses"} or "browser" in text or "http" in text:
+        add("browser_activity", "Review browser/profile context, downloads, cache, and browser attribution warnings.", tool="relic_query_browser_activity")
+    if source_table in {"firefox_history"}:
+        add("browser_activity", "Review browser/profile context and browser attribution.", tool="relic_query_browser_activity")
+    if source_table in {"shortcut_items", "windows_search_files", "windows_search_gather_logs", "filesystem_entries", "usn_journal_entries", "mft_entries"} or any(token in text for token in ("lnk", "jumplist", "shellbag", "file", "docx", "xlsx", "pdf")):
+        add("file_dossier", "Review filesystem metadata, internal metadata, file references, and indexed content for this path/name.", tool="relic_file_dossier")
+    has_volume_metadata = any(details.get(key) for key in ("volume_serial_number", "drive_letter", "volume_name", "volume_guid"))
+    if source_table.startswith("usb_") or has_volume_metadata or any(token in text for token in ("usb", "usbstor", "uasp", "removable", "volume_serial", "drive_letter")):
+        add("usb_timeline", "Review USB device connection, volume, and file-correlation context.", tool="relic_query_external_storage")
+    if source_table in {"mailbox_messages", "mailbox_attachments", "messaging_messages"} or any(token in text for token in ("mail", "email", "message", "outlook", "mapi")):
+        add("communications", "Review parsed messages, attachments, conversations, and indexed communication fragments.", tool="relic_query_communications")
+    if source_table in {"prefetch_items", "registry_artifacts", "sam_accounts"} or any(token in text for token in ("prefetch", "userassist", "runmru", ".exe", "execution")):
+        add("execution", "Review execution and persistence context for the program or registry activity.", tool="relic_user_activity")
+    if source_table in {"evtx_events", "srum_records", "etl_events"} and any(token in text for token in ("wifi", "wi-fi", "wlan", "network", "ssid", "srum_network")):
+        add("wifi_activity", "Resolve network sessions and then query the master timeline for the full activity window.", tool="relic_query_wifi_activity")
+    if not hints:
+        add("timeline", "Use source_table/source_row_id for direct artifact drilldown, then query the relevant artifact family report.", tool="relic_timeline_window")
+    return hints
 
 
 def _timeline_source_scope_from_event(event: dict[str, Any], details: dict[str, Any]) -> str:
@@ -23418,6 +24698,53 @@ def file_dossier_report(
                     },
                 )
 
+    filesystem_entry_rows = _query_report_rows(
+        db,
+        case_id,
+        "filesystem_entries",
+        """
+        SELECT *
+        FROM filesystem_entries
+        WHERE case_id = ? AND file_name = ?
+        ORDER BY COALESCE(modified_utc, created_utc, accessed_utc, metadata_changed_utc, created_at, ''),
+                 file_path,
+                 row_number
+        LIMIT ?
+        """,
+        (case_id, basename, limit),
+    )
+    for row in filesystem_entry_rows:
+        add_row(
+            category="filesystem",
+            source_table="filesystem_entries",
+            source_id=row["id"],
+            file_name=row["file_name"],
+            row_path=row["file_path"],
+            timestamp=row["modified_utc"] or row["created_utc"] or row["accessed_utc"] or row["metadata_changed_utc"],
+            summary=f"Generated filesystem listing: {row['scan_status'] or 'listed'}",
+            details={
+                "computer_id": row["computer_id"],
+                "image_id": row["image_id"],
+                "partition_id": row["partition_id"],
+                "filesystem_type": row["filesystem_type"],
+                "source_root": row["source_root"],
+                "parent_path": row["parent_path"],
+                "extension": row["extension"],
+                "file_size": row["file_size"],
+                "is_directory": row["is_directory"],
+                "created_utc": row["created_utc"],
+                "modified_utc": row["modified_utc"],
+                "accessed_utc": row["accessed_utc"],
+                "metadata_changed_utc": row["metadata_changed_utc"],
+                "mode": row["mode"],
+                "uid": row["uid"],
+                "gid": row["gid"],
+                "scan_status": row["scan_status"],
+                "error": row["error"],
+                "tool_name": row["tool_name"],
+            },
+        )
+
     fs_rows = _query_report_rows(
         db,
         case_id,
@@ -23630,7 +24957,10 @@ def file_dossier_report(
             },
         )
 
-    metadata_rows = db.conn.execute(
+    metadata_rows = _query_report_rows(
+        db,
+        case_id,
+        "file_internal_metadata",
         """
         SELECT *
         FROM file_internal_metadata
@@ -23639,7 +24969,7 @@ def file_dossier_report(
         LIMIT ?
         """,
         (case_id, basename, max(limit, 250)),
-    ).fetchall()
+    )
     for row in metadata_rows:
         add_row(
             category="internal_metadata",
@@ -23770,6 +25100,8 @@ def file_dossier_report(
 
     deduped_rows = _dedupe_dossier_rows(rows)
     sections = _dossier_sections(deduped_rows)
+    metadata_summary = _dossier_metadata_summary(sections["internal_metadata"])
+    filesystem_metadata_summary = _dossier_filesystem_metadata_summary(sections["filesystem"])
     source_counts: dict[str, int] = {}
     source_type_counts: dict[str, int] = {}
     for row in deduped_rows:
@@ -23804,10 +25136,13 @@ def file_dossier_report(
             "timeline_events": len(sections["filesystem"]),
             "copied_indicators": len(sections["copied_indicators"]),
             "windows_search_hits": len(sections["windows_search"]),
+            "filesystem_listing_hits": len([row for row in sections["filesystem"] if row["source_table"] == "filesystem_entries"]),
+            "internal_metadata_hits": len(sections["internal_metadata"]),
             "mailbox_attachment_hits": 0,
             "web_references": 0,
             "source_counts": [{"source": key, "count": value} for key, value in sorted(source_counts.items())],
             "source_type_counts": [{"source_type": key, "count": value} for key, value in sorted(source_type_counts.items())],
+            "internal_metadata_property_counts": metadata_summary["property_counts"],
         },
         "identity": {
             "file_name": basename,
@@ -23815,6 +25150,8 @@ def file_dossier_report(
             "normalized_requested_path": _normalize_artifact_path(path),
         },
         "sections": sections,
+        "filesystem_metadata": filesystem_metadata_summary,
+        "internal_metadata": metadata_summary,
         "interpretation": _dossier_interpretation(sections),
         "history": sections["filesystem"],
         "evidence": evidence,
@@ -23859,6 +25196,11 @@ def file_intelligence_report(
             "source_counts": [{"source": key, "count": value} for key, value in sorted(source_counts.items())],
             "timestamped_evidence_rows": timestamped_rows,
         },
+        "identity": dossier.get("identity"),
+        "filesystem_metadata": dossier.get("filesystem_metadata"),
+        "internal_metadata": dossier.get("internal_metadata"),
+        "sections": dossier.get("sections"),
+        "interpretation": dossier.get("interpretation"),
         "timeline": dossier["history"],
         "evidence": evidence_rows,
         "copied": dossier["copied"],
@@ -25263,6 +26605,81 @@ def _dossier_sections(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, An
         if category in sections:
             sections[category].append(row)
     return sections
+
+
+def _dossier_filesystem_metadata_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    listing_rows = [row for row in rows if row.get("source_table") == "filesystem_entries"]
+    variants: list[dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
+    for row in listing_rows:
+        details = row.get("details") or {}
+        key = (
+            _normalize_artifact_path(row.get("path")),
+            details.get("image_id"),
+            details.get("filesystem_type"),
+            details.get("scan_status"),
+            details.get("file_size"),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        variants.append(
+            {
+                "path": row.get("path"),
+                "normalized_path": row.get("normalized_path"),
+                "computer_id": details.get("computer_id"),
+                "image_id": details.get("image_id"),
+                "partition_id": details.get("partition_id"),
+                "filesystem_type": details.get("filesystem_type"),
+                "scan_status": details.get("scan_status"),
+                "file_size": details.get("file_size"),
+                "is_directory": details.get("is_directory"),
+                "created_utc": details.get("created_utc"),
+                "modified_utc": details.get("modified_utc"),
+                "accessed_utc": details.get("accessed_utc"),
+                "metadata_changed_utc": details.get("metadata_changed_utc"),
+                "mode": details.get("mode"),
+                "uid": details.get("uid"),
+                "gid": details.get("gid"),
+            }
+        )
+    return {
+        "source_of_truth": "filesystem_entries",
+        "available": bool(variants),
+        "listing_count": len(variants),
+        "variants": variants,
+    }
+
+
+def _dossier_metadata_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    property_counts: dict[str, int] = {}
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        details = row.get("details") or {}
+        group = str(details.get("metadata_group") or details.get("parser") or "metadata")
+        property_name = str(details.get("property_name") or row.get("summary") or "")
+        if property_name:
+            property_counts[property_name] = property_counts.get(property_name, 0) + 1
+        grouped.setdefault(group, []).append(
+            {
+                "property_name": details.get("property_name"),
+                "property_value": details.get("property_value"),
+                "raw_property_name": details.get("raw_property_name"),
+                "parser": details.get("parser"),
+                "source_path": row.get("path"),
+                "timestamp": row.get("timestamp"),
+                "file_size": details.get("file_size"),
+                "extraction_method": details.get("extraction_method"),
+            }
+        )
+    return {
+        "source_of_truth": "file_internal_metadata",
+        "available": bool(rows),
+        "property_count": sum(property_counts.values()),
+        "group_count": len(grouped),
+        "property_counts": [{"property_name": key, "count": value} for key, value in sorted(property_counts.items())],
+        "groups": [{"metadata_group": key, "properties": value} for key, value in sorted(grouped.items())],
+    }
 
 
 def _dossier_interpretation(sections: dict[str, list[dict[str, Any]]]) -> list[dict[str, str]]:
@@ -30645,6 +32062,31 @@ def file_movement_identity_export_rows(report: dict[str, Any]) -> list[dict[str,
 
 DERIVED_TIMELINE_TOOL = "RelicDerived"
 
+TIMELINE_SOURCE_TABLES = (
+    "shortcut_items",
+    "prefetch_items",
+    "sam_accounts",
+    "recycle_items",
+    "firefox_history",
+    "browser_history",
+    "browser_downloads",
+    "browser_cache_entries",
+    "package_cache_entries",
+    "package_artifacts",
+    "telemetry_artifacts",
+    "windows_activities",
+    "windows_search_gather_logs",
+    "windows_error_reports",
+    "windows_defender_events",
+    "memory_string_hits",
+    "staged_carves",
+    "webcache_entries",
+    "webcache_file_accesses",
+    "registry_artifacts",
+    "etl_events",
+    "evtx_events",
+)
+
 
 def derived_timeline_events_report(
     db: Database,
@@ -30678,7 +32120,7 @@ def rebuild_derived_timeline_events(
     *,
     case_id: str,
     image_id: str | None = None,
-    limit: int = 5000,
+    limit: int = 100_000,
 ) -> dict[str, Any]:
     db.get_case(case_id)
     if image_id:
@@ -30700,6 +32142,98 @@ def rebuild_derived_timeline_events(
     return {"case_id": case_id, "image_id": image_id, "deleted_source_tool": DERIVED_TIMELINE_TOOL, "inserted": len(events)}
 
 
+def rebuild_timeline_events(
+    db: Database,
+    *,
+    case_id: str,
+    image_id: str | None = None,
+    batch_size: int = 50_000,
+    include_derived: bool = True,
+) -> dict[str, Any]:
+    db.get_case(case_id)
+    if image_id:
+        db.get_image(image_id, case_id)
+    where = ["case_id = ?"]
+    params: list[Any] = [case_id]
+    if image_id:
+        where.append("image_id = ?")
+        params.append(image_id)
+    where_sql = " AND ".join(where)
+    if not _sqlite_object_is_view(db, "timeline_events"):
+        db.conn.execute(f"DELETE FROM timeline_events WHERE {where_sql}", params)
+    if db.analytics is not None:
+        db.analytics.delete_where("timeline_events", where_sql, params)
+
+    stats: dict[str, Any] = {
+        "case_id": case_id,
+        "image_id": image_id,
+        "deleted_where": where_sql,
+        "source_tables": {},
+        "inserted": 0,
+        "derived": None,
+    }
+    for table in TIMELINE_SOURCE_TABLES:
+        if not _table_exists(db, table):
+            continue
+        columns = _report_table_columns(db, case_id, table)
+        if not columns:
+            continue
+        table_where = ["case_id = ?"]
+        table_params: list[Any] = [case_id]
+        if image_id and "image_id" in columns:
+            table_where.append("image_id = ?")
+            table_params.append(image_id)
+        elif image_id:
+            continue
+        table_where_sql = " AND ".join(table_where)
+        count_row = _query_report_rows(
+            db,
+            case_id,
+            table,
+            f"SELECT COUNT(*) AS count FROM {table} WHERE {table_where_sql}",
+            table_params,
+        )[0]
+        source_count = int(count_row.get("count") or 0)
+        if source_count <= 0:
+            continue
+        inserted_for_table = 0
+        for offset in range(0, source_count, max(batch_size, 1)):
+            rows = _query_report_rows(
+                db,
+                case_id,
+                table,
+                f"""
+                SELECT *
+                FROM {table}
+                WHERE {table_where_sql}
+                ORDER BY row_number, id
+                LIMIT ? OFFSET ?
+                """,
+                [*table_params, batch_size, offset],
+            )
+            normalized_rows = [_timeline_rebuild_source_row(table, dict(row)) for row in rows]
+            events = timeline_events_from_rows(normalized_rows)
+            if events:
+                db.insert_timeline_events(events)
+                inserted_for_table += len(events)
+        stats["source_tables"][table] = {"source_rows": source_count, "inserted": inserted_for_table}
+        stats["inserted"] += inserted_for_table
+    if include_derived:
+        stats["derived"] = rebuild_derived_timeline_events(db, case_id=case_id, image_id=image_id)
+        stats["inserted"] += int((stats["derived"] or {}).get("inserted") or 0)
+    return stats
+
+
+def _timeline_rebuild_source_row(table: str, row: dict[str, Any]) -> dict[str, Any]:
+    if not row.get("tool_name"):
+        if table == "firefox_history":
+            row["tool_name"] = "FirefoxParser"
+        elif table == "recycle_items":
+            row["tool_name"] = "RecycleParser"
+            row.setdefault("record_type", "recycle_item")
+    return row
+
+
 def _sqlite_object_is_view(db: Database, name: str) -> bool:
     row = db.conn.execute(
         "SELECT type FROM sqlite_master WHERE name = ?",
@@ -30708,8 +32242,12 @@ def _sqlite_object_is_view(db: Database, name: str) -> bool:
     return bool(row and row["type"] == "view")
 
 
-def derived_timeline_events(db: Database, case_id: str, *, limit: int = 5000) -> list[dict[str, Any]]:
+def derived_timeline_events(db: Database, case_id: str, *, limit: int = 100_000) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
+
+    rows.extend(_wifi_session_timeline_events(db, case_id, limit=limit))
+    rows.extend(_srum_timeline_events(db, case_id, limit=limit))
+    rows.extend(_usb_connection_timeline_events(db, case_id, limit=limit))
 
     for item in user_intent_artifacts_report(db, case_id, limit=min(limit, 1000)).get("events") or []:
         details = item.get("details") if isinstance(item.get("details"), dict) else {}
@@ -30870,7 +32408,16 @@ def derived_timeline_events(db: Database, case_id: str, *, limit: int = 5000) ->
                 source_row_id=str(item.get("id") or uuid.uuid4()),
                 event_type=f"evtx_{item.get('category') or 'interpreted'}",
                 timestamp=item.get("time_created"),
-                description=item.get("summary") or item.get("payload_data1"),
+                description=_derived_timeline_description(
+                    item.get("summary") or item.get("payload_data1"),
+                    f"evtx_{item.get('category') or 'interpreted'}",
+                    {
+                        "category": item.get("category"),
+                        "event_id": item.get("event_id"),
+                        "provider": item.get("provider"),
+                        "channel": item.get("channel"),
+                    },
+                ),
                 details={
                     "category": item.get("category"),
                     "event_id": item.get("event_id"),
@@ -30896,15 +32443,21 @@ def _derived_event(
     timestamp: Any,
     description: Any,
     details: dict[str, Any],
+    end_timestamp: Any = None,
 ) -> list[dict[str, Any]]:
     timestamp_utc = normalize_timestamp(timestamp)
     if not timestamp_utc:
         return []
+    end_timestamp_utc = normalize_timestamp(end_timestamp)
+    duration_ms = _timeline_duration_ms(timestamp_utc, end_timestamp_utc)
+    if end_timestamp_utc and duration_ms is None:
+        end_timestamp_utc = None
     tool_output_id = item.get("tool_output_id")
     computer_id = item.get("computer_id")
     image_id = item.get("image_id")
     if not (tool_output_id and computer_id and image_id):
         return []
+    description_text = _derived_timeline_description(description, event_type, details)
     return [
         {
             "id": str(uuid.uuid4()),
@@ -30918,10 +32471,264 @@ def _derived_event(
             "event_type": event_type,
             "raw_timestamp": str(timestamp or ""),
             "timestamp_utc": timestamp_utc,
-            "description": str(description or ""),
+            "end_timestamp_utc": end_timestamp_utc,
+            "duration_ms": duration_ms,
+            "description": description_text,
             "details": details,
         }
     ]
+
+
+def _derived_timeline_description(description: Any, event_type: str, details: dict[str, Any]) -> str:
+    value = str(description or "").strip()
+    if value:
+        return value
+    for key in (
+        "path",
+        "target",
+        "url",
+        "provider",
+        "channel",
+        "event_id",
+        "category",
+        "source",
+        "activity",
+    ):
+        candidate = str(details.get(key) or "").strip()
+        if candidate:
+            if key == "event_id":
+                return f"{event_type}: event {candidate}"
+            return candidate
+    return event_type
+
+
+def _timeline_duration_ms(start_timestamp: str | None, end_timestamp: str | None) -> int | None:
+    if not start_timestamp or not end_timestamp:
+        return None
+    start = parse_timestamp(start_timestamp)
+    end = parse_timestamp(end_timestamp)
+    if start is None or end is None:
+        return None
+    duration = int((end - start).total_seconds() * 1000)
+    return duration if duration >= 0 else None
+
+
+def _wifi_session_timeline_events(db: Database, case_id: str, *, limit: int) -> list[dict[str, Any]]:
+    rows = _query_report_rows(
+        db,
+        case_id,
+        "evtx_events",
+        """
+        SELECT id, case_id, computer_id, image_id, tool_output_id, time_created, provider, event_id, channel,
+               computer, map_description, payload_data1, payload_data2, payload_data3,
+               payload_data4, source_file, payload
+        FROM evtx_events
+        WHERE case_id = ?
+          AND (
+            lower(coalesce(provider, '')) like '%wlan%' OR
+            lower(coalesce(channel, '')) like '%wlan%' OR
+            lower(coalesce(provider, '')) like '%networkprofile%' OR
+            lower(coalesce(channel, '')) like '%networkprofile%' OR
+            lower(coalesce(map_description, '')) like '%wifi%' OR
+            lower(coalesce(payload, '')) like '%wifi%' OR
+            lower(coalesce(payload, '')) like '%wireless%'
+          )
+        ORDER BY time_created, event_id
+        LIMIT ?
+        """,
+        (case_id, max(limit * 5, 1000)),
+    )
+    for row in rows:
+        row["network_name"] = _wifi_network_name_from_row(row)
+        row["wifi_event_class"] = _wifi_event_class(row)
+        row["source_table"] = "evtx_events"
+    sessions = _wifi_session_rows(rows)
+    rows: list[dict[str, Any]] = []
+    for session in sessions[:limit]:
+        start_row = session.get("start_row") if isinstance(session.get("start_row"), dict) else {}
+        end_row = session.get("end_row") if isinstance(session.get("end_row"), dict) else {}
+        network_name = session.get("network_name") or start_row.get("network_name") or end_row.get("network_name")
+        rows.extend(
+            _derived_event(
+                case_id=case_id,
+                item=start_row,
+                source_table="evtx_events",
+                source_row_id=str(start_row.get("id") or uuid.uuid4()),
+                event_type="wifi_session",
+                timestamp=session.get("start"),
+                end_timestamp=session.get("end"),
+                description=f"Wi-Fi session: {network_name or '<unknown>'}",
+                details={
+                    "network_name": network_name,
+                    "start_event_id": start_row.get("event_id"),
+                    "end_event_id": end_row.get("event_id"),
+                    "start_basis": start_row.get("map_description") or start_row.get("provider"),
+                    "end_basis": end_row.get("map_description") or session.get("end_basis"),
+                    "supporting_event_count": session.get("supporting_event_count"),
+                    "evidence_strength": "session",
+                },
+            )
+        )
+    return rows
+
+
+def _wifi_session_rows(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    relevant: list[dict[str, Any]] = []
+    for row in events:
+        timestamp = parse_timestamp(str(row.get("time_created") or ""))
+        if timestamp is None:
+            continue
+        item = dict(row)
+        item["_parsed_time"] = timestamp
+        relevant.append(item)
+    relevant.sort(key=lambda row: row["_parsed_time"])
+    sessions: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    for row in relevant:
+        event_id = str(row.get("event_id") or "")
+        event_class = str(row.get("wifi_event_class") or "")
+        text = " ".join(str(row.get(key) or "") for key in ("map_description", "payload")).casefold()
+        timestamp = row["_parsed_time"]
+        timestamp_text = timestamp.isoformat().replace("+00:00", "Z")
+        is_start = event_class == "connected" or event_id in {"8001", "10000"} or "connect to the internet" in text
+        is_end = event_id in {"8003", "10001"} or "disconnect from the internet" in text or "connection was terminated" in text
+        if is_start:
+            if current and not current.get("end"):
+                current_start = parse_timestamp(str(current.get("start") or ""))
+                if current_start is not None and 0 <= (timestamp - current_start).total_seconds() <= 5:
+                    current["supporting_event_count"] = int(current.get("supporting_event_count") or 0) + 1
+                    if _better_wifi_session_name(row.get("network_name"), current.get("network_name")):
+                        current["network_name"] = row.get("network_name")
+                        current["start_row"] = row
+                    continue
+                current["end"] = timestamp_text
+                current["end_basis"] = "next_connection_started"
+                sessions.append(current)
+            current = {
+                "network_name": row.get("network_name"),
+                "start": timestamp_text,
+                "end": None,
+                "start_row": row,
+                "end_row": None,
+                "end_basis": None,
+                "supporting_event_count": 0,
+            }
+            continue
+        if current and is_end:
+            current["end"] = timestamp_text
+            current["end_row"] = row
+            current["end_basis"] = row.get("map_description") or "wifi_disconnected"
+            sessions.append(current)
+            current = None
+            continue
+        if current:
+            current["supporting_event_count"] = int(current.get("supporting_event_count") or 0) + 1
+    if current:
+        last_support = relevant[-1]["_parsed_time"].isoformat().replace("+00:00", "Z") if relevant else current["start"]
+        current["end"] = last_support
+        current["end_basis"] = "last_observed_matching_wifi_event"
+        sessions.append(current)
+    return sessions
+
+
+def _better_wifi_session_name(candidate: Any, current: Any) -> bool:
+    candidate_text = str(candidate or "").strip()
+    current_text = str(current or "").strip()
+    if not candidate_text:
+        return False
+    generic = {"identifying...", "identifying", "network", "unknown", "<unknown>"}
+    if not current_text or current_text.casefold() in generic:
+        return True
+    return False
+
+
+def _srum_timeline_events(db: Database, case_id: str, *, limit: int) -> list[dict[str, Any]]:
+    rows = _query_report_rows(
+        db,
+        case_id,
+        "srum_records",
+        """
+        SELECT *
+        FROM srum_records
+        WHERE case_id = ?
+          AND COALESCE(timestamp, connect_start_time, start_time, event_timestamp, '') != ''
+        ORDER BY COALESCE(timestamp, connect_start_time, start_time, event_timestamp, '') DESC
+        LIMIT ?
+        """,
+        (case_id, limit),
+    )
+    events: list[dict[str, Any]] = []
+    for row in rows:
+        timestamp = row.get("timestamp") or row.get("connect_start_time") or row.get("start_time") or row.get("event_timestamp")
+        end_timestamp = row.get("end_time") or row.get("timeline_end")
+        record_type = row.get("record_type") or row.get("source_table") or "srum"
+        description = row.get("app_name") or row.get("app_path") or row.get("l2_profile_name") or record_type
+        events.extend(
+            _derived_event(
+                case_id=case_id,
+                item=row,
+                source_table="srum_records",
+                source_row_id=str(row.get("id") or uuid.uuid4()),
+                event_type=f"srum_{record_type}",
+                timestamp=timestamp,
+                end_timestamp=end_timestamp,
+                description=description,
+                details={
+                    "record_type": record_type,
+                    "app_name": row.get("app_name"),
+                    "app_path": row.get("app_path"),
+                    "user_name": row.get("user_name"),
+                    "l2_profile_name": row.get("l2_profile_name"),
+                    "network_type": row.get("network_type"),
+                    "interface_type": row.get("interface_type"),
+                    "bytes_sent": row.get("bytes_sent"),
+                    "bytes_received": row.get("bytes_received"),
+                    "evidence_strength": "srum_observation",
+                },
+            )
+        )
+    return events
+
+
+def _usb_connection_timeline_events(db: Database, case_id: str, *, limit: int) -> list[dict[str, Any]]:
+    rows = _query_report_rows(
+        db,
+        case_id,
+        "usb_connection_events",
+        """
+        SELECT *
+        FROM usb_connection_events
+        WHERE case_id = ?
+          AND COALESCE(event_time_utc, '') != ''
+        ORDER BY event_time_utc DESC
+        LIMIT ?
+        """,
+        (case_id, limit),
+    )
+    events: list[dict[str, Any]] = []
+    for row in rows:
+        event_type = str(row.get("event_type") or "usb_observed").strip() or "usb_observed"
+        events.extend(
+            _derived_event(
+                case_id=case_id,
+                item=row,
+                source_table="usb_connection_events",
+                source_row_id=str(row.get("id") or uuid.uuid4()),
+                event_type=f"usb_{event_type}",
+                timestamp=row.get("event_time_utc"),
+                description=row.get("friendly_name") or row.get("serial") or row.get("drive_letter") or event_type,
+                details={
+                    "event_type": event_type,
+                    "serial": row.get("serial"),
+                    "drive_letter": row.get("drive_letter"),
+                    "volume_serial_number": row.get("volume_serial_number"),
+                    "volume_guid": row.get("volume_guid"),
+                    "event_source": row.get("event_source"),
+                    "evidence_strength": "usb_connection_event",
+                },
+            )
+        )
+    return events
 
 
 def _droid_column_sql(columns: set[str], name: str) -> str:
@@ -31164,6 +32971,10 @@ def artifact_search_report(
     user_text = (user or "").strip()
     computer_text = (computer or "").strip()
     source_text = (source_type or "").strip().casefold()
+    normalized_start = _normalize_report_timestamp(start)
+    normalized_end = _normalize_report_timestamp(end)
+    start_bound = _timestamp_sql_bound(start)
+    end_bound = _timestamp_sql_bound(end)
     computer_labels = _case_computer_labels(db, case_id)
     image_paths = _case_image_paths(db, case_id)
     computer_ids = _matching_computer_ids(computer_labels, computer_text)
@@ -31182,8 +32993,9 @@ def artifact_search_report(
         searchable = [field for field in spec["fields"] if field in columns]
         display = [field for field in spec["display"] if field in columns]
         timestamp_col = str(spec.get("timestamp") or "")
+        end_timestamp_col = str(spec.get("end_timestamp") or "")
         user_col = str(spec.get("user") or "")
-        select_cols = _dedupe_columns(["id", "case_id", "computer_id", "image_id", timestamp_col, user_col, *display, *searchable])
+        select_cols = _dedupe_columns(["id", "case_id", "computer_id", "image_id", timestamp_col, end_timestamp_col, user_col, *display, *searchable])
         select_cols = [column for column in select_cols if column in columns]
         if "id" not in select_cols or "case_id" not in select_cols:
             continue
@@ -31206,12 +33018,23 @@ def artifact_search_report(
             placeholders = ", ".join("?" for _ in computer_ids)
             where.append(f"computer_id IN ({placeholders})")
             params.extend(computer_ids)
-        if start and timestamp_col in columns:
-            where.append(f"{timestamp_col} >= ?")
-            params.append(start)
-        if end and timestamp_col in columns:
-            where.append(f"{timestamp_col} <= ?")
-            params.append(end)
+        if (start_bound or end_bound) and timestamp_col in columns:
+            timestamp_expr = _timestamp_sql_expr(timestamp_col)
+            if end_timestamp_col in columns:
+                end_timestamp_expr = f"COALESCE(NULLIF({_timestamp_sql_expr(end_timestamp_col)}, ''), {timestamp_expr})"
+                if start_bound:
+                    where.append(f"{end_timestamp_expr} >= ?")
+                    params.append(start_bound)
+                if end_bound:
+                    where.append(f"{timestamp_expr} <= ?")
+                    params.append(end_bound)
+            else:
+                if start_bound:
+                    where.append(f"{timestamp_expr} >= ?")
+                    params.append(start_bound)
+                if end_bound:
+                    where.append(f"{timestamp_expr} <= ?")
+                    params.append(end_bound)
         order = f"ORDER BY {timestamp_col} DESC" if timestamp_col in columns else "ORDER BY id"
         remaining = limit - len(results)
         sql = f"SELECT {', '.join(select_cols)} FROM {table} WHERE {' AND '.join(where)} {order} LIMIT ?"
@@ -31221,6 +33044,7 @@ def artifact_search_report(
             item["table"] = table
             item["category"] = category
             item["timestamp"] = item.get(timestamp_col) if timestamp_col else None
+            item["end_timestamp"] = item.get(end_timestamp_col) if end_timestamp_col else None
             item["computer_label"] = computer_labels.get(str(item.get("computer_id") or ""))
             item["image_path"] = image_paths.get(str(item.get("image_id") or ""))
             item["matched_fields"] = _artifact_matched_fields(item, searchable, query_text)
@@ -31244,8 +33068,8 @@ def artifact_search_report(
             "user": user_text,
             "computer": computer_text,
             "source_type": source_text,
-            "start": start or "",
-            "end": end or "",
+            "start": normalized_start or "",
+            "end": normalized_end or "",
         },
         "summary": {
             "searched_tables": searched_tables,
@@ -32195,15 +34019,34 @@ def _usb_overlaps_for_time(
     timestamp_utc: str | None,
     local_path: str | None,
 ) -> list[dict[str, Any]]:
-    if not timestamp_utc:
+    timestamp_bound = _timestamp_sql_bound(timestamp_utc)
+    if not timestamp_bound:
         return []
     params: list[Any] = [case_id]
     image_filter = ""
     if image_id:
         image_filter = "AND start_event.image_id = ?"
         params.append(image_id)
-    params.append(timestamp_utc)
-    params.append(timestamp_utc)
+    params.append(timestamp_bound)
+    params.append(timestamp_bound)
+    removal_after_start_expr = (
+        f"{_timestamp_sql_expr('end_event.event_time_utc')} >= "
+        f"{_timestamp_sql_expr('start_event.event_time_utc')}"
+    )
+    session_end_expr = f"""
+        COALESCE(
+          (
+            SELECT MIN(end_event.event_time_utc)
+            FROM usb_connection_events end_event
+            WHERE end_event.case_id = start_event.case_id
+              AND end_event.image_id = start_event.image_id
+              AND end_event.serial = start_event.serial
+              AND end_event.event_type = 'removal'
+              AND {removal_after_start_expr}
+          ),
+          start_event.event_time_utc
+        )
+    """
     rows = _query_report_rows(
         db,
         case_id,
@@ -32211,18 +34054,7 @@ def _usb_overlaps_for_time(
         f"""
         SELECT start_event.serial, start_event.volume_serial_number, start_event.volume_guid,
                start_event.drive_letter, start_event.event_time_utc AS session_start,
-               COALESCE(
-                 (
-                   SELECT MIN(end_event.event_time_utc)
-                   FROM usb_connection_events end_event
-                   WHERE end_event.case_id = start_event.case_id
-                     AND end_event.image_id = start_event.image_id
-                     AND end_event.serial = start_event.serial
-                     AND end_event.event_type = 'removal'
-                     AND end_event.event_time_utc >= start_event.event_time_utc
-                 ),
-                 start_event.event_time_utc
-               ) AS session_end,
+               {session_end_expr} AS session_end,
                usb_storage_devices.volume_name,
                usb_storage_devices.product,
                usb_storage_devices.vendor
@@ -32232,19 +34064,8 @@ def _usb_overlaps_for_time(
         WHERE start_event.case_id = ?
           {image_filter}
           AND start_event.event_type IN ('arrival', 'first_connected', 'partition_seen')
-          AND start_event.event_time_utc <= ?
-          AND COALESCE(
-                (
-                  SELECT MIN(end_event.event_time_utc)
-                  FROM usb_connection_events end_event
-                  WHERE end_event.case_id = start_event.case_id
-                    AND end_event.image_id = start_event.image_id
-                    AND end_event.serial = start_event.serial
-                    AND end_event.event_type = 'removal'
-                    AND end_event.event_time_utc >= start_event.event_time_utc
-                ),
-                start_event.event_time_utc
-              ) >= ?
+          AND {_timestamp_sql_expr('start_event.event_time_utc')} <= ?
+          AND {_timestamp_sql_expr(session_end_expr)} >= ?
         ORDER BY start_event.event_time_utc DESC
         LIMIT 10
         """,

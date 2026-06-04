@@ -397,6 +397,8 @@ tools:
           - "*.pptx"
           - "*.pub"
           - "*.rtf"
+          - "_WRD*.tmp"
+          - "~WR*.tmp"
         exclude_patterns:
           - "Windows/*"
           - "Windows.old/*"
@@ -2647,6 +2649,12 @@ profiles:
         - ThumbcacheParser
         - WindowsSearchESEParser
         - WindowsSearchGatherParser
+      internal_file_metadata:
+        - FileMetadataOffice
+        - FileMetadataDocuments
+        - FileMetadataPicturesUserContent
+        - FileMetadataVideos
+        - FileMetadataExecutables
       browser_activity:
         - BrowserCacheParser
         - ChromiumParser
@@ -2739,6 +2747,11 @@ profiles:
       - WindowsMailParser
       - MessagingParser
       - ArchiveInventoryParser
+      - FileMetadataOffice
+      - FileMetadataDocuments
+      - FileMetadataPicturesUserContent
+      - FileMetadataVideos
+      - FileMetadataExecutables
       - JLECmd
       - LECmd
       - SBECmd

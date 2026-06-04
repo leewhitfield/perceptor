@@ -30,7 +30,7 @@ ANALYTICS_TABLE_COLUMNS: dict[str, list[str]] = {
     "timeline_events": [
         "id", "case_id", "computer_id", "image_id", "tool_output_id", "source_tool",
         "source_table", "source_row_id", "event_type", "raw_timestamp", "timestamp_utc",
-        "description", "created_at",
+        "end_timestamp_utc", "duration_ms", "description", "details_json", "created_at",
     ],
     "onedrive_log_entries": [
         "id", "case_id", "computer_id", "image_id", "tool_output_id", "tool_name",

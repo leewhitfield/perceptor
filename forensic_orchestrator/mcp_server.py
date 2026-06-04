@@ -53,10 +53,13 @@ from .reports import (
     unmapped_imports_report,
     usb_file_correlation_report,
     usb_dossier_report,
+    system_users_report,
     user_activity_report,
+    wifi_activity_report,
     workspace_health_report,
+    _query_report_rows,
 )
-from .search.opensearch import OpenSearchConfig, search_case_content
+from .search.opensearch import OpenSearchConfig, OpenSearchRestClient, search_case_content
 from .standalone import doctor_report, job_status_report
 from .tools.profiles import profile_extraction_preview
 from .tools.registry import ToolRegistry
@@ -187,6 +190,8 @@ class RelicMcpServer:
             "instructions": (
                 "Relic MCP exposes forensic workspace tools. Inspection and report-generation tools are available by default. "
                 "For broad questions, call relic_route_question first to classify the request and receive the source-of-truth order. "
+                "For matter background or scope context, call relic_case_summary or relic_report_case_overview first; case descriptions "
+                "stored with `case describe` are returned there. "
                 "For report-backed questions, call relic_read_existing_report or relic_discover_reports first and treat generated reports "
                 "as the source of truth before querying raw artifacts or starting processing. "
                 "For questions phrased as evidence contents, drive contents, files on a volume, or list files, call "
@@ -194,6 +199,10 @@ class RelicMcpServer:
                 "listings are absent, stale, or the user explicitly requests new processing. "
                 "For filesystem/file-listing questions, call relic_query_filesystem_listings first because it reads generated "
                 "case file listings and avoids slow image tooling. "
+                "For Wi-Fi, WLAN, SSID, or network-connection questions, call relic_query_wifi_activity because it reconciles "
+                "WLAN/NetworkProfile EVTX, SRUM, and NetworkList registry evidence. "
+                "For questions about what happened during a Wi-Fi connection, first call relic_query_wifi_activity to resolve "
+                "the session window, then call relic_timeline_window with that start/end. "
                 "For file-content, document-text, body-text, or indexed-content search questions, call relic_search_content after "
                 "checking relevant generated reports; it queries OpenSearch indexed content and does not start image processing. "
                 "Import and processing calls require --allow-processing. Sensitive credential reveal, external AI upload, "
@@ -460,13 +469,26 @@ class RelicMcpServer:
             McpTool(
                 name="relic_timeline_window",
                 title="Relic Timeline Window",
-                description="Return a focused timeline review window for a case.",
+                description=(
+                    "Return normalized master-timeline events for a case, optionally bounded by start/end. "
+                    "Use this as the first source for questions about what happened during, around, or overlapping "
+                    "a resolved activity window. For broad activity-window questions, do not pass the Wi-Fi SSID, "
+                    "USB name, user term, or trigger phrase as contains; contains is only applied when "
+                    "filter_within_window is true."
+                ),
                 input_schema=_object_schema(
                     {
                         "case_id": _string_schema("Relic case ID."),
                         "limit": _integer_schema("Maximum events to return.", default=100, minimum=1, maximum=1000),
+                        "start": _string_schema("Optional inclusive timestamp lower bound."),
+                        "end": _string_schema("Optional inclusive timestamp upper bound."),
                         "user": _string_schema("Optional user/profile filter."),
-                        "contains": _string_schema("Optional text filter."),
+                        "contains": _string_schema("Optional text filter. Ignored for start/end windows unless filter_within_window is true."),
+                        "filter_within_window": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": "When true, apply contains inside the bounded window. Leave false for broad 'what happened during this session' questions.",
+                        },
                         "source": _string_schema("Optional source filter."),
                         "preset": _string_schema("Optional timeline preset."),
                     },
@@ -476,9 +498,43 @@ class RelicMcpServer:
                 annotations=read_only,
             ),
             McpTool(
+                name="relic_activity_windows",
+                title="Relic Activity Windows",
+                description=(
+                    "Aggregate activity across multiple resolved time windows. Use this after tools such as "
+                    "relic_query_wifi_activity return session_activity_plan.calls. This is the preferred tool for "
+                    "questions like what happened while connected to a network when there are multiple sessions."
+                ),
+                input_schema=_object_schema(
+                    {
+                        "case_id": _string_schema("Relic case ID."),
+                        "windows": {
+                            "type": "array",
+                            "description": "Resolved windows to aggregate. Each item needs start and end.",
+                            "items": _object_schema(
+                                {
+                                    "label": _string_schema("Optional window label."),
+                                    "start": _string_schema("Inclusive start timestamp."),
+                                    "end": _string_schema("Inclusive end timestamp."),
+                                },
+                                required=["start", "end"],
+                            ),
+                        },
+                        "limit": _integer_schema("Maximum rows per window/source.", default=250, minimum=1, maximum=1000),
+                    },
+                    required=["case_id", "windows"],
+                ),
+                handler=self.activity_windows,
+                annotations=read_only,
+            ),
+            McpTool(
                 name="relic_file_dossier",
                 title="Relic File Dossier",
-                description="Return a file-centric dossier by path or name. For broad filesystem listings, use relic_query_filesystem_listings first.",
+                description=(
+                    "Return a file-centric dossier by path or name. Use this for questions such as what can you tell me "
+                    "about this file, file metadata, filesystem metadata for a file, internal metadata, and file provenance. "
+                    "For broad filesystem listings, use relic_query_filesystem_listings first."
+                ),
                 input_schema=_object_schema(
                     {
                         "case_id": _string_schema("Relic case ID."),
@@ -518,8 +574,8 @@ class RelicMcpServer:
                 name="relic_query_evidence_contents",
                 title="Query Evidence Contents",
                 description=(
-                    "Return file contents/listings for any evidence image, drive, volume, or filesystem from stored filesystem_entries only. "
-                    "Use this for questions like 'pull a list of contents' before any FLS, SleuthKit, mount, or image processing."
+                    "Return file listings / drive contents for any evidence image, drive, volume, or filesystem from stored filesystem_entries only. "
+                    "This does not return file text. For the text/content inside a specific file, use relic_file_dossier for metadata and then relic_search_content."
                 ),
                 input_schema=_object_schema(
                     {
@@ -535,6 +591,28 @@ class RelicMcpServer:
                     required=["case_id"],
                 ),
                 handler=self.query_evidence_contents,
+                annotations=read_only,
+            ),
+            McpTool(
+                name="relic_query_usb_contents",
+                title="Query USB Contents",
+                description=(
+                    "Resolve a USB volume/device such as BYEBYE to stored filesystem_entries and USB file correlations. "
+                    "Use this for questions like what else was on the USB drive, especially after relic_activity_windows "
+                    "or relic_query_wifi_activity identifies a USB volume name or drive letter."
+                ),
+                input_schema=_object_schema(
+                    {
+                        "case_id": _string_schema("Relic case ID."),
+                        "volume_name": _string_schema("Optional USB volume label/name, for example BYEBYE."),
+                        "image_id": _string_schema("Optional USB evidence image ID."),
+                        "serial": _string_schema("Optional USB serial."),
+                        "include_system": {"type": "boolean", "default": False},
+                        "limit": _integer_schema("Maximum rows to return.", default=500, minimum=1, maximum=1000),
+                    },
+                    required=["case_id"],
+                ),
+                handler=self.query_usb_contents,
                 annotations=read_only,
             ),
             McpTool(
@@ -557,7 +635,12 @@ class RelicMcpServer:
             McpTool(
                 name="relic_user_activity",
                 title="Relic User Activity",
-                description="Return user-focused execution, file, browser, logon, communication, and USB activity.",
+                description=(
+                    "Return user-focused execution, file, browser, logon, communication, and USB activity. "
+                    "This is not the source of truth for bounded activity-window questions such as what happened "
+                    "during a Wi-Fi connection, USB attachment, logon session, or other resolved time span; use "
+                    "relic_timeline_window with start/end for those questions."
+                ),
                 input_schema=_object_schema(
                     {
                         "case_id": _string_schema("Relic case ID."),
@@ -568,6 +651,36 @@ class RelicMcpServer:
                 ),
                 handler=self.user_activity,
                 annotations=read_only,
+            ),
+            McpTool(
+                name="relic_query_system_users",
+                title="Query System Users",
+                description=(
+                    "Return consolidated Windows local and Microsoft-account users for a case/computer. "
+                    "Use this as the source of truth for questions about users, accounts, usernames, SIDs, "
+                    "last logon, and Microsoft account InternetUserName before searching raw artifacts."
+                ),
+                input_schema=_object_schema(
+                    {
+                        "case_id": _string_schema("Relic case ID."),
+                        "computer_id": _string_schema("Optional computer ID filter."),
+                        "include_builtin": {"type": "boolean", "default": True},
+                        "limit": _integer_schema("Maximum users to return.", default=500, minimum=1, maximum=1000),
+                    },
+                    required=["case_id"],
+                ),
+                handler=self.query_system_users,
+                annotations=read_only,
+                category="identity",
+                tags=("users", "accounts", "sam", "sid", "microsoft-account", "read"),
+                dependencies=("sam_accounts", "registry_artifacts"),
+                source_priority=("parsed_artifact_tables", "generated_reports"),
+                examples=(
+                    {
+                        "description": "List users and account types for a case.",
+                        "arguments": {"case_id": "case-id", "include_builtin": False},
+                    },
+                ),
             ),
             McpTool(
                 name="relic_query_suspicious_executions",
@@ -591,6 +704,44 @@ class RelicMcpServer:
                 ),
                 handler=self.query_external_storage,
                 annotations=read_only,
+            ),
+            McpTool(
+                name="relic_query_wifi_activity",
+                title="Query Wi-Fi Activity",
+                description=(
+                    "Return reconciled Wi-Fi/network activity from WLAN and NetworkProfile EVTX events, SRUM "
+                    "network_connectivity rows, and NetworkList registry artifacts. Use this for SSID, Wi-Fi, "
+                    "wireless, WLAN, or network-connection questions before broad timeline searches. If the "
+                    "user names a network such as Hyatt, Lemonade, or xfinitywifi, pass that name in the ssid argument. "
+                    "For questions asking what happened while connected to a network, use session_activity_plan and "
+                    "call session_activity_plan.aggregate_tool first; use per-session connection_sessions rows only for drilldown."
+                ),
+                input_schema=_object_schema(
+                    {
+                        "case_id": _string_schema("Relic case ID."),
+                        "start": _string_schema("Optional inclusive timestamp lower bound, for example 2025-11-17 00:00:00."),
+                        "end": _string_schema("Optional exclusive timestamp upper bound, for example 2025-11-18 00:00:00."),
+                        "ssid": _string_schema("Optional SSID/network name filter."),
+                        "limit": _integer_schema("Maximum rows per source to return.", default=100, minimum=1, maximum=1000),
+                    },
+                    required=["case_id"],
+                ),
+                handler=self.query_wifi_activity,
+                annotations=read_only,
+                category="network",
+                tags=("network", "wifi", "wlan", "ssid", "evtx", "srum", "registry", "read"),
+                dependencies=("evtx_events", "srum_records", "registry_artifacts"),
+                source_priority=("parsed_artifact_tables", "generated_reports"),
+                examples=(
+                    {
+                        "description": "Review Wi-Fi activity for one day.",
+                        "arguments": {"case_id": "case-id", "start": "2025-11-17 00:00:00", "end": "2025-11-18 00:00:00"},
+                    },
+                    {
+                        "description": "Review evidence for one SSID.",
+                        "arguments": {"case_id": "case-id", "ssid": "Lemonade", "start": "2025-11-17 00:00:00", "end": "2025-11-18 00:00:00"},
+                    },
+                ),
             ),
             McpTool(
                 name="relic_query_usb_files",
@@ -678,7 +829,11 @@ class RelicMcpServer:
             McpTool(
                 name="relic_query_browser_activity",
                 title="Query Browser Activity",
-                description="Return browser host, download, WebCache, and cache correlation summary.",
+                description=(
+                    "Return browser host, download, WebCache, and cache correlation summary. Includes "
+                    "attribution_warnings for mirrored cross-browser Chromium records, such as Edge visit_source=8, "
+                    "which should not be treated alone as proof of active Edge browsing."
+                ),
                 input_schema=_object_schema(
                     {
                         "case_id": _string_schema("Relic case ID."),
@@ -836,6 +991,38 @@ class RelicMcpServer:
                     {
                         "description": "Search indexed file and message content for a phrase.",
                         "arguments": {"case_id": "case-id", "query": "confidential project notes", "limit": 25},
+                    },
+                ),
+            ),
+            McpTool(
+                name="relic_get_indexed_content",
+                title="Relic Get Indexed Content",
+                description=(
+                    "Return the stored full-text content for one OpenSearch content hit. Use the opensearch_document_id "
+                    "returned by relic_search_content when the user wants to read more than the search snippet. "
+                    "Credentials are read from FORENSIC_OPENSEARCH_* environment variables and are not accepted as MCP arguments."
+                ),
+                input_schema=_object_schema(
+                    {
+                        "case_id": _string_schema("Relic case ID. The OpenSearch document must belong to this case."),
+                        "opensearch_document_id": _string_schema("OpenSearch document ID returned by relic_search_content."),
+                        "max_chars": _integer_schema("Maximum indexed-content characters to return.", default=20000, minimum=1, maximum=1000000),
+                        "url": _string_schema("Optional OpenSearch URL. Defaults to FORENSIC_OPENSEARCH_URL or http://localhost:9200."),
+                        "index": _string_schema("Optional OpenSearch index. Defaults to FORENSIC_OPENSEARCH_INDEX or forensic-content."),
+                        "insecure": {"type": "boolean", "default": False, "description": "Disable TLS certificate verification for this request."},
+                    },
+                    required=["case_id", "opensearch_document_id"],
+                ),
+                handler=self.get_indexed_content,
+                annotations=read_only,
+                category="search",
+                tags=("search", "content", "opensearch", "read", "drilldown"),
+                dependencies=("OpenSearch", "FORENSIC_OPENSEARCH_* environment variables when authentication is required"),
+                source_priority=("opensearch_content_index", "parsed_artifact_tables", "existing_reports"),
+                examples=(
+                    {
+                        "description": "Read full indexed text for a content-search hit.",
+                        "arguments": {"case_id": "case-id", "opensearch_document_id": "opensearch-doc-id", "max_chars": 20000},
                     },
                 ),
             ),
@@ -1709,6 +1896,56 @@ class RelicMcpServer:
     def timeline_window(self, arguments: dict[str, Any]) -> dict[str, Any]:
         db = self._db()
         try:
+            start = _optional_text(arguments, "start")
+            end = _optional_text(arguments, "end")
+            if start or end:
+                requested_contains = _optional_text(arguments, "contains")
+                filter_within_window = bool(arguments.get("filter_within_window", False))
+                result = timeline_report(
+                    db,
+                    _required(arguments, "case_id"),
+                    limit=_limit(arguments, default=100),
+                    contains=requested_contains if filter_within_window else None,
+                    start=start,
+                    end=end,
+                )
+                result["source_of_truth"] = "normalized_master_timeline"
+                result["requested_contains"] = requested_contains
+                result["filter_within_window"] = filter_within_window
+                if requested_contains and not filter_within_window:
+                    result["ignored_contains"] = requested_contains
+                window_summary = result.get("window_summary") if isinstance(result.get("window_summary"), dict) else {}
+                highlights = window_summary.get("activity_highlights") if isinstance(window_summary.get("activity_highlights"), dict) else {}
+                activity_counts: dict[str, int] = {}
+                activity_events: dict[str, list[dict[str, Any]]] = {}
+                for key in (
+                    "browser_activity",
+                    "usb_activity",
+                    "file_activity",
+                    "execution_activity",
+                    "communication_activity",
+                    "network_activity",
+                ):
+                    value = highlights.get(key) if isinstance(highlights.get(key), dict) else {}
+                    activity_events[key] = value.get("events", [])
+                    activity_counts[key] = int(value.get("count") or 0)
+                guidance = (
+                    "This is the master timeline with interval-overlap matching. For broad activity-window questions, "
+                    "review the unfiltered window first; only use contains with filter_within_window=true when the user "
+                    "explicitly asks to search for a term inside the window. Use browser_activity, usb_activity, "
+                    "file_activity, execution_activity, communication_activity, and network_activity for the first "
+                    "summary pass; use source_table/source_row_id for drilldown."
+                )
+                return _timeline_window_activity_response(
+                    result,
+                    activity_counts=activity_counts,
+                    activity_events=activity_events,
+                    highlights=highlights,
+                    guidance=guidance,
+                    requested_contains=requested_contains,
+                    filter_within_window=filter_within_window,
+                    ignored_contains=requested_contains if requested_contains and not filter_within_window else None,
+                )
             return timeline_review_report(
                 db,
                 _required(arguments, "case_id"),
@@ -1721,16 +1958,119 @@ class RelicMcpServer:
         finally:
             db.close()
 
+    def activity_windows(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        case_id = _required(arguments, "case_id")
+        windows_arg = arguments.get("windows")
+        if not isinstance(windows_arg, list) or not windows_arg:
+            raise ValueError("windows must be a non-empty list")
+        limit = _limit(arguments, default=250)
+        windows: list[dict[str, Any]] = []
+        for index, item in enumerate(windows_arg, start=1):
+            if not isinstance(item, dict):
+                raise ValueError("each window must be an object with start and end")
+            start = str(item.get("start") or "").strip()
+            end = str(item.get("end") or "").strip()
+            if not start or not end:
+                raise ValueError("each window must include start and end")
+            windows.append({"index": index, "label": str(item.get("label") or f"window-{index}"), "start": start, "end": end})
+        window_results = []
+        totals: dict[str, int] = {}
+        combined: dict[str, list[dict[str, Any]]] = {
+            "browser_activity": [],
+            "usb_activity": [],
+            "usb_file_interaction": [],
+            "file_activity": [],
+            "onedrive_file_activity": [],
+            "desktop_file_activity": [],
+            "onedrive_desktop_file_activity": [],
+            "execution_activity": [],
+            "communication_activity": [],
+            "network_activity": [],
+        }
+        direct_source_rows: dict[str, list[dict[str, Any]]] = {}
+        direct_counts: dict[str, int] = {}
+        for window in windows:
+            result = self.timeline_window({"case_id": case_id, "start": window["start"], "end": window["end"], "limit": limit})
+            result["window_index"] = window["index"]
+            result["window_label"] = window["label"]
+            window_results.append(
+                {
+                    "index": window["index"],
+                    "label": window["label"],
+                    "start": window["start"],
+                    "end": window["end"],
+                    "activity_counts": result.get("activity_answer", {}).get("activity_counts", {}),
+                    "direct_activity_counts": result.get("direct_activity_counts", {}),
+                    "folder_activity_counts": result.get("activity_answer", {}).get("folder_activity_counts", {}),
+                    "browser_activity_count": result.get("browser_activity_count", 0),
+                    "usb_activity_count": result.get("usb_activity_count", 0),
+                    "usb_file_interaction_count": result.get("usb_file_interaction_count", 0),
+                }
+            )
+            for key, value in (result.get("activity_answer", {}).get("activity_counts") or {}).items():
+                totals[key] = totals.get(key, 0) + int(value or 0)
+            for key, value in (result.get("direct_activity_counts") or {}).items():
+                direct_counts[key] = direct_counts.get(key, 0) + int(value or 0)
+            for key in combined:
+                combined[key].extend(_tag_window_rows(result.get(key) or [], window))
+            sources = ((result.get("direct_activity") or {}).get("sources") or {})
+            for source_key, source in sources.items():
+                if not isinstance(source, dict):
+                    continue
+                direct_source_rows.setdefault(source_key, []).extend(_tag_window_rows(source.get("rows") or [], window))
+        for key in list(combined):
+            combined[key] = _dedupe_activity_rows(combined[key])[:limit]
+        for key in list(direct_source_rows):
+            direct_source_rows[key] = _dedupe_activity_rows(direct_source_rows[key])[:limit]
+        usb_identity_summary = _usb_identity_summary_for_activity_windows(self, case_id, combined, limit=limit)
+        summary = _activity_windows_summary(totals, direct_counts, combined)
+        summary["usb_identity_summary"] = usb_identity_summary
+        return {
+            "case_id": case_id,
+            "source_of_truth": "aggregated_activity_windows",
+            "window_count": len(windows),
+            "activity_answer": summary,
+            "activity_counts": totals,
+            "direct_activity_counts": direct_counts,
+            "windows": window_results,
+            "browser_activity": combined["browser_activity"],
+            "usb_activity": combined["usb_activity"],
+            "usb_file_interaction": combined["usb_file_interaction"],
+            "file_activity": combined["file_activity"],
+            "onedrive_file_activity": combined["onedrive_file_activity"],
+            "desktop_file_activity": combined["desktop_file_activity"],
+            "onedrive_desktop_file_activity": combined["onedrive_desktop_file_activity"],
+            "execution_activity": combined["execution_activity"],
+            "communication_activity": combined["communication_activity"],
+            "network_activity": combined["network_activity"],
+            "usb_identity_summary": usb_identity_summary,
+            "direct_activity_sources": direct_source_rows,
+            "guidance": "This aggregates every supplied window. Use this for multi-session network questions before drawing conclusions.",
+        }
+
     def file_dossier(self, arguments: dict[str, Any]) -> dict[str, Any]:
         db = self._db()
         try:
-            return file_dossier_report(
+            result = file_dossier_report(
                 db,
                 _required(arguments, "case_id"),
                 path=_optional_text(arguments, "path"),
                 name=_optional_text(arguments, "name"),
                 limit=_limit(arguments, default=100),
             )
+            query_text = _optional_text(arguments, "path") or _optional_text(arguments, "name") or ""
+            result["content_followup"] = {
+                "required_for_content_questions": True,
+                "tool": "relic_search_content",
+                "arguments": {
+                    "case_id": result.get("case_id"),
+                    "query": query_text,
+                    "limit": 10,
+                },
+                "next_step": "If relic_search_content returns full_content_available=true, call relic_get_indexed_content with that hit's opensearch_document_id.",
+                "reason": "A file dossier focuses on metadata/provenance. File text/content lives in the OpenSearch content index when extracted or indexed.",
+            }
+            return result
         finally:
             db.close()
 
@@ -1761,6 +2101,78 @@ class RelicMcpServer:
         )
         return result
 
+    def query_usb_contents(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        case_id = _required(arguments, "case_id")
+        volume_name = _optional_text(arguments, "volume_name")
+        image_id = _optional_text(arguments, "image_id")
+        limit = _limit(arguments, default=500)
+        include_system = bool(arguments.get("include_system", False))
+        db = self._db()
+        try:
+            resolved_image_ids = [image_id] if image_id else _resolve_usb_content_image_ids(db, case_id, volume_name=volume_name)
+            entries: list[dict[str, Any]] = []
+            for resolved_image_id in resolved_image_ids:
+                listing = filesystem_listing_report(
+                    db,
+                    case_id,
+                    image_id=resolved_image_id,
+                    include_deleted=True,
+                    include_virtual=True,
+                    limit=limit,
+                )
+                for row in listing.get("filesystem_entries") or []:
+                    if not include_system and str(row.get("scan_status") or "").casefold() == "system":
+                        continue
+                    entries.append(row)
+            if volume_name and not entries:
+                listing = filesystem_listing_report(
+                    db,
+                    case_id,
+                    contains=volume_name,
+                    include_deleted=True,
+                    include_virtual=True,
+                    limit=limit,
+                )
+                entries.extend(listing.get("filesystem_entries") or [])
+            status_counts: dict[str, int] = {}
+            for row in entries:
+                status = str(row.get("scan_status") or "unknown")
+                status_counts[status] = status_counts.get(status, 0) + 1
+            usb_files = usb_file_correlation_report(
+                db,
+                case_id,
+                limit=limit,
+                persist=False,
+                grouped=False,
+                serial=_optional_text(arguments, "serial"),
+                volume_name=volume_name,
+                include_drive_roots=True,
+            )
+            return {
+                "case_id": case_id,
+                "source_of_truth": "filesystem_entries_and_usb_file_correlations",
+                "filters": {
+                    "volume_name": volume_name,
+                    "image_id": image_id,
+                    "resolved_image_ids": resolved_image_ids,
+                    "include_system": include_system,
+                },
+                "summary": {
+                    "filesystem_entry_count": len(entries),
+                    "filesystem_status_counts": status_counts,
+                    "usb_file_correlation_count": len(usb_files.get("items") or []),
+                    "listing_available": bool(entries),
+                },
+                "filesystem_entries": entries[:limit],
+                "usb_file_correlations": (usb_files.get("items") or [])[:limit],
+                "guidance": (
+                    "Use filesystem_entries for what was on the USB evidence image. Use usb_file_correlations for host artifacts "
+                    "showing files/folders referenced from that USB. If listing_available is false, the USB image listing has not been generated."
+                ),
+            }
+        finally:
+            db.close()
+
     def usb_dossier(self, arguments: dict[str, Any]) -> dict[str, Any]:
         db = self._db()
         try:
@@ -1787,6 +2199,19 @@ class RelicMcpServer:
         finally:
             db.close()
 
+    def query_system_users(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        db = self._db()
+        try:
+            return system_users_report(
+                db,
+                _required(arguments, "case_id"),
+                computer_id=_optional_text(arguments, "computer_id"),
+                include_builtin=bool(arguments.get("include_builtin", True)),
+                limit=_limit(arguments, default=500),
+            )
+        finally:
+            db.close()
+
     def query_suspicious_executions(self, arguments: dict[str, Any]) -> dict[str, Any]:
         db = self._db()
         try:
@@ -1804,6 +2229,35 @@ class RelicMcpServer:
                 rebuild_correlations=False,
                 include_file_activity=bool(arguments.get("include_file_activity", True)),
             )
+        finally:
+            db.close()
+
+    def query_wifi_activity(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        db = self._db()
+        try:
+            result = wifi_activity_report(
+                db,
+                _required(arguments, "case_id"),
+                start=_optional_text(arguments, "start"),
+                end=_optional_text(arguments, "end"),
+                ssid=_optional_text(arguments, "ssid"),
+                limit=_limit(arguments, default=100),
+            )
+            result["source_of_truth"] = "parsed_network_artifact_tables"
+            result["guidance"] = (
+                "Use reconciled_networks first. Treat EVTX WLAN 8001 and NetworkProfile 10000 as stronger "
+                "successful-connection evidence than SRUM alone; treat WLAN 8002 as failed-attempt evidence. "
+                "For what happened while connected to a network, call session_activity_plan.aggregate_tool first. "
+                "Use per-session relic_timeline_window calls only for drilldown. Do not answer from only the first "
+                "session when multiple sessions are present. Do not use relic_user_activity for bounded activity-window questions."
+            )
+            result["next_step"] = {
+                "for_activity_during_connection": "Call session_activity_plan.aggregate_tool to aggregate every matching session.",
+                "tool": "relic_activity_windows",
+                "argument_source": "session_activity_plan.aggregate_tool.arguments",
+                "avoid": "relic_user_activity is narrower and can miss browser, cache, USB, filesystem, and other timeline events in the window.",
+            }
+            return result
         finally:
             db.close()
 
@@ -2028,6 +2482,26 @@ class RelicMcpServer:
                 continue
             source_table = str(hit.get("source_table") or "")
             source_record_id = str(hit.get("source_record_id") or "")
+            opensearch_document_id = str(hit.get("opensearch_document_id") or "")
+            content_length = _safe_int(hit.get("content_length"))
+            hit["snippet_note"] = "OpenSearch highlight fields are matching snippets, not the full indexed content."
+            forensic_source_table = str(hit.get("forensic_source_table") or source_table)
+            evidence_nature = str(hit.get("evidence_nature") or "")
+            hit["provenance_summary"] = _indexed_content_provenance_summary(
+                retrieval_backend="OpenSearch",
+                storage_table=str(hit.get("storage_table") or source_table),
+                forensic_source_table=forensic_source_table,
+                evidence_nature=evidence_nature,
+            )
+            hit["full_content_available"] = bool(opensearch_document_id and content_length > 0)
+            hit["full_content_tool"] = {
+                "tool": "relic_get_indexed_content",
+                "arguments": {
+                    "case_id": result.get("case_id"),
+                    "opensearch_document_id": opensearch_document_id,
+                },
+                "note": "Call this tool when the user wants to read the full indexed content for this hit.",
+            }
             hit["drilldown"] = {
                 "tool": "relic_file_dossier" if source_table in {"windows_search_indexed_content", "mailbox_attachments"} else "relic_search_artifacts",
                 "source_table": source_table,
@@ -2036,10 +2510,78 @@ class RelicMcpServer:
             }
         result["source_of_truth"] = "opensearch_content_index"
         result["guidance"] = (
-            "These hits come from OpenSearch indexed content. Use generated reports/listings for high-level conclusions, "
-            "then pivot from source_table/source_record_id into parsed metadata for provenance."
+            "These hits come from OpenSearch indexed content. Highlight values are snippets only and are not the full "
+            "indexed content. If the user wants to read the full indexed text for a hit, call relic_get_indexed_content "
+            "with that hit's opensearch_document_id. Use generated reports/listings for high-level conclusions, then "
+            "pivot from source_table/source_record_id into parsed metadata for provenance."
         )
         return result
+
+    def get_indexed_content(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        case_id = _required(arguments, "case_id")
+        document_id = _required(arguments, "opensearch_document_id")
+        max_chars = _bounded_int(arguments, "max_chars", default=20000, minimum=1, maximum=1_000_000)
+        config = OpenSearchConfig.from_values(
+            url=_optional_text(arguments, "url"),
+            index=_optional_text(arguments, "index"),
+            insecure=bool(arguments.get("insecure") or False),
+        )
+        response = OpenSearchRestClient(config).request("GET", f"/{quote(config.index)}/_doc/{quote(document_id, safe='')}")
+        source = response.get("_source") or {}
+        actual_case_id = str(source.get("case_id") or "")
+        if actual_case_id != case_id:
+            raise ValueError("OpenSearch document does not belong to the requested case")
+        content = str(source.get("content") or "")
+        returned_content = content[:max_chars]
+        metadata = source.get("metadata") if isinstance(source.get("metadata"), dict) else {}
+        storage_table = str(metadata.get("storage_table") or source.get("source_table") or "")
+        forensic_source_table = str(
+            metadata.get("forensic_source_table")
+            or metadata.get("windows_search_source_table")
+            or storage_table
+        )
+        evidence_nature = str(
+            metadata.get("evidence_nature")
+            or _indexed_content_evidence_nature(forensic_source_table)
+        )
+        return {
+            "case_id": case_id,
+            "opensearch_document_id": document_id,
+            "found": bool(response.get("found", True)),
+            "source_of_truth": "opensearch_content_index",
+            "retrieval_backend": "OpenSearch",
+            "title": source.get("title"),
+            "source_path": source.get("source_path"),
+            "container_path": source.get("container_path"),
+            "source_type": source.get("source_type"),
+            "source_table": source.get("source_table"),
+            "storage_table": storage_table,
+            "forensic_source_table": forensic_source_table,
+            "evidence_nature": evidence_nature,
+            "direct_file_content_extraction": evidence_nature == "direct_file_content_extraction",
+            "windows_search_artifact_content": evidence_nature == "windows_search_artifact_indexed_content",
+            "source_record_id": source.get("source_record_id"),
+            "computer_id": source.get("computer_id"),
+            "image_id": source.get("image_id"),
+            "timestamp": source.get("timestamp"),
+            "user_profile": source.get("user_profile"),
+            "content_hash": source.get("content_hash"),
+            "content_length": _safe_int(source.get("content_length"), default=len(content)),
+            "returned_content_length": len(returned_content),
+            "truncated": len(content) > len(returned_content),
+            "content": returned_content,
+            "provenance_summary": _indexed_content_provenance_summary(
+                retrieval_backend="OpenSearch",
+                storage_table=storage_table,
+                forensic_source_table=forensic_source_table,
+                evidence_nature=evidence_nature,
+            ),
+            "guidance": (
+                "This content was retrieved from OpenSearch. Use forensic_source_table/evidence_nature to identify "
+                "whether the underlying forensic source was direct file-content extraction, Windows Search artifact "
+                "content, email content, or another indexed source."
+            ),
+        }
 
     def case_activity_digest(self, arguments: dict[str, Any]) -> dict[str, Any]:
         db = self._db()
@@ -2777,7 +3319,7 @@ def run_mcp_server(
             if not responses:
                 continue
             payload: dict[str, Any] | list[dict[str, Any]] = responses if isinstance(message, list) else responses[0]
-            stdout.write(json.dumps(payload, default=str, separators=(",", ":")) + "\n")
+            stdout.write(json.dumps(_decode_escaped_unicode(payload), default=str, ensure_ascii=False, separators=(",", ":")) + "\n")
             stdout.flush()
         except json.JSONDecodeError as exc:
             stdout.write(json.dumps(RelicMcpServer._error(None, -32700, "Parse error", str(exc)), separators=(",", ":")) + "\n")
@@ -2793,6 +3335,7 @@ def _tool_result(
     correlation_id: str | None = None,
     duration_ms: int | None = None,
 ) -> dict[str, Any]:
+    result = _decode_escaped_unicode(result)
     if isinstance(result, dict):
         result = dict(result)
         result.setdefault(
@@ -2809,10 +3352,384 @@ def _tool_result(
             },
         )
     return {
-        "content": [{"type": "text", "text": json.dumps(result, indent=2, default=str)}],
+        "content": [{"type": "text", "text": json.dumps(result, indent=2, default=str, ensure_ascii=False)}],
         "structuredContent": result,
         "isError": is_error,
     }
+
+
+def _decode_escaped_unicode(value: Any) -> Any:
+    if isinstance(value, str):
+        return _decode_escaped_unicode_text(value)
+    if isinstance(value, list):
+        return [_decode_escaped_unicode(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_decode_escaped_unicode(item) for item in value)
+    if isinstance(value, dict):
+        return {key: _decode_escaped_unicode(item) for key, item in value.items()}
+    return value
+
+
+def _decode_escaped_unicode_text(value: str) -> str:
+    if "\\u" not in value and "\\U" not in value:
+        return value
+    pattern = re.compile(r"(?:\\u[0-9a-fA-F]{4}){2,}|\\u[0-9a-fA-F]{4}|\\U[0-9a-fA-F]{8}")
+
+    def replace(match: re.Match[str]) -> str:
+        try:
+            decoded = json.loads(f'"{match.group(0)}"')
+        except Exception:
+            return match.group(0)
+        return decoded if isinstance(decoded, str) else match.group(0)
+
+    return pattern.sub(replace, value)
+
+
+def _timeline_window_activity_response(
+    result: dict[str, Any],
+    *,
+    activity_counts: dict[str, int],
+    activity_events: dict[str, list[dict[str, Any]]],
+    highlights: dict[str, Any],
+    guidance: str,
+    requested_contains: str | None,
+    filter_within_window: bool,
+    ignored_contains: str | None,
+) -> dict[str, Any]:
+    window_summary = result.get("window_summary") if isinstance(result.get("window_summary"), dict) else {}
+    direct_activity = window_summary.get("direct_activity") if isinstance(window_summary.get("direct_activity"), dict) else {}
+    direct_counts = direct_activity.get("summary_counts") if isinstance(direct_activity.get("summary_counts"), dict) else {}
+    combined_counts = dict(activity_counts)
+    for key, value in direct_counts.items():
+        try:
+            direct_value = int(value or 0)
+        except (TypeError, ValueError):
+            direct_value = 0
+        combined_counts[key] = max(int(combined_counts.get(key) or 0), direct_value)
+    browser_examples = _activity_examples(activity_events.get("browser_activity", []))
+    folder_activity = highlights.get("folder_activity") if isinstance(highlights.get("folder_activity"), dict) else {}
+    folder_counts = {
+        key: int((value if isinstance(value, dict) else {}).get("count") or 0)
+        for key, value in folder_activity.items()
+    }
+    folder_examples = {
+        key: _activity_examples((value if isinstance(value, dict) else {}).get("events", []), limit=12)
+        for key, value in folder_activity.items()
+    }
+    response: dict[str, Any] = {
+        "case_id": result.get("case_id"),
+        "source_of_truth": "normalized_master_timeline",
+        "activity_answer": {
+            "summary": _timeline_activity_summary_text(combined_counts, browser_examples),
+            "time_window": {
+                "start": (result.get("filters") or {}).get("start"),
+                "end": (result.get("filters") or {}).get("end"),
+                "time_match": (result.get("filters") or {}).get("time_match"),
+            },
+            "total_window_events": window_summary.get("total_events"),
+            "activity_counts": combined_counts,
+            "timeline_activity_counts": activity_counts,
+            "direct_activity_counts": direct_counts,
+            "folder_activity_counts": folder_counts,
+            "browser_examples": browser_examples,
+            "folder_examples": folder_examples,
+        },
+        "combined_activity_counts": combined_counts,
+        "timeline_activity_counts": activity_counts,
+        "direct_activity_counts": direct_counts,
+        "direct_activity": direct_activity,
+        "folder_activity": folder_activity,
+        "onedrive_file_activity_count": folder_counts.get("onedrive_file_activity", 0),
+        "onedrive_file_activity": (folder_activity.get("onedrive_file_activity") or {}).get("events", []),
+        "desktop_file_activity_count": folder_counts.get("desktop_file_activity", 0),
+        "desktop_file_activity": (folder_activity.get("desktop_file_activity") or {}).get("events", []),
+        "onedrive_desktop_file_activity_count": folder_counts.get("onedrive_desktop_file_activity", 0),
+        "onedrive_desktop_file_activity": (folder_activity.get("onedrive_desktop_file_activity") or {}).get("events", []),
+        "usb_file_interaction_count": folder_counts.get("usb_file_interaction", 0),
+        "usb_file_interaction": (folder_activity.get("usb_file_interaction") or {}).get("events", []),
+        "browser_activity_count": combined_counts.get("browser_activity", 0),
+        "browser_activity": activity_events.get("browser_activity", []),
+        "usb_activity_count": combined_counts.get("usb_activity", 0),
+        "usb_activity": activity_events.get("usb_activity", []),
+        "file_activity_count": combined_counts.get("file_activity", 0),
+        "file_activity": activity_events.get("file_activity", []),
+        "execution_activity_count": combined_counts.get("execution_activity", 0),
+        "execution_activity": activity_events.get("execution_activity", []),
+        "communication_activity_count": combined_counts.get("communication_activity", 0),
+        "communication_activity": activity_events.get("communication_activity", []),
+        "network_activity_count": combined_counts.get("network_activity", 0),
+        "network_activity": activity_events.get("network_activity", []),
+        "guidance": guidance,
+        "filters": result.get("filters"),
+        "requested_contains": requested_contains,
+        "filter_within_window": filter_within_window,
+        "activity_highlights": highlights,
+        "window_summary": window_summary,
+        "events": result.get("events", []),
+        "total_returned": result.get("total_returned"),
+    }
+    if ignored_contains:
+        response["ignored_contains"] = ignored_contains
+    return response
+
+
+def _activity_examples(events: list[dict[str, Any]], *, limit: int = 8) -> list[dict[str, Any]]:
+    examples: list[dict[str, Any]] = []
+    for event in events[:limit]:
+        examples.append(
+            {
+                "timestamp_utc": event.get("timestamp_utc"),
+                "event_type": event.get("event_type"),
+                "source_table": event.get("source_table"),
+                "description": event.get("description"),
+                "computer": event.get("computer_label") or event.get("computer"),
+            }
+        )
+    return examples
+
+
+def _timeline_activity_summary_text(activity_counts: dict[str, int], browser_examples: list[dict[str, Any]]) -> str:
+    browser_count = activity_counts.get("browser_activity", 0)
+    if browser_count:
+        first = browser_examples[0].get("description") if browser_examples else None
+        return (
+            f"Browser/web activity is present in this window ({browser_count} matching timeline events). "
+            f"Start with browser_activity before summarizing the chronological events. First example: {first or 'available in browser_activity'}."
+        )
+    return "No browser/web activity was found in the categorized timeline highlights for this window; review other activity categories and raw events."
+
+
+def _tag_window_rows(rows: list[dict[str, Any]], window: dict[str, Any]) -> list[dict[str, Any]]:
+    tagged = []
+    for row in rows:
+        item = dict(row)
+        item["window_index"] = window.get("index")
+        item["window_label"] = window.get("label")
+        item["window_start"] = window.get("start")
+        item["window_end"] = window.get("end")
+        tagged.append(item)
+    return tagged
+
+
+def _dedupe_activity_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[tuple[str, str, str, str]] = set()
+    output = []
+    for row in rows:
+        key = (
+            str(row.get("source_table") or ""),
+            str(row.get("id") or row.get("source_row_id") or ""),
+            str(row.get("timestamp_utc") or row.get("activity_time_utc") or ""),
+            str(row.get("description") or row.get("activity_description") or ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(row)
+    return output
+
+
+def _activity_windows_summary(
+    activity_counts: dict[str, int],
+    direct_counts: dict[str, int],
+    combined: dict[str, list[dict[str, Any]]],
+) -> dict[str, Any]:
+    usb_count = int(activity_counts.get("usb_activity") or 0) + int(direct_counts.get("device_activity") or 0)
+    usb_file_count = len(combined.get("usb_file_interaction") or [])
+    browser_count = int(activity_counts.get("browser_activity") or 0) or int(direct_counts.get("browser_activity") or 0)
+    email_count = int(direct_counts.get("email_activity") or 0)
+    execution_count = int(activity_counts.get("execution_activity") or 0) or int(direct_counts.get("application_execution") or 0)
+    file_count = int(activity_counts.get("file_activity") or 0) + int(direct_counts.get("file_index_activity") or 0)
+    findings = []
+    if usb_count or usb_file_count:
+        findings.append(f"USB/removable activity is present across the supplied windows ({usb_count} USB activity events, {usb_file_count} USB file-interaction rows returned).")
+    else:
+        findings.append("No USB/removable activity was found across the supplied windows.")
+    if browser_count:
+        findings.append(f"Browser/web activity is present ({browser_count} matching events).")
+    if email_count:
+        findings.append(f"Email activity is present ({email_count} messages).")
+    if file_count:
+        findings.append(f"File/index activity is present ({file_count} matching events/rows).")
+    if execution_count:
+        findings.append(f"Application execution/resource activity is present ({execution_count} matching events/rows).")
+    return {
+        "summary": " ".join(findings),
+        "activity_counts": activity_counts,
+        "direct_activity_counts": direct_counts,
+        "usb_activity_present": bool(usb_count or usb_file_count),
+        "browser_activity_present": bool(browser_count),
+        "email_activity_present": bool(email_count),
+        "file_activity_present": bool(file_count),
+        "execution_activity_present": bool(execution_count),
+        "usb_examples": _activity_examples((combined.get("usb_file_interaction") or combined.get("usb_activity") or []), limit=10),
+        "browser_examples": _activity_examples(combined.get("browser_activity") or [], limit=10),
+        "file_examples": _activity_examples(combined.get("file_activity") or [], limit=10),
+    }
+
+
+def _resolve_usb_content_image_ids(db: Database, case_id: str, *, volume_name: str | None) -> list[str]:
+    if not volume_name:
+        rows = _query_report_rows(
+            db,
+            case_id,
+            "filesystem_entries",
+            """
+            SELECT image_id, COUNT(*) AS count
+            FROM filesystem_entries
+            WHERE case_id = ?
+            GROUP BY image_id
+            ORDER BY count DESC
+            LIMIT 20
+            """,
+            [case_id],
+        )
+        return [str(row.get("image_id")) for row in rows if row.get("image_id")]
+    like = f"%{volume_name}%"
+    rows = _query_report_rows(
+        db,
+        case_id,
+        "filesystem_entries",
+        """
+        SELECT DISTINCT image_id
+        FROM filesystem_entries
+        WHERE case_id = ?
+          AND (
+            file_name LIKE ?
+            OR file_path LIKE ?
+            OR parent_path LIKE ?
+          )
+        ORDER BY image_id
+        LIMIT 20
+        """,
+        [case_id, like, like, like],
+    )
+    return [str(row.get("image_id")) for row in rows if row.get("image_id")]
+
+
+def _usb_identity_summary_for_activity_windows(
+    server: RelicMcpServer,
+    case_id: str,
+    combined: dict[str, list[dict[str, Any]]],
+    *,
+    limit: int,
+) -> dict[str, Any]:
+    usb_rows = list(combined.get("usb_file_interaction") or []) + list(combined.get("usb_activity") or [])
+    observed_names = _observed_usb_names_from_rows(usb_rows)
+    observed_drive_letters = _observed_drive_letters_from_rows(usb_rows)
+    db = server._db()
+    try:
+        storage = external_storage_report(db, case_id, limit=max(limit, 250), rebuild_correlations=False, include_file_activity=True)
+    finally:
+        db.close()
+    devices = []
+    possible_drive_letter_devices = []
+    for device in storage.get("devices") or []:
+        public_device = _public_usb_identity_device(device)
+        if _usb_device_matches_observed_name(device, observed_names):
+            public_device["identity_basis"] = "observed_volume_or_device_name"
+            public_device["identity_confidence"] = "medium"
+            devices.append(public_device)
+        elif _usb_device_matches_observed_drive_letter(device, observed_drive_letters):
+            public_device["identity_basis"] = "drive_letter_only"
+            public_device["identity_confidence"] = "low"
+            public_device["caveat"] = "Drive letters are reusable; this is a possible device context, not a firm identity for the activity window."
+            possible_drive_letter_devices.append(public_device)
+    file_rows = []
+    possible_drive_letter_file_rows = []
+    for row in storage.get("file_activity") or []:
+        if _usb_file_row_matches_observed_name(row, observed_names):
+            file_rows.append(row)
+        elif _usb_file_row_matches_observed_drive_letter(row, observed_drive_letters):
+            possible_drive_letter_file_rows.append(row)
+    names = sorted(
+        {
+            str(value).strip()
+            for row in devices
+            for value in (row.get("volume_name"), row.get("vbr_volume_name"), row.get("friendly_name"), row.get("product"))
+            if str(value or "").strip()
+        }
+        | observed_names
+    )
+    return {
+        "observed_names_in_windows": sorted(observed_names),
+        "observed_drive_letters_in_windows": sorted(observed_drive_letters),
+        "device_count": len(devices),
+        "device_names": names,
+        "devices": devices[:limit],
+        "possible_drive_letter_devices": possible_drive_letter_devices[:limit],
+        "file_activity_rows": file_rows[:limit],
+        "possible_drive_letter_file_activity_rows": possible_drive_letter_file_rows[:limit],
+        "evidence_note": "Observed names come from the supplied windows; device metadata is enriched from the external-storage report. Drive-letter-only matches are reported separately because drive letters are reusable.",
+    }
+
+
+def _public_usb_identity_device(device: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "serial": device.get("serial"),
+        "friendly_name": device.get("friendly_name"),
+        "vendor": device.get("vendor"),
+        "product": device.get("product"),
+        "drive_letter": device.get("drive_letter"),
+        "volume_serial_number": device.get("volume_serial_number"),
+        "volume_name": device.get("volume_name"),
+        "vbr_volume_name": device.get("vbr_volume_name"),
+        "file_system": device.get("file_system") or device.get("vbr_file_system"),
+        "last_arrival_utc": device.get("last_arrival_utc"),
+        "last_removal_utc": device.get("last_removal_utc"),
+        "file_activity_detected": device.get("file_activity_detected"),
+        "file_activity_count": device.get("file_activity_count"),
+    }
+
+
+def _observed_usb_names_from_rows(rows: list[dict[str, Any]]) -> set[str]:
+    names: set[str] = set()
+    generic = {"usb drive", "removable disk", "local disk", "this pc"}
+    for row in rows:
+        text = " ".join(str(row.get(key) or "") for key in ("description", "activity_description", "file_location", "file_name", "volume_name", "usb_volume_name", "artifact_volume_name"))
+        for match in re.finditer(r"\b([A-Za-z0-9 _.-]{2,40})\s*\(([A-Z]:)\)", text):
+            label = match.group(1).strip()
+            if label and label.casefold() not in generic:
+                names.add(label)
+        for key in ("volume_name", "usb_volume_name", "artifact_volume_name", "matched_volume_name"):
+            value = str(row.get(key) or "").strip()
+            if value and value.casefold() not in generic:
+                names.add(value)
+    return names
+
+
+def _observed_drive_letters_from_rows(rows: list[dict[str, Any]]) -> set[str]:
+    letters: set[str] = set()
+    for row in rows:
+        text = " ".join(str(value or "") for value in row.values())
+        for match in re.finditer(r"\b([A-Z]:)\\?", text):
+            letters.add(match.group(1))
+    return letters
+
+
+def _usb_device_matches_observed_name(device: dict[str, Any], observed_names: set[str]) -> bool:
+    device_values = {
+        str(device.get(key) or "").strip().casefold()
+        for key in ("volume_name", "vbr_volume_name", "friendly_name", "product", "serial")
+        if str(device.get(key) or "").strip()
+    }
+    if any(name.casefold() in device_values for name in observed_names):
+        return True
+    return bool(device.get("file_activity_detected") and any(name.casefold() in json.dumps(device, default=str).casefold() for name in observed_names))
+
+
+def _usb_device_matches_observed_drive_letter(device: dict[str, Any], observed_drive_letters: set[str]) -> bool:
+    drive = str(device.get("drive_letter") or "").strip().upper()
+    return bool(drive and drive in observed_drive_letters)
+
+
+def _usb_file_row_matches_observed_name(row: dict[str, Any], observed_names: set[str]) -> bool:
+    text = json.dumps(row, default=str).casefold()
+    return any(name.casefold() in text for name in observed_names)
+
+
+def _usb_file_row_matches_observed_drive_letter(row: dict[str, Any], observed_drive_letters: set[str]) -> bool:
+    text = json.dumps(row, default=str).casefold()
+    return any(letter.casefold() in text for letter in observed_drive_letters)
 
 
 def _public_job(job: dict[str, Any]) -> dict[str, Any]:
@@ -2881,7 +3798,7 @@ def _infer_tool_tags(name: str, category: str, permission: str) -> tuple[str, ..
     for token in ("source_of_truth", "filesystem", "cloud", "usb", "memory", "timeline", "report", "processing", "recovery"):
         if token.replace("_", "-") in name or token in name:
             tags.add(token)
-    if name in {"relic_read_existing_report", "relic_discover_reports", "relic_query_filesystem_listings", "relic_query_evidence_contents"}:
+    if name in {"relic_read_existing_report", "relic_discover_reports", "relic_query_filesystem_listings", "relic_query_evidence_contents", "relic_query_usb_contents"}:
         tags.add("source_of_truth")
     return tuple(tags)
 
@@ -2892,13 +3809,48 @@ def _infer_tool_dependencies(name: str, permission: str) -> tuple[str, ...]:
         deps.append("relic CLI")
     if "report" in name:
         deps.append("generated reports")
-    if "filesystem" in name or "evidence_contents" in name:
+    if "filesystem" in name or "evidence_contents" in name or "usb_contents" in name:
         deps.append("filesystem_entries")
+    if "usb_contents" in name:
+        deps.append("usb_file_correlations")
     if "mcp_job" in name:
         deps.append("mcp-jobs/index.json")
     if "doctor" in name:
         deps.append("third-party dependency registry")
     return tuple(deps)
+
+
+def _indexed_content_evidence_nature(source_table: str) -> str:
+    if source_table == "user_file_content":
+        return "direct_file_content_extraction"
+    if source_table.startswith("windows_search_"):
+        return "windows_search_artifact_indexed_content"
+    if source_table in {"mailbox_messages", "mailbox_attachments"}:
+        return "email_or_attachment_extracted_content"
+    return "indexed_content"
+
+
+def _indexed_content_provenance_summary(
+    *,
+    retrieval_backend: str,
+    storage_table: str,
+    forensic_source_table: str,
+    evidence_nature: str,
+) -> str:
+    if evidence_nature == "direct_file_content_extraction":
+        return (
+            f"Retrieved from {retrieval_backend}; underlying forensic source is direct file-content extraction "
+            f"({forensic_source_table}), stored in compatibility table {storage_table}."
+        )
+    if evidence_nature == "windows_search_artifact_indexed_content":
+        return (
+            f"Retrieved from {retrieval_backend}; underlying forensic source is Windows Search artifact content "
+            f"({forensic_source_table}), stored in {storage_table}."
+        )
+    return (
+        f"Retrieved from {retrieval_backend}; underlying forensic source is {forensic_source_table}, "
+        f"stored in {storage_table}."
+    )
 
 
 def _infer_source_priority(name: str, category: str) -> tuple[str, ...]:
@@ -2909,7 +3861,7 @@ def _infer_source_priority(name: str, category: str) -> tuple[str, ...]:
     if category == "cloud":
         return ("existing_cloud_reports", "cloud_sync_artifacts", "opened_from_cloud_storage", "raw_processing")
     if category == "external_storage":
-        return ("existing_usb_reports", "usb_storage_devices", "usb_connection_events", "filesystem_entries")
+        return ("existing_usb_reports", "usb_storage_devices", "usb_connection_events", "filesystem_entries", "usb_file_correlations")
     return ("parsed_artifacts", "existing_reports", "processing")
 
 
@@ -3150,6 +4102,13 @@ def _bounded_int(arguments: dict[str, Any], key: str, *, default: int, minimum: 
     except (TypeError, ValueError):
         raise ValueError(f"{key} must be an integer")
     return max(minimum, min(value, maximum))
+
+
+def _safe_int(value: Any, *, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _count_table(db: Database, table: str) -> int:
@@ -3612,7 +4571,52 @@ def _route_mcp_question(
             "sleuthkit",
         },
     )
+    wants_file_content = _is_file_content_lookup_question(text)
     wants_recovery = _contains_any(text, {"recover", "restore", "undelete", "extract deleted", "deleted file", "deleted files"})
+    has_wifi_terms = _contains_any(
+        text,
+        {
+            "wifi",
+            "wi-fi",
+            "wireless",
+            "wlan",
+            "ssid",
+            "networkprofile",
+            "network profile",
+            "connected to network",
+            "connect to network",
+            "network connection",
+            "network connections",
+        },
+    )
+    wants_activity_during_connection = _contains_any(
+        text,
+        {"activity", "occurred", "happened", "during", "while connected", "while the computer was connected", "usage", "used", "what did"},
+    )
+    wants_user_inventory = _contains_any(
+        text,
+        {
+            "users on",
+            "users of",
+            "system users",
+            "local users",
+            "local accounts",
+            "microsoft account",
+            "microsoft accounts",
+            "internetusername",
+            "internet user name",
+            "user accounts",
+            "accounts on",
+            "who are the users",
+            "which users",
+            "list users",
+            "list accounts",
+            "sid",
+            "sids",
+            "last login",
+            "last logon",
+        },
+    )
 
     intent = "general_review"
     report_purpose = "full"
@@ -3628,7 +4632,24 @@ def _route_mcp_question(
         {"order": 4, "source": "processing_or_image_access", "tools": ["processing tools"], "requires_explicit_user_request": True},
     ]
 
-    if wants_recovery:
+    if wants_user_inventory:
+        intent = "system_users"
+        first_source = "parsed_identity_artifact_tables"
+        report_purpose = "identity"
+        report_names = ["case-overview"]
+        recommended_tool = "relic_query_system_users"
+        fallback_tools = ["relic_user_activity", "relic_search_artifacts"]
+        reason = (
+            "User/account inventory questions should use the consolidated system-users view, which joins SAM accounts "
+            "with registry cloud-account details and SID evidence before falling back to raw artifact searches."
+        )
+        source_order = [
+            {"order": 1, "source": "consolidated_user_inventory", "tools": ["relic_query_system_users"]},
+            {"order": 2, "source": "user_activity_if_named_user", "tools": ["relic_user_activity"]},
+            {"order": 3, "source": "parsed_artifact_tables", "tools": ["relic_search_artifacts"], "tables": ["sam_accounts", "registry_artifacts"]},
+            {"order": 4, "source": "processing_or_reparse", "tools": ["relic_process_image", "relic_run_profile"], "requires_explicit_user_request": True},
+        ]
+    elif wants_recovery:
         intent = "deleted_file_recovery"
         first_source = "generated_filesystem_listings"
         recommended_tool = "relic_query_evidence_contents"
@@ -3644,7 +4665,7 @@ def _route_mcp_question(
             {"order": 3, "source": "file_dossier", "tools": ["relic_file_dossier"]},
             {"order": 4, "source": "deleted_file_recovery", "tools": ["relic_recover_deleted_files"], "requires_explicit_user_request": True},
         ]
-    elif _is_content_search_question(text):
+    elif _is_content_search_question(text) and not _is_file_information_question(text, tokens):
         intent = "content_search"
         first_source = "generated_reports"
         recommended_tool = "relic_search_content"
@@ -3658,21 +4679,67 @@ def _route_mcp_question(
             {"order": 3, "source": "parsed_artifact_tables", "tools": ["relic_search_artifacts", "relic_file_dossier"]},
             {"order": 4, "source": "processing_or_reindexing", "tools": ["relic_process_image", "relic_run_profile"], "requires_explicit_user_request": True},
         ]
-    elif _contains_any(text, {"contents", "content", "list files", "files on", "folder", "directory", "filesystem", "file listing", "drive contents", "volume contents"}) or "files" in tokens and _contains_any(text, {"usb", "drive", "volume", "image"}):
-        intent = "evidence_contents"
-        first_source = "generated_filesystem_listings"
-        recommended_tool = "relic_query_evidence_contents"
-        fallback_tools = ["relic_query_filesystem_listings", "relic_file_dossier", "relic_search_artifacts"]
-        report_names = ["opened-from-removable-media", "file-movement-identity", "usb-files"]
-        report_purpose = "usb" if _contains_any(text, {"usb", "removable", "external"}) else "full"
-        reason = "Filesystem answers should come from stored filesystem_entries before live image access or SleuthKit."
+    elif _is_file_information_question(text, tokens):
+        intent = "file_content_and_information" if wants_file_content else "file_information"
+        first_source = "file_dossier"
+        recommended_tool = "relic_file_dossier"
+        fallback_tools = ["relic_query_filesystem_listings", "relic_search_content", "relic_search_artifacts", "relic_read_existing_report"]
+        report_names = ["file-movement-identity", "opened-from-removable-media", "opened-from-cloud-storage", "windows-search"]
+        report_purpose = "documents"
+        reason = (
+            "Single-file questions should use the file dossier first because it combines generated filesystem listings, "
+            "MFT/USN/Search/shortcut/cloud evidence, and internal file metadata when available."
+        )
         source_order = [
-            {"order": 1, "source": "generated_filesystem_listings", "tools": ["relic_query_evidence_contents", "relic_query_filesystem_listings"]},
-            {"order": 2, "source": "generated_reports", "tools": ["relic_read_existing_report"], "report_names": report_names},
-            {"order": 3, "source": "parsed_artifact_tables", "tools": ["relic_file_dossier", "relic_search_artifacts"]},
-            {"order": 4, "source": "image_processing_or_fls", "tools": ["relic_process_image", "relic_run_profile"], "requires_explicit_user_request": True},
+            {"order": 1, "source": "file_dossier", "tools": ["relic_file_dossier"]},
+            {"order": 2, "source": "generated_filesystem_listings", "tools": ["relic_query_filesystem_listings"]},
+            {
+                "order": 3,
+                "source": "opensearch_content_index",
+                "tools": ["relic_search_content"],
+                "required_when": "The user asks for file contents, text inside the file, full content, or what the file says.",
+                "followup": "If a hit is returned and full_content_available is true, call relic_get_indexed_content with that hit's opensearch_document_id.",
+            },
+            {"order": 4, "source": "parsed_artifact_tables", "tools": ["relic_search_artifacts"]},
+            {"order": 5, "source": "generated_reports", "tools": ["relic_read_existing_report"], "report_names": report_names},
+            {"order": 6, "source": "processing_or_image_access", "tools": ["relic_process_image", "relic_run_profile"], "requires_explicit_user_request": True},
         ]
-    elif _contains_any(text, {"usb", "removable", "external storage", "thumb drive", "flash drive", "uasp", "usbstor", "volume serial"}):
+        if wants_file_content:
+            reason += " Because the question asks for content, do not stop at metadata; query relic_search_content with the file name/path and use relic_get_indexed_content when available."
+    elif _contains_any(text, {"contents", "content", "list files", "files on", "folder", "directory", "filesystem", "file listing", "drive contents", "volume contents"}) or "files" in tokens and _contains_any(text, {"usb", "drive", "volume", "image"}) or _contains_any(text, {"what else", "what was on", "what is on", "anything else"}) and _contains_any(text, {"usb", "removable", "external", "drive", "volume"}):
+        intent = "evidence_contents"
+        usb_scoped = _contains_any(text, {"usb", "removable", "external"})
+        first_source = "generated_usb_filesystem_listings" if usb_scoped else "generated_filesystem_listings"
+        recommended_tool = "relic_query_usb_contents" if usb_scoped else "relic_query_evidence_contents"
+        fallback_tools = (
+            ["relic_query_evidence_contents", "relic_query_filesystem_listings", "relic_query_usb_files", "relic_file_dossier", "relic_search_artifacts"]
+            if usb_scoped
+            else ["relic_query_filesystem_listings", "relic_file_dossier", "relic_search_artifacts"]
+        )
+        report_names = ["opened-from-removable-media", "file-movement-identity", "usb-files"]
+        report_purpose = "usb" if usb_scoped else "full"
+        reason = (
+            "USB contents answers should resolve the USB volume/device to stored filesystem_entries, then use USB file correlations for host-side references."
+            if usb_scoped
+            else "Filesystem answers should come from stored filesystem_entries before live image access or SleuthKit."
+        )
+        source_order = [
+            {
+                "order": 1,
+                "source": "generated_usb_filesystem_listings" if usb_scoped else "generated_filesystem_listings",
+                "tools": ["relic_query_usb_contents"] if usb_scoped else ["relic_query_evidence_contents", "relic_query_filesystem_listings"],
+            },
+            {
+                "order": 2,
+                "source": "usb_file_correlations" if usb_scoped else "generated_reports",
+                "tools": ["relic_query_usb_files", "relic_query_evidence_contents", "relic_query_filesystem_listings"] if usb_scoped else ["relic_read_existing_report"],
+                "report_names": report_names,
+            },
+            {"order": 3, "source": "generated_reports", "tools": ["relic_read_existing_report"], "report_names": report_names},
+            {"order": 4, "source": "parsed_artifact_tables", "tools": ["relic_file_dossier", "relic_search_artifacts"]},
+            {"order": 5, "source": "image_processing_or_fls", "tools": ["relic_process_image", "relic_run_profile"], "requires_explicit_user_request": True},
+        ]
+    elif not (has_wifi_terms and wants_activity_during_connection) and _contains_any(text, {"usb", "removable", "external storage", "thumb drive", "flash drive", "uasp", "usbstor", "volume serial"}):
         intent = "usb_storage"
         report_purpose = "usb"
         report_names = ["external-storage", "usb-files", "usb-timeline", "opened-from-removable-media", "file-movement-identity"]
@@ -3686,6 +4753,31 @@ def _route_mcp_question(
         recommended_tool = "relic_read_existing_report"
         fallback_tools = ["relic_query_suspicious_executions", "relic_lead_search", "relic_query_registry_activity"]
         reason = "Execution questions should start with generated execution and suspicious-execution reports."
+    elif has_wifi_terms:
+        intent = "wifi_network_activity"
+        first_source = "parsed_network_artifact_tables"
+        report_purpose = "network"
+        report_names = ["case-overview", "user-intent"]
+        recommended_tool = "relic_query_wifi_activity" if wants_activity_during_connection else "relic_query_wifi_activity"
+        fallback_tools = ["relic_timeline_window", "relic_timeline", "relic_search_artifacts", "relic_read_existing_report"]
+        reason = (
+            "Wi-Fi questions need reconciliation across WLAN/NetworkProfile EVTX, SRUM, and NetworkList registry rows. "
+            "For questions about activity while connected to a network, resolve all matching connect/disconnect sessions first, then "
+            "call relic_activity_windows with session_activity_plan.aggregate_tool so normalized timeline and direct artifact activity are aggregated across sessions. "
+            "Do not pass the SSID as contains unless the user specifically asks to filter timeline results to that SSID."
+        )
+        source_order = [
+            {"order": 1, "source": "parsed_network_artifact_tables", "tools": ["relic_query_wifi_activity"]},
+            {
+                "order": 2,
+                "source": "normalized_master_timeline",
+                "tools": ["relic_activity_windows", "relic_timeline_window"],
+                "requires": "Use session_activity_plan.aggregate_tool unless the user specified one session or exact start/end; interval events are matched by overlap. Leave contains unset and filter_within_window false for broad activity questions.",
+            },
+            {"order": 3, "source": "generated_reports", "tools": ["relic_read_existing_report", "relic_discover_report_exports"], "report_names": report_names},
+            {"order": 4, "source": "artifact_drilldown", "tools": ["relic_search_artifacts", "domain query tools"]},
+            {"order": 5, "source": "broad_artifact_search", "tools": ["relic_search_artifacts"]},
+        ]
     elif _contains_any(text, {"timeline", "when", "between", "around", "date", "time window"}):
         intent = "timeline"
         report_names = ["case-overview", "external-storage", "suspicious-executions", "memory-analysis"]
@@ -3770,6 +4862,7 @@ def _route_mcp_question(
         "guardrails": [
             "Use existing generated reports before raw artifact queries when a report can answer the question.",
             "Use filesystem_entries through relic_query_evidence_contents for any file-listing or drive-contents question.",
+            "Use relic_query_wifi_activity for Wi-Fi, WLAN, SSID, or network-connection questions so EVTX, SRUM, and registry evidence are reconciled.",
             "Use relic_search_content for file-content, document-text, body-text, attachment-text, or indexed-content search questions.",
             "Use parsed artifact tables before resources, packet files, or direct image tooling.",
             "Use processing, mounts, FLS, or recovery tools only after the user explicitly asks for that work and MCP processing is enabled.",
@@ -3805,6 +4898,60 @@ def _is_content_search_question(text: str) -> bool:
     return wants_search and content_target
 
 
+def _is_file_content_lookup_question(text: str) -> bool:
+    return _contains_any(
+        text,
+        {
+            "content of",
+            "contents of",
+            "file content",
+            "file contents",
+            "what does",
+            "what did it say",
+            "what it says",
+            "read the file",
+            "full content",
+            "full text",
+            "text from",
+            "text in",
+            "inside the file",
+            "inside this file",
+            "extract text",
+            "show me the content",
+            "show the content",
+        },
+    )
+
+
+def _is_file_information_question(text: str, tokens: set[str]) -> bool:
+    asks_about_file = _contains_any(
+        text,
+        {
+            "what can you tell me about",
+            "tell me about this file",
+            "tell me about the file",
+            "file metadata",
+            "filesystem metadata",
+            "internal metadata",
+            "metadata for",
+            "file provenance",
+            "file dossier",
+            "this file",
+            "that file",
+        },
+    )
+    file_like_token = any(
+        re.search(r"\.[a-z0-9]{1,8}$", token)
+        for token in tokens
+        if not token.startswith("http")
+    )
+    path_like = bool(re.search(r"(?:[a-z]:[\\/]|[\\/][^\\/\s]+[\\/]|users[\\/][^\\/\s]+[\\/])", text, flags=re.IGNORECASE))
+    return (
+        asks_about_file
+        and (file_like_token or path_like or "file metadata" in text or "filesystem metadata" in text)
+    ) or (file_like_token and _is_file_content_lookup_question(text))
+
+
 def _contains_any(text: str, needles: set[str]) -> bool:
     return any(needle in text for needle in needles)
 
@@ -3832,14 +4979,15 @@ def _mcp_workflow_guide() -> dict[str, Any]:
         {"order": 7, "tool": "relic_case_runbook", "purpose": "Get safe next commands and reasons based on current case state."},
         {"order": 8, "tool": "relic_artifact_search_sources", "purpose": "Check which source tables, fields, and row counts are available for search."},
         {"order": 9, "tool": "relic_query_evidence_contents", "purpose": "For evidence contents, drive contents, volume contents, or file-listing questions, query generated filesystem_entries first before considering live image, mount, or SleuthKit processing."},
-        {"order": 10, "tool": "relic_lead_search", "purpose": "Run preset execution, USB, cloud, document, browser, or communications searches after existing reports have been checked."},
-        {"order": 11, "tool": "relic_search_content", "purpose": "Search OpenSearch indexed file contents, document text, message bodies, attachments, and Windows Search indexed content after report context has been checked."},
-        {"order": 12, "tool": "relic_search_artifacts", "purpose": "Run ad hoc artifact searches with user, computer, source, and time filters after existing reports have been checked."},
-        {"order": 13, "tool": "drilldown tools", "purpose": "Follow search result drilldown hints into file, USB, user, timeline, registry, cloud, communication, shortcut, or remote-access context."},
-        {"order": 14, "tool": "relic_write_search_packet", "purpose": "Save repeatable searches, result hash sets, case counts, and result sets as examiner work product."},
-        {"order": 15, "tool": "relic_rerun_search_packet", "purpose": "Rerun saved searches and compare added, removed, changed, and unchanged results."},
-        {"order": 16, "tool": "relic_write_review_packet", "purpose": "Save selected findings, notes, timeline slices, and report URIs."},
-        {"order": 17, "tool": "relic_write_report_bundle", "purpose": "Export a review bundle for handoff or UI consumption. Use purpose=review for MCP/operator review packs."},
+        {"order": 10, "tool": "relic_query_wifi_activity", "purpose": "For Wi-Fi, WLAN, SSID, or network-connection questions, reconcile WLAN/NetworkProfile EVTX, SRUM, and NetworkList registry evidence before broad timeline search."},
+        {"order": 11, "tool": "relic_lead_search", "purpose": "Run preset execution, USB, cloud, document, browser, or communications searches after existing reports have been checked."},
+        {"order": 12, "tool": "relic_search_content", "purpose": "Search OpenSearch indexed file contents, document text, message bodies, attachments, and Windows Search indexed content after report context has been checked."},
+        {"order": 13, "tool": "relic_search_artifacts", "purpose": "Run ad hoc artifact searches with user, computer, source, and time filters after existing reports have been checked."},
+        {"order": 14, "tool": "drilldown tools", "purpose": "Follow search result drilldown hints into file, USB, user, timeline, registry, cloud, communication, shortcut, or remote-access context."},
+        {"order": 15, "tool": "relic_write_search_packet", "purpose": "Save repeatable searches, result hash sets, case counts, and result sets as examiner work product."},
+        {"order": 16, "tool": "relic_rerun_search_packet", "purpose": "Rerun saved searches and compare added, removed, changed, and unchanged results."},
+        {"order": 17, "tool": "relic_write_review_packet", "purpose": "Save selected findings, notes, timeline slices, and report URIs."},
+        {"order": 18, "tool": "relic_write_report_bundle", "purpose": "Export a review bundle for handoff or UI consumption. Use purpose=review for MCP/operator review packs."},
     ]
     return {
         "title": "Relic MCP Workflow Guide",
@@ -3850,6 +4998,7 @@ def _mcp_workflow_guide() -> dict[str, Any]:
         "reports_first_tool": "relic_read_existing_report",
         "evidence_contents_first_tool": "relic_query_evidence_contents",
         "filesystem_first_tool": "relic_query_filesystem_listings",
+        "wifi_activity_tool": "relic_query_wifi_activity",
         "content_search_tool": "relic_search_content",
         "packet_tools": ["relic_write_search_packet", "relic_list_search_packets", "relic_rerun_search_packet", "relic_write_review_packet", "relic_list_review_packets"],
     }

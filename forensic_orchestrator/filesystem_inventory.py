@@ -219,6 +219,9 @@ def _row_from_fls_entry(
     else:
         status = "deleted"
     metadata = metadata or {}
+    accessed_utc = metadata.get("accessed_utc")
+    if _is_fat_filesystem(filesystem_type) and isinstance(accessed_utc, str) and accessed_utc.endswith("T00:00:00Z"):
+        accessed_utc = accessed_utc[:10]
     return {
         "id": str(uuid.uuid4()),
         "case_id": case_id,
@@ -237,10 +240,10 @@ def _row_from_fls_entry(
         "extension": _extension(name, entry.is_directory),
         "file_size": metadata.get("file_size", ""),
         "is_directory": "true" if entry.is_directory else "false",
-        "created_utc": None,
-        "modified_utc": None,
-        "accessed_utc": None,
-        "metadata_changed_utc": None,
+        "created_utc": metadata.get("created_utc"),
+        "modified_utc": metadata.get("modified_utc"),
+        "accessed_utc": accessed_utc,
+        "metadata_changed_utc": metadata.get("metadata_changed_utc"),
         "mode": "",
         "uid": "",
         "gid": "",
@@ -248,6 +251,11 @@ def _row_from_fls_entry(
         "error": "",
         "created_at": created_at,
     }
+
+
+def _is_fat_filesystem(filesystem_type: str | None) -> bool:
+    normalized = (filesystem_type or "").strip().casefold().replace("_", "").replace("-", "")
+    return normalized in {"fat", "fat12", "fat16", "fat32", "vfat", "msdos"}
 
 
 def _fls_entry_metadata(

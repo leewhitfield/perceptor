@@ -12,6 +12,7 @@ from forensic_orchestrator.search.opensearch import (
     messaging_message_document,
     messaging_record_document,
     search_case_content,
+    windows_search_content_document,
 )
 
 
@@ -70,6 +71,36 @@ def test_opensearch_documents_only_index_body_or_content_fields():
     assert "raw json blob" not in combined
 
 
+def test_windows_search_content_document_preserves_user_file_content_provenance():
+    document = windows_search_content_document(
+        {
+            "id": "content-1",
+            "case_id": "case-1",
+            "computer_id": "computer-1",
+            "image_id": "image-1",
+            "opensearch_document_id": "",
+            "source_table": "user_file_content",
+            "source_record_id": "content-1",
+            "item_path": "/_WRD0001.tmp",
+            "item_name": "_WRD0001.tmp",
+            "item_type": "tmp",
+            "content_field": "extracted_text",
+            "timestamp": "2026-06-02T16:08:57Z",
+            "gather_time": "",
+            "work_id": "",
+            "created_at": "2026-06-02T16:08:58Z",
+        },
+        content_text="You did not have to be so pompous.",
+    )
+
+    assert document is not None
+    assert document["source_type"] == "direct_file_content"
+    assert document["source_table"] == "windows_search_indexed_content"
+    assert document["metadata"]["storage_table"] == "windows_search_indexed_content"
+    assert document["metadata"]["forensic_source_table"] == "user_file_content"
+    assert document["metadata"]["evidence_nature"] == "direct_file_content_extraction"
+
+
 def test_content_search_queries_body_title_and_source_path(monkeypatch):
     captured = {}
 
@@ -82,6 +113,7 @@ def test_content_search_queries_body_title_and_source_path(monkeypatch):
                 "total": {"value": 1, "relation": "eq"},
                 "hits": [
                     {
+                        "_id": "os-doc-1",
                         "_score": 1.0,
                         "_source": {
                             "source_type": "indexed_file_content",
@@ -96,6 +128,11 @@ def test_content_search_queries_body_title_and_source_path(monkeypatch):
                             "image_id": "image-1",
                             "content_hash": "abc",
                             "content_length": 10,
+                            "metadata": {
+                                "storage_table": "windows_search_indexed_content",
+                                "forensic_source_table": "user_file_content",
+                                "evidence_nature": "direct_file_content_extraction",
+                            },
                         },
                         "highlight": {"title": ["<em>_WRD0001.tmp</em>"]},
                     }
@@ -119,9 +156,16 @@ def test_content_search_queries_body_title_and_source_path(monkeypatch):
     assert "title" in highlight_fields
     assert "source_path" in highlight_fields
     assert result["hits"][0]["highlight"] == {"title": ["<em>_WRD0001.tmp</em>"]}
+    assert result["hits"][0]["opensearch_document_id"] == "os-doc-1"
     assert result["hits"][0]["title"] == "_WRD0001.tmp"
     assert result["hits"][0]["source_path"] == "/_WRD0001.tmp"
     assert result["hits"][0]["timestamp"] == "2026-06-02T16:08:57Z"
+    assert result["hits"][0]["retrieval_backend"] == "OpenSearch"
+    assert result["hits"][0]["storage_table"] == "windows_search_indexed_content"
+    assert result["hits"][0]["forensic_source_table"] == "user_file_content"
+    assert result["hits"][0]["evidence_nature"] == "direct_file_content_extraction"
+    assert result["hits"][0]["direct_file_content_extraction"] is True
+    assert result["hits"][0]["windows_search_artifact_content"] is False
 
 
 def test_content_heavy_db_inserts_keep_only_metadata_references(tmp_path):

@@ -44,6 +44,10 @@ Created:\t1999-01-01 00:00:00.000000000 (UTC)
         "mft_modified": "2008-07-06 07:54:18.000000000 (UTC)",
         "mft_record_modified": "2008-07-06 07:54:20.000000000 (UTC)",
         "mft_accessed": "2008-07-06 07:54:27.000000000 (UTC)",
+        "created_utc": "2008-07-06T07:54:26Z",
+        "modified_utc": "2008-07-06T07:54:18Z",
+        "metadata_changed_utc": "2008-07-06T07:54:20Z",
+        "accessed_utc": "2008-07-06T07:54:27Z",
     }
 
 
@@ -53,9 +57,15 @@ Directory Entry: 9
 File Name: timestamps.docx
 Size: 31055
 Created: 2025-11-17 20:44:51 (UTC)
+File Modified: 2025-11-17 20:44:52 (UTC)
+Accessed: 2025-11-17 00:00:00 (UTC)
 """
 
-    assert parse_istat_metadata(output)["file_size"] == "31055"
+    metadata = parse_istat_metadata(output)
+    assert metadata["file_size"] == "31055"
+    assert metadata["created_utc"] == "2025-11-17T20:44:51Z"
+    assert metadata["modified_utc"] == "2025-11-17T20:44:52Z"
+    assert metadata["accessed_utc"] == "2025-11-17T00:00:00Z"
 
 
 def test_parse_fls_output_preserves_paths_and_inodes():
@@ -215,6 +225,48 @@ def test_extract_artifact_excludes_start_menu_lnk_by_default(monkeypatch, tmp_pa
     )
 
     assert [path.name for path in extracted_destinations] == ["Report.lnk"]
+
+
+def test_extract_artifact_passes_filesystem_type_to_icat(monkeypatch, tmp_path):
+    filesystems: list[str | None] = []
+
+    def fake_run_icat_to_file(**kwargs):
+        destination = kwargs["destination"]
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text("doc")
+        filesystems.append(kwargs.get("filesystem_type"))
+
+    monkeypatch.setattr("forensic_orchestrator.mounting.tsk._run_icat_to_file", fake_run_icat_to_file)
+    monkeypatch.setattr("forensic_orchestrator.mounting.tsk.read_file_metadata", lambda **kwargs: {})
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/usb.E01"), computer_id="computer-1")
+
+    extract_artifact(
+        db=db,
+        case_id=case.id,
+        image_id="image-1",
+        computer_id="computer-1",
+        raw_image=Path("/evidence/usb.E01"),
+        offset_sectors=240,
+        artifact=ArtifactDefinition(
+            name="metadata_files",
+            source="",
+            destination="metadata_files",
+            recursive=True,
+            patterns=("*.docx", "_WRD*.tmp"),
+        ),
+        artifacts_root=tmp_path / "artifacts",
+        dry_run=False,
+        fls_entries=[
+            FlsEntry("10", "Alex.docx", False),
+            FlsEntry("11", "_WRD0001.tmp", False),
+        ],
+        filesystem_type="fat32",
+    )
+
+    assert filesystems == ["fat32", "fat32"]
 
 
 def test_extract_artifact_can_include_start_menu_lnk(monkeypatch, tmp_path):

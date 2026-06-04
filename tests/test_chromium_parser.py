@@ -5,7 +5,18 @@ import struct
 
 import plyvel
 
-from forensic_orchestrator.tools.chromium import parse_chromium_artifacts_to_csv
+from forensic_orchestrator.tools.chromium import (
+    _chromium_local_vs_synced,
+    _chromium_visit_source_label,
+    parse_chromium_artifacts_to_csv,
+)
+
+
+def test_chromium_visit_source_8_is_labeled_as_ambiguous_edge_generated_source():
+    assert _chromium_visit_source_label(8) == "chromium_edge_internal_or_generated_source_8"
+    assert _chromium_local_vs_synced(8) == "internal_or_generated_unknown"
+    assert _chromium_visit_source_label(42) == "unknown_source_42"
+    assert _chromium_local_vs_synced(42) == "unknown"
 
 
 def test_chromium_parser_writes_history_download_and_cookie_csvs(tmp_path):

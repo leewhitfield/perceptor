@@ -8,7 +8,8 @@ from io import StringIO
 from pathlib import Path
 
 from forensic_orchestrator.db import Database
-from forensic_orchestrator.mcp_server import RelicMcpServer, run_mcp_server
+from forensic_orchestrator.mcp_server import RelicMcpServer, _tool_result, run_mcp_server
+from forensic_orchestrator.search.opensearch import OpenSearchRestClient
 
 
 def test_mcp_initialize_and_list_tools(tmp_path):
@@ -34,6 +35,7 @@ def test_mcp_initialize_and_list_tools(tmp_path):
     assert "relic_import_triage_zip" in names
     assert "relic_query_suspicious_executions" in names
     assert "relic_query_external_storage" in names
+    assert "relic_query_wifi_activity" in names
     assert "relic_case_review" in names
     assert "relic_case_evidence_map" in names
     assert "relic_workspace_map" in names
@@ -46,9 +48,12 @@ def test_mcp_initialize_and_list_tools(tmp_path):
     assert "relic_file_dossier" in names
     assert "relic_query_filesystem_listings" in names
     assert "relic_query_evidence_contents" in names
+    assert "relic_query_usb_contents" in names
     assert "relic_usb_dossier" in names
     assert "relic_user_activity" in names
+    assert "relic_query_system_users" in names
     assert "relic_timeline_window" in names
+    assert "relic_activity_windows" in names
     assert "relic_lead_search" in names
     assert "relic_case_activity_digest" in names
     assert "relic_case_next_actions" in names
@@ -63,6 +68,7 @@ def test_mcp_initialize_and_list_tools(tmp_path):
     assert "relic_read_search_packet" in names
     assert "relic_rerun_search_packet" in names
     assert "relic_search_content" in names
+    assert "relic_get_indexed_content" in names
     assert "relic_list_progress_manifests" in names
     assert "relic_list_mcp_jobs" in names
     assert "relic_get_mcp_job_progress" in names
@@ -75,14 +81,35 @@ def test_mcp_initialize_and_list_tools(tmp_path):
     assert "first source of truth" in fs_tool["description"]
     contents_tool = next(tool for tool in tools if tool["name"] == "relic_query_evidence_contents")
     assert "stored filesystem_entries only" in contents_tool["description"]
+    usb_contents_tool = next(tool for tool in tools if tool["name"] == "relic_query_usb_contents")
+    assert "stored filesystem_entries" in usb_contents_tool["description"]
+    assert "volume_name" in usb_contents_tool["inputSchema"]["properties"]
     usb_files_tool = next(tool for tool in tools if tool["name"] == "relic_query_usb_files")
     assert "volume name" in usb_files_tool["description"]
     assert "contains" in usb_files_tool["inputSchema"]["properties"]
     assert "volume_name" in usb_files_tool["inputSchema"]["properties"]
+    wifi_tool = next(tool for tool in tools if tool["name"] == "relic_query_wifi_activity")
+    assert wifi_tool["metadata"]["category"] == "network"
+    assert "ssid" in wifi_tool["inputSchema"]["properties"]
+    assert "connection_sessions" in wifi_tool["description"]
+    assert "session_activity_plan" in wifi_tool["description"]
+    user_activity_tool = next(tool for tool in tools if tool["name"] == "relic_user_activity")
+    assert "not the source of truth for bounded activity-window questions" in user_activity_tool["description"]
+    timeline_window_tool = next(tool for tool in tools if tool["name"] == "relic_timeline_window")
+    assert "start" in timeline_window_tool["inputSchema"]["properties"]
+    assert "end" in timeline_window_tool["inputSchema"]["properties"]
+    assert "filter_within_window" in timeline_window_tool["inputSchema"]["properties"]
+    assert "contains is only applied when filter_within_window is true" in timeline_window_tool["description"]
+    activity_windows_tool = next(tool for tool in tools if tool["name"] == "relic_activity_windows")
+    assert "multiple resolved time windows" in activity_windows_tool["description"]
+    assert "windows" in activity_windows_tool["inputSchema"]["properties"]
     content_search_tool = next(tool for tool in tools if tool["name"] == "relic_search_content")
     assert "OpenSearch" in content_search_tool["description"]
     assert "password" not in content_search_tool["inputSchema"]["properties"]
     assert content_search_tool["metadata"]["category"] == "search"
+    indexed_content_tool = next(tool for tool in tools if tool["name"] == "relic_get_indexed_content")
+    assert "opensearch_document_id" in indexed_content_tool["inputSchema"]["properties"]
+    assert "password" not in indexed_content_tool["inputSchema"]["properties"]
     route_tool = next(tool for tool in tools if tool["name"] == "relic_route_question")
     assert "source-of-truth order" in route_tool["description"]
     process_tool = next(tool for tool in tools if tool["name"] == "relic_process_image")
@@ -137,6 +164,151 @@ def test_mcp_workspace_and_case_summary_tools(tmp_path):
     mapped = evidence_map["result"]["structuredContent"]
     assert mapped["summary"]["computer_count"] == 1
     assert mapped["images"][0]["computer_label"] == "HOST01"
+
+
+def test_mcp_timeline_window_uses_master_timeline_for_time_bounds(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    db.insert_tool_output(
+        {
+            "id": "output-1",
+            "case_id": case.id,
+            "computer_id": "computer-1",
+            "image_id": "image-1",
+            "tool_name": "TestTool",
+            "output_type": "csv",
+            "path": tmp_path / "source.csv",
+            "row_count": 1,
+        }
+    )
+    db.insert_timeline_events(
+        [
+            {
+                "id": "timeline-1",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "output-1",
+                "source_tool": "TestTool",
+                "source_table": "test_rows",
+                "source_row_id": "row-1",
+                "event_type": "long_activity",
+                "raw_timestamp": "2025-11-17T13:00:00Z",
+                "timestamp_utc": "2025-11-17T13:00:00Z",
+                "end_timestamp_utc": "2025-11-17T13:20:00Z",
+                "duration_ms": 1_200_000,
+                "description": "Long activity",
+                "details": {},
+            },
+            {
+                "id": "timeline-2",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "output-1",
+                "source_tool": "BrowserParser",
+                "source_table": "browser_history",
+                "source_row_id": "row-2",
+                "event_type": "browser_history",
+                "raw_timestamp": "2025-11-17T13:14:00Z",
+                "timestamp_utc": "2025-11-17T13:14:00Z",
+                "end_timestamp_utc": "",
+                "duration_ms": None,
+                "description": "YouTube watch page",
+                "details": {},
+            }
+        ]
+    )
+    db.insert_filesystem_entries(
+        [
+            {
+                "id": "fs-1",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "output-1",
+                "tool_name": "MountedFilesystemInventory",
+                "source_csv": "filesystem_entries.csv",
+                "row_number": 1,
+                "partition_id": "partition-1",
+                "filesystem_type": "fat32",
+                "source_root": "/mnt/usb",
+                "file_path": "The end.docx",
+                "parent_path": "",
+                "file_name": "The end.docx",
+                "extension": ".docx",
+                "file_size": "1234",
+                "is_directory": "false",
+                "created_utc": "2025-11-17T12:00:00Z",
+                "modified_utc": "2025-11-17T13:14:30Z",
+                "accessed_utc": "",
+                "metadata_changed_utc": "",
+                "mode": "",
+                "uid": "",
+                "gid": "",
+                "scan_status": "live",
+                "error": "",
+                "created_at": "2026-05-30T00:00:00Z",
+            }
+        ]
+    )
+    db.close()
+
+    server = RelicMcpServer(root=tmp_path)
+    result = server.timeline_window(
+        {
+            "case_id": "case-1",
+            "start": "2025-11-17T13:13:36Z",
+            "end": "2025-11-17T13:15:00Z",
+            "limit": 10,
+            "contains": "Hyatt",
+        }
+    )
+
+    assert result["source_of_truth"] == "normalized_master_timeline"
+    assert result["ignored_contains"] == "Hyatt"
+    assert result["events"][0]["event_type"] == "long_activity"
+    assert result["window_summary"]["total_events"] == 2
+    assert result["window_summary"]["notable_events"][0]["event_type"] == "browser_history"
+    assert "Browser/web activity is present" in result["activity_answer"]["summary"]
+    assert result["activity_answer"]["browser_examples"][0]["description"] == "YouTube watch page"
+    assert result["browser_activity_count"] == 1
+    assert result["browser_activity"][0]["description"] == "YouTube watch page"
+    assert result["file_activity_count"] >= 1
+    assert result["direct_activity_counts"]["file_activity"] >= 1
+    filesystem_modified = result["direct_activity"]["sources"]["filesystem_modified"]["rows"]
+    assert filesystem_modified[0]["file_name"] == "The end.docx"
+    assert filesystem_modified[0]["modified_utc"] == "2025-11-17T13:14:30Z"
+
+    filtered = server.timeline_window(
+        {
+            "case_id": "case-1",
+            "start": "2025-11-17T13:13:36Z",
+            "end": "2025-11-17T13:15:00Z",
+            "limit": 10,
+            "contains": "Hyatt",
+            "filter_within_window": True,
+        }
+    )
+
+    assert filtered["filter_within_window"] is True
+    assert filtered["events"] == []
+
+
+def test_mcp_tool_result_decodes_escaped_unicode_without_rewriting_paths():
+    result = _tool_result(
+        {
+            "title": "\\ud83d\\udd34RARE Throwing Knives (LIVE Test) - YouTube",
+            "path": "C:\\Users\\mayas\\Desktop",
+        }
+    )
+
+    structured = result["structuredContent"]
+    assert structured["title"] == "🔴RARE Throwing Knives (LIVE Test) - YouTube"
+    assert structured["path"] == "C:\\Users\\mayas\\Desktop"
+    assert "\\ud83d\\udd34" not in result["content"][0]["text"]
 
 
 def test_mcp_stdio_server_roundtrip(tmp_path):
@@ -336,6 +508,66 @@ def test_mcp_usb_files_filters_existing_report_rows(tmp_path):
     assert structured["total_returned"] == 1
     assert structured["items"][0]["file_name"] == "Report.docx"
     assert structured["items"][0]["artifact_volume_serial_number"] == "1122AABB"
+
+
+def test_mcp_usb_contents_resolves_volume_label_to_filesystem_listing(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORENSIC_ANALYTICS_MODE", "sqlite")
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path)
+    computer = db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    image = db.add_image("image-1", case.id, tmp_path / "usb.E01", computer_id=computer.id)
+
+    def fs_row(row_id: str, path: str, name: str, status: str, size: int | None = None) -> dict[str, object]:
+        return {
+            "id": row_id,
+            "case_id": case.id,
+            "computer_id": computer.id,
+            "image_id": image.id,
+            "tool_output_id": "tool-1",
+            "tool_name": "MountedFilesystemInventory",
+            "source_csv": "filesystem_entries.csv",
+            "row_number": int(row_id.rsplit("-", 1)[-1]),
+            "partition_id": "part-1",
+            "filesystem_type": "fat32",
+            "source_root": "/mnt/usb",
+            "file_path": path,
+            "parent_path": "",
+            "file_name": name,
+            "extension": Path(name).suffix,
+            "file_size": size,
+            "is_directory": "false",
+            "created_utc": "2025-11-17T15:47:02Z",
+            "modified_utc": "2025-11-17T15:47:04Z",
+            "accessed_utc": None,
+            "metadata_changed_utc": None,
+            "mode": None,
+            "uid": None,
+            "gid": None,
+            "scan_status": status,
+            "error": "",
+            "created_at": "2026-05-30T00:00:00Z",
+        }
+
+    db.insert_filesystem_entries(
+        [
+            fs_row("fs-1", "BYEBYE      (Volume Label Entry)", "BYEBYE      (Volume Label Entry)", "system", None),
+            fs_row("fs-2", "The end.docx", "The end.docx", "live", 0),
+            fs_row("fs-3", "Alex.docx", "Alex.docx", "deleted", 31055),
+        ]
+    )
+    db.close()
+
+    server = RelicMcpServer(root=tmp_path)
+    result = server.query_usb_contents({"case_id": case.id, "volume_name": "BYEBYE"})
+
+    assert result["source_of_truth"] == "filesystem_entries_and_usb_file_correlations"
+    assert result["filters"]["resolved_image_ids"] == ["image-1"]
+    assert result["summary"]["listing_available"] is True
+    assert result["summary"]["filesystem_status_counts"] == {"live": 1, "deleted": 1}
+    assert {row["file_name"] for row in result["filesystem_entries"]} == {"The end.docx", "Alex.docx"}
+
+    with_system = server.query_usb_contents({"case_id": case.id, "volume_name": "BYEBYE", "include_system": True})
+    assert "BYEBYE      (Volume Label Entry)" in [row["file_name"] for row in with_system["filesystem_entries"]]
 
 
 def test_mcp_job_persists_and_output_can_be_read(tmp_path):
@@ -570,6 +802,7 @@ def test_mcp_artifact_search_and_progress_manifests(tmp_path, monkeypatch):
     assert guide["reports_first_tool"] == "relic_read_existing_report"
     assert guide["evidence_contents_first_tool"] == "relic_query_evidence_contents"
     assert guide["filesystem_first_tool"] == "relic_query_filesystem_listings"
+    assert guide["wifi_activity_tool"] == "relic_query_wifi_activity"
     assert guide["content_search_tool"] == "relic_search_content"
 
 
@@ -578,10 +811,15 @@ def test_mcp_route_question_enforces_truth_order(tmp_path):
 
     contents = server.route_question({"case_id": "case-1", "question": "Can you pull a list of contents for the USB drive?"})
     assert contents["intent"] == "evidence_contents"
-    assert contents["first_source"] == "generated_filesystem_listings"
-    assert contents["recommended_tool"] == "relic_query_evidence_contents"
-    assert contents["source_order"][0]["tools"] == ["relic_query_evidence_contents", "relic_query_filesystem_listings"]
+    assert contents["first_source"] == "generated_usb_filesystem_listings"
+    assert contents["recommended_tool"] == "relic_query_usb_contents"
+    assert contents["source_order"][0]["tools"] == ["relic_query_usb_contents"]
     assert contents["processing_allowed"] is False
+
+    usb_else = server.route_question({"case_id": "case-1", "question": "What else was on the USB drive?"})
+    assert usb_else["intent"] == "evidence_contents"
+    assert usb_else["recommended_tool"] == "relic_query_usb_contents"
+    assert usb_else["source_order"][0]["source"] == "generated_usb_filesystem_listings"
 
     suspicious = server.route_question({"case_id": "case-1", "question": "Show me suspicious executables"})
     assert suspicious["intent"] == "execution"
@@ -594,6 +832,36 @@ def test_mcp_route_question_enforces_truth_order(tmp_path):
     assert content["intent"] == "content_search"
     assert content["recommended_tool"] == "relic_search_content"
     assert content["source_order"][1]["source"] == "opensearch_content_index"
+
+    file_info = server.route_question({"case_id": "case-1", "question": "What can you tell me about _WRD0001.tmp filesystem and internal metadata?"})
+    assert file_info["intent"] == "file_information"
+    assert file_info["recommended_tool"] == "relic_file_dossier"
+    assert file_info["source_order"][0]["source"] == "file_dossier"
+
+    file_content = server.route_question({"case_id": "case-1", "question": "What is the content of _WRD0001.tmp?"})
+    assert file_content["intent"] == "file_content_and_information"
+    assert file_content["recommended_tool"] == "relic_file_dossier"
+    assert file_content["source_order"][2]["source"] == "opensearch_content_index"
+    assert "do not stop at metadata" in file_content["reason"]
+    assert file_content["source_order"][2]["followup"].startswith("If a hit is returned")
+
+    wifi = server.route_question({"case_id": "case-1", "question": "Were wifi networks connected on November 17?"})
+    assert wifi["intent"] == "wifi_network_activity"
+    assert wifi["first_source"] == "parsed_network_artifact_tables"
+    assert wifi["recommended_tool"] == "relic_query_wifi_activity"
+    assert wifi["source_order"][0]["tools"] == ["relic_query_wifi_activity"]
+
+    wifi_activity = server.route_question({"case_id": "case-1", "question": "What activity occurred while the computer was connected to Hyatt wifi?"})
+    assert wifi_activity["intent"] == "wifi_network_activity"
+    assert wifi_activity["recommended_tool"] == "relic_query_wifi_activity"
+    assert wifi_activity["source_order"][1]["source"] == "normalized_master_timeline"
+    assert wifi_activity["source_order"][1]["tools"] == ["relic_activity_windows", "relic_timeline_window"]
+    assert "session_activity_plan.aggregate_tool" in wifi_activity["source_order"][1]["requires"]
+
+    users = server.route_question({"case_id": "case-1", "question": "Who are the users on this computer and what are their SIDs?"})
+    assert users["intent"] == "system_users"
+    assert users["recommended_tool"] == "relic_query_system_users"
+    assert users["source_order"][0]["source"] == "consolidated_user_inventory"
 
     recovery = server.route_question({"case_id": "case-1", "question": "Recover the deleted timeline.docx file"})
     assert recovery["intent"] == "deleted_file_recovery"
@@ -612,7 +880,6 @@ def test_mcp_route_question_enforces_truth_order(tmp_path):
     assert recovery_allowed["processing_allowed"] is True
     assert "relic_recover_deleted_files" in recovery_allowed["fallback_tools"]
 
-
 def test_mcp_search_content_wraps_opensearch_without_password_argument(tmp_path, monkeypatch):
     captured = {}
 
@@ -629,7 +896,13 @@ def test_mcp_search_content_wraps_opensearch_without_password_argument(tmp_path,
                     "score": 2.5,
                     "source_type": "indexed_file_content",
                     "source_table": "windows_search_indexed_content",
+                    "storage_table": "windows_search_indexed_content",
+                    "forensic_source_table": "user_file_content",
+                    "evidence_nature": "direct_file_content_extraction",
+                    "direct_file_content_extraction": True,
+                    "windows_search_artifact_content": False,
                     "source_record_id": "wic-1",
+                    "opensearch_document_id": "os-doc-1",
                     "computer_id": "computer-1",
                     "image_id": "image-1",
                     "content_hash": "abc",
@@ -661,7 +934,82 @@ def test_mcp_search_content_wraps_opensearch_without_password_argument(tmp_path,
     assert captured["config"].url == "http://localhost:9200"
     assert captured["config"].index == "case-content"
     assert result["source_of_truth"] == "opensearch_content_index"
+    assert "snippets only" in result["guidance"]
     assert result["hits"][0]["drilldown"]["source_table"] == "windows_search_indexed_content"
+    assert result["hits"][0]["snippet_note"] == "OpenSearch highlight fields are matching snippets, not the full indexed content."
+    assert result["hits"][0]["forensic_source_table"] == "user_file_content"
+    assert result["hits"][0]["evidence_nature"] == "direct_file_content_extraction"
+    assert "direct file-content extraction" in result["hits"][0]["provenance_summary"]
+    assert result["hits"][0]["full_content_available"] is True
+    assert result["hits"][0]["full_content_tool"]["tool"] == "relic_get_indexed_content"
+    assert result["hits"][0]["full_content_tool"]["arguments"] == {
+        "case_id": "case-1",
+        "opensearch_document_id": "os-doc-1",
+    }
+
+
+def test_mcp_get_indexed_content_returns_full_opensearch_document(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_request(self, method, path, body=None):
+        captured["method"] = method
+        captured["path"] = path
+        captured["body"] = body
+        return {
+            "_id": "os-doc-1",
+            "found": True,
+            "_source": {
+                "case_id": "case-1",
+                "title": "_WRD0001.tmp",
+                "source_path": "/_WRD0001.tmp",
+                "container_path": "",
+                "source_type": "indexed_file_content",
+                "source_table": "windows_search_indexed_content",
+                "source_record_id": "wic-1",
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "timestamp": "2026-06-02T16:08:57Z",
+                "user_profile": "",
+                "content_hash": "abc",
+                "content_length": 34,
+                "content": "You did not have to be so pompous.",
+                "metadata": {
+                    "storage_table": "windows_search_indexed_content",
+                    "forensic_source_table": "user_file_content",
+                    "evidence_nature": "direct_file_content_extraction",
+                },
+            },
+        }
+
+    monkeypatch.setattr(OpenSearchRestClient, "request", fake_request)
+    server = RelicMcpServer(root=tmp_path)
+
+    result = server.get_indexed_content(
+        {
+            "case_id": "case-1",
+            "opensearch_document_id": "os-doc-1",
+            "url": "http://localhost:9200",
+            "index": "case-content",
+            "max_chars": 12,
+        }
+    )
+
+    assert captured["method"] == "GET"
+    assert captured["path"] == "/case-content/_doc/os-doc-1"
+    assert result["source_of_truth"] == "opensearch_content_index"
+    assert result["retrieval_backend"] == "OpenSearch"
+    assert result["title"] == "_WRD0001.tmp"
+    assert result["source_record_id"] == "wic-1"
+    assert result["storage_table"] == "windows_search_indexed_content"
+    assert result["forensic_source_table"] == "user_file_content"
+    assert result["evidence_nature"] == "direct_file_content_extraction"
+    assert result["direct_file_content_extraction"] is True
+    assert result["windows_search_artifact_content"] is False
+    assert "direct file-content extraction" in result["provenance_summary"]
+    assert result["content"] == "You did not "
+    assert result["returned_content_length"] == 12
+    assert result["content_length"] == 34
+    assert result["truncated"] is True
 
 
 def test_mcp_filesystem_listing_uses_generated_inventory(tmp_path, monkeypatch):
@@ -750,6 +1098,11 @@ def test_mcp_filesystem_listing_uses_generated_inventory(tmp_path, monkeypatch):
     assert contents["intent"] == "evidence_contents"
     assert contents["source_of_truth"] == "filesystem_entries"
     assert [row["file_name"] for row in contents["filesystem_entries"]] == ["Alex.docx"]
+
+    dossier = server.file_dossier({"case_id": "case-1", "name": "Alex.docx"})
+    assert dossier["content_followup"]["tool"] == "relic_search_content"
+    assert dossier["content_followup"]["arguments"]["query"] == "Alex.docx"
+    assert "relic_get_indexed_content" in dossier["content_followup"]["next_step"]
 
 
 def test_mcp_tool_reference_and_audit_log(tmp_path):

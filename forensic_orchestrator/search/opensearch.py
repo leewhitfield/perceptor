@@ -212,11 +212,12 @@ def mailbox_attachment_document(row: dict[str, Any], *, extracted_text: str) -> 
 def windows_search_content_document(row: dict[str, Any], *, content_text: str) -> dict[str, Any] | None:
     if not content_text.strip():
         return None
+    forensic_source_table = str(row.get("source_table") or "windows_search_indexed_content")
     return _base_document(
         case_id=row["case_id"],
         computer_id=row.get("computer_id"),
         image_id=row.get("image_id"),
-        source_type="indexed_file_content",
+        source_type=_indexed_content_source_type(forensic_source_table),
         source_table="windows_search_indexed_content",
         source_record_id=row["id"],
         document_id=row.get("opensearch_document_id"),
@@ -229,6 +230,9 @@ def windows_search_content_document(row: dict[str, Any], *, content_text: str) -
         extra={
             "source_record_parent_id": row.get("source_record_id"),
             "windows_search_source_table": row.get("source_table"),
+            "forensic_source_table": forensic_source_table,
+            "storage_table": "windows_search_indexed_content",
+            "evidence_nature": _indexed_content_evidence_nature(forensic_source_table),
             "work_id": row.get("work_id"),
             "item_type": row.get("item_type"),
             "content_field": row.get("content_field"),
@@ -368,11 +372,20 @@ def search_case_content(
     hits = []
     for hit in response.get("hits", {}).get("hits", []):
         source = hit.get("_source") or {}
+        metadata = source.get("metadata") if isinstance(source.get("metadata"), dict) else {}
+        provenance = _content_provenance(source, metadata)
         hits.append(
             {
+                "opensearch_document_id": hit.get("_id"),
                 "score": hit.get("_score"),
                 "source_type": source.get("source_type"),
                 "source_table": source.get("source_table"),
+                "retrieval_backend": "OpenSearch",
+                "storage_table": provenance["storage_table"],
+                "forensic_source_table": provenance["forensic_source_table"],
+                "evidence_nature": provenance["evidence_nature"],
+                "direct_file_content_extraction": provenance["direct_file_content_extraction"],
+                "windows_search_artifact_content": provenance["windows_search_artifact_content"],
                 "source_record_id": source.get("source_record_id"),
                 "title": source.get("title"),
                 "source_path": source.get("source_path"),
@@ -541,6 +554,40 @@ def _base_document(
         "user_profile": user_profile,
         "metadata": extra,
         "indexed_at": utc_now(),
+    }
+
+
+def _indexed_content_source_type(source_table: str) -> str:
+    if source_table == "user_file_content":
+        return "direct_file_content"
+    return "indexed_file_content"
+
+
+def _indexed_content_evidence_nature(source_table: str) -> str:
+    if source_table == "user_file_content":
+        return "direct_file_content_extraction"
+    if source_table.startswith("windows_search_"):
+        return "windows_search_artifact_indexed_content"
+    return "indexed_content"
+
+
+def _content_provenance(source: dict[str, Any], metadata: dict[str, Any]) -> dict[str, Any]:
+    storage_table = str(metadata.get("storage_table") or source.get("source_table") or "")
+    forensic_source_table = str(
+        metadata.get("forensic_source_table")
+        or metadata.get("windows_search_source_table")
+        or storage_table
+    )
+    evidence_nature = str(
+        metadata.get("evidence_nature")
+        or _indexed_content_evidence_nature(forensic_source_table)
+    )
+    return {
+        "storage_table": storage_table,
+        "forensic_source_table": forensic_source_table,
+        "evidence_nature": evidence_nature,
+        "direct_file_content_extraction": evidence_nature == "direct_file_content_extraction",
+        "windows_search_artifact_content": evidence_nature == "windows_search_artifact_indexed_content",
     }
 
 

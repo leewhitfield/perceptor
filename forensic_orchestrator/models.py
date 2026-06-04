@@ -10,6 +10,8 @@ class Case:
     id: str
     root: Path
     created_at: str
+    description: str | None = None
+    notes_path: str | None = None
 
 
 @dataclass(frozen=True)

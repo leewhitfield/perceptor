@@ -555,6 +555,7 @@ def _run_profile_impl(
         artifact.name
         for tool in tools
             if tool.type in {"internal_file_metadata", "internal_mailbox", "internal_zone_identifier"}
+            and str(filesystem_type or "").lower() == "ntfs"
             for artifact in tool.artifacts
     }
     artifact_tool_names = {
@@ -750,6 +751,7 @@ def _run_profile_impl(
                         dry_run=dry_run,
                         fls_entries=current_fls_entries,
                         ignore_exclude_patterns=artifact.name == "lnk_files" and include_start_menu_lnk,
+                        filesystem_type=filesystem_type,
                     )
             except Exception as exc:
                 if windows_old_mode and _is_missing_source_error(exc):

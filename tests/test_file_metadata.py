@@ -32,6 +32,12 @@ def test_file_metadata_profiles_are_configured():
         "FileMetadataPicturesUserContent"
     ]
     assert [tool.name for tool in registry.profile_tools("file-metadata-all")] == ["FileMetadataExtractor"]
+    windows_full_tools = [tool.name for tool in registry.profile_tools("windows-full")]
+    assert "FileMetadataOffice" in windows_full_tools
+    assert "FileMetadataDocuments" in windows_full_tools
+    assert "FileMetadataPicturesUserContent" in windows_full_tools
+    assert "FileMetadataVideos" in windows_full_tools
+    assert "FileMetadataExecutables" in windows_full_tools
 
     office = registry.get_tool("FileMetadataOffice")
     assert office.type == "internal_file_metadata"

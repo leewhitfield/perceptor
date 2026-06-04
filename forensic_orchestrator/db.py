@@ -26,7 +26,7 @@ LOGGER = logging.getLogger(__name__)
 
 
 def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _parse_iso_datetime(value: str) -> datetime:
@@ -393,6 +393,8 @@ class Database:
             CREATE TABLE IF NOT EXISTS cases (
               id TEXT PRIMARY KEY,
               root TEXT NOT NULL,
+              description TEXT,
+              notes_path TEXT,
               created_at TEXT NOT NULL
             );
 
@@ -2464,6 +2466,8 @@ class Database:
               event_type TEXT NOT NULL,
               raw_timestamp TEXT,
               timestamp_utc TEXT NOT NULL,
+              end_timestamp_utc TEXT,
+              duration_ms INTEGER,
               description TEXT,
               details_json TEXT NOT NULL,
               created_at TEXT NOT NULL
@@ -4130,12 +4134,16 @@ class Database:
               ON activity_log(case_id, level);
             """
         )
+        self._add_column_if_missing("cases", "description", "TEXT")
+        self._add_column_if_missing("cases", "notes_path", "TEXT")
         self._add_column_if_missing("images", "computer_id", "TEXT REFERENCES computers(id)")
         self._add_column_if_missing("mounts", "source_type", "TEXT NOT NULL DEFAULT 'ewfmount'")
         self._add_column_if_missing("mounts", "filesystem_type", "TEXT")
         self._add_column_if_missing("jobs", "computer_id", "TEXT")
         self._add_column_if_missing("tool_outputs", "content_sha256", "TEXT")
         self._add_column_if_missing("timeline_events", "is_windows_old", "INTEGER NOT NULL DEFAULT 0")
+        self._add_column_if_missing("timeline_events", "end_timestamp_utc", "TEXT")
+        self._add_column_if_missing("timeline_events", "duration_ms", "INTEGER")
         self._add_column_if_missing("timeline_events", "dedupe_key", "TEXT")
         self._add_column_if_missing("timeline_events", "primary_event_id", "TEXT")
         self._add_column_if_missing("timeline_events", "dedupe_status", "TEXT NOT NULL DEFAULT 'primary'")
@@ -5201,8 +5209,8 @@ class Database:
     def create_case(self, case_id: str, root: Path) -> Case:
         created_at = utc_now()
         self.conn.execute(
-            "INSERT INTO cases (id, root, created_at) VALUES (?, ?, ?)",
-            (case_id, str(root), created_at),
+            "INSERT INTO cases (id, root, description, notes_path, created_at) VALUES (?, ?, ?, ?, ?)",
+            (case_id, str(root), None, None, created_at),
         )
         self.conn.execute(
             "INSERT OR IGNORE INTO projects (id, case_id, name, root, created_at) VALUES (?, ?, ?, ?, ?)",
@@ -5215,7 +5223,30 @@ class Database:
         row = self.conn.execute("SELECT * FROM cases WHERE id = ?", (case_id,)).fetchone()
         if row is None:
             raise KeyError(f"Case not found: {case_id}")
-        return Case(id=row["id"], root=Path(row["root"]), created_at=row["created_at"])
+        return Case(
+            id=row["id"],
+            root=Path(row["root"]),
+            created_at=row["created_at"],
+            description=row["description"],
+            notes_path=row["notes_path"],
+        )
+
+    def update_case_description(
+        self,
+        case_id: str,
+        *,
+        description: str | None = None,
+        notes_path: str | None = None,
+    ) -> Case:
+        case = self.get_case(case_id)
+        next_description = description if description is not None else case.description
+        next_notes_path = notes_path if notes_path is not None else case.notes_path
+        self.conn.execute(
+            "UPDATE cases SET description = ?, notes_path = ? WHERE id = ?",
+            (next_description, next_notes_path, case_id),
+        )
+        self.conn.commit()
+        return self.get_case(case_id)
 
     def create_computer(
         self,
@@ -7753,6 +7784,8 @@ class Database:
                 "event_type": row["event_type"],
                 "raw_timestamp": row.get("raw_timestamp"),
                 "timestamp_utc": row["timestamp_utc"],
+                "end_timestamp_utc": row.get("end_timestamp_utc"),
+                "duration_ms": row.get("duration_ms"),
                 "description": row.get("description"),
                 "details_json": json.dumps(row.get("details", {}), default=str),
                 "created_at": created_at,
@@ -7766,8 +7799,8 @@ class Database:
             INSERT INTO timeline_events (
               id, case_id, computer_id, image_id, tool_output_id, source_tool,
               source_table, source_row_id, event_type, raw_timestamp, timestamp_utc,
-              description, details_json, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              end_timestamp_utc, duration_ms, description, details_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
@@ -7782,6 +7815,8 @@ class Database:
                     row["event_type"],
                     row.get("raw_timestamp"),
                     row["timestamp_utc"],
+                    row.get("end_timestamp_utc"),
+                    row.get("duration_ms"),
                     row.get("description"),
                     json.dumps(row.get("details", {}), default=str),
                     created_at,
@@ -8436,8 +8471,20 @@ class Database:
         parsed_counts = self.parsed_row_counts(case_id)
         activity = self.activity_for_case(case_id, limit=50)
         return {
-            "case": {"id": case.id, "root": str(case.root), "created_at": case.created_at},
-            "project": {"id": case.id, "root": str(case.root), "created_at": case.created_at},
+            "case": {
+                "id": case.id,
+                "root": str(case.root),
+                "description": case.description,
+                "notes_path": case.notes_path,
+                "created_at": case.created_at,
+            },
+            "project": {
+                "id": case.id,
+                "root": str(case.root),
+                "description": case.description,
+                "notes_path": case.notes_path,
+                "created_at": case.created_at,
+            },
             "computers": [dict(row) for row in computers],
             "images": [dict(row) for row in images],
             "image_metadata": [dict(row) for row in image_metadata],

@@ -31,6 +31,7 @@ from forensic_orchestrator.reports import (
     copied_usb_files_report,
     common_dialog_items_report,
     artifact_completeness_report,
+    artifact_search_report,
     data_exfiltration_markdown,
     data_exfiltration_report,
     deep_recovery_status_markdown,
@@ -107,6 +108,7 @@ from forensic_orchestrator.reports import (
     storage_policy_report,
     suspicious_executions_markdown,
     suspicious_executions_report,
+    system_users_report,
     suspicious_timeline_windows_markdown,
     suspicious_timeline_windows_report,
     shortcuts_report,
@@ -127,7 +129,9 @@ from forensic_orchestrator.reports import (
     usb_dossier_report,
     usb_timeline_report,
     usb_verbose_report,
+    wifi_activity_report,
     browser_deep_storage_report,
+    browser_activity_report,
     browser_profile_activity_report,
     cd_burning_activity_markdown,
     cd_burning_activity_report,
@@ -141,6 +145,7 @@ from forensic_orchestrator.reports import (
     rdp_remote_access_markdown,
     remote_access_sessions_report,
     regression_smoke_report,
+    rebuild_timeline_events,
     vpn_activity_report,
     vpn_config_report,
     vpn_connections_report,
@@ -215,6 +220,11 @@ def test_summary_report_counts_outputs_artifacts_and_issues(tmp_path):
 def test_high_level_investigation_reports_smoke_on_empty_case(tmp_path):
     db = Database(tmp_path / "orchestrator.sqlite3")
     case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.update_case_description(
+        case.id,
+        description="Brief context for this matter.",
+        notes_path=str(tmp_path / "cases" / "case-1" / "case-description.md"),
+    )
     db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
     db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
 
@@ -241,12 +251,14 @@ def test_high_level_investigation_reports_smoke_on_empty_case(tmp_path):
     assert executive["summary"]["computers"] == 1
     assert combined["summary"]["family_count"] >= 1
     assert "status_counts" in processing["summary"]
+    assert overview["case_context"]["description"] == "Brief context for this matter."
     assert "Suspicious Timeline Windows" in suspicious_timeline_windows_markdown(suspicious)
     assert "Investigation Triage Dashboard" in investigation_triage_dashboard_markdown(triage)
     assert "Data Exfiltration Report" in data_exfiltration_markdown(exfiltration)
     assert "Account Compromise Report" in account_compromise_markdown(account)
     assert "Program Provenance Report" in program_provenance_markdown(provenance)
     assert "Case Overview" in case_overview_markdown(overview)
+    assert "Brief context for this matter." in case_overview_markdown(overview)
 
 
 def test_windows_search_report_surfaces_encrypted_sqlite_status(tmp_path):
@@ -457,6 +469,311 @@ def test_timeline_report_adds_memory_source_labels(tmp_path):
     assert report["events"][0]["source_scope"] == "pagefile"
     assert report["events"][0]["source_origin"] == "memory"
     assert report["events"][0]["source_label"] == "pagefile"
+    assert report["events"][0]["artifact_reference"]["source_table"] == "memory_string_hits"
+    assert report["events"][0]["artifact_reference"]["source_row_id"] == "mem-1"
+    assert report["events"][0]["report_hints"][0]["report"] == "memory_artifacts"
+    assert report["events"][0]["report_hints"][0]["tool"] == "relic_query_memory_artifacts"
+
+
+def test_timeline_report_adds_report_hints_for_browser_usb_and_files(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    base = {
+        "case_id": case.id,
+        "computer_id": "computer-1",
+        "image_id": "image-1",
+        "tool_output_id": "output-1",
+        "raw_timestamp": "2025-11-17T13:00:00Z",
+        "timestamp_utc": "2025-11-17T13:00:00Z",
+        "created_at": "2025-11-17T13:00:00Z",
+    }
+    db.insert_timeline_events(
+        [
+            {
+                **base,
+                "id": "event-browser",
+                "source_tool": "ChromiumParser",
+                "source_table": "browser_history",
+                "source_row_id": "browser-1",
+                "event_type": "browser_visit",
+                "description": "YouTube",
+                "details": {"url": "https://www.youtube.com/watch?v=abc"},
+            },
+            {
+                **base,
+                "id": "event-file",
+                "source_tool": "LECmd",
+                "source_table": "shortcut_items",
+                "source_row_id": "lnk-1",
+                "event_type": "lnk_timestamp",
+                "description": "E:/report.docx",
+                "details": {"target_path": "E:/report.docx", "volume_serial_number": "3304EABA"},
+            },
+        ]
+    )
+
+    report = timeline_report(db, case.id)
+    by_id = {event["id"]: event for event in report["events"]}
+
+    browser_reports = {hint["report"] for hint in by_id["event-browser"]["report_hints"]}
+    file_reports = {hint["report"] for hint in by_id["event-file"]["report_hints"]}
+    assert "browser_activity" in browser_reports
+    assert "file_dossier" in file_reports
+    assert "usb_timeline" in file_reports
+    assert by_id["event-browser"]["artifact_reference"]["source_table"] == "browser_history"
+    assert by_id["event-browser"]["artifact_reference"]["source_row_id"] == "browser-1"
+
+
+def test_rebuild_timeline_events_regenerates_from_parsed_artifacts(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    base = {
+        "case_id": case.id,
+        "computer_id": "computer-1",
+        "image_id": "image-1",
+        "tool_output_id": "output",
+        "tool_name": "ChromiumParser",
+        "source_csv": tmp_path / "BrowserHistory.csv",
+        "row_number": 1,
+    }
+    db.insert_browser_history(
+        [
+            {
+                **base,
+                "id": "browser-1",
+                "browser": "Edge",
+                "profile_path": "Users/Jane/AppData/Local/Microsoft/Edge/User Data/Default",
+                "url": "https://www.youtube.com/watch?v=abc",
+                "title": "YouTube",
+                "visit_time_utc": "2025-11-17T22:02:30Z",
+                "visit_source": "8",
+                "visit_source_label": "chromium_edge_internal_or_generated_source_8",
+                "local_vs_synced": "internal_or_generated_unknown",
+            }
+        ]
+    )
+    db.insert_firefox_history(
+        [
+            {
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "output",
+                "source_csv": tmp_path / "FirefoxHistory.csv",
+                "row_number": 1,
+                "id": "firefox-1",
+                "profile_path": "Users/Jane/AppData/Roaming/Mozilla/Firefox/Profiles/default",
+                "url": "https://example.org/",
+                "title": "Example",
+                "visit_time_utc": "2025-11-17T22:03:30Z",
+            }
+        ]
+    )
+    db.insert_timeline_events(
+        [
+            {
+                "id": "stale-event",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "output",
+                "source_tool": "OldTool",
+                "source_table": "old_table",
+                "source_row_id": "old-row",
+                "event_type": "old_event",
+                "raw_timestamp": "2025-01-01T00:00:00Z",
+                "timestamp_utc": "2025-01-01T00:00:00Z",
+                "description": "stale",
+                "details": {},
+            }
+        ]
+    )
+
+    stats = rebuild_timeline_events(db, case_id=case.id, include_derived=False)
+    report = timeline_report(db, case.id)
+
+    assert stats["source_tables"]["browser_history"]["inserted"] == 1
+    assert report["total_returned"] == 2
+    by_source = {event["source_row_id"]: event for event in report["events"]}
+    event = by_source["browser-1"]
+    assert event["source_table"] == "browser_history"
+    assert event["details"]["visit_source"] == "8"
+    assert event["artifact_reference"]["source_row_id"] == "browser-1"
+    assert by_source["firefox-1"]["source_tool"] == "FirefoxParser"
+
+
+def test_timeline_description_fallback_uses_details_when_description_is_blank(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    db.insert_timeline_events(
+        [
+            {
+                "id": "event-blank",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "output-1",
+                "source_tool": "WebCacheParser",
+                "source_table": "webcache_entries",
+                "source_row_id": "webcache-1",
+                "event_type": "webcache_expires",
+                "raw_timestamp": "2025-11-17T13:00:00Z",
+                "timestamp_utc": "2025-11-17T13:00:00Z",
+                "description": "",
+                "details": {"host": "example.test", "timestamp_field": "expires_utc"},
+            }
+        ]
+    )
+
+    report = timeline_report(db, case.id)
+
+    assert report["events"][0]["description"] == "example.test"
+
+
+def test_derived_timeline_events_use_evtx_fallback_description(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    base = {
+        "case_id": case.id,
+        "computer_id": "computer-1",
+        "image_id": "image-1",
+        "tool_output_id": "output",
+        "tool_name": "EvtxECmd",
+        "source_csv": tmp_path / "evtx.csv",
+        "row_number": 1,
+    }
+    db.insert_evtx_events(
+        [
+            {
+                **base,
+                "id": "evtx-1",
+                "time_created": "2025-11-17T13:00:00Z",
+                "event_id": "1010",
+                "provider": "Microsoft-Windows-Kernel-PnP",
+                "channel": "Microsoft-Windows-Kernel-PnP/Device Management",
+                "map_description": "",
+                "payload": r"\\\\server\\share",
+            }
+        ]
+    )
+
+    events = derived_timeline_events(db, case.id, limit=10)
+    network_events = [event for event in events if event["event_type"] == "evtx_network_share"]
+
+    assert network_events
+    assert network_events[0]["description"] == "Microsoft-Windows-Kernel-PnP"
+
+
+def test_derived_timeline_events_drop_reverse_end_timestamp(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    base = {
+        "case_id": case.id,
+        "computer_id": "computer-1",
+        "image_id": "image-1",
+        "tool_output_id": "output",
+        "tool_name": "SrumParser",
+        "source_csv": tmp_path / "srum.csv",
+        "row_number": 1,
+    }
+    db.insert_srum_records(
+        [
+            {
+                **base,
+                "id": "srum-1",
+                "record_type": "app_timeline_provider",
+                "timestamp": "2025-11-17T13:15:00Z",
+                "app_name": "svchost.exe",
+                "start_time": "2025-11-17T13:10:00Z",
+                "end_time": "2025-11-17T13:14:00Z",
+                "row_json": "{}",
+            }
+        ]
+    )
+
+    events = derived_timeline_events(db, case.id, limit=10)
+    srum_events = [event for event in events if event["source_row_id"] == "srum-1"]
+
+    assert srum_events
+    assert srum_events[0]["end_timestamp_utc"] is None
+    assert srum_events[0]["duration_ms"] is None
+
+
+def test_system_users_report_consolidates_sam_sid_and_microsoft_account(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    base = {
+        "case_id": case.id,
+        "computer_id": "computer-1",
+        "image_id": "image-1",
+        "tool_output_id": "output",
+        "source_csv": tmp_path / "source.csv",
+        "row_number": 1,
+    }
+    db.insert_sam_accounts(
+        [
+            {
+                **base,
+                "id": "sam-1",
+                "tool_name": "SAMParser",
+                "username": "devon",
+                "rid": "1001",
+                "rid_hex": "000003E9",
+                "account_category": "local",
+                "last_login_utc": "2025-01-02T03:04:05Z",
+                "account_flags": "normal_account",
+            }
+        ]
+    )
+    db.insert_registry_artifacts(
+        [
+            {
+                **base,
+                "id": "reg-sid",
+                "tool_name": "RegistryArtifactParser",
+                "hive_type": "ntuser",
+                "artifact": "user_context",
+                "category": "identity",
+                "key_path": "ROOT/Software/Test",
+                "user_sid": "S-1-5-21-1-2-3-1001",
+            },
+            {
+                **base,
+                "id": "reg-cloud",
+                "tool_name": "RegistryArtifactParser",
+                "hive_type": "sam",
+                "artifact": "cloud_account_details",
+                "category": "account",
+                "key_path": "ROOT/SAM/Domains/Account/Users/000003E9",
+                "value_name": "InternetUserName",
+                "value_data": "devon@example.com",
+                "key_last_write_utc": "2025-01-02T03:04:05Z",
+            },
+        ]
+    )
+
+    report = system_users_report(db, case.id, include_builtin=False)
+
+    assert report["total_returned"] == 1
+    user = report["users"][0]
+    assert user["username"] == "devon"
+    assert user["sid"] == "S-1-5-21-1-2-3-1001"
+    assert user["account_type"] == "microsoft_account"
+    assert user["internet_username"] == "devon@example.com"
+    assert user["last_login_utc"] == "2025-01-02T03:04:05Z"
+    assert {source["source_table"] for source in user["evidence_sources"]} == {"sam_accounts", "registry_artifacts"}
 
 
 def test_processing_decision_report_rolls_up_limits_memory_and_credentials(tmp_path):
@@ -2112,6 +2429,117 @@ def test_artifact_completeness_can_scope_to_latest_profile_run(tmp_path):
     assert [row["tool_name"] for row in scoped["tools"]] == ["MFTECmd"]
     assert historical["summary"]["failed_jobs"] == 1
     assert {row["tool_name"] for row in historical["tools"]} == {"MFTECmd", "OldParser"}
+
+
+def test_file_dossier_includes_filesystem_entries_and_internal_metadata(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORENSIC_ANALYTICS_MODE", "sqlite")
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    computer = db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    image = db.add_image("image-1", case.id, Path("/evidence/usb.E01"), computer_id=computer.id)
+    db.insert_tool_output(
+        {
+            "id": "output-filesystem",
+            "case_id": case.id,
+            "computer_id": computer.id,
+            "image_id": image.id,
+            "tool_name": "MountedFilesystemInventory",
+            "output_type": "csv",
+            "path": tmp_path / "filesystem_entries.csv",
+            "content_sha256": "fs",
+            "row_count": 1,
+        }
+    )
+    db.insert_tool_output(
+        {
+            "id": "output-metadata",
+            "case_id": case.id,
+            "computer_id": computer.id,
+            "image_id": image.id,
+            "tool_name": "FileMetadataOffice",
+            "output_type": "csv",
+            "path": tmp_path / "FileMetadata.csv",
+            "content_sha256": "meta",
+            "row_count": 1,
+        }
+    )
+    db.insert_filesystem_entries(
+        [
+            {
+                "id": "fs-1",
+                "case_id": case.id,
+                "computer_id": computer.id,
+                "image_id": image.id,
+                "tool_output_id": "output-filesystem",
+                "tool_name": "MountedFilesystemInventory",
+                "source_csv": "filesystem_entries.csv",
+                "row_number": 1,
+                "partition_id": "part-1",
+                "filesystem_type": "fat32",
+                "source_root": "/mnt/usb",
+                "file_path": "Docs/plan.docx",
+                "parent_path": "Docs",
+                "file_name": "plan.docx",
+                "extension": ".docx",
+                "file_size": "31055",
+                "is_directory": "false",
+                "created_utc": "2025-11-17T15:47:02Z",
+                "modified_utc": "2025-11-17T15:47:04Z",
+                "accessed_utc": "2025-11-17T00:00:00Z",
+                "metadata_changed_utc": "",
+                "mode": "",
+                "uid": "",
+                "gid": "",
+                "scan_status": "deleted",
+                "error": "",
+                "created_at": "2026-05-30T00:00:00Z",
+            }
+        ]
+    )
+    db.insert_file_internal_metadata(
+        [
+            {
+                "id": "meta-1",
+                "case_id": case.id,
+                "computer_id": computer.id,
+                "image_id": image.id,
+                "tool_output_id": "output-metadata",
+                "tool_name": "FileMetadataOffice",
+                "source_csv": "FileMetadata.csv",
+                "row_number": 1,
+                "source_file": "/tmp/plan.docx",
+                "original_path": "Docs/plan.docx",
+                "file_name": "plan.docx",
+                "extension": ".docx",
+                "parser": "exiftool",
+                "metadata_group": "XMP",
+                "property_name": "Creator",
+                "property_value": "Jean",
+                "raw_property_name": "XMP:Creator",
+                "file_size": "31055",
+                "mft_created": "2025-11-17T15:47:02Z",
+                "mft_modified": "2025-11-17T15:47:04Z",
+                "mft_accessed": "2025-11-17T00:00:00Z",
+                "mft_record_modified": "",
+                "mft_in_use": "false",
+                "path_unresolved": "false",
+                "deleted_mft_entry": "true",
+                "live_orphan": "false",
+                "extraction_method": "mounted_in_place",
+            }
+        ]
+    )
+
+    dossier = file_dossier_report(db, case.id, name="plan.docx", limit=25)
+
+    assert dossier["summary"]["filesystem_listing_hits"] == 1
+    assert dossier["summary"]["internal_metadata_hits"] == 1
+    assert dossier["filesystem_metadata"]["available"] is True
+    assert dossier["filesystem_metadata"]["variants"][0]["filesystem_type"] == "fat32"
+    assert dossier["filesystem_metadata"]["variants"][0]["scan_status"] == "deleted"
+    assert dossier["internal_metadata"]["available"] is True
+    assert dossier["internal_metadata"]["groups"][0]["metadata_group"] == "XMP"
+    assert dossier["internal_metadata"]["groups"][0]["properties"][0]["property_value"] == "Jean"
 
 
 def test_artifact_completeness_separates_icat_extraction_caveats(tmp_path):
@@ -7354,6 +7782,304 @@ def test_srum_network_reports_show_networks_vpns_and_app_usage(tmp_path):
     assert usage["applications"][0]["total_bytes"] == 400
 
 
+def test_wifi_activity_report_reconciles_evtx_srum_and_registry(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    base = {
+        "case_id": case.id,
+        "computer_id": "computer-1",
+        "image_id": "image-1",
+        "tool_output_id": "output",
+        "tool_name": "tool",
+        "source_csv": tmp_path / "source.csv",
+        "row_number": 1,
+    }
+    db.insert_evtx_events(
+        [
+            {
+                **base,
+                "id": str(uuid.uuid4()),
+                "tool_name": "EvtxECmd",
+                "time_created": "2025-11-17 13:13:29.2588102",
+                "event_id": "8000",
+                "provider": "Microsoft-Windows-WLAN-AutoConfig",
+                "channel": "Microsoft-Windows-WLAN-AutoConfig/Operational",
+                "map_description": "WIFI connection was attempted",
+                "payload_data2": "ProfileName: Lemonade",
+                "payload_data3": "SSID: Lemonade",
+                "payload": "ProfileName Lemonade SSID Lemonade",
+            },
+            {
+                **base,
+                "id": str(uuid.uuid4()),
+                "tool_name": "EvtxECmd",
+                "time_created": "2025-11-17 13:13:32.9712945",
+                "event_id": "8002",
+                "provider": "Microsoft-Windows-WLAN-AutoConfig",
+                "channel": "Microsoft-Windows-WLAN-AutoConfig/Operational",
+                "map_description": "WIFI connection was failed",
+                "payload_data2": "ProfileName: Lemonade",
+                "payload_data3": "SSID: Lemonade",
+                "payload": "Failed to connect because no connectable Access Point was visible",
+            },
+            {
+                **base,
+                "id": str(uuid.uuid4()),
+                "tool_name": "EvtxECmd",
+                "time_created": "2025-11-17 13:13:36.4041647",
+                "event_id": "8001",
+                "provider": "Microsoft-Windows-WLAN-AutoConfig",
+                "channel": "Microsoft-Windows-WLAN-AutoConfig/Operational",
+                "map_description": "WIFI connection was successful",
+                "payload_data2": "ProfileName: @Hyatt_WiFi",
+                "payload_data3": "SSID: @Hyatt_WiFi",
+                "payload": "ProfileName @Hyatt_WiFi SSID @Hyatt_WiFi",
+            },
+            {
+                **base,
+                "id": str(uuid.uuid4()),
+                "tool_name": "EvtxECmd",
+                "time_created": "2025-11-17 13:13:36.5620038",
+                "event_id": "10000",
+                "provider": "Microsoft-Windows-NetworkProfile",
+                "channel": "Microsoft-Windows-NetworkProfile/Operational",
+                "map_description": "Connect to the Internet",
+                "payload_data1": "@Hyatt_WiFi",
+                "payload": "Name @Hyatt_WiFi Description @Hyatt_WiFi",
+            },
+        ]
+    )
+    db.insert_srum_records(
+        [
+            {
+                **base,
+                "id": str(uuid.uuid4()),
+                "tool_name": "SrumParser",
+                "record_type": "network_connectivity",
+                "timestamp": "2025-11-17T13:15:00Z",
+                "interface_type": "71",
+                "l2_profile_name": "Lemonade",
+                "connected_time": "342981",
+                "connect_start_time": "2025-11-11T22:47:31.547364Z",
+                "row_json": "{}",
+            },
+            {
+                **base,
+                "id": str(uuid.uuid4()),
+                "tool_name": "SrumParser",
+                "record_type": "network_connectivity",
+                "timestamp": "2025-11-17T13:13:36.463030Z",
+                "interface_type": "71",
+                "l2_profile_name": "@Hyatt_WiFi",
+                "connected_time": "1",
+                "connect_start_time": "2025-11-17T13:13:36.463030Z",
+                "row_json": "{}",
+            },
+        ]
+    )
+    db.insert_registry_artifacts(
+        [
+            {
+                **base,
+                "id": str(uuid.uuid4()),
+                "tool_name": "RegistryArtifactParser",
+                "source_path": "/registry/SOFTWARE",
+                "hive_type": "software",
+                "artifact": "connected_networks",
+                "category": "network",
+                "key_path": "ROOT/Microsoft/Windows NT/CurrentVersion/NetworkList/Profiles/{GUID}",
+                "key_last_write_utc": "2025-11-17T22:02:08.940728Z",
+                "value_name": "ProfileName",
+                "value_type": "REG_SZ",
+                "value_data": "@Hyatt_WiFi",
+                "display_name": "@Hyatt_WiFi",
+            }
+        ]
+    )
+
+    report = wifi_activity_report(db, case.id, start="2025-11-17 00:00:00", end="2025-11-18 00:00:00")
+    assert report["activity_scope"]["default_for_network_activity_questions"] == "all_matching_sessions"
+    assert "first connection_session" in report["activity_scope"]["warning"]
+    assert report["session_activity_plan"]["mode"] == "all_matching_sessions"
+    assert report["session_activity_plan"]["aggregate_tool"]["tool"] == "relic_activity_windows"
+    assert report["session_activity_plan"]["calls"][0]["arguments"]["case_id"] == case.id
+    by_name = {row["network_name"]: row for row in report["reconciled_networks"]}
+    assert by_name["@Hyatt_WiFi"]["assessment"] == "connected"
+    assert by_name["@Hyatt_WiFi"]["successful_connection_events"] == 2
+    assert by_name["@Hyatt_WiFi"]["connection_session_count"] == 1
+    assert by_name["@Hyatt_WiFi"]["timeline_window_tools"][0]["tool"] == "relic_timeline_window"
+    assert by_name["Lemonade"]["assessment"] == "attempted_failed"
+    assert by_name["Lemonade"]["failed_connection_events"] == 1
+    assert by_name["Lemonade"]["srum_observations"] == 1
+    assert report["summary"]["evtx_event_count"] == 4
+    assert report["summary"]["srum_observation_count"] == 2
+    assert report["summary"]["registry_row_count"] == 1
+    assert report["summary"]["connection_session_count"] == 1
+    assert report["filters"]["start"] == "2025-11-17T00:00:00Z"
+    session = report["connection_sessions"][0]
+    assert session["network_name"] == "@Hyatt_WiFi"
+    assert session["start"] == "2025-11-17T13:13:36.404164Z"
+    assert session["timeline_window_tool"]["tool"] == "relic_timeline_window"
+    assert session["timeline_window_tool"]["arguments"]["start"] == session["start"]
+    assert "start_row" not in session
+
+    timeline_events = derived_timeline_events(db, case.id, limit=50)
+    by_type = {event["event_type"]: event for event in timeline_events}
+    assert "wifi_session" in by_type
+    assert by_type["wifi_session"]["end_timestamp_utc"] is not None
+    assert "srum_network_connectivity" in by_type
+
+
+def test_artifact_search_report_normalizes_mixed_timestamp_bounds(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    base = {
+        "case_id": case.id,
+        "computer_id": "computer-1",
+        "image_id": "image-1",
+        "tool_output_id": "output",
+        "source_csv": tmp_path / "source.csv",
+        "row_number": 1,
+    }
+    db.insert_browser_history(
+        [
+            {
+                **base,
+                "id": str(uuid.uuid4()),
+                "tool_name": "ChromiumParser",
+                "browser": "Edge",
+                "profile_path": "Users/Sterling/AppData/Local/Microsoft/Edge/User Data/Default",
+                "url": "https://www.youtube.com/results?search_query=knife",
+                "title": "knife - YouTube",
+                "visit_time_utc": "2025-11-17T13:14:18.531434Z",
+            },
+            {
+                **base,
+                "id": str(uuid.uuid4()),
+                "tool_name": "ChromiumParser",
+                "browser": "Edge",
+                "profile_path": "Users/Sterling/AppData/Local/Microsoft/Edge/User Data/Default",
+                "url": "https://example.test/outside",
+                "title": "outside",
+                "visit_time_utc": "2025-11-17T20:58:34.000000Z",
+            },
+        ]
+    )
+
+    report = artifact_search_report(
+        db,
+        case.id,
+        source_type="browser",
+        start="2025-11-17 13:13:36",
+        end="2025-11-17 20:51:47",
+        limit=10,
+    )
+
+    assert report["filters"]["start"] == "2025-11-17T13:13:36Z"
+    assert [row["title"] for row in report["results"]] == ["knife - YouTube"]
+
+
+def test_artifact_search_report_includes_interval_overlap(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    base = {
+        "case_id": case.id,
+        "computer_id": "computer-1",
+        "image_id": "image-1",
+        "tool_output_id": "output",
+        "source_csv": tmp_path / "source.csv",
+        "row_number": 1,
+    }
+    db.insert_browser_downloads(
+        [
+            {
+                **base,
+                "id": str(uuid.uuid4()),
+                "tool_name": "ChromiumParser",
+                "browser": "Edge",
+                "profile_path": "Users/Sterling/AppData/Local/Microsoft/Edge/User Data/Default",
+                "target_path": "C:/Users/Sterling/Downloads/big.iso",
+                "tab_url": "https://example.test/big.iso",
+                "start_time_utc": "2025-11-17T13:00:00Z",
+                "end_time_utc": "2025-11-17T13:20:00Z",
+            }
+        ]
+    )
+
+    report = artifact_search_report(
+        db,
+        case.id,
+        query="big.iso",
+        source_type="browser",
+        start="2025-11-17 13:13:36",
+        end="2025-11-17 13:15:00",
+        limit=10,
+    )
+
+    assert report["summary"]["result_count"] == 1
+    assert report["results"][0]["target_path"].endswith("big.iso")
+    assert report["results"][0]["end_timestamp"] == "2025-11-17T13:20:00Z"
+
+
+def test_timeline_report_includes_interval_overlap(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    db.insert_tool_output(
+        {
+            "id": "output-1",
+            "case_id": case.id,
+            "computer_id": "computer-1",
+            "image_id": "image-1",
+            "tool_name": "TestTool",
+            "output_type": "csv",
+            "path": tmp_path / "source.csv",
+            "row_count": 1,
+        }
+    )
+    db.insert_timeline_events(
+        [
+            {
+                "id": "timeline-1",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "output-1",
+                "source_tool": "TestTool",
+                "source_table": "test_rows",
+                "source_row_id": "row-1",
+                "event_type": "long_activity",
+                "raw_timestamp": "2025-11-17T13:00:00Z",
+                "timestamp_utc": "2025-11-17T13:00:00Z",
+                "end_timestamp_utc": "2025-11-17T13:20:00Z",
+                "duration_ms": 1_200_000,
+                "description": "Long activity",
+                "details": {"evidence_strength": "test"},
+            }
+        ]
+    )
+
+    report = timeline_report(
+        db,
+        case.id,
+        start="2025-11-17T13:13:36Z",
+        end="2025-11-17T13:15:00Z",
+        limit=10,
+    )
+
+    assert report["filters"]["time_match"] == "interval_overlap"
+    assert report["total_returned"] == 1
+    assert report["events"][0]["event_type"] == "long_activity"
+    assert report["events"][0]["end_timestamp_utc"] == "2025-11-17T13:20:00Z"
+
+
 def test_ual_report_returns_logging_timeline_and_grouped_access(tmp_path):
     db = Database(tmp_path / "orchestrator.sqlite3")
     case = db.create_case("case-1", tmp_path / "cases" / "case-1")
@@ -7641,6 +8367,57 @@ def test_operator_consolidation_reports(tmp_path):
     assert {row["artifact"] for row in persistence["persistence_items"]} == {"autostart", "services"}
     assert "summary" in quality and "findings" in quality
     assert file_intel["summary"]["source_counts"]
+
+
+def test_browser_activity_report_flags_edge_source_8_cross_browser_mirrors(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    base = {
+        "case_id": case.id,
+        "computer_id": "computer-1",
+        "image_id": "image-1",
+        "tool_output_id": "output",
+        "tool_name": "ChromiumParser",
+        "source_csv": tmp_path / "BrowserHistory.csv",
+        "row_number": 1,
+        "url": "https://www.youtube.com/watch?v=abc123",
+        "title": "Knife throwing - YouTube",
+        "visit_time_utc": "2025-11-17T22:02:30Z",
+    }
+    db.insert_browser_history(
+        [
+            {
+                **base,
+                "id": str(uuid.uuid4()),
+                "browser": "Chrome",
+                "profile_path": "Users/Jane/AppData/Local/Google/Chrome/User Data/Default",
+                "visit_source": "",
+                "visit_source_label": "",
+                "local_vs_synced": "",
+            },
+            {
+                **base,
+                "id": str(uuid.uuid4()),
+                "browser": "Edge",
+                "profile_path": "Users/Jane/AppData/Local/Microsoft/Edge/User Data/Default",
+                "visit_source": "8",
+                "visit_source_label": "chromium_edge_internal_or_generated_source_8",
+                "local_vs_synced": "internal_or_generated_unknown",
+            },
+        ]
+    )
+
+    report = browser_activity_report(db, case.id, limit=10)
+
+    warning = report["attribution_warnings"][0]
+    assert warning["warning_type"] == "cross_browser_mirrored_history"
+    assert warning["url"] == "https://www.youtube.com/watch?v=abc123"
+    assert warning["browsers"] == ["Chrome", "Edge"]
+    assert warning["edge_source_8_count"] == 1
+    assert "should not be treated alone as proof of active Edge browsing" in report["attribution_guidance"]
+    assert "internal/generated" in warning["interpretation"]
 
 
 def test_artifact_correlations_and_computer_inventory_reports(tmp_path):
