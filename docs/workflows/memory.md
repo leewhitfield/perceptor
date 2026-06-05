@@ -92,8 +92,28 @@ icat -f ntfs -o OFFSET_SECTORS /path/to/image ENTRY_NUMBER
 uv run relic --root /path/to/workspace report memory-analysis --case CASE_ID --format md
 uv run relic --root /path/to/workspace report memory-artifacts --case CASE_ID --format md
 uv run relic --root /path/to/workspace report memory-support-files --case CASE_ID --format md
+uv run relic --root /path/to/workspace report structured-memory --case CASE_ID --format md
 uv run relic --root /path/to/workspace report memory-string-hits --case CASE_ID --format csv
 ```
+
+Run structured tooling against a full memory image or decompressed hiberfil
+candidate with:
+
+```bash
+uv run relic --root /path/to/workspace memory structured \
+  --case CASE_ID \
+  --path /path/to/memory.dmp
+```
+
+Relic records Volatility and MemProcFS run attempts even when a tool cannot
+derive structured rows from a dump. `report structured-memory` shows both
+imported rows and tool-level failures or no-row results.
+
+The managed installer downloads the official Volatility Windows symbol pack to
+`/opt/relic-tools/volatility3-symbols/windows.zip`. Symbols help future Intel
+Windows memory cases, but they do not guarantee support for Windows ARM64 dumps;
+those may still fail because the memory layer/architecture is unsupported by
+the current Volatility release.
 
 Memory report bundles use purpose `memory`:
 

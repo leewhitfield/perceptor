@@ -40,7 +40,7 @@ from .office_backstage import parse_office_backstage_artifacts_to_csv
 from .thumbcache import parse_thumbcache_artifacts_to_csv
 from .user_dictionary import parse_user_dictionaries_to_csv
 from .zone_identifier import parse_zone_identifier_ads_to_csv
-from .package_artifacts import parse_package_artifacts_to_csv
+from .package_artifacts import parse_package_artifacts_sources_to_csv
 from .package_cache import parse_package_cache_artifacts_to_csv
 from .telemetry import parse_telemetry_artifacts_to_csv
 from .prefetch import parse_prefetch_directory_to_csv
@@ -964,7 +964,7 @@ def run_internal_package_artifacts_tool(
     artifacts: dict[str, Path],
     dry_run: bool,
 ) -> object:
-    return run_internal_csv_tool(
+    return run_internal_multi_artifact_tool(
         db=db,
         case_id=case_id,
         image_id=image_id,
@@ -974,9 +974,9 @@ def run_internal_package_artifacts_tool(
         output=output,
         artifacts=artifacts,
         dry_run=dry_run,
-        artifact_name="package_artifact_profiles",
+        artifact_names=["package_artifact_profiles", "edge_artifact_files"],
         parser_description="internal package artifact parser",
-        parse_to_csv=parse_package_artifacts_to_csv,
+        parse_to_csv=parse_package_artifacts_sources_to_csv,
     )
 
 

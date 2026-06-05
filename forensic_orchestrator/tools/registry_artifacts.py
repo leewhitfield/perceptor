@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import re
 import struct
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -117,8 +118,11 @@ RULES = [
     ArtifactRule("autostart", "execution", ("software", "ntuser"), ("microsoft", "windows", "currentversion", "runonce")),
     ArtifactRule("installed_applications", "software", ("software",), ("microsoft", "windows", "currentversion", "uninstall"), recursive=True),
     ArtifactRule("connected_networks", "network", ("software",), ("microsoft", "windows nt", "currentversion", "networklist"), recursive=True),
+    ArtifactRule("windows_update", "system", ("software",), ("microsoft", "windows", "currentversion", "windowsupdate"), recursive=True),
     ArtifactRule("network_interfaces", "network", ("system",), ("currentcontrolset", "services", "tcpip", "parameters", "interfaces"), recursive=True),
     ArtifactRule("network_cards", "network", ("software",), ("microsoft", "windows nt", "currentversion", "networkcards"), recursive=True),
+    ArtifactRule("bluetooth_paired_devices", "device", ("system",), ("currentcontrolset", "services", "bthport", "parameters", "devices"), recursive=True),
+    ArtifactRule("bluetooth_paired_devices", "device", ("system",), ("currentcontrolset", "enum", "bthenum"), recursive=True),
     ArtifactRule("cloud_onedrive_account", "cloud", ("ntuser",), ("microsoft", "onedrive", "accounts"), recursive=True),
     ArtifactRule("cloud_onedrive_sync_engine", "cloud", ("ntuser",), ("syncengines", "providers", "onedrive"), recursive=True),
     ArtifactRule("cloud_google_drivefs", "cloud", ("ntuser",), ("google", "drivefs"), recursive=True),
@@ -128,6 +132,9 @@ RULES = [
     ArtifactRule("ras_connection_manager", "network", ("software", "system", "ntuser"), ("remoteaccess",), recursive=True),
     ArtifactRule("ras_connection_manager", "network", ("software", "system", "ntuser"), ("rasman",), recursive=True),
     ArtifactRule("capability_access_manager", "privacy", ("software", "ntuser"), ("capabilityaccessmanager", "consentstore"), recursive=True),
+    ArtifactRule("credential_manager_settings", "credentials", ("software", "ntuser"), ("microsoft", "vault"), recursive=True),
+    ArtifactRule("credential_manager_settings", "credentials", ("software", "ntuser"), ("microsoft", "credentials"), recursive=True),
+    ArtifactRule("swiftkey_input_settings", "user_activity", ("software", "ntuser"), ("microsoft", "inputpersonalization"), recursive=True),
     ArtifactRule("cloud_account_details", "account", ("sam",), ("domains", "account", "users"), recursive=True),
     ArtifactRule("amcache", "execution", ("amcache",), ("root",), recursive=True),
     ArtifactRule("wordwheel_query", "user_activity", ("ntuser",), ("explorer", "wordwheelquery")),
@@ -139,6 +146,9 @@ RULES = [
     ArtifactRule("office_recent_docs", "user_activity", ("ntuser",), ("microsoft", "office"), recursive=True),
     ArtifactRule("outlook_secure_temp", "email", ("ntuser",), ("outlook", "security"), recursive=True),
     ArtifactRule("common_dialog", "user_activity", ("ntuser",), ("explorer", "comdlg32"), recursive=True),
+    ArtifactRule("outbound_rdp_history", "remote_access", ("ntuser",), ("terminal server client", "servers"), recursive=True),
+    ArtifactRule("outbound_rdp_history", "remote_access", ("ntuser",), ("terminal server client", "default"), recursive=True),
+    ArtifactRule("mountpoints2", "user_activity", ("ntuser",), ("explorer", "mountpoints2"), recursive=True),
     ArtifactRule("runmru", "user_activity", ("ntuser",), ("explorer", "runmru")),
     ArtifactRule("userassist", "execution", ("ntuser",), ("explorer", "userassist"), recursive=True),
     ArtifactRule("taskbar_usage", "user_activity", ("ntuser",), ("explorer", "taskband"), recursive=True),
@@ -198,7 +208,7 @@ def parse_registry_artifacts(path: Path, *, allowed_artifacts: set[str] | None =
             for rule in rules:
                 display_name = _display_name_for_value(rule.artifact, value_name, value_type, raw, value_data)
                 user_sid = _user_sid_for_artifact(rule.artifact, key_path)
-                normalized_path = _normalized_path_for_artifact(rule.artifact, value_name)
+                normalized_path = _normalized_path_for_artifact(rule.artifact, value_name, key_path)
                 userassist_metadata = _userassist_metadata_for_value(rule.artifact, raw)
                 recentdocs_time = _recentdocs_time_for_value(rule.artifact, recentdocs_scope, record, value_name)
                 recentdocs_extension_time = _recentdocs_extension_time_for_value(
@@ -579,6 +589,17 @@ def _event_time_for_value(artifact: str, record: RegistryKeyRecord, value_name: 
         rank = _mru_rank(record)
         if rank.get(value_name) == 1:
             return record.last_write_utc
+    if artifact in {
+        "bluetooth_paired_devices",
+        "connected_networks",
+        "credential_manager_settings",
+        "installed_applications",
+        "mountpoints2",
+        "outbound_rdp_history",
+        "swiftkey_input_settings",
+        "windows_update",
+    }:
+        return record.last_write_utc
     return None
 
 
@@ -591,12 +612,42 @@ def _user_sid_for_artifact(artifact: str, key_path: str) -> str | None:
     return None
 
 
-def _normalized_path_for_artifact(artifact: str, value_name: str) -> str | None:
+def mountpoints2_network_path_from_key(key_path: str) -> dict[str, str] | None:
+    """Decode MountPoints2 network share keys such as ##server#share#folder."""
+    for part in [part for part in (key_path or "").replace("\\", "/").split("/") if part]:
+        if not part.startswith("##") or len(part) <= 2:
+            continue
+        encoded = part[2:]
+        pieces = [piece for piece in encoded.split("#") if piece]
+        if not pieces:
+            continue
+        host = pieces[0]
+        path_parts = pieces[1:]
+        share = path_parts[0] if path_parts else ""
+        remote_path = "\\".join(path_parts[1:]) if len(path_parts) > 1 else ""
+        unc_path = "\\\\" + host
+        if path_parts:
+            unc_path += "\\" + "\\".join(path_parts)
+        return {
+            "host": host,
+            "share": share,
+            "remote_path": remote_path,
+            "unc_path": unc_path,
+            "mountpoints2_key": part,
+        }
+    return None
+
+
+def _normalized_path_for_artifact(artifact: str, value_name: str, key_path: str = "") -> str | None:
     if artifact == "userassist" and value_name:
         decoded = _rot13(value_name)
         if "\\" in decoded or "/" in decoded or decoded.startswith("{"):
             return decoded
         return None
+    if artifact in {"mountpoints2", "usb_mountpoints2"}:
+        parsed = mountpoints2_network_path_from_key(key_path)
+        if parsed:
+            return parsed["unc_path"]
     if artifact not in {"bam", "dam"} or not value_name:
         return None
     path = value_name.replace("/", "\\")
@@ -648,7 +699,57 @@ def _display_name_for_value(artifact: str, value_name: str, value_type: int, raw
         return value_data or None
     if artifact == "recentdocs" and value_type == 3:
         return _decode_recentdocs_binary_name(raw)
+    if artifact == "bluetooth_paired_devices":
+        return _bluetooth_display_value(value_name, raw, value_data)
     return value_data or None
+
+
+def _bluetooth_display_value(value_name: str, raw: bytes, value_data: str) -> str | None:
+    lowered = value_name.lower()
+    if lowered in {"name", "friendlyname"}:
+        decoded = _decode_bluetooth_text(raw)
+        return decoded or value_data or None
+    if lowered == "hardwareid":
+        mac = _bluetooth_mac_from_text(value_data)
+        return f"{value_data} | bluetooth_mac={mac}" if mac else value_data or None
+    if lowered in {"lastseen", "lastconnected"} and len(raw) >= 8:
+        filetime = _filetime_to_iso(struct.unpack_from("<Q", raw)[0])
+        return filetime or value_data or None
+    return value_data or None
+
+
+def _decode_bluetooth_text(raw: bytes) -> str | None:
+    if not raw:
+        return None
+    stripped = raw.rstrip(b"\x00")
+    try:
+        utf8 = stripped.decode("utf-8").strip("\x00").strip()
+        if utf8 and sum(char.isprintable() for char in utf8) / max(len(utf8), 1) > 0.8:
+            return utf8
+    except UnicodeDecodeError:
+        pass
+    if stripped and all(32 <= byte < 127 or byte in {9, 10, 13} for byte in stripped):
+        return stripped.decode("utf-8", errors="replace").strip() or None
+    hex_text = stripped.decode("ascii", errors="ignore").strip()
+    if hex_text and len(hex_text) % 2 == 0 and re.fullmatch(r"[0-9A-Fa-f]+", hex_text):
+        try:
+            decoded = bytes.fromhex(hex_text).decode("utf-8", errors="replace").strip("\x00").strip()
+            if decoded and sum(char.isprintable() for char in decoded) / max(len(decoded), 1) > 0.8:
+                return decoded
+        except ValueError:
+            pass
+    utf16 = _decode_utf16(raw).strip("\x00").strip()
+    if utf16 and sum(char.isprintable() for char in utf16) / max(len(utf16), 1) > 0.8:
+        return utf16
+    return None
+
+
+def _bluetooth_mac_from_text(text: str) -> str | None:
+    compact_match = re.search(r"(?<![0-9A-Fa-f])([0-9A-Fa-f]{12})(?![0-9A-Fa-f])", text or "")
+    if not compact_match:
+        return None
+    compact = compact_match.group(1).upper()
+    return ":".join(compact[index : index + 2] for index in range(0, 12, 2))
 
 
 def _decode_recentdocs_binary_name(raw: bytes) -> str | None:
@@ -686,6 +787,14 @@ def _notes_for_value(artifact: str, value_name: str, value_type: int, raw: bytes
         filetime = _filetime_to_iso(struct.unpack_from("<Q", raw)[0])
         if filetime:
             notes.append(f"filetime={filetime}")
+    if artifact == "bluetooth_paired_devices":
+        mac = _bluetooth_mac_from_text(" ".join((value_name, value_data)))
+        if mac:
+            notes.append(f"bluetooth_mac={mac}")
+        if value_name.lower() in {"lastseen", "lastconnected"} and len(raw) >= 8:
+            filetime = _filetime_to_iso(struct.unpack_from("<Q", raw)[0])
+            if filetime:
+                notes.append(f"{value_name.lower()}={filetime}")
     if artifact == "install_time_software" and value_name.lower() == "installdate" and value_type == 4:
         try:
             unix_time = int(value_data.split(" ", 1)[0])

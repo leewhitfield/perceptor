@@ -44,6 +44,7 @@ DEFAULT_COVERAGE_TOOLS = [
     ("pypykatz", "DPAPI/LSA validation follow-up"),
     ("vol", "Volatility 3 launcher"),
     ("volatility3", "Volatility 3 launcher"),
+    ("volatility3-symbols", "Volatility Windows symbol pack"),
     ("MemProcFS", "memory filesystem analysis"),
     ("sidr", "Windows Search parser where supported"),
     ("ual-timeliner", "external UAL/SUM timeline parser"),
@@ -684,6 +685,7 @@ def _install_progress_note(name: str) -> str:
         "sidr": " (Rust source build may take several minutes)",
         "memprocfs": " (GitHub release download/extraction may take a few minutes)",
         "volatility3": " (uv Python tool install may take a few minutes)",
+        "volatility3-symbols": " (official Windows symbol pack download may take a few minutes)",
         "ual-timeliner": " (uv Python tool install may take a few minutes)",
         "usnjrnl-forensic": " (Rust crate compile may take several minutes)",
     }
@@ -738,6 +740,8 @@ def _install_one_tool(tool: str, *, tools_dir: Path, env_file: Path, force: bool
             force=force,
             apply=apply,
         )
+    if tool == "volatility3-symbols":
+        return _install_volatility3_symbols(tools_dir=tools_dir, force=force, apply=apply)
     if tool == "sidr":
         return _install_sidr_from_source(tools_dir=tools_dir, force=force, apply=apply)
     if tool in {"eztools", "bstrings"}:
@@ -745,7 +749,25 @@ def _install_one_tool(tool: str, *, tools_dir: Path, env_file: Path, force: bool
     return {
         "tool": tool,
         "status": "unknown",
-        "reason": "Supported tools: eztools, bstrings, sidr, memprocfs, dotnet, pypykatz, volatility3, ual-timeliner, usnjrnl-forensic, all.",
+        "reason": "Supported tools: eztools, bstrings, sidr, memprocfs, dotnet, pypykatz, volatility3, volatility3-symbols, ual-timeliner, usnjrnl-forensic, all.",
+    }
+
+
+def _install_volatility3_symbols(*, tools_dir: Path, force: bool, apply: bool) -> dict[str, Any]:
+    symbol_dir = tools_dir / "volatility3-symbols"
+    target = symbol_dir / "windows.zip"
+    url = "https://downloads.volatilityfoundation.org/volatility3/symbols/windows.zip"
+    if target.exists() and target.stat().st_size > 0 and not force:
+        return {"tool": "volatility3-symbols", "status": "present", "path": str(target)}
+    if not apply:
+        return {"tool": "volatility3-symbols", "status": "would_download", "url": url, "path": str(target)}
+    _download_file(url, target)
+    return {
+        "tool": "volatility3-symbols",
+        "status": "installed" if target.exists() and target.stat().st_size > 0 else "failed",
+        "path": str(target),
+        "url": url,
+        "size_bytes": target.stat().st_size if target.exists() else 0,
     }
 
 
@@ -1110,7 +1132,7 @@ def _linux_release() -> dict[str, str]:
 def _expand_tool_selection(tool: str) -> list[str]:
     normalized = _normalize_tool_name(tool)
     if normalized == "all":
-        return ["dotnet", "eztools", "sidr", "memprocfs", "pypykatz", "volatility3", "ual-timeliner", "usnjrnl-forensic"]
+        return ["dotnet", "eztools", "sidr", "memprocfs", "pypykatz", "volatility3", "volatility3-symbols", "ual-timeliner", "usnjrnl-forensic"]
     return [normalized]
 
 
@@ -1120,6 +1142,9 @@ def _normalize_tool_name(tool: str) -> str:
         "memprocfs": "memprocfs",
         "volatility": "volatility3",
         "vol": "vol",
+        "volatility-symbols": "volatility3-symbols",
+        "volatility3_symbols": "volatility3-symbols",
+        "volatility-symbol-pack": "volatility3-symbols",
         "ez": "eztools",
         "ual": "ual-timeliner",
         "ual_timeliner": "ual-timeliner",
@@ -1256,6 +1281,8 @@ def _managed_tool_path(name: str, tools_dir: Path) -> Path:
         return tools_dir / "bin" / normalized
     if normalized in {"vol", "volatility3"}:
         return tools_dir / "bin" / "vol"
+    if normalized == "volatility3-symbols":
+        return tools_dir / "volatility3-symbols" / "windows.zip"
     if normalized == "memprocfs":
         return tools_dir / "MemProcFS" / "memprocfs"
     if normalized == "sidr":
@@ -1426,6 +1453,10 @@ def _which(name: str) -> str | None:
         managed = _managed_tool_path(name, _tools_dir(None))
         if managed.exists():
             return str(managed)
+    if name == "volatility3-symbols":
+        candidate = _managed_tool_path(name, _tools_dir(None))
+        if candidate.exists() and candidate.stat().st_size > 0:
+            return str(candidate)
     if name == "dotnet":
         candidate = resolve_dotnet_runtime()
         if candidate and Path(candidate).exists():
@@ -1454,6 +1485,10 @@ def _which(name: str) -> str | None:
         "volatility3": [
             _tools_dir(None) / "bin" / "vol",
             Path.home() / ".local" / "bin" / "vol",
+        ],
+        "volatility3-symbols": [
+            _tools_dir(None) / "volatility3-symbols" / "windows.zip",
+            Path.home() / "tools" / "volatility3-symbols" / "windows.zip",
         ],
         "ual-timeliner": [
             _tools_dir(None) / "bin" / "ual-timeliner",

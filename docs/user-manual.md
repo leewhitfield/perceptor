@@ -948,12 +948,14 @@ High-value report families:
   `suspicious-executions`, `event-interpretation`,
   `suspicious-timeline-windows`, `program-provenance`, `prefetch`, `amcache`,
   `shimcache`, `autostarts`, `persistence`, `malware-hiding-places`,
-  `bits-activity`.
+  `bits-activity`, `examiner-edge-artifacts`, `mapped-network-paths`,
+  `remote-access-tool-logs`.
 - Filesystem and file movement: `mft`, `ntfs-index`, `ntfs-logfile`,
   `ntfs-namespace`, `filesystem-review`, `files`, `file-names`,
   `file-name-drilldown`, `file-history`, `file-dossier`, `file-intelligence`,
   `copied-files`, `copied-file-indicators`, `copied-file-groups`,
-  `copied-usb-files`, `file-movement-identity`.
+  `copied-usb-files`, `file-movement-identity`, `non-standard-ads`,
+  `ntfs-security-descriptors`.
 - USB/storage: `usb`, `external-storage`, `device-inventory`, `usb-files`,
   `usb-timeline`, `usb-verbose`, `usb-dossier`, `shellbag-external-storage`,
   `opened-from-removable-media`, `shortcut-droid-changes`,
@@ -970,7 +972,8 @@ High-value report families:
   `mailbox-attachment-copies`, `mailbox-copies`, `communications`,
   `communication-groups`, `communication-review`, `messaging-artifacts`,
   `messaging-messages`.
-- Remote access: `remote-access`, `remote-access-attribution`, `rdp`,
+- Remote access: `remote-access`, `remote-access-attribution`,
+  `mapped-network-paths`, `rdp`,
   `rdp-cache`, `rdp-visual-observations`, `vpn-activity`,
   `vpn-local-activity`, `vpn-connections`, `vpn-config`, `vpn-execution`,
   `vpn-sessions`, `sessions`, `session`.
@@ -979,11 +982,12 @@ High-value report families:
   `taskbar-feature-usage`, `taskbar-pins`, `common-dialog-items`,
   `activity-summary`, `user-activity`, `users`, `accounts`, `shellbags`,
   `windows-activities`, `clipboard`, `ual`, `bits-activity`, `srum`, `srum-context`, `srum-networks`,
-  `srum-app-usage`.
+  `srum-app-usage`, `examiner-edge-artifacts`, `mapped-network-paths`.
 - Windows Search and memory: `windows-search`, `windows-search-combined`,
   `search-index-runs`, `memory-artifacts`, `memory-support-files`,
   `memory-analysis`, `memory-credentials`, `memory-credential-review`,
-  `memory-disk-correlations`, `memory-string-hits`, `crash-dump-analysis`.
+  `memory-disk-correlations`, `memory-string-hits`, `structured-memory`,
+  `crash-dump-analysis`.
 - Recovery/deep parsing: `recovery-coverage`, `carve-coverage`,
   `sqlite-inventory`, `evtx-recovery`, `deep-recovery-status`,
   `artifact-processing-status`, `processing-decisions`,
@@ -1027,6 +1031,24 @@ uv run relic --root ROOT report clipboard --case CASE_ID --contains "copied text
 It records text, file URI, HTML payload indicators, item timestamps, image
 presence, and cloud sync identifiers/state. Windows Activities clipboard rows
 remain secondary clipboard-adjacent evidence.
+
+Examiner-edge and filesystem edge reports:
+
+```bash
+uv run relic --root ROOT report examiner-edge-artifacts --case CASE_ID --format table
+uv run relic --root ROOT report mapped-network-paths --case CASE_ID --format table
+uv run relic --root ROOT report non-standard-ads --case CASE_ID --format table
+uv run relic --root ROOT report ntfs-security-descriptors --case CASE_ID --format table
+uv run relic --root ROOT report remote-access-tool-logs --case CASE_ID --format table
+```
+
+`examiner-edge-artifacts` includes Sticky Notes, notification database rows,
+NetworkList, outbound RDP, MountPoints2, Task Scheduler XML, EventTranscript.db,
+TokenBroker metadata, CryptnetUrlCache, hosts, WSL, Windows Update,
+Credential/Vault metadata, Bluetooth, installed applications, SwiftKey fragments,
+and legacy `Thumbs.db` leads where present. `ntfs-security-descriptors` is
+presence/metadata-only for `$Secure` streams; use dedicated SDS output when ACL
+decoding is required.
 
 ## Search Commands
 

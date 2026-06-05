@@ -18,8 +18,70 @@ uv run relic --root ~/analysis/case-root report opened-from-removable-media --ca
 uv run relic --root ~/analysis/case-root report opened-from-cloud-storage --case CASE_ID --format md
 uv run relic --root ~/analysis/case-root report file-movement-identity --case CASE_ID --format md
 uv run relic --root ~/analysis/case-root report memory-analysis --case CASE_ID --format md
+uv run relic --root ~/analysis/case-root report structured-memory --case CASE_ID --format md
 uv run relic --root ~/analysis/case-root report bits-activity --case CASE_ID --format table
+uv run relic --root ~/analysis/case-root report examiner-edge-artifacts --case CASE_ID --format table
+uv run relic --root ~/analysis/case-root report mapped-network-paths --case CASE_ID --format table
+uv run relic --root ~/analysis/case-root report non-standard-ads --case CASE_ID --format table
+uv run relic --root ~/analysis/case-root report ntfs-security-descriptors --case CASE_ID --format table
+uv run relic --root ~/analysis/case-root report remote-access-tool-logs --case CASE_ID --format table
 ```
+
+## Examiner Edge Artifacts
+
+`examiner-edge-artifacts` surfaces small, high-value artifacts that commonly
+produce leads:
+
+- Sticky Notes.
+- Windows notifications.
+- NetworkList, outbound RDP history, and MountPoints2 registry rows.
+- EventTranscript.db diagnostic telemetry rows where present, with app launch,
+  file, network, and device-census rows classified where possible.
+- Scheduled Task XML files.
+- TokenBroker cache metadata and account leads. Token-like values are not
+  emitted as report text.
+- CryptnetUrlCache and hosts file mappings.
+- Legacy `Thumbs.db` presence metadata and OLE stream inventory when the
+  `olefile` parser is available.
+- WSL presence/history, Windows Update registry/DataStore presence, Credential
+  Manager/Vault metadata, Bluetooth paired-device registry rows, installed
+  application registry rows, and SwiftKey/InputPersonalization leads.
+
+Credential and Vault entries are metadata-only unless separate DPAPI context is
+available. SwiftKey/InputPersonalization strings are investigative fragments,
+not standalone proof of typed content.
+
+## Mapped Network Paths
+
+`mapped-network-paths` decodes MountPoints2 network-share keys from user
+registry hives. Keys in the form `##host#share#path` are reported as UNC-style
+paths such as `\\host\share\path`, with the associated user profile, first/last
+observed key times, and sampled registry values. Use this report for mapped
+network drives, UNC share access, and MountPoints2 network questions.
+
+## Non-Standard ADS
+
+`non-standard-ads` reports MFT alternate data stream rows beyond common
+`Zone.Identifier` streams. It classifies common Cloud Files/OneDrive metadata,
+WOF compression, SmartScreen, and NTFS metadata streams as expected/low-priority
+so unclassified streams stand out. Treat high-priority rows as leads for hidden
+content or unusual file metadata and corroborate with file extraction where
+possible.
+
+## NTFS Security Descriptors
+
+`ntfs-security-descriptors` inventories `$Secure` security descriptor streams
+such as `$SDS`, `$SII`, and `$SDH` when they appear in MFT ADS rows. The current
+report is presence/metadata-only; structured ACL interpretation requires
+dedicated `$Secure:$SDS` parsing or MFTECmd security descriptor output.
+
+## Remote Access Tool Logs
+
+`remote-access-tool-logs` surfaces collected AnyDesk, TeamViewer, LogMeIn,
+ConnectWise Control, Splashtop, RustDesk, VNC-family, and similar remote-support
+application logs or candidate files. Log lines are normalized into connection,
+authentication, transfer, and identity/routing leads where possible. Correlate
+these rows with execution, remote-access sessions, and network artifacts.
 
 ## BITS Activity
 

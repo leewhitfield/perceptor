@@ -118,6 +118,40 @@ qmgr, OneDrive updater, component updater, or transfer-job questions. The report
 uses timestamped BITS Client EVTX rows and shows qmgr database/carved
 correlations when exact job ID or URL matches are available.
 
+Use `relic_generate_report` with `report_name: "examiner-edge-artifacts"` for
+Sticky Notes, Windows notifications, NetworkList, outbound RDP history,
+MountPoints2, Scheduled Task XML, CryptnetUrlCache, hosts, WSL, Windows Update,
+Credential/Vault metadata, Bluetooth paired devices, installed applications, or
+SwiftKey/InputPersonalization questions.
+
+Use `relic_generate_report` with `report_name: "mapped-network-paths"` for
+mapped network drives, UNC shares, or MountPoints2 keys that look like
+`##host#share#path`. Relic decodes those keys into `\\host\share\path` and
+returns the user profile plus first/last observed registry timestamps.
+
+Use `relic_generate_report` with `report_name: "non-standard-ads"` for hidden
+or alternate data stream questions. This report filters common
+`Zone.Identifier` streams and classifies Cloud Files/OneDrive metadata, WOF
+compression, SmartScreen, and NTFS metadata streams separately from
+high-priority unclassified ADS rows.
+
+Use `relic_generate_report` with `report_name: "ntfs-security-descriptors"` for
+`$Secure`, `$SDS`, ACL, or NTFS permission-change questions. This report
+inventories security descriptor streams from MFT ADS rows and clearly marks that
+current output is presence/metadata-only, not decoded ACL content.
+
+Use `relic_generate_report` with `report_name: "remote-access-tool-logs"` for
+AnyDesk, TeamViewer, LogMeIn, ConnectWise Control, Splashtop, RustDesk, VNC, and
+similar remote-support application log questions. Parsed log lines are
+categorized into connection, authentication, transfer, and identity/routing
+leads when possible.
+
+Use `relic_generate_report` with `report_name: "structured-memory"` for
+Volatility and MemProcFS structured memory questions. The report returns parsed
+rows when available and also lists tool run attempts, failures, and no-row
+results so analysts can distinguish "not run" from "run but unsupported for this
+dump."
+
 Use `relic_generate_report` with `report_name: "event-interpretation"` for
 high-value EVTX questions involving account manipulation, log clearing,
 PowerShell, scheduled tasks, WMI persistence indicators, print-service history,

@@ -883,6 +883,12 @@ def test_mcp_route_question_enforces_truth_order(tmp_path):
     assert users["recommended_tool"] == "relic_query_system_users"
     assert users["source_order"][0]["source"] == "consolidated_user_inventory"
 
+    sds = server.route_question({"case_id": "case-1", "question": "Were NTFS permissions or $Secure:$SDS entries present?"})
+    assert sds["intent"] == "ntfs_security_descriptors"
+    assert sds["recommended_tool"] == "relic_generate_report"
+    assert "ntfs-security-descriptors" in sds["report_names"]
+    assert sds["source_order"][0]["source"] == "generated_reports"
+
     recovery = server.route_question({"case_id": "case-1", "question": "Recover the deleted timeline.docx file"})
     assert recovery["intent"] == "deleted_file_recovery"
     assert recovery["recommended_tool"] == "relic_query_evidence_contents"

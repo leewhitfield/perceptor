@@ -10,11 +10,16 @@ basis. Local timezone display is optional and display-only.
 - Mounted FAT and exFAT directory listings for removable volumes without `$MFT`.
 - File metadata, file listings, deleted-folder indicators, deleted-file recovery
   candidates, archive inventory, nested evidence inventory.
-- Zone.Identifier alternate data streams.
+- Zone.Identifier alternate data streams and non-standard ADS leads from MFT
+  stream rows.
+- `$Secure` security descriptor stream presence (`$SDS`, `$SII`, `$SDH`) from
+  MFT ADS rows. Structured ACL decoding is a future parser item; current output
+  is presence/metadata-only.
 
 Primary reports include `files`, `filesystem-entries`, `filesystem-review`,
 `file-history`, `file-dossier`, `ntfs-*`, `usn-*`, `deleted-folders`,
-`recovery-coverage`, `nested-evidence`, and `evidence-extractions`.
+`non-standard-ads`, `ntfs-security-descriptors`, `recovery-coverage`,
+`nested-evidence`, and `evidence-extractions`.
 
 ## Execution and Program Presence
 
@@ -41,6 +46,25 @@ Primary reports include `shortcuts`, `jumplists`, `shellbags`,
 `clipboard`, `file-movement-identity`, `shortcut-droid-changes`,
 `shortcut-object-tracking`, `opened-from-removable-media`, and
 `opened-from-cloud-storage`.
+
+## Examiner Edge Artifacts
+
+- Sticky Notes `plum.sqlite` content and timestamps where present.
+- Windows notification database rows and decoded notification text where
+  available.
+- Scheduled Task XML definitions under `Windows/System32/Tasks`.
+- Hosts file mappings and modification time.
+- CryptnetUrlCache metadata and cached URL/string indicators.
+- Credential Manager and Windows Vault file metadata. Relic records presence,
+  size, and timestamps; decrypted credential contents require DPAPI context.
+- WSL `ext4.vhdx` presence/size and WSL shell-history files where present.
+- Windows Update registry context and `DataStore.edb` presence metadata.
+- Bluetooth paired-device registry rows.
+- Installed application registry rows.
+- SwiftKey/InputPersonalization settings and stored string fragments where
+  present. Treat fragments as leads until corroborated.
+
+Primary report: `examiner-edge-artifacts`.
 
 ## Browser and Web
 
@@ -94,21 +118,30 @@ Primary reports include `external-storage`, `usb`, `usb-files`,
   PowerShell, scheduled tasks, WMI activity, print service, service installs,
   process creation, RDP/logon context.
 - Wi-Fi/WLAN sessions, NetworkList registry context, SRUM network context.
+- NetworkList registry profiles/signatures, outbound RDP client history, and
+  MountPoints2 network-share/volume references.
 - BITS qmgr database rows and BITS event-log correlation.
 
 Primary reports include `evtx`, `event-interpretation`, `wifi-activity`,
-`remote-access`, `remote-access-attribution`, `rdp`, `bits-activity`,
-`srum-networks`, and `network-activity`.
+`remote-access`, `remote-access-attribution`, `mapped-network-paths`, `rdp`,
+`bits-activity`, `srum-networks`, `network-activity`, and
+`examiner-edge-artifacts`.
 
 ## Memory and Support Files
 
 - Full memory images and process/crash dumps through string scanning.
+- Structured full-memory attempts through Volatility and MemProcFS, including
+  process, command-line, network, module, handle, file-object, and suspicious
+  memory-region views when the tool can resolve the image.
 - Pagefile, hiberfil, swapfile, crash dumps, and memory-adjacent support files.
+  Hiberfil processing reports whether decompressed structured-memory output is
+  available, scanned only, failed gracefully, or not processed.
 - Memory/disk correlations, memory credentials, Windows Search memory carves.
 
 Primary reports include `memory-artifacts`, `memory-support-files`,
 `memory-string-hits`, `memory-credentials`, `memory-disk-correlations`,
-`memory-analysis`, `crash-dump-analysis`, and `windows-search-combined`.
+`structured-memory`, `memory-analysis`, `crash-dump-analysis`, and
+`windows-search-combined`.
 
 ## Windows Search
 
@@ -123,14 +156,17 @@ Primary reports include `windows-search`, `windows-search-combined`,
 ## Persistence, Anti-Forensics, and Other Windows Artifacts
 
 - Run keys, services, scheduled tasks, startup folders, WMI event-log indicators.
-- Defender, WER, RDP bitmap cache, thumbcache, recycle bin, telemetry,
-  virtualization, Phone Link, package caches, CD/DVD burning indicators.
+- Defender, WER, RDP bitmap cache, thumbcache, legacy `Thumbs.db`, recycle bin,
+  telemetry, EventTranscript.db, TokenBroker cache metadata, virtualization,
+  Phone Link, package caches, CD/DVD burning indicators.
 - SDelete/evidence destruction and timestamp anomaly indicators.
 
 Primary reports include `autostarts`, `persistence`, `malware-hiding-places`,
 `windows-defender`, `windows-error-reporting`, `rdp-cache`,
 `rdp-visual-observations`, `thumbcache`, `recycle`, `telemetry-artifacts`,
 `virtualization`, `phone-link`, `package-artifacts`, `package-cache`,
+`examiner-edge-artifacts`, `non-standard-ads`, `ntfs-security-descriptors`,
+`remote-access-tool-logs`,
 `cd-burning`, `sdelete`, and `timestamp-anomalies`.
 
 ## Search Coverage

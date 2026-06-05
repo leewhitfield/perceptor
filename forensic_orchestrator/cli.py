@@ -147,6 +147,7 @@ from .reports import (
     deep_recovery_status_report,
     email_artifacts_report,
     encrypted_volume_indicators_report,
+    examiner_edge_artifacts_report,
     event_interpretation_report,
     evidence_gaps_markdown,
     evidence_gaps_report,
@@ -195,6 +196,7 @@ from .reports import (
     mailbox_messages_report,
     malware_hiding_places_markdown,
     malware_hiding_places_report,
+    mapped_network_paths_report,
     memory_analysis_markdown,
     memory_analysis_report,
     memory_artifacts_markdown,
@@ -206,6 +208,8 @@ from .reports import (
     memory_support_files_markdown,
     memory_support_files_report,
     memory_string_hits_report,
+    structured_memory_report,
+    structured_memory_markdown,
     windows_search_combined_markdown,
     windows_search_combined_report,
     communication_review_report,
@@ -216,6 +220,8 @@ from .reports import (
     ntfs_index_report,
     ntfs_logfile_report,
     ntfs_namespace_report,
+    ntfs_security_descriptors_report,
+    non_standard_ads_report,
     office_backstage_report,
     operation_manifest_report,
     office_trust_report,
@@ -239,6 +245,7 @@ from .reports import (
     recovery_coverage_report,
     remote_access_attribution_markdown,
     remote_access_attribution_report,
+    remote_access_tool_logs_report,
     rdp_remote_access_markdown,
     regression_smoke_report,
     rerun_search_packet_markdown,
@@ -388,6 +395,7 @@ from .tools.clipboard import parse_clipboard_artifacts_to_csv
 from .tools.firefox import parse_firefox_artifacts_to_csv
 from .tools.activities import parse_windows_activities_to_csv
 from .tools.memory_strings import scan_memory_strings_to_csv
+from .tools.structured_memory import run_structured_memory_analysis
 from .timeline import timeline_events_from_rows
 from .tools.windows_search_memory import parse_windows_search_memory_carves
 from .timestamps import parse_timestamp
@@ -407,6 +415,44 @@ def print_progress(message: str) -> None:
 def _count_csv_rows(path: Path) -> int:
     with path.open("r", encoding="utf-8-sig", errors="replace", newline="") as handle:
         return max(0, sum(1 for _ in csv.DictReader(handle)))
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _structured_memory_rows_from_csv(
+    path: Path,
+    *,
+    case_id: str,
+    computer_id: str,
+    image_id: str,
+    tool_output_id: str,
+) -> list[dict[str, object]]:
+    created_at = datetime.now(timezone.utc).isoformat()
+    rows: list[dict[str, object]] = []
+    with path.open("r", encoding="utf-8-sig", errors="replace", newline="") as handle:
+        for row_number, row in enumerate(csv.DictReader(handle), start=1):
+            payload = dict(row)
+            payload.update(
+                {
+                    "id": str(uuid.uuid4()),
+                    "case_id": case_id,
+                    "computer_id": computer_id,
+                    "image_id": image_id,
+                    "tool_output_id": tool_output_id,
+                    "tool_name": "StructuredMemoryAnalyzer",
+                    "source_csv": path,
+                    "row_number": row_number,
+                    "created_at": created_at,
+                }
+            )
+            rows.append(payload)
+    return rows
 
 
 def _cloud_or_memory_evidence_ids(
@@ -1157,12 +1203,12 @@ def _bundle_report_names_for_purpose(purpose: str) -> set[str] | None:
         "usn-lifecycle",
     }
     groups = {
-        "triage": common | {"suspicious-executions", "event-interpretation", "user-intent", "file-movement-identity", "opened-from-removable-media", "opened-from-cloud-storage", "cloud-mounts", "cloud-removable-overlap", "artifact-processing-status", "lead-search-usb", "lead-search-execution", "lead-search-cloud", "lead-search-browser", "lead-search-documents", "lead-search-communications", "lead-search-usb-summary", "lead-search-execution-summary", "lead-search-cloud-summary", "lead-search-browser-summary", "lead-search-documents-summary", "lead-search-communications-summary"},
-        "review": common | usb_reports | {"activity-digest", "next-actions", "workspace-map", "artifact-search-sources", "suspicious-executions", "event-interpretation", "opened-from-cloud-storage", "cloud-mounts", "bits-activity", "artifact-processing-status", "lead-search-usb", "lead-search-execution", "lead-search-cloud", "lead-search-browser", "lead-search-documents", "lead-search-communications", "lead-search-usb-summary", "lead-search-execution-summary", "lead-search-cloud-summary", "lead-search-browser-summary", "lead-search-documents-summary", "lead-search-communications-summary", "changed-search-packets"},
+        "triage": common | {"suspicious-executions", "event-interpretation", "examiner-edge-artifacts", "mapped-network-paths", "non-standard-ads", "ntfs-security-descriptors", "remote-access-tool-logs", "user-intent", "file-movement-identity", "opened-from-removable-media", "opened-from-cloud-storage", "cloud-mounts", "cloud-removable-overlap", "artifact-processing-status", "lead-search-usb", "lead-search-execution", "lead-search-cloud", "lead-search-browser", "lead-search-documents", "lead-search-communications", "lead-search-usb-summary", "lead-search-execution-summary", "lead-search-cloud-summary", "lead-search-browser-summary", "lead-search-documents-summary", "lead-search-communications-summary"},
+        "review": common | usb_reports | {"activity-digest", "next-actions", "workspace-map", "artifact-search-sources", "suspicious-executions", "event-interpretation", "examiner-edge-artifacts", "mapped-network-paths", "non-standard-ads", "ntfs-security-descriptors", "remote-access-tool-logs", "opened-from-cloud-storage", "cloud-mounts", "bits-activity", "artifact-processing-status", "lead-search-usb", "lead-search-execution", "lead-search-cloud", "lead-search-browser", "lead-search-documents", "lead-search-communications", "lead-search-usb-summary", "lead-search-execution-summary", "lead-search-cloud-summary", "lead-search-browser-summary", "lead-search-documents-summary", "lead-search-communications-summary", "changed-search-packets"},
         "usb": common | usb_reports,
         "cloud": common | {"cloud-artifacts", "opened-from-cloud-storage", "cloud-mounts", "cloud-removable-overlap", "user-intent"},
         "execution": common | {"execution", "execution-correlation", "suspicious-executions", "event-interpretation", "program-provenance", "remote-access", "bits-activity", "user-intent"},
-        "memory": common | {"memory-analysis", "memory-credentials", "memory-disk-correlations", "memory-support-files", "combined-artifacts", "crash-dump-analysis", "memory-artifacts"},
+        "memory": common | {"memory-analysis", "memory-credentials", "memory-disk-correlations", "memory-support-files", "structured-memory", "combined-artifacts", "crash-dump-analysis", "memory-artifacts"},
     }
     return groups.get(purpose, groups["triage"])
 
@@ -1266,6 +1312,7 @@ def write_case_report_bundle(
         ("memory-credentials", "md", "Memory credentials", lambda: memory_credentials_markdown(credentials())),
         ("memory-disk-correlations", "md", "Memory/disk correlations", lambda: memory_disk_correlations_markdown(memory_disk())),
         ("memory-support-files", "md", "Memory support files", lambda: memory_support_files_markdown(memory_support())),
+        ("structured-memory", "md", "Structured memory records", lambda: structured_memory_markdown(structured_memory_report(db, case_id, limit=limit))),
         ("combined-artifacts", "md", "Combined artifact families", lambda: combined_artifact_family_markdown(combined_artifact_family_report(db, case_id, limit=limit, memory_disk_report=memory_disk()))),
         ("crash-dump-analysis", "md", "Crash dump analysis", lambda: crash_dump_analysis_markdown(crash_dump_analysis_report(db, case_id, limit=limit))),
         ("execution", "md", "Execution", lambda: execution_markdown(execution_report(db, case_id, limit=limit))),
@@ -1278,6 +1325,10 @@ def write_case_report_bundle(
         ("memory-artifacts", "md", "Memory artifact inventory", lambda: memory_artifacts_markdown(memory_artifacts_report(db, case_id, limit=limit))),
         ("deep-recovery-status", "md", "Deep recovery status", lambda: deep_recovery_status_markdown(deep_recovery_status_report(db, case_id, limit=limit))),
         ("user-intent", "md", "User intent artifacts", lambda: user_intent_artifacts_markdown(user_intent())),
+        ("mapped-network-paths", "json", "Mapped network paths", lambda: mapped_network_paths_report(db, case_id, limit=limit)),
+        ("non-standard-ads", "json", "Non-standard alternate data streams", lambda: non_standard_ads_report(db, case_id, limit=limit)),
+        ("ntfs-security-descriptors", "json", "NTFS security descriptor streams", lambda: ntfs_security_descriptors_report(db, case_id, limit=limit)),
+        ("remote-access-tool-logs", "json", "Remote access tool logs", lambda: remote_access_tool_logs_report(db, case_id, limit=limit)),
         ("usb-summary", "json", "USB storage summary", lambda: usb_summary()),
         ("external-storage", "md", "External storage", lambda: external_storage_markdown(external_storage())),
         ("shellbag-external-storage", "md", "Shellbag external storage", lambda: shellbag_external_storage_markdown(shellbag_storage())),
@@ -2788,6 +2839,19 @@ def build_parser() -> argparse.ArgumentParser:
     memory_profile.add_argument("--workers", type=int, default=1, help="Run file scanning with this many workers; database ingest remains serialized")
     memory_profile.add_argument("--no-crash-dumps", action="store_true")
     memory_profile.add_argument("--no-extract-fallback", action="store_true", help="Do not extract MFT-discovered memory support files with icat when mounts are unavailable")
+    memory_structured = memory_sub.add_parser("structured")
+    memory_structured.add_argument("--case", required=True, dest="case_id")
+    memory_structured.add_argument("--path", required=True, help="Full memory dump or decompressed hiberfil image")
+    memory_structured.add_argument("--computer", dest="computer_id")
+    memory_structured.add_argument("--image", dest="image_id")
+    memory_structured.add_argument(
+        "--source-artifact-type",
+        choices=["memory", "hiberfil", "crash_dump", "process_dump", "full_memory_dump"],
+        default="full_memory_dump",
+    )
+    memory_structured.add_argument("--no-volatility", action="store_true")
+    memory_structured.add_argument("--no-memprocfs", action="store_true")
+    memory_structured.add_argument("--timeout-seconds", type=int, default=1800)
     memory_workflow = memory_sub.add_parser("workflow")
     memory_workflow.add_argument("--case", required=True, dest="case_id")
     memory_workflow.add_argument("--computer", dest="computer_id")
@@ -4203,6 +4267,32 @@ def build_parser() -> argparse.ArgumentParser:
     report_artifact_search_sources.add_argument("--case", required=True, dest="case_id")
     report_artifact_search_sources.add_argument("--format", choices=["json", "table", "csv"], default="json")
     report_artifact_search_sources.add_argument("--output")
+    report_examiner_edge = report_sub.add_parser("examiner-edge-artifacts")
+    report_examiner_edge.add_argument("--case", required=True, dest="case_id")
+    report_examiner_edge.add_argument("--limit", type=int, default=250)
+    report_examiner_edge.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    report_examiner_edge.add_argument("--output")
+    report_mapped_network_paths = report_sub.add_parser("mapped-network-paths")
+    report_mapped_network_paths.add_argument("--case", required=True, dest="case_id")
+    report_mapped_network_paths.add_argument("--user")
+    report_mapped_network_paths.add_argument("--limit", type=int, default=250)
+    report_mapped_network_paths.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    report_mapped_network_paths.add_argument("--output")
+    report_non_standard_ads = report_sub.add_parser("non-standard-ads")
+    report_non_standard_ads.add_argument("--case", required=True, dest="case_id")
+    report_non_standard_ads.add_argument("--limit", type=int, default=250)
+    report_non_standard_ads.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    report_non_standard_ads.add_argument("--output")
+    report_ntfs_security_descriptors = report_sub.add_parser("ntfs-security-descriptors")
+    report_ntfs_security_descriptors.add_argument("--case", required=True, dest="case_id")
+    report_ntfs_security_descriptors.add_argument("--limit", type=int, default=250)
+    report_ntfs_security_descriptors.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    report_ntfs_security_descriptors.add_argument("--output")
+    report_remote_access_tool_logs = report_sub.add_parser("remote-access-tool-logs")
+    report_remote_access_tool_logs.add_argument("--case", required=True, dest="case_id")
+    report_remote_access_tool_logs.add_argument("--limit", type=int, default=250)
+    report_remote_access_tool_logs.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    report_remote_access_tool_logs.add_argument("--output")
     report_lead_search = report_sub.add_parser("lead-search")
     report_lead_search.add_argument("--case", required=True, dest="case_id")
     report_lead_search.add_argument("--preset", required=True, choices=["execution", "usb", "cloud", "documents", "browser", "communications"])
@@ -4370,6 +4460,13 @@ def build_parser() -> argparse.ArgumentParser:
     report_memory_strings.add_argument("--limit", type=int, default=100)
     report_memory_strings.add_argument("--format", choices=["json", "table", "csv"], default="json")
     report_memory_strings.add_argument("--output")
+    report_structured_memory = report_sub.add_parser("structured-memory")
+    report_structured_memory.add_argument("--case", required=True, dest="case_id")
+    report_structured_memory.add_argument("--limit", type=int, default=100)
+    report_structured_memory.add_argument("--category")
+    report_structured_memory.add_argument("--process")
+    report_structured_memory.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
+    report_structured_memory.add_argument("--output")
     report_manifest = report_sub.add_parser("operation-manifest")
     report_manifest.add_argument("--case", required=True, dest="case_id")
     report_manifest.add_argument("--limit", type=int, default=500)
@@ -6076,6 +6173,75 @@ def run(args: argparse.Namespace) -> int:
             )
             return 0
 
+        if args.resource == "memory" and args.action == "structured":
+            source = Path(args.path)
+            if not source.exists():
+                raise OrchestratorError(f"Structured memory source does not exist: {source}")
+            computer_id, image_id = _cloud_or_memory_evidence_ids(
+                db,
+                case_id=args.case_id,
+                evidence_path=source,
+                computer_id=args.computer_id,
+                image_id=args.image_id,
+            )
+            output_dir = paths.case_dir(args.case_id) / "supplemental" / "structured-memory" / str(uuid.uuid4())
+            csv_path, metadata = run_structured_memory_analysis(
+                source,
+                output_dir,
+                source_artifact_type=args.source_artifact_type,
+                include_volatility=not args.no_volatility,
+                include_memprocfs=not args.no_memprocfs,
+                timeout_seconds=args.timeout_seconds,
+                progress=print_progress,
+            )
+            row_count = _count_csv_rows(csv_path)
+            output_id = str(uuid.uuid4())
+            db.insert_tool_output(
+                {
+                    "id": output_id,
+                    "case_id": args.case_id,
+                    "computer_id": computer_id,
+                    "image_id": image_id,
+                    "job_id": None,
+                    "tool_name": "StructuredMemoryAnalyzer",
+                    "output_type": "csv",
+                    "path": csv_path,
+                    "row_count": row_count,
+                    "content_sha256": _file_sha256(csv_path),
+                }
+            )
+            structured_rows = _structured_memory_rows_from_csv(
+                csv_path,
+                case_id=args.case_id,
+                computer_id=computer_id,
+                image_id=image_id,
+                tool_output_id=output_id,
+            )
+            if db.analytics_only:
+                db.insert_normalized_artifact_rows("structured_memory_records", structured_rows)
+            else:
+                db.insert_structured_memory_records(structured_rows)
+            db.log_activity(
+                case_id=args.case_id,
+                computer_id=computer_id,
+                image_id=image_id,
+                event="memory.structured_analyzed",
+                message="Ran structured memory analysis against memory source",
+                details={"output": str(csv_path), "imported_rows": len(structured_rows), **metadata},
+            )
+            print_json(
+                {
+                    "case_id": args.case_id,
+                    "computer_id": computer_id,
+                    "image_id": image_id,
+                    "output": csv_path,
+                    "output_dir": output_dir,
+                    "imported_rows": len(structured_rows),
+                    **metadata,
+                }
+            )
+            return 0
+
         if args.resource == "memory" and args.action == "profile":
             print_json(
                 run_memory_processing_profile(
@@ -7705,6 +7871,94 @@ def run(args: argparse.Namespace) -> int:
             )
             return 0
 
+        if args.resource == "report" and args.action == "examiner-edge-artifacts":
+            report = examiner_edge_artifacts_report(db, args.case_id, limit=args.limit)
+            write_report_output(
+                report,
+                report["items"],
+                args.format,
+                args.output,
+                title=f"Examiner edge artifacts for case {args.case_id}",
+                columns=["timestamp_utc", "category", "artifact_type", "user_profile", "source_table", "source_name", "summary"],
+            )
+            return 0
+
+        if args.resource == "report" and args.action == "mapped-network-paths":
+            report = mapped_network_paths_report(db, args.case_id, user=args.user, limit=args.limit)
+            write_report_output(
+                report,
+                report["mapped_network_paths"],
+                args.format,
+                args.output,
+                title=f"Mapped network paths for case {args.case_id}",
+                columns=[
+                    "last_seen_utc",
+                    "first_seen_utc",
+                    "user_profile",
+                    "host",
+                    "share",
+                    "remote_path",
+                    "unc_path",
+                    "row_count",
+                    "source_path",
+                ],
+            )
+            return 0
+
+        if args.resource == "report" and args.action == "non-standard-ads":
+            report = non_standard_ads_report(db, args.case_id, limit=args.limit)
+            write_report_output(
+                report,
+                report["alternate_data_streams"],
+                args.format,
+                args.output,
+                title=f"Non-standard alternate data streams for case {args.case_id}",
+                columns=[
+                    "review_priority",
+                    "is_expected",
+                    "timestamp_utc",
+                    "source_table",
+                    "path",
+                    "stream_name",
+                    "classification",
+                    "file_size",
+                    "classification_note",
+                ],
+            )
+            return 0
+
+        if args.resource == "report" and args.action == "ntfs-security-descriptors":
+            report = ntfs_security_descriptors_report(db, args.case_id, limit=args.limit)
+            write_report_output(
+                report,
+                report["security_descriptor_streams"],
+                args.format,
+                args.output,
+                title=f"NTFS security descriptor streams for case {args.case_id}",
+                columns=[
+                    "timestamp_utc",
+                    "source_table",
+                    "path",
+                    "stream_name",
+                    "file_size",
+                    "parse_status",
+                    "forensic_value",
+                ],
+            )
+            return 0
+
+        if args.resource == "report" and args.action == "remote-access-tool-logs":
+            report = remote_access_tool_logs_report(db, args.case_id, limit=args.limit)
+            write_report_output(
+                report,
+                report["remote_access_tool_logs"],
+                args.format,
+                args.output,
+                title=f"Remote access tool logs for case {args.case_id}",
+                columns=["timestamp_utc", "application", "artifact_type", "user_profile", "source_table", "source_path", "host", "url"],
+            )
+            return 0
+
         if args.resource == "report" and args.action == "lead-search":
             report = artifact_lead_search_report(
                 db,
@@ -8138,6 +8392,38 @@ def run(args: argparse.Namespace) -> int:
                 title=f"Memory string hits for case {args.case_id}",
                 columns=["hit_category", "matched_term", "string_value", "source_artifact_type", "source_path", "offset", "context_hint"],
             )
+            return 0
+
+        if args.resource == "report" and args.action == "structured-memory":
+            report = structured_memory_report(
+                db,
+                args.case_id,
+                category=args.category,
+                process=args.process,
+                limit=args.limit,
+            )
+            if args.format == "md":
+                write_text_output(structured_memory_markdown(report), args.output)
+            else:
+                write_report_output(
+                    report,
+                    report["records"],
+                    args.format,
+                    args.output,
+                    title=f"Structured memory records for case {args.case_id}",
+                    columns=[
+                        "analysis_engine",
+                        "plugin",
+                        "category",
+                        "pid",
+                        "process_name",
+                        "command_line",
+                        "local_address",
+                        "foreign_address",
+                        "path",
+                        "summary",
+                    ],
+                )
             return 0
 
         if args.resource == "report" and args.action == "copied-file-drilldown":

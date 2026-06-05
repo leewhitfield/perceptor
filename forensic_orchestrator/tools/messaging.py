@@ -60,6 +60,9 @@ SLACK_URI_RE = re.compile(r"slack://[^\s\"'<>\x00-\x1f]+", re.IGNORECASE)
 EMAIL_RE = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
 ISO_TIME_RE = re.compile(r"\b20\d\d-\d\d-\d\d[T ][0-2]\d:[0-5]\d:[0-5]\d(?:\.\d+)?Z?\b")
 EPOCH_MS_RE = re.compile(r"\b1[5-9]\d{11,12}\b")
+IPV4_RE = re.compile(r"\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b")
+HOSTNAME_RE = re.compile(r"(?i)\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}\b")
+REMOTE_ACCESS_ID_RE = re.compile(r"\b\d{6,12}\b")
 SLACK_ID_RE = re.compile(r"\b([UTC][A-Z0-9]{8,}|[DW][A-Z0-9]{8,})\b")
 SLACK_TS_RE = re.compile(r"\b(?:msg_ts|ts|event_ts)[:=]([0-9]{10}\.[0-9]{3,6})\b", re.IGNORECASE)
 SLACK_LOG_TIME_RE = re.compile(r"\[(\d\d)/(\d\d)/(\d\d),\s+(\d\d):(\d\d):(\d\d):(\d{3})\]")
@@ -139,7 +142,7 @@ def parse_messaging_artifacts_to_csv(source: Path, output: Path) -> Path:
                 if app == "Slack":
                     rows.extend(_slack_rows(path, artifact_type))
                 elif app in REMOTE_ACCESS_APPS and artifact_type == "log_file":
-                    rows.extend(_text_file_rows(path, app, artifact_type))
+                    rows.extend(_remote_access_log_rows(path, app, artifact_type))
                 else:
                     rows.extend(_string_rows(path, app, artifact_type))
                 message_rows.extend(_structured_message_rows(path, app))
@@ -765,6 +768,91 @@ def _text_file_rows(path: Path, app: str, artifact_type: str) -> list[dict[str, 
             "dedupe_key": _dedupe_key(app, path, path.name, content),
         }
     ]
+
+
+def _remote_access_log_rows(path: Path, app: str, artifact_type: str) -> list[dict[str, object]]:
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    rows: list[dict[str, object]] = []
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        cleaned = re.sub(r"\s+", " ", line).strip()
+        if not cleaned:
+            continue
+        record_type = _remote_access_record_type(cleaned)
+        if record_type == "remote_access_log_line" and not _remote_access_line_has_lead(cleaned):
+            continue
+        url = _first_url(cleaned)
+        ip = _first_ipv4(cleaned)
+        hostname = _first_hostname(cleaned)
+        identity = _remote_access_identity(cleaned)
+        record_key = identity or ip or url or str(line_number)
+        rows.append(
+            {
+                "application": app,
+                "user_profile": _user_profile_from_path(path),
+                "artifact_type": artifact_type,
+                "source_path": str(path),
+                "store_path": str(path.parent),
+                "record_key": f"{path.name}:{line_number}:{record_key}",
+                "record_type": record_type,
+                "url": url,
+                "host": _host_from_url(url) or ip or hostname,
+                "email": _first_email(cleaned),
+                "timestamp_utc": _first_timestamp(cleaned),
+                "message_text": cleaned[:TEXT_LIMIT],
+                "raw_text": cleaned[:TEXT_LIMIT],
+                "dedupe_key": _dedupe_key(app, path, f"{path.name}:{line_number}:{record_key}", cleaned),
+            }
+        )
+        if len(rows) >= 5000:
+            break
+    if rows:
+        return rows
+    return _text_file_rows(path, app, artifact_type)
+
+
+def _remote_access_record_type(text: str) -> str:
+    lower = text.lower()
+    if any(token in lower for token in ("file transfer", "filetransfer", "download", "upload", "clipboard", "copy paste", "copy/paste")):
+        return "remote_access_file_or_clipboard_transfer"
+    if any(token in lower for token in ("login", "logon", "authenticate", "authentication", "password", "credential", "authorization", "authorized")):
+        return "remote_access_authentication"
+    if any(token in lower for token in ("connect", "connected", "connection", "disconnect", "disconnected", "session", "client", "peer", "remote")):
+        return "remote_access_connection"
+    if any(token in lower for token in ("alias", "id", "address", "relay", "rendezvous")):
+        return "remote_access_identity_or_routing"
+    return "remote_access_log_line"
+
+
+def _remote_access_line_has_lead(text: str) -> bool:
+    lower = text.lower()
+    return bool(_first_url(text) or _first_email(text) or IPV4_RE.search(text) or REMOTE_ACCESS_ID_RE.search(text) or any(token in lower for token in ("session", "connect", "remote", "peer", "relay", "alias")))
+
+
+def _first_ipv4(text: str) -> str:
+    match = IPV4_RE.search(text)
+    return match.group(0) if match else ""
+
+
+def _first_hostname(text: str) -> str:
+    for match in HOSTNAME_RE.finditer(text):
+        value = match.group(0).lower()
+        if not _first_email(value):
+            return value
+    return ""
+
+
+def _remote_access_identity(text: str) -> str:
+    email = _first_email(text)
+    if email:
+        return email
+    ip = _first_ipv4(text)
+    if ip:
+        return ip
+    match = REMOTE_ACCESS_ID_RE.search(text)
+    return match.group(0) if match else ""
 
 
 def _json_file_rows(path: Path, app: str, text: str) -> list[dict[str, object]]:

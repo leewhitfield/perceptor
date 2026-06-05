@@ -1589,6 +1589,12 @@ tools:
           - ".zsh_history"
           - "typedurls.json"
           - "notifications.json"
+          - "EventTranscript.db"
+          - "hosts"
+          - "plum.sqlite"
+          - "wpndatabase.db"
+          - "Thumbs.db"
+          - "ext4.vhdx"
           - "hxstore.hxd"
           - "browser.log"
           - "webapp-console.log"
@@ -1600,6 +1606,8 @@ tools:
           - "*.db"
           - "*.sqlite"
           - "*.edb"
+          - "*.vhdx"
+          - "*.xml"
           - "*.hxd"
           - "*.json"
           - "*.log"
@@ -1622,7 +1630,55 @@ tools:
         include_path_patterns:
           - "*/AppData/Local/Packages/*"
           - "*/AppData/Local/Microsoft/Windows/INetCache/Content.Outlook/*"
+          - "*/AppData/Local/Microsoft/Windows/INetCache/CryptnetUrlCache/*"
+          - "*/AppData/LocalLow/Microsoft/CryptnetUrlCache/*"
+          - "*/AppData/Local/Microsoft/CryptnetUrlCache/*"
+          - "*/AppData/Roaming/Microsoft/CryptnetUrlCache/*"
+          - "*/AppData/Local/Microsoft/TokenBroker/Cache/*"
+          - "*/AppData/Local/Microsoft/Credentials/*"
+          - "*/AppData/Roaming/Microsoft/Credentials/*"
+          - "*/AppData/Local/Microsoft/Vault/*"
+          - "*/AppData/Roaming/Microsoft/Vault/*"
+          - "*/AppData/Local/Microsoft/InputPersonalization/*"
+          - "*/AppData/Roaming/Microsoft/InputPersonalization/*"
+          - "*/Windows/System32/drivers/etc/hosts"
+          - "*/Windows/System32/Tasks/*"
+          - "*/Windows/SoftwareDistribution/DataStore/DataStore.edb"
+          - "*/ProgramData/Microsoft/Diagnosis/EventTranscript/EventTranscript.db"
+          - "*/Thumbs.db"
           - "*/Windows/AppCompat/Programs/*"
+      - name: edge_artifact_files
+        source: ""
+        destination: "packages/EdgeArtifacts"
+        recursive: true
+        process_in_place: true
+        optional: true
+        recovery:
+          deleted_files: true
+          orphaned_files: true
+          cost: medium
+          noise: low
+        patterns:
+          - "*"
+        include_path_patterns:
+          - "*/Users/*/AppData/Local/Packages/Microsoft.MicrosoftStickyNotes_*/LocalState/plum.sqlite"
+          - "*/Users/*/AppData/Local/Packages/*/LocalState/ext4.vhdx"
+          - "*/Users/*/AppData/Local/Microsoft/Windows/INetCache/CryptnetUrlCache/*"
+          - "*/Users/*/AppData/LocalLow/Microsoft/CryptnetUrlCache/*"
+          - "*/Users/*/AppData/Local/Microsoft/CryptnetUrlCache/*"
+          - "*/Users/*/AppData/Roaming/Microsoft/CryptnetUrlCache/*"
+          - "*/Users/*/AppData/Local/Microsoft/TokenBroker/Cache/*"
+          - "*/Users/*/AppData/Local/Microsoft/Credentials/*"
+          - "*/Users/*/AppData/Roaming/Microsoft/Credentials/*"
+          - "*/Users/*/AppData/Local/Microsoft/Vault/*"
+          - "*/Users/*/AppData/Roaming/Microsoft/Vault/*"
+          - "*/Users/*/AppData/Local/Microsoft/InputPersonalization/*"
+          - "*/Users/*/AppData/Roaming/Microsoft/InputPersonalization/*"
+          - "*/Windows/System32/drivers/etc/hosts"
+          - "*/Windows/System32/Tasks/*"
+          - "*/Windows/SoftwareDistribution/DataStore/DataStore.edb"
+          - "*/ProgramData/Microsoft/Diagnosis/EventTranscript/EventTranscript.db"
+          - "*/Thumbs.db"
     command:
       - internal-package-artifacts-parser
       - "{artifact:package_artifact_profiles}"
@@ -3106,6 +3162,13 @@ profiles:
       - WindowsMailParser
       - MessagingParser
       - PackageArtifactsParser
+
+  windows-edge-artifacts:
+    description: Parse high-value examiner edge artifacts such as Sticky Notes, notifications, task XML, hosts, CryptnetUrlCache, WSL, Credential/Vault metadata, Bluetooth, Windows Update, and InputPersonalization
+    tools:
+      - RegistryArtifactParser
+      - PackageArtifactsParser
+      - TelemetryParser
 
   windows-mail:
     description: Parse Windows Mail store.vol and related body files

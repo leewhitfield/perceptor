@@ -54,6 +54,11 @@ uv run relic --root ROOT report-bundle import-many --path live-case.zip --accept
 uv run relic --root ROOT report dashboard --case CASE_ID --format table
 uv run relic --root ROOT report progress --case CASE_ID --format table
 uv run relic --root ROOT report processing-estimate --case CASE_ID --profile windows-full --format table
+uv run relic --root ROOT report examiner-edge-artifacts --case CASE_ID --format table
+uv run relic --root ROOT report mapped-network-paths --case CASE_ID --format table
+uv run relic --root ROOT report non-standard-ads --case CASE_ID --format table
+uv run relic --root ROOT report ntfs-security-descriptors --case CASE_ID --format table
+uv run relic --root ROOT report remote-access-tool-logs --case CASE_ID --format table
 uv run relic --root ROOT report runbook --case CASE_ID --format md
 uv run relic --root ROOT report review-status --case CASE_ID --format table
 uv run relic --root ROOT report bundle --case CASE_ID --purpose review

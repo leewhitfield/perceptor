@@ -129,6 +129,16 @@ ANALYTICS_TABLE_COLUMNS: dict[str, list[str]] = {
         "string_sha256", "string_length", "offset", "context_hint",
         "created_at",
     ],
+    "structured_memory_records": [
+        "id", "case_id", "computer_id", "image_id", "tool_output_id",
+        "tool_name", "source_csv", "row_number", "source_artifact_type",
+        "source_path", "analysis_engine", "plugin", "category", "record_type",
+        "pid", "ppid", "process_name", "command_line", "local_address",
+        "local_port", "foreign_address", "foreign_port", "protocol", "state",
+        "object_type", "object_name", "path", "module_base", "module_size",
+        "offset", "virtual_address", "created_utc", "exited_utc", "suspicious",
+        "summary", "raw_record_json", "created_at",
+    ],
     "carve_scan_ranges": [
         "id", "case_id", "computer_id", "image_id", "tool_output_id",
         "tool_name", "source_csv", "row_number", "profile", "carve_type",

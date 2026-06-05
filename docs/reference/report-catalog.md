@@ -11,7 +11,7 @@ reports have narrower options. Use `uv run relic report REPORT_NAME --help` for
 the exact switches.
 
 This catalog is generated from the current `report --help` command set and
-groups all 222 report subcommands by topic.
+groups all 228 report subcommands by topic.
 
 ## Core Case Review
 
@@ -76,6 +76,7 @@ groups all 222 report subcommands by topic.
 - `data-exfiltration`
 - `account-compromise`
 - `bits-activity`
+- `examiner-edge-artifacts`
 - `program-provenance`
 - `cd-burning`
 - `prefetch`
@@ -106,6 +107,8 @@ groups all 222 report subcommands by topic.
 - `ntfs-index`
 - `ntfs-logfile`
 - `ntfs-namespace`
+- `non-standard-ads`
+- `ntfs-security-descriptors`
 - `filesystem-review`
 - `user-file-references`
 - `user-file-reference-source`
@@ -241,6 +244,8 @@ groups all 222 report subcommands by topic.
 - `rdp-visual-observations`
 - `remote-access`
 - `remote-access-attribution`
+- `mapped-network-paths`
+- `remote-access-tool-logs`
 - `vpn-activity`
 - `vpn-local-activity`
 - `vpn-connections`
@@ -274,6 +279,7 @@ groups all 222 report subcommands by topic.
 - `memory-credential-review`
 - `memory-disk-correlations`
 - `memory-string-hits`
+- `structured-memory`
 - `crash-dump-analysis`
 
 ## Artifact Search

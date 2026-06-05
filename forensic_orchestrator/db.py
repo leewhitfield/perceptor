@@ -211,6 +211,7 @@ DEFAULT_PURGE_TABLES = (
     "content_references",
     "cloud_server_events",
     "memory_string_hits",
+    "structured_memory_records",
     "carve_scan_ranges",
     "staged_carves",
 )
@@ -303,6 +304,7 @@ TOOL_PURGE_TABLES = {
     },
     "CloudServerLogImporter": {"cloud_server_events", "content_references", "tool_outputs"},
     "MemoryStringScanner": {"memory_string_hits", "tool_outputs"},
+    "StructuredMemoryAnalyzer": {"structured_memory_records", "tool_outputs"},
     "CarveStageRunner": {"carve_scan_ranges", "staged_carves", "tool_outputs"},
     "WindowsSearchMemoryCarveParser": {
         "windows_search_memory_carves",
@@ -4223,6 +4225,50 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_memory_string_hits_output
               ON memory_string_hits(tool_output_id);
 
+            CREATE TABLE IF NOT EXISTS structured_memory_records (
+              id TEXT PRIMARY KEY,
+              case_id TEXT NOT NULL REFERENCES cases(id),
+              computer_id TEXT REFERENCES computers(id),
+              image_id TEXT REFERENCES images(id),
+              tool_output_id TEXT NOT NULL REFERENCES tool_outputs(id),
+              tool_name TEXT NOT NULL,
+              source_csv TEXT NOT NULL,
+              row_number INTEGER NOT NULL,
+              source_artifact_type TEXT,
+              source_path TEXT,
+              analysis_engine TEXT,
+              plugin TEXT,
+              category TEXT,
+              record_type TEXT,
+              pid TEXT,
+              ppid TEXT,
+              process_name TEXT,
+              command_line TEXT,
+              local_address TEXT,
+              local_port TEXT,
+              foreign_address TEXT,
+              foreign_port TEXT,
+              protocol TEXT,
+              state TEXT,
+              object_type TEXT,
+              object_name TEXT,
+              path TEXT,
+              module_base TEXT,
+              module_size TEXT,
+              offset TEXT,
+              virtual_address TEXT,
+              created_utc TEXT,
+              exited_utc TEXT,
+              suspicious TEXT,
+              summary TEXT,
+              raw_record_json TEXT,
+              created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_structured_memory_case_category
+              ON structured_memory_records(case_id, category);
+            CREATE INDEX IF NOT EXISTS idx_structured_memory_case_process
+              ON structured_memory_records(case_id, pid, process_name);
+
             CREATE TABLE IF NOT EXISTS memory_credential_reviews (
               id TEXT PRIMARY KEY,
               case_id TEXT NOT NULL REFERENCES cases(id),
@@ -4599,6 +4645,19 @@ class Database:
                 "matched_term": "TEXT", "string_value": "TEXT",
                 "string_sha256": "TEXT", "string_length": "INTEGER",
                 "offset": "TEXT", "context_hint": "TEXT",
+            },
+            "structured_memory_records": {
+                "source_artifact_type": "TEXT", "source_path": "TEXT",
+                "analysis_engine": "TEXT", "plugin": "TEXT", "category": "TEXT",
+                "record_type": "TEXT", "pid": "TEXT", "ppid": "TEXT",
+                "process_name": "TEXT", "command_line": "TEXT",
+                "local_address": "TEXT", "local_port": "TEXT",
+                "foreign_address": "TEXT", "foreign_port": "TEXT",
+                "protocol": "TEXT", "state": "TEXT", "object_type": "TEXT",
+                "object_name": "TEXT", "path": "TEXT", "module_base": "TEXT",
+                "module_size": "TEXT", "offset": "TEXT", "virtual_address": "TEXT",
+                "created_utc": "TEXT", "exited_utc": "TEXT", "suspicious": "TEXT",
+                "summary": "TEXT", "raw_record_json": "TEXT",
             },
             "usn_journal_entries": {
                 "source_file": "TEXT", "update_sequence_number": "TEXT",
@@ -8168,6 +8227,22 @@ class Database:
                 "encoding", "hit_category", "matched_term", "string_value",
                 "string_sha256", "string_length", "offset", "context_hint",
                 "created_at",
+            ],
+            rows,
+        )
+
+    def insert_structured_memory_records(self, rows: list[dict[str, Any]]) -> None:
+        self._insert_rows(
+            "structured_memory_records",
+            [
+                "id", "case_id", "computer_id", "image_id", "tool_output_id",
+                "tool_name", "source_csv", "row_number", "source_artifact_type",
+                "source_path", "analysis_engine", "plugin", "category", "record_type",
+                "pid", "ppid", "process_name", "command_line", "local_address",
+                "local_port", "foreign_address", "foreign_port", "protocol", "state",
+                "object_type", "object_name", "path", "module_base", "module_size",
+                "offset", "virtual_address", "created_utc", "exited_utc", "suspicious",
+                "summary", "raw_record_json", "created_at",
             ],
             rows,
         )

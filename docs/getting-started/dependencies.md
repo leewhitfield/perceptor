@@ -57,9 +57,12 @@ uv run relic standalone install-tool usnjrnl-forensic --tools-dir ~/tools --env-
   the default managed install.
 - SIDR is expected to be a native Linux Rust build, not upstream `sidr.exe`.
 - `usnjrnl-forensic` requires Rust 1.88.0 or newer.
-- `pypykatz`, Volatility 3, MemProcFS, SIDR, `ual-timeliner`, and
-  `usnjrnl-forensic` are treated as default coverage tools by
-  `install-tool all`.
+- `pypykatz`, Volatility 3, the Volatility Windows symbol pack, MemProcFS,
+  SIDR, `ual-timeliner`, and `usnjrnl-forensic` are treated as default coverage
+  tools by `install-tool all`.
+- The Volatility Windows symbol pack is stored as
+  `/opt/relic-tools/volatility3-symbols/windows.zip` by the managed installer.
+  Structured memory analysis passes that directory to Volatility when present.
 - Missing coverage tools should be reported by doctor and fixed during setup.
   Individual workflows should still fail gracefully when a specialized tool is
   unavailable.

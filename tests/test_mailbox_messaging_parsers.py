@@ -374,8 +374,10 @@ def test_messaging_parser_captures_remote_access_app_history(tmp_path):
 
     assert rows
     assert rows[0]["application"] == "AnyDesk"
-    assert rows[0]["record_type"] == "application_config_or_history"
+    assert rows[0]["record_type"] == "remote_access_connection"
     assert rows[0]["artifact_type"] == "log_file"
+    assert rows[0]["host"] == "support.example.test"
+    assert rows[0]["timestamp_utc"] == "2024-01-02T03:04:05Z"
 
 
 def test_messaging_parser_extracts_ai_app_json_and_obsidian_notes(tmp_path, monkeypatch):

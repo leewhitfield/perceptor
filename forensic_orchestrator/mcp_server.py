@@ -82,9 +82,15 @@ SUPPORTED_MCP_REPORTS = {
     "opened-from-cloud-storage",
     "memory-analysis",
     "memory-artifacts",
+    "structured-memory",
     "cloud-artifacts",
     "bits-activity",
     "clipboard",
+    "examiner-edge-artifacts",
+    "mapped-network-paths",
+    "non-standard-ads",
+    "ntfs-security-descriptors",
+    "remote-access-tool-logs",
     "windows-activities",
     "usb-files",
     "usb-timeline",
@@ -4614,7 +4620,7 @@ def _expected_report_names(purpose: str) -> set[str]:
         "usb": common | {"shellbag-external-storage", "file-movement-identity", "opened-from-removable-media", "cloud-removable-overlap", "shortcut-droid-changes", "shortcut-object-tracking", "usn-lifecycle"},
         "cloud": common | {"cloud-artifacts", "opened-from-cloud-storage", "cloud-mounts", "cloud-removable-overlap", "user-intent"},
         "execution": common | {"execution", "execution-correlation", "suspicious-executions", "program-provenance", "remote-access", "user-intent"},
-        "memory": common | {"memory-analysis", "memory-credentials", "memory-disk-correlations", "memory-support-files", "combined-artifacts", "crash-dump-analysis", "memory-artifacts"},
+        "memory": common | {"memory-analysis", "memory-credentials", "memory-disk-correlations", "memory-support-files", "structured-memory", "combined-artifacts", "crash-dump-analysis", "memory-artifacts"},
     }
     if purpose == "full":
         return set()
@@ -5060,6 +5066,119 @@ def _route_mcp_question(
             {"order": 2, "source": "clipboard_items_table", "tools": ["relic_generate_report", "relic_search_artifacts"], "tables": ["clipboard_items"]},
             {"order": 3, "source": "normalized_master_timeline", "tools": ["relic_timeline_window"], "tables": ["clipboard_items"]},
             {"order": 4, "source": "secondary_activity_artifacts", "tools": ["relic_generate_report", "relic_search_artifacts"], "tables": ["windows_activities", "browser_site_settings", "evtx_events"]},
+        ]
+    elif _contains_any(
+        text,
+        {
+            "mapped network path",
+            "mapped network paths",
+            "mapped network drive",
+            "mapped network drives",
+            "network mapped",
+            "network share",
+            "network shares",
+            "mountpoints2 ##",
+            "##server",
+            "unc path",
+            "unc paths",
+        },
+    ):
+        intent = "mapped_network_paths"
+        report_purpose = "network"
+        report_names = ["mapped-network-paths", "examiner-edge-artifacts"]
+        recommended_tool = "relic_generate_report"
+        fallback_tools = ["relic_read_existing_report", "relic_search_artifacts", "relic_timeline_window"]
+        reason = (
+            "Mapped network path questions should start with the mapped-network-paths report, "
+            "which decodes MountPoints2 ##host#share#path registry keys into UNC-style network paths."
+        )
+        source_order = [
+            {"order": 1, "source": "generated_reports", "tools": ["relic_read_existing_report", "relic_generate_report"], "report_names": report_names},
+            {"order": 2, "source": "registry_artifacts_mountpoints2_rows", "tools": ["relic_search_artifacts"], "tables": ["registry_artifacts"]},
+            {"order": 3, "source": "normalized_master_timeline", "tools": ["relic_timeline_window"], "tables": ["registry_artifacts"]},
+        ]
+    elif _contains_any(text, {"$secure", "$sds", "$sii", "$sdh", "security descriptor", "security descriptors", "ntfs permissions", "file permissions", "acl", "access control list"}):
+        intent = "ntfs_security_descriptors"
+        report_purpose = "filesystem"
+        report_names = ["ntfs-security-descriptors", "non-standard-ads"]
+        recommended_tool = "relic_generate_report"
+        fallback_tools = ["relic_read_existing_report", "relic_search_artifacts", "relic_timeline_window"]
+        reason = "NTFS permission/security descriptor questions should start with the ntfs-security-descriptors report, which inventories $Secure stream presence and states the current structured parsing caveat."
+        source_order = [
+            {"order": 1, "source": "generated_reports", "tools": ["relic_read_existing_report", "relic_generate_report"], "report_names": report_names},
+            {"order": 2, "source": "mft_security_descriptor_stream_rows", "tools": ["relic_search_artifacts"], "tables": ["mft_entries"]},
+            {"order": 3, "source": "normalized_master_timeline", "tools": ["relic_timeline_window"], "tables": ["mft_entries"]},
+        ]
+    elif _contains_any(text, {"alternate data stream", "alternate data streams", "non-standard ads", "non standard ads", "hidden stream", "ads stream"}):
+        intent = "non_standard_ads"
+        report_purpose = "filesystem"
+        report_names = ["non-standard-ads"]
+        recommended_tool = "relic_generate_report"
+        fallback_tools = ["relic_read_existing_report", "relic_search_artifacts", "relic_timeline_window"]
+        reason = "Alternate data stream questions should start with the non-standard-ads report, which filters MFT ADS rows beyond common Zone.Identifier/system streams."
+        source_order = [
+            {"order": 1, "source": "generated_reports", "tools": ["relic_read_existing_report", "relic_generate_report"], "report_names": report_names},
+            {"order": 2, "source": "mft_ads_rows", "tools": ["relic_search_artifacts"], "tables": ["mft_entries"]},
+            {"order": 3, "source": "normalized_master_timeline", "tools": ["relic_timeline_window"], "tables": ["mft_entries"]},
+        ]
+    elif _contains_any(text, {"anydesk", "teamviewer", "logmein", "screenconnect", "connectwise control", "splashtop", "rustdesk", "remote access tool", "remote support tool"}):
+        intent = "remote_access_tool_logs"
+        report_purpose = "remote_access"
+        report_names = ["remote-access-tool-logs", "remote-access", "suspicious-executions"]
+        recommended_tool = "relic_generate_report"
+        fallback_tools = ["relic_read_existing_report", "relic_search_artifacts", "relic_timeline_window"]
+        reason = "Remote access tool questions should start with the remote-access-tool-logs report, then correlate with remote-access sessions and execution artifacts."
+        source_order = [
+            {"order": 1, "source": "generated_reports", "tools": ["relic_read_existing_report", "relic_generate_report"], "report_names": report_names},
+            {"order": 2, "source": "messaging_records_remote_access_logs", "tools": ["relic_search_artifacts"], "tables": ["messaging_records", "messaging_messages"]},
+            {"order": 3, "source": "execution_and_filesystem_candidates", "tools": ["relic_search_artifacts"], "tables": ["mft_entries", "prefetch_items", "amcache_entries", "shimcache_entries"]},
+            {"order": 4, "source": "normalized_master_timeline", "tools": ["relic_timeline_window"]},
+        ]
+    elif _contains_any(
+        text,
+        {
+            "sticky note",
+            "sticky notes",
+            "plum.sqlite",
+            "notification database",
+            "wpndatabase",
+            "networklist",
+            "outbound rdp",
+            "terminal server client",
+            "mountpoints2",
+            "scheduled task xml",
+            "task scheduler xml",
+            "cryptnet",
+            "cryptneturlcache",
+            "hosts file",
+            "wsl",
+            "ext4.vhdx",
+            "windows update",
+            "datastore.edb",
+            "credential manager",
+            "windows vault",
+            "bluetooth",
+            "swiftkey",
+            "inputpersonalization",
+            "installed programs",
+            "installed applications",
+        },
+    ):
+        intent = "examiner_edge_artifacts"
+        report_purpose = "full"
+        report_names = ["examiner-edge-artifacts", "mapped-network-paths"]
+        recommended_tool = "relic_generate_report"
+        fallback_tools = ["relic_read_existing_report", "relic_search_artifacts", "relic_timeline_window"]
+        reason = (
+            "These high-value edge artifact questions should start with the examiner-edge-artifacts report, "
+            "which consolidates Sticky Notes, notifications, NetworkList, outbound RDP, MountPoints2, task XML, "
+            "CryptnetUrlCache, hosts, WSL, Windows Update, Credential/Vault metadata, Bluetooth, installed "
+            "applications, and SwiftKey/InputPersonalization leads."
+        )
+        source_order = [
+            {"order": 1, "source": "generated_reports", "tools": ["relic_read_existing_report", "relic_generate_report"], "report_names": report_names},
+            {"order": 2, "source": "parsed_artifact_tables", "tools": ["relic_search_artifacts"], "tables": ["package_artifacts", "telemetry_artifacts", "registry_artifacts"]},
+            {"order": 3, "source": "normalized_master_timeline", "tools": ["relic_timeline_window"], "tables": ["package_artifacts", "telemetry_artifacts", "registry_artifacts"]},
         ]
     elif has_wifi_terms:
         intent = "wifi_network_activity"

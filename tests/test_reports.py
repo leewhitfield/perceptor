@@ -51,6 +51,7 @@ from forensic_orchestrator.reports import (
     evidence_gaps_markdown,
     evidence_gaps_report,
     encrypted_volume_indicators_report,
+    examiner_edge_artifacts_report,
     derived_timeline_events,
     derived_timeline_events_report,
     event_interpretation_report,
@@ -78,6 +79,7 @@ from forensic_orchestrator.reports import (
     mailbox_attachment_coverage_report,
     malware_hiding_places_markdown,
     malware_hiding_places_report,
+    mapped_network_paths_report,
     memory_analysis_markdown,
     memory_analysis_report,
     memory_artifacts_markdown,
@@ -88,6 +90,8 @@ from forensic_orchestrator.reports import (
     memory_disk_correlations_report,
     memory_support_files_markdown,
     memory_support_files_report,
+    structured_memory_markdown,
+    structured_memory_report,
     processing_decision_markdown,
     processing_decision_report,
     processing_disk_estimate_report,
@@ -98,6 +102,8 @@ from forensic_orchestrator.reports import (
     resume_plan_report,
     messaging_artifacts_report,
     mft_report,
+    non_standard_ads_report,
+    ntfs_security_descriptors_report,
     office_trust_report,
     opened_from_cloud_storage_report,
     opened_from_removable_media_report,
@@ -393,6 +399,73 @@ def test_memory_support_files_report_rolls_up_scan_status_and_categories(tmp_pat
     assert page_row["hit_count"] == 1
     assert page_row["categories"] == {"credentials": 1}
     assert "Memory Support File Processing" in memory_support_files_markdown(report)
+
+
+def test_structured_memory_report_includes_records_and_run_attempts(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/memory.dmp"), computer_id="computer-1")
+    csv_path = tmp_path / "StructuredMemoryAnalyzer.csv"
+    csv_path.write_text("plugin,category,pid,process_name,summary\n", encoding="utf-8")
+    db.insert_tool_output(
+        {
+            "id": "structured-output-1",
+            "case_id": case.id,
+            "computer_id": "computer-1",
+            "image_id": "image-1",
+            "job_id": None,
+            "tool_name": "StructuredMemoryAnalyzer",
+            "output_type": "csv",
+            "path": csv_path,
+            "row_count": 1,
+        }
+    )
+    db.insert_structured_memory_records(
+        [
+            {
+                "id": "structured-row-1",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "structured-output-1",
+                "tool_name": "StructuredMemoryAnalyzer",
+                "source_csv": str(csv_path),
+                "row_number": 1,
+                "source_artifact_type": "full_memory_dump",
+                "source_path": "/evidence/memory.dmp",
+                "analysis_engine": "volatility3",
+                "plugin": "windows.pslist.PsList",
+                "category": "process",
+                "record_type": "process",
+                "pid": "1234",
+                "process_name": "SearchIndexer.exe",
+                "summary": "SearchIndexer.exe",
+            }
+        ]
+    )
+    db.log_activity(
+        case_id=case.id,
+        computer_id="computer-1",
+        image_id="image-1",
+        event="memory.structured_analyzed",
+        message="Ran structured memory analysis",
+        details={
+            "source_path": "/evidence/memory.dmp",
+            "source_artifact_type": "full_memory_dump",
+            "output": str(csv_path),
+            "imported_rows": 1,
+            "runs": [{"engine": "volatility3", "plugin": "windows.pslist.PsList", "status": "completed", "record_count": 1}],
+        },
+    )
+
+    report = structured_memory_report(db, case.id, process="SearchIndexer", limit=10)
+    markdown = structured_memory_markdown(report)
+
+    assert report["summary"]["total_record_count"] == 1
+    assert report["summary"]["attempt_count"] == 1
+    assert report["records"][0]["process_name"] == "SearchIndexer.exe"
+    assert "Run Attempts" in markdown
 
 
 def test_processing_readiness_report_lists_project_workflow_items(tmp_path):
@@ -1734,6 +1807,300 @@ def test_processing_disk_estimate_reports_registered_image_size(tmp_path):
     assert report["summary"]["image_count"] == 1
     assert report["images"][0]["status"] == "estimated"
     assert report["images"][0]["multiplier"] == 1.0
+
+
+def test_examiner_edge_artifacts_report_combines_high_value_sources(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    db.insert_tool_output(
+        {
+            "id": "output-1",
+            "case_id": case.id,
+            "computer_id": "computer-1",
+            "image_id": "image-1",
+            "job_id": "job-1",
+            "tool_name": "PackageArtifactsParser",
+            "output_type": "csv",
+            "path": tmp_path / "PackageArtifacts.csv",
+            "row_count": 3,
+        }
+    )
+    db.insert_package_artifacts(
+        [
+            {
+                "id": str(uuid.uuid4()),
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "output-1",
+                "tool_name": "PackageArtifactsParser",
+                "source_csv": "PackageArtifacts.csv",
+                "row_number": 1,
+                "record_type": "sticky_note",
+                "user_profile": "Maya",
+                "source_path": "Users/Maya/AppData/Local/Packages/Microsoft.MicrosoftStickyNotes/LocalState/plum.sqlite",
+                "source_name": "Microsoft Sticky Notes",
+                "file_name": "plum.sqlite",
+                "event_time_utc": "2025-11-17T13:00:00Z",
+                "title": "note-1",
+                "artifact_text": "VPN password reminder",
+                "created_at": "2026-01-01T00:00:00Z",
+            }
+        ]
+    )
+    db.insert_telemetry_artifacts(
+        [
+            {
+                "id": str(uuid.uuid4()),
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "output-1",
+                "tool_name": "TelemetryParser",
+                "source_csv": "Telemetry.csv",
+                "row_number": 1,
+                "record_type": "notifications_notification",
+                "artifact_group": "notifications",
+                "user_profile": "Maya",
+                "source_name": "Windows Notifications",
+                "file_name": "wpndatabase.db",
+                "event_time_utc": "2025-11-17T14:00:00Z",
+                "title": "Teams",
+                "artifact_text": "Meet in lobby",
+                "created_at": "2026-01-01T00:00:00Z",
+            }
+        ]
+    )
+    db.insert_registry_artifacts(
+        [
+            {
+                "id": str(uuid.uuid4()),
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "output-1",
+                "tool_name": "RegistryArtifactParser",
+                "source_csv": "RegistryArtifactParser.csv",
+                "row_number": 1,
+                "source_path": "NTUSER.DAT",
+                "hive_type": "ntuser",
+                "user_profile": "Maya",
+                "artifact": "outbound_rdp_history",
+                "category": "remote_access",
+                "key_path": "Software/Microsoft/Terminal Server Client/Servers/host.example",
+                "key_last_write_utc": "2025-11-17T15:00:00Z",
+                "event_time_utc": "2025-11-17T15:00:00Z",
+                "value_name": "UsernameHint",
+                "value_data": "MAYA\\admin",
+                "display_name": "MAYA\\admin",
+                "created_at": "2026-01-01T00:00:00Z",
+            }
+        ]
+    )
+
+    report = examiner_edge_artifacts_report(db, case.id, limit=2)
+
+    assert report["limited"] is True
+    assert "not evidence of absence" in report["limit_warning"]
+    assert {row["category"] for row in report["items"]} >= {"network_and_remote_access", "notifications"}
+
+
+def test_mapped_network_paths_report_decodes_mountpoints2_network_shares(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    key_path = (
+        "ROOT/Software/Microsoft/Windows/CurrentVersion/Explorer/MountPoints2/"
+        "##fileserver#legal#case123/shell/Autoplay"
+    )
+    db.insert_registry_artifacts(
+        [
+            {
+                "id": str(uuid.uuid4()),
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "output-1",
+                "tool_name": "RegistryArtifactParser",
+                "source_csv": "RegistryArtifactParser.csv",
+                "row_number": 1,
+                "source_path": "Users/Maya/NTUSER.DAT",
+                "hive_type": "ntuser",
+                "user_profile": "Maya",
+                "artifact": "mountpoints2",
+                "category": "user_activity",
+                "key_path": key_path,
+                "key_last_write_utc": "2025-11-17T15:00:00Z",
+                "event_time_utc": "2025-11-17T15:00:00Z",
+                "value_name": "MUIVerb",
+                "value_type": "REG_SZ",
+                "value_data": "@shell32.dll,-8507",
+                "display_name": "@shell32.dll,-8507",
+                "normalized_path": "\\\\fileserver\\legal\\case123",
+                "created_at": "2026-01-01T00:00:00Z",
+            },
+            {
+                "id": str(uuid.uuid4()),
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "output-1",
+                "tool_name": "RegistryArtifactParser",
+                "source_csv": "RegistryArtifactParser.csv",
+                "row_number": 2,
+                "source_path": "Users/Maya/NTUSER.DAT",
+                "hive_type": "ntuser",
+                "user_profile": "Maya",
+                "artifact": "mountpoints2",
+                "category": "user_activity",
+                "key_path": key_path,
+                "key_last_write_utc": "2025-11-17T16:00:00Z",
+                "event_time_utc": "2025-11-17T16:00:00Z",
+                "value_name": "Run",
+                "value_type": "REG_SZ",
+                "value_data": "open",
+                "display_name": "open",
+                "normalized_path": "\\\\fileserver\\legal\\case123",
+                "created_at": "2026-01-01T00:00:00Z",
+            },
+        ]
+    )
+
+    report = mapped_network_paths_report(db, case.id)
+    rows = report["mapped_network_paths"]
+
+    assert len(rows) == 1
+    assert rows[0]["host"] == "fileserver"
+    assert rows[0]["share"] == "legal"
+    assert rows[0]["remote_path"] == "case123"
+    assert rows[0]["unc_path"] == "\\\\fileserver\\legal\\case123"
+    assert rows[0]["row_count"] == 2
+    assert rows[0]["last_seen_utc"] == "2025-11-17T16:00:00Z"
+
+
+def test_non_standard_ads_report_filters_common_zone_identifier_stream(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    db.insert_mft_entries(
+        [
+            {
+                "id": str(uuid.uuid4()),
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "output-1",
+                "tool_name": "MFTECmd",
+                "source_csv": "mft.csv",
+                "row_number": 1,
+                "parent_path": "C:\\Users\\Maya\\Desktop",
+                "file_name": "report.docx:Zone.Identifier",
+                "file_size": "128",
+                "is_ads": "True",
+                "modified_si": "2025-11-17T15:00:00Z",
+                "created_at": "2026-01-01T00:00:00Z",
+            },
+            {
+                "id": str(uuid.uuid4()),
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "output-1",
+                "tool_name": "MFTECmd",
+                "source_csv": "mft.csv",
+                "row_number": 2,
+                "parent_path": "C:\\Users\\Maya\\Desktop",
+                "file_name": "report.docx:hidden",
+                "file_size": "512",
+                "is_ads": "True",
+                "modified_si": "2025-11-17T16:00:00Z",
+                "created_at": "2026-01-01T00:00:00Z",
+            },
+            {
+                "id": str(uuid.uuid4()),
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "output-1",
+                "tool_name": "MFTECmd",
+                "source_csv": "mft.csv",
+                "row_number": 3,
+                "parent_path": "C:\\Windows",
+                "file_name": "notepad.exe:WofCompressedData",
+                "file_size": "4096",
+                "is_ads": "True",
+                "modified_si": "2025-11-17T17:00:00Z",
+                "created_at": "2026-01-01T00:00:00Z",
+            },
+        ]
+    )
+
+    report = non_standard_ads_report(db, case.id)
+    rows = report["alternate_data_streams"]
+
+    assert len(rows) == 2
+    hidden = next(row for row in rows if row["stream_name"] == "hidden")
+    wof = next(row for row in rows if row["stream_name"] == "WofCompressedData")
+    assert hidden["classification"] == "unclassified_non_standard_ads"
+    assert hidden["review_priority"] == "high"
+    assert hidden["is_expected"] is False
+    assert wof["classification"] == "expected_windows_overlay_filter_compression"
+    assert wof["review_priority"] == "low"
+    assert wof["is_expected"] is True
+    assert report["summary"]["needs_review_count"] == 1
+
+
+def test_ntfs_security_descriptors_report_surfaces_secure_streams(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    db.insert_mft_entries(
+        [
+            {
+                "id": str(uuid.uuid4()),
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "output-1",
+                "tool_name": "MFTECmd",
+                "source_csv": "mft.csv",
+                "row_number": 1,
+                "parent_path": ".",
+                "file_name": "$Secure:$SDS",
+                "file_size": "8192",
+                "is_ads": "True",
+                "modified_si": "2025-11-17T18:00:00Z",
+                "created_at": "2026-01-01T00:00:00Z",
+            },
+            {
+                "id": str(uuid.uuid4()),
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "output-1",
+                "tool_name": "MFTECmd",
+                "source_csv": "mft.csv",
+                "row_number": 2,
+                "parent_path": "C:\\Users\\Maya",
+                "file_name": "note.txt:hidden",
+                "file_size": "128",
+                "is_ads": "True",
+                "modified_si": "2025-11-17T19:00:00Z",
+                "created_at": "2026-01-01T00:00:00Z",
+            },
+        ]
+    )
+
+    report = ntfs_security_descriptors_report(db, case.id)
+
+    assert report["summary"]["result_count"] == 1
+    assert report["security_descriptor_streams"][0]["stream_name"] == "$SDS"
+    assert report["security_descriptor_streams"][0]["parse_status"] == "presence_and_metadata_only"
 
 
 def test_report_specs_load_and_run_duckdb_sql(tmp_path, monkeypatch):

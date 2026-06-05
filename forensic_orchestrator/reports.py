@@ -31,6 +31,7 @@ from .storage_policy import CONTENT_HEAVY_TABLES, storage_policy_items
 from .timestamps import normalize_timestamp, parse_timestamp
 from .timeline import timeline_events_from_rows
 from .tools.memory_strings import assess_hiberfil_source, memory_artifact_type as _classify_memory_artifact_type
+from .tools.registry_artifacts import mountpoints2_network_path_from_key
 from .tools.usb_partition import usb_rows_from_partition_diagnostic_event
 from .tools.usb_summary import enrich_usb_storage_device_volume_serials
 from .usn_rules import load_usn_rules, match_usn_rules
@@ -23381,24 +23382,210 @@ def memory_support_files_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def structured_memory_report(
+    db: Database,
+    case_id: str,
+    *,
+    category: str | None = None,
+    process: str | None = None,
+    limit: int = 100,
+) -> dict[str, Any]:
+    db.get_case(case_id)
+    filters = ["case_id = ?"]
+    params: list[Any] = [case_id]
+    if category:
+        filters.append("category = ?")
+        params.append(category)
+    if process:
+        filters.append("(process_name LIKE ? OR command_line LIKE ? OR pid = ?)")
+        params.extend([f"%{process}%", f"%{process}%", process])
+    where = " AND ".join(filters)
+    rows = _query_report_rows(
+        db,
+        case_id,
+        "structured_memory_records",
+        f"""
+        SELECT *
+        FROM structured_memory_records
+        WHERE {where}
+        ORDER BY analysis_engine, plugin, row_number
+        LIMIT ?
+        """,
+        (*params, limit),
+    )
+    counts = _query_report_rows(
+        db,
+        case_id,
+        "structured_memory_records",
+        f"""
+        SELECT analysis_engine, plugin, category, COUNT(*) AS count
+        FROM structured_memory_records
+        WHERE {where}
+        GROUP BY analysis_engine, plugin, category
+        ORDER BY analysis_engine, plugin, category
+        """,
+        tuple(params),
+    )
+    attempts = _structured_memory_activity_rows(db, case_id)
+    return {
+        "case_id": case_id,
+        "summary": {
+            "result_count": len(rows),
+            "limit": limit,
+            "limited": len(rows) >= limit,
+            "total_record_count": sum(int(row.get("count") or 0) for row in counts),
+            "attempt_count": len(attempts),
+            "category_counts": _count_by_key(rows, "category"),
+            "engine_counts": _count_by_key(rows, "analysis_engine"),
+            "suspicious_count": sum(1 for row in rows if str(row.get("suspicious") or "").lower() == "true"),
+            "architecture_limitations": _structured_memory_limitations(attempts),
+            "filters": {"category": category or "", "process": process or ""},
+        },
+        "counts": counts,
+        "attempts": attempts,
+        "records": rows,
+        "caveats": [
+            "Structured memory rows are parsed summaries of Volatility or MemProcFS output; preserve raw output files for detailed validation.",
+            "Not every plugin has event timestamps. Process, network, file-object, and handle rows are primarily state-at-capture evidence.",
+            "Report output may be limited. Increase --limit or query a category/process-specific view for the full record set.",
+        ],
+    }
+
+
+def structured_memory_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    lines = [
+        "# Structured Memory Analysis",
+        "",
+        f"Case: `{report.get('case_id') or ''}`",
+        "",
+        "## Summary",
+        "",
+        f"- Records shown: `{summary.get('result_count', 0)}`",
+        f"- Total matching records: `{summary.get('total_record_count', 0)}`",
+        f"- Run attempts: `{summary.get('attempt_count', 0)}`",
+        f"- Limited: `{summary.get('limited', False)}`",
+        f"- Suspicious rows shown: `{summary.get('suspicious_count', 0)}`",
+        "",
+        "## Plugin Counts",
+        "",
+    ]
+    limitations = summary.get("architecture_limitations") if isinstance(summary.get("architecture_limitations"), list) else []
+    if limitations:
+        lines.extend(["## Limitations", ""])
+        for limitation in limitations:
+            lines.append(f"- {limitation}")
+        lines.append("")
+    for row in report.get("counts") or []:
+        lines.append(
+            f"- `{row.get('analysis_engine') or ''}` `{row.get('plugin') or ''}` "
+            f"`{row.get('category') or ''}` count `{row.get('count') or 0}`"
+        )
+    lines.extend(["", "## Run Attempts", ""])
+    attempts = report.get("attempts") if isinstance(report.get("attempts"), list) else []
+    if not attempts:
+        lines.append("- No structured memory run attempts were recorded.")
+    for attempt in attempts[:25]:
+        lines.append(
+            f"- `{attempt.get('created_at') or ''}` source `{attempt.get('source_artifact_type') or ''}` "
+            f"imported `{attempt.get('imported_rows') or 0}` output `{attempt.get('output') or ''}`"
+        )
+        for run in attempt.get("runs") or []:
+            if not isinstance(run, dict):
+                continue
+            lines.append(
+                f"  - `{run.get('engine') or ''}` `{run.get('plugin') or ''}` "
+                f"status `{run.get('status') or ''}` records `{run.get('record_count') or 0}`"
+            )
+            if run.get("detected_os") or run.get("detected_architecture"):
+                lines.append(f"    - detected: `{run.get('detected_os') or run.get('detected_architecture')}`")
+            if run.get("limitation"):
+                lines.append(f"    - limitation: {run.get('limitation')}")
+    lines.extend(["", "## Records", ""])
+    records = report.get("records") if isinstance(report.get("records"), list) else []
+    if not records:
+        lines.append("- No structured memory records matched.")
+    for row in records[:50]:
+        lines.append(
+            f"- `{row.get('analysis_engine') or ''}` `{row.get('category') or ''}` "
+            f"pid `{row.get('pid') or ''}` process `{row.get('process_name') or ''}` "
+            f"{row.get('summary') or row.get('path') or row.get('object_name') or ''}"
+        )
+    lines.extend(["", "## Caveats", ""])
+    for caveat in report.get("caveats") or []:
+        lines.append(f"- {caveat}")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _structured_memory_activity_rows(db: Database, case_id: str) -> list[dict[str, Any]]:
+    rows = db.conn.execute(
+        """
+        SELECT created_at, level, event, message, details_json
+        FROM activity_log
+        WHERE case_id = ?
+          AND event = 'memory.structured_analyzed'
+        ORDER BY created_at DESC
+        LIMIT 50
+        """,
+        (case_id,),
+    ).fetchall()
+    output: list[dict[str, Any]] = []
+    for row in rows:
+        details = _json_details(row["details_json"])
+        output.append(
+            {
+                "created_at": row["created_at"],
+                "level": row["level"],
+                "event": row["event"],
+                "message": row["message"],
+                "source_path": details.get("source_path"),
+                "source_artifact_type": details.get("source_artifact_type"),
+                "output": details.get("output"),
+                "imported_rows": details.get("imported_rows"),
+                "runs": details.get("runs") if isinstance(details.get("runs"), list) else [],
+            }
+        )
+    return output
+
+
+def _structured_memory_limitations(attempts: list[dict[str, Any]]) -> list[str]:
+    values: list[str] = []
+    seen: set[str] = set()
+    for attempt in attempts:
+        for run in attempt.get("runs") or []:
+            if not isinstance(run, dict):
+                continue
+            value = str(run.get("limitation") or "").strip()
+            if value and value not in seen:
+                seen.add(value)
+                values.append(value)
+    return values
+
+
 def memory_analysis_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str, Any]:
     db.get_case(case_id)
     artifacts = memory_artifacts_report(db, case_id, limit=max(limit, 1000))
+    support_files = memory_support_files_report(db, case_id, limit=max(limit, 1000))
+    structured_memory = structured_memory_report(db, case_id, limit=max(limit, 1000))
     string_hits = memory_string_hits_report(db, case_id, limit=limit)
     search_status = _windows_search_parser_status(db, case_id)
-    workflow = _memory_processing_workflow(case_id, artifacts.get("artifacts") or [])
+    workflow = _memory_processing_workflow(case_id, (artifacts.get("artifacts") or []) + (support_files.get("support_files") or []))
     useful_hits = _memory_useful_hits(string_hits.get("hits") or [], limit=limit)
     search_assessment = _memory_windows_search_assessment(search_status, string_hits)
     findings = _memory_analysis_findings(artifacts, string_hits, search_assessment)
+    hiberfil_structured = _hiberfil_structured_analysis_status(support_files.get("support_files") or artifacts.get("artifacts") or [])
     return {
         "case_id": case_id,
         "summary": {
             "memory_artifact_count": (artifacts.get("summary") or {}).get("artifact_count", 0),
             "hiberfil_present": (artifacts.get("summary") or {}).get("hiberfil_present", False),
+            "hiberfil_structured_status": hiberfil_structured.get("status"),
             "pagefile_present": (artifacts.get("summary") or {}).get("pagefile_present", False),
             "swapfile_present": (artifacts.get("summary") or {}).get("swapfile_present", False),
             "crash_dump_present": (artifacts.get("summary") or {}).get("crash_dump_present", False),
             "memory_string_hit_count": (string_hits.get("summary") or {}).get("hit_count", 0),
+            "structured_memory_record_count": (structured_memory.get("summary") or {}).get("total_record_count", 0),
+            "structured_memory_attempt_count": (structured_memory.get("summary") or {}).get("attempt_count", 0),
             "useful_memory_hit_count": len(useful_hits),
             "windows_search_status": search_status.get("summary_status"),
             "windows_search_memory_result": search_assessment.get("result"),
@@ -23407,7 +23594,11 @@ def memory_analysis_report(db: Database, case_id: str, *, limit: int = 100) -> d
         },
         "tool_availability": _memory_tool_availability(),
         "workflow": workflow,
+        "hiberfil_structured_analysis": hiberfil_structured,
         "artifacts": (artifacts.get("artifacts") or [])[:limit],
+        "memory_support_summary": support_files.get("summary") or {},
+        "structured_memory_summary": structured_memory.get("summary") or {},
+        "structured_memory_counts": structured_memory.get("counts") or [],
         "memory_string_summary": string_hits.get("summary") or {},
         "useful_hits": useful_hits,
         "windows_search_assessment": search_assessment,
@@ -23422,6 +23613,49 @@ def memory_analysis_report(db: Database, case_id: str, *, limit: int = 100) -> d
     }
 
 
+def _hiberfil_structured_analysis_status(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    hiberfils = [row for row in rows if str(row.get("artifact_type") or "").casefold() == "hiberfil"]
+    if not hiberfils:
+        return {
+            "status": "not_present",
+            "ready_for_structured_memory_analysis": False,
+            "summary": "No hiberfil.sys artifact was inventoried for this case.",
+            "caveat": "",
+        }
+    decompressed = [row for row in hiberfils if str(row.get("decompress_status") or "").casefold() == "decompressed" or row.get("decompressed_path")]
+    scanned = [row for row in hiberfils if row.get("processed_status") == "processed" or row.get("scan_status")]
+    failed = [row for row in hiberfils if row.get("decompress_status") and str(row.get("decompress_status")).casefold() not in {"decompressed", "not_applicable"}]
+    if decompressed:
+        return {
+            "status": "decompressed_ready",
+            "ready_for_structured_memory_analysis": True,
+            "summary": "At least one hiberfil source has decompressed output recorded and can be treated as the best available structured-memory candidate.",
+            "decompressed_paths": [row.get("decompressed_path") or row.get("scanned_path") for row in decompressed if row.get("decompressed_path") or row.get("scanned_path")],
+            "caveat": "Run Volatility/MemProcFS validation where supported; decompressed hiberfil output is not always equivalent to a full live-memory capture.",
+        }
+    if scanned:
+        return {
+            "status": "scanned_without_structured_decompression",
+            "ready_for_structured_memory_analysis": False,
+            "summary": "Hiberfil was scanned for strings or leads, but no decompressed structured-memory output is recorded.",
+            "caveat": "String scanning can produce leads but should not be reported as full hiberfil memory analysis.",
+        }
+    if failed:
+        return {
+            "status": "decompression_failed",
+            "ready_for_structured_memory_analysis": False,
+            "summary": "Hiberfil decompression was attempted but did not produce structured-memory output.",
+            "errors": [str(row.get("decompress_error") or "")[:500] for row in failed if row.get("decompress_error")],
+            "caveat": "This is an expected recoverable condition; reports should record the caveat and continue with other artifacts.",
+        }
+    return {
+        "status": "present_not_processed",
+        "ready_for_structured_memory_analysis": False,
+        "summary": "Hiberfil is present but no hiberfil processing result is recorded.",
+        "caveat": "Run the memory profile if hibernation-time process/network/context analysis is in scope.",
+    }
+
+
 def memory_analysis_markdown(report: dict[str, Any]) -> str:
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
     lines = [
@@ -23433,7 +23667,10 @@ def memory_analysis_markdown(report: dict[str, Any]) -> str:
         "",
         f"- Memory artifacts: `{summary.get('memory_artifact_count', 0)}`",
         f"- Hiberfil/pagefile/swapfile/crash present: `{summary.get('hiberfil_present', False)}` / `{summary.get('pagefile_present', False)}` / `{summary.get('swapfile_present', False)}` / `{summary.get('crash_dump_present', False)}`",
+        f"- Hiberfil structured status: `{summary.get('hiberfil_structured_status') or ''}`",
         f"- Memory string hits: `{summary.get('memory_string_hit_count', 0)}`",
+        f"- Structured memory records: `{summary.get('structured_memory_record_count', 0)}`",
+        f"- Structured memory attempts: `{summary.get('structured_memory_attempt_count', 0)}`",
         f"- Useful memory hits: `{summary.get('useful_memory_hit_count', 0)}`",
         f"- Windows Search status: `{summary.get('windows_search_status') or ''}`",
         f"- Windows Search memory result: `{summary.get('windows_search_memory_result') or ''}`",
@@ -23451,6 +23688,23 @@ def memory_analysis_markdown(report: dict[str, Any]) -> str:
             lines.append(f"  - command: `{command}`")
         if step.get("output"):
             lines.append(f"  - output: {step.get('output')}")
+    structured = report.get("hiberfil_structured_analysis") if isinstance(report.get("hiberfil_structured_analysis"), dict) else {}
+    lines.extend(["", "## Hiberfil Structured Analysis", ""])
+    lines.append(f"- Status: `{structured.get('status') or ''}`")
+    lines.append(f"- Ready: `{structured.get('ready_for_structured_memory_analysis', False)}`")
+    if structured.get("summary"):
+        lines.append(f"- Summary: {structured.get('summary')}")
+    if structured.get("caveat"):
+        lines.append(f"- Caveat: {structured.get('caveat')}")
+    lines.extend(["", "## Structured Tool Output", ""])
+    structured_summary = report.get("structured_memory_summary") if isinstance(report.get("structured_memory_summary"), dict) else {}
+    lines.append(f"- Total records: `{structured_summary.get('total_record_count', 0)}`")
+    lines.append(f"- Limited: `{structured_summary.get('limited', False)}`")
+    for row in report.get("structured_memory_counts") or []:
+        lines.append(
+            f"- `{row.get('analysis_engine') or ''}` `{row.get('plugin') or ''}` "
+            f"`{row.get('category') or ''}` count `{row.get('count') or 0}`"
+        )
     lines.extend(["", "## Findings", ""])
     findings = report.get("findings") if isinstance(report.get("findings"), list) else []
     if not findings:
@@ -24351,7 +24605,21 @@ def _memory_tool_availability() -> list[dict[str, str]]:
     ]
     rows = []
     for label, candidates in tools:
-        path = next((shutil.which(candidate) for candidate in candidates if shutil.which(candidate)), None)
+        path = None
+        if label == "memprocfs" and os.environ.get("MEMPROCFS_BIN"):
+            candidate = Path(os.environ["MEMPROCFS_BIN"]).expanduser()
+            if candidate.exists():
+                path = str(candidate)
+        if label == "volatility3" and os.environ.get("VOLATILITY3_BIN"):
+            candidate = Path(os.environ["VOLATILITY3_BIN"]).expanduser()
+            if candidate.exists():
+                path = str(candidate)
+        path = path or next((shutil.which(candidate) for candidate in candidates if shutil.which(candidate)), None)
+        if label == "memprocfs" and not path:
+            for candidate in _tool_root_candidates("MemProcFS/memprocfs", "memprocfs/memprocfs"):
+                if Path(candidate).exists():
+                    path = candidate
+                    break
         if label == "bstrings" and not path:
             for candidate in _tool_root_candidates(
                 "bstrings/bstrings.dll",
@@ -24392,13 +24660,34 @@ def _tool_root_candidates(*relative_paths: str) -> list[str]:
 
 
 def _memory_processing_workflow(case_id: str, artifacts: list[dict[str, Any]]) -> list[dict[str, str]]:
-    paths = [str(row.get("actual_path") or row.get("path") or "") for row in artifacts if row.get("actual_path") or row.get("path")]
-    existing_paths = [path for path in paths if Path(path).exists()]
-    candidate_paths = existing_paths or paths
-    primary = next(
-        (path for path in candidate_paths if not path.lower().endswith(("pagefile.sys", "swapfile.sys"))),
-        candidate_paths[0] if candidate_paths else "MEMORY_OR_HIBERFIL_PATH",
+    artifact_paths = [
+        {
+            "artifact_type": str(row.get("artifact_type") or "").lower(),
+            "path": str(row.get("actual_path") or row.get("path") or ""),
+            "decompressed_path": str(row.get("decompressed_path") or row.get("scanned_path") or ""),
+        }
+        for row in artifacts
+        if row.get("actual_path") or row.get("path")
+    ]
+
+    def candidates_for(kind: str) -> list[str]:
+        values: list[str] = []
+        for row in artifact_paths:
+            if row["artifact_type"] != kind:
+                continue
+            if row.get("decompressed_path"):
+                values.append(row["decompressed_path"])
+            if row.get("path"):
+                values.append(row["path"])
+        return values
+
+    ordered_candidates = (
+        candidates_for("full_memory_dump")
+        + candidates_for("hiberfil")
+        + candidates_for("crash_dump")
+        + [row["path"] for row in artifact_paths if not row["path"].lower().endswith(("pagefile.sys", "swapfile.sys"))]
     )
+    primary = next((path for path in ordered_candidates if path and Path(path).exists()), next((path for path in ordered_candidates if path), "MEMORY_OR_HIBERFIL_PATH"))
     workflow = [
         {
             "step": "inventory",
@@ -24443,7 +24732,7 @@ def _memory_processing_workflow(case_id: str, artifacts: list[dict[str, Any]]) -
             "output": "Investigator-facing memory processing and analysis report.",
         },
     ]
-    if not paths:
+    if not artifact_paths:
         workflow.insert(
             1,
             {
@@ -33149,6 +33438,744 @@ def _table_count(db: Database, table: str, case_id: str) -> int:
     return int((rows[0] if rows else {}).get("count") or 0)
 
 
+EDGE_PACKAGE_RECORD_TYPES = {
+    "cryptnet_url_cache",
+    "eventtranscript_event",
+    "eventtranscript_sqlite_inventory",
+    "hosts_file",
+    "hosts_mapping",
+    "legacy_thumbs_db",
+    "scheduled_task_xml",
+    "sticky_note",
+    "sticky_notes_sqlite_inventory",
+    "swiftkey_input_file",
+    "swiftkey_input_fragment",
+    "tokenbroker_account",
+    "tokenbroker_cache_file",
+    "windows_credential_file",
+    "windows_update_datastore",
+    "windows_vault_file",
+    "wsl_ext4_vhdx",
+    "wsl_shell_history",
+}
+
+EDGE_REGISTRY_ARTIFACTS = {
+    "bluetooth_paired_devices",
+    "connected_networks",
+    "credential_manager_settings",
+    "installed_applications",
+    "mountpoints2",
+    "outbound_rdp_history",
+    "swiftkey_input_settings",
+    "usb_mountpoints2",
+    "windows_update",
+}
+
+
+WELL_KNOWN_ADS_STREAMS = {
+    "zone.identifier",
+    "encryptable",
+    "summaryinformation",
+    "documentsummaryinformation",
+    "com.dropbox.attributes",
+}
+ADS_PRIORITY_ORDER = {"high": 0, "medium": 1, "low": 2}
+
+
+def _ads_stream_name(path_or_name: object) -> str:
+    text = str(path_or_name or "")
+    if ":" not in text:
+        return ""
+    return text.rsplit(":", 1)[-1].strip()
+
+
+def _ads_stream_classification(stream: str, path: str) -> dict[str, Any]:
+    stream_lower = (stream or "").casefold()
+    path_lower = (path or "").casefold()
+    if not stream:
+        return {
+            "classification": "ads_stream_name_unknown",
+            "review_priority": "medium",
+            "is_expected": False,
+            "classification_note": "ADS row did not contain a parseable stream name.",
+        }
+    if re.fullmatch(r"\$\{[0-9a-f-]{36}\}\.metadata", stream_lower):
+        return {
+            "classification": "expected_cloud_files_metadata",
+            "review_priority": "low",
+            "is_expected": True,
+            "classification_note": "Cloud Files/OneDrive metadata stream. Useful for cloud context but usually not hidden user content.",
+        }
+    if re.fullmatch(r"\$\{[0-9a-f-]{36}\}\.syncrootidentity", stream_lower):
+        return {
+            "classification": "expected_cloud_sync_root_identity",
+            "review_priority": "low",
+            "is_expected": True,
+            "classification_note": "Cloud Files sync-root identity stream. Usually expected on OneDrive or similar sync roots.",
+        }
+    if stream_lower == "wofcompresseddata":
+        return {
+            "classification": "expected_windows_overlay_filter_compression",
+            "review_priority": "low",
+            "is_expected": True,
+            "classification_note": "Windows Overlay Filter compressed data stream.",
+        }
+    if stream_lower == "streamedfilestate":
+        return {
+            "classification": "expected_streamed_file_state",
+            "review_priority": "low",
+            "is_expected": True,
+            "classification_note": "Windows streamed-file state metadata, commonly seen on temporary files.",
+        }
+    if stream_lower == "smartscreen":
+        return {
+            "classification": "expected_smartscreen_metadata",
+            "review_priority": "low",
+            "is_expected": True,
+            "classification_note": "Windows SmartScreen metadata stream.",
+        }
+    if stream_lower.startswith("cm_") and path_lower.startswith("./windows:"):
+        return {
+            "classification": "expected_windows_content_metadata",
+            "review_priority": "low",
+            "is_expected": True,
+            "classification_note": "Windows content metadata stream on a system path.",
+        }
+    if stream_lower.startswith("cm_") and "codemeter" in path_lower:
+        return {
+            "classification": "expected_codemeter_license_metadata",
+            "review_priority": "low",
+            "is_expected": True,
+            "classification_note": "CodeMeter licensing metadata stream.",
+        }
+    if stream_lower in {"$sds", "$sii", "$sdh", "$j", "$max", "$info", "$bad", "$bitmap", "$logfile", "$corrupt", "$verify", "$config", "$srat", "$t"}:
+        return {
+            "classification": "expected_ntfs_metadata_stream",
+            "review_priority": "low",
+            "is_expected": True,
+            "classification_note": "NTFS/system metadata stream. Investigate only when the parent path or timestamps are independently relevant.",
+        }
+    if stream_lower.startswith("$"):
+        return {
+            "classification": "system_named_ads",
+            "review_priority": "medium",
+            "is_expected": False,
+            "classification_note": "Dollar-prefixed stream not in the known expected list.",
+        }
+    return {
+        "classification": "unclassified_non_standard_ads",
+        "review_priority": "high",
+        "is_expected": False,
+        "classification_note": "Stream is not in the expected Cloud Files, Windows compression, SmartScreen, or NTFS metadata families.",
+    }
+
+
+def non_standard_ads_report(db: Database, case_id: str, *, limit: int = 250) -> dict[str, Any]:
+    """Surface alternate data streams beyond common Zone/System ADS."""
+    limit = max(1, min(int(limit), 50_000))
+    rows: list[dict[str, Any]] = []
+    for table in ("mft_entries",):
+        if not _report_table_columns(db, case_id, table):
+            continue
+        selected = _query_report_rows(
+            db,
+            case_id,
+            table,
+            f"""
+            SELECT id, case_id, computer_id, image_id,
+                   '{table}' AS source_table,
+                   parent_path,
+                   file_name,
+                   file_size,
+                   is_ads,
+                   has_ads,
+                   created_si,
+                   modified_si,
+                   accessed_si,
+                   record_changed_si
+            FROM {table}
+            WHERE case_id = ?
+              AND LOWER(COALESCE(is_ads, '')) IN ('true', '1', 'yes')
+            ORDER BY COALESCE(modified_si, record_changed_si, accessed_si, created_si) DESC
+            LIMIT ?
+            """,
+            (case_id, limit * 3),
+        )
+        rows.extend(dict(row) for row in selected)
+    output: list[dict[str, Any]] = []
+    for row in rows:
+        path = _join_path(row.get("parent_path"), row.get("file_name"))
+        stream = _ads_stream_name(path or row.get("file_name"))
+        if stream.casefold() in WELL_KNOWN_ADS_STREAMS:
+            continue
+        item = dict(row)
+        item["timestamp_utc"] = row.get("modified_si") or row.get("record_changed_si") or row.get("accessed_si") or row.get("created_si")
+        item["path"] = path
+        item["stream_name"] = stream
+        item.update(_ads_stream_classification(stream, path))
+        output.append(item)
+    output.sort(key=lambda item: str(item.get("timestamp_utc") or ""), reverse=True)
+    output.sort(key=lambda item: ADS_PRIORITY_ORDER.get(str(item.get("review_priority") or ""), 3))
+    priority_counts: dict[str, int] = {}
+    classification_counts: dict[str, int] = {}
+    expected_count = 0
+    for item in output:
+        priority = str(item.get("review_priority") or "unknown")
+        classification = str(item.get("classification") or "unknown")
+        priority_counts[priority] = priority_counts.get(priority, 0) + 1
+        classification_counts[classification] = classification_counts.get(classification, 0) + 1
+        if item.get("is_expected"):
+            expected_count += 1
+    total = len(output)
+    output = output[:limit]
+    limited = total > limit
+    return {
+        "case_id": case_id,
+        "summary": {
+            "result_count": len(output),
+            "total_available": total,
+            "limit": limit,
+            "limited": limited,
+            "expected_count": expected_count,
+            "needs_review_count": total - expected_count,
+            "priority_counts": priority_counts,
+            "classification_counts": classification_counts,
+        },
+        "limited": limited,
+        "limit_warning": (
+            "Returned rows reached the active non-standard ADS limit; request a higher limit or export CSV/JSON for the full set."
+            if limited
+            else ""
+        ),
+        "alternate_data_streams": output,
+    }
+
+
+NTFS_SECURITY_DESCRIPTOR_STREAMS = {"$sds", "$sii", "$sdh"}
+
+
+def ntfs_security_descriptors_report(db: Database, case_id: str, *, limit: int = 250) -> dict[str, Any]:
+    """Surface NTFS $Secure security descriptor stream presence from MFT ADS rows."""
+    limit = max(1, min(int(limit), 50_000))
+    rows: list[dict[str, Any]] = []
+    if _report_table_columns(db, case_id, "mft_entries"):
+        selected = _query_report_rows(
+            db,
+            case_id,
+            "mft_entries",
+            """
+            SELECT id, case_id, computer_id, image_id,
+                   parent_path,
+                   file_name,
+                   file_size,
+                   is_ads,
+                   created_si,
+                   modified_si,
+                   accessed_si,
+                   record_changed_si
+            FROM mft_entries
+            WHERE case_id = ?
+              AND LOWER(COALESCE(is_ads, '')) IN ('true', '1', 'yes')
+            ORDER BY COALESCE(modified_si, record_changed_si, accessed_si, created_si) DESC
+            LIMIT ?
+            """,
+            (case_id, max(limit * 20, 1000)),
+        )
+        for row in selected:
+            path = _join_path(row.get("parent_path"), row.get("file_name"))
+            stream = _ads_stream_name(path or row.get("file_name"))
+            if stream.casefold() not in NTFS_SECURITY_DESCRIPTOR_STREAMS:
+                continue
+            item = dict(row)
+            item["source_table"] = "mft_entries"
+            item["timestamp_utc"] = row.get("modified_si") or row.get("record_changed_si") or row.get("accessed_si") or row.get("created_si")
+            item["path"] = path
+            item["stream_name"] = stream
+            item["parse_status"] = "presence_and_metadata_only"
+            item["forensic_value"] = (
+                "$Secure stream presence confirms NTFS security descriptor metadata is present. "
+                "Structured ACL interpretation requires dedicated $Secure:$SDS parsing or MFTECmd security descriptor output."
+            )
+            rows.append(item)
+            if len(rows) >= limit:
+                break
+    limited = len(rows) >= limit
+    return {
+        "case_id": case_id,
+        "summary": {
+            "result_count": len(rows),
+            "limit": limit,
+            "limited": limited,
+            "streams": _count_by_key(rows, "stream_name"),
+            "parse_status": "presence_and_metadata_only",
+        },
+        "limited": limited,
+        "limit_warning": (
+            "Returned rows reached the active ntfs-security-descriptors limit; request a higher limit or export CSV/JSON for the full set."
+            if limited
+            else ""
+        ),
+        "security_descriptor_streams": rows,
+        "caveats": [
+            "$Secure:$SDS records security descriptor metadata, but this report currently inventories stream presence rather than decoding ACL contents.",
+            "Use MFTECmd security descriptor output or a future structured SDS parser when file/folder permission-change analysis is in scope.",
+        ],
+    }
+
+
+REMOTE_ACCESS_TOOL_NAMES = {
+    "AnyDesk",
+    "TeamViewer",
+    "LogMeIn",
+    "GoTo",
+    "ConnectWise Control",
+    "BeyondTrust",
+    "Splashtop",
+    "RustDesk",
+    "Chrome Remote Desktop",
+    "RemotePC",
+    "Dameware",
+    "Atera",
+    "NinjaOne",
+    "MeshCentral",
+    "DWAgent",
+    "Parsec",
+    "RealVNC",
+    "TightVNC",
+    "UltraVNC",
+}
+
+
+def _application_indicator_for_text(text: str) -> str | None:
+    lowered = (text or "").lower()
+    for indicator in APPLICATION_INDICATORS:
+        application = str(indicator.get("application") or "")
+        if application not in REMOTE_ACCESS_TOOL_NAMES:
+            continue
+        if any(str(token).lower() in lowered for token in indicator.get("tokens") or ()):
+            return application
+    return None
+
+
+def _remote_access_candidate_application_for_path(path: str) -> str | None:
+    normalized = re.sub(r"[\\/]+", "/", (path or "").lower())
+    if not normalized:
+        return None
+    if normalized.startswith("/windows/") or "/winsxs/" in normalized or "/officefilecache/" in normalized:
+        return None
+    strong_tokens = {
+        "AnyDesk": ("anydesk",),
+        "TeamViewer": ("teamviewer", "tv_w32.exe", "tv_x64.exe"),
+        "LogMeIn": ("logmein", "lmi rescue"),
+        "GoTo": ("gotoassist", "goto resolve", "g2ax_"),
+        "ConnectWise Control": ("screenconnect", "connectwise control"),
+        "BeyondTrust": ("bomgar", "beyondtrust"),
+        "Splashtop": ("splashtop",),
+        "RustDesk": ("rustdesk",),
+        "Chrome Remote Desktop": ("chrome remote desktop", "chromoting"),
+        "RemotePC": ("remotepc",),
+        "Dameware": ("dameware",),
+        "Atera": ("atera",),
+        "NinjaOne": ("ninjarmm", "ninjaone"),
+        "MeshCentral": ("meshcentral",),
+        "DWAgent": ("dwagent",),
+        "Parsec": ("parsec",),
+        "RealVNC": ("realvnc", "vnc viewer", "vnc server"),
+        "TightVNC": ("tightvnc",),
+        "UltraVNC": ("ultravnc",),
+    }
+    for application, tokens in strong_tokens.items():
+        for token in tokens:
+            token_lower = token.lower()
+            if f"/{token_lower}/" in normalized or normalized.endswith(f"/{token_lower}") or normalized.endswith(f"/{token_lower}.exe"):
+                return application
+            if " " in token_lower and token_lower in normalized:
+                return application
+    return None
+
+
+def remote_access_tool_logs_report(db: Database, case_id: str, *, limit: int = 250) -> dict[str, Any]:
+    """Surface collected remote-access application logs and candidate files."""
+    limit = max(1, min(int(limit), 50_000))
+    rows: list[dict[str, Any]] = []
+    if _report_table_columns(db, case_id, "messaging_records"):
+        placeholders = ", ".join("?" for _ in REMOTE_ACCESS_TOOL_NAMES)
+        rows.extend(
+            _query_report_rows(
+                db,
+                case_id,
+                "messaging_records",
+                f"""
+                SELECT id, case_id, computer_id, image_id,
+                       application,
+                       user_profile,
+                       artifact_type,
+                       source_path,
+                       store_path,
+                       record_key,
+                       record_type,
+                       url,
+                       host,
+                       email,
+                       timestamp_utc,
+                       message_text,
+                       raw_text,
+                       'messaging_records' AS source_table
+                FROM messaging_records
+                WHERE case_id = ?
+                  AND application IN ({placeholders})
+                ORDER BY timestamp_utc DESC, application, source_path
+                LIMIT ?
+                """,
+                [case_id, *sorted(REMOTE_ACCESS_TOOL_NAMES), limit],
+            )
+        )
+    if len(rows) < limit and _report_table_columns(db, case_id, "mft_entries"):
+        app_patterns = [(app["application"], token) for app in APPLICATION_INDICATORS if app["application"] in REMOTE_ACCESS_TOOL_NAMES for token in app["tokens"]]
+        pattern_sql = " OR ".join("LOWER(COALESCE(parent_path, '') || '/' || COALESCE(file_name, '')) LIKE ?" for _ in app_patterns)
+        if pattern_sql:
+            scan_limit = max((limit - len(rows)) * 20, 5000)
+            for row in _query_report_rows(
+                db,
+                case_id,
+                "mft_entries",
+                f"""
+                SELECT id, case_id, computer_id, image_id,
+                       parent_path,
+                       file_name,
+                       file_size,
+                       modified_si AS timestamp_utc,
+                       created_si,
+                       accessed_si,
+                       'mft_entries' AS source_table
+                FROM mft_entries
+                WHERE case_id = ?
+                  AND ({pattern_sql})
+                ORDER BY modified_si DESC
+                LIMIT ?
+                """,
+                [case_id, *[f"%{token.lower()}%" for _, token in app_patterns], scan_limit],
+            ):
+                item = dict(row)
+                path = _join_path(item.get("parent_path"), item.get("file_name"))
+                application = _remote_access_candidate_application_for_path(path)
+                if not application:
+                    continue
+                item["source_path"] = path
+                item["application"] = application
+                item["artifact_type"] = "candidate_file"
+                rows.append(item)
+                if len(rows) >= limit:
+                    break
+    rows = rows[:limit]
+    return {
+        "case_id": case_id,
+        "summary": {"result_count": len(rows), "limit": limit, "limited": len(rows) >= limit},
+        "limited": len(rows) >= limit,
+        "limit_warning": (
+            "Returned rows reached the active remote-access-tool-logs limit; request a higher limit or export CSV/JSON for the full set."
+            if len(rows) >= limit
+            else ""
+        ),
+        "remote_access_tool_logs": rows,
+    }
+
+
+def mapped_network_paths_report(db: Database, case_id: str, *, user: str | None = None, limit: int = 250) -> dict[str, Any]:
+    """Summarize MountPoints2 network share keys as UNC-style mapped paths."""
+    limit = max(1, min(int(limit), 50_000))
+    if not _report_table_columns(db, case_id, "registry_artifacts"):
+        return {
+            "case_id": case_id,
+            "summary": {"result_count": 0, "limit": limit, "limited": False},
+            "limit_warning": "",
+            "mapped_network_paths": [],
+        }
+
+    params: list[Any] = [case_id, "mountpoints2", "%/mountpoints2/##%"]
+    user_clause = ""
+    if user:
+        user_clause = " AND LOWER(COALESCE(user_profile, '')) = LOWER(?)"
+        params.append(user)
+
+    rows = _query_report_rows(
+        db,
+        case_id,
+        "registry_artifacts",
+        f"""
+        SELECT id, case_id, computer_id, image_id,
+               user_profile,
+               source_path,
+               key_path,
+               key_last_write_utc,
+               event_time_utc,
+               value_name,
+               value_type,
+               value_data,
+               display_name,
+               normalized_path,
+               notes
+        FROM registry_artifacts
+        WHERE case_id = ?
+          AND artifact = ?
+          AND LOWER(REPLACE(key_path, '\\\\', '/')) LIKE ?
+          {user_clause}
+        ORDER BY COALESCE(NULLIF(event_time_utc, ''), key_last_write_utc) DESC, key_path, value_name
+        LIMIT ?
+        """,
+        [*params, limit * 50],
+    )
+
+    grouped: dict[tuple[str, str, str, str, str], dict[str, Any]] = {}
+    for row in rows:
+        parsed = mountpoints2_network_path_from_key(str(row.get("key_path") or ""))
+        if not parsed:
+            continue
+        timestamp = str(row.get("event_time_utc") or row.get("key_last_write_utc") or "")
+        key = (
+            str(row.get("computer_id") or ""),
+            str(row.get("image_id") or ""),
+            str(row.get("user_profile") or ""),
+            parsed["mountpoints2_key"],
+            parsed["unc_path"].casefold(),
+        )
+        item = grouped.get(key)
+        if item is None:
+            item = {
+                "case_id": case_id,
+                "computer_id": row.get("computer_id"),
+                "image_id": row.get("image_id"),
+                "user_profile": row.get("user_profile"),
+                "timestamp_utc": timestamp or None,
+                "first_seen_utc": timestamp or None,
+                "last_seen_utc": timestamp or None,
+                "host": parsed["host"],
+                "share": parsed["share"],
+                "remote_path": parsed["remote_path"],
+                "unc_path": parsed["unc_path"],
+                "mountpoints2_key": parsed["mountpoints2_key"],
+                "source_path": row.get("source_path"),
+                "source_table": "registry_artifacts",
+                "row_count": 0,
+                "evidence_values": [],
+                "notes": "MountPoints2 network-share key decoded from ##host#share#path registry format.",
+            }
+            grouped[key] = item
+        item["row_count"] = int(item.get("row_count") or 0) + 1
+        if timestamp:
+            if not item.get("first_seen_utc") or timestamp < str(item["first_seen_utc"]):
+                item["first_seen_utc"] = timestamp
+            if not item.get("last_seen_utc") or timestamp > str(item["last_seen_utc"]):
+                item["last_seen_utc"] = timestamp
+                item["timestamp_utc"] = timestamp
+        evidence_values = item["evidence_values"]
+        if isinstance(evidence_values, list) and len(evidence_values) < 10:
+            value_name = str(row.get("value_name") or "").strip()
+            value_data = str(row.get("value_data") or row.get("display_name") or "").strip()
+            if value_name or value_data:
+                evidence_values.append(
+                    {
+                        "value_name": value_name,
+                        "value_type": row.get("value_type"),
+                        "value_data": value_data[:500],
+                    }
+                )
+
+    mapped_paths = sorted(
+        grouped.values(),
+        key=lambda item: str(item.get("last_seen_utc") or item.get("timestamp_utc") or ""),
+        reverse=True,
+    )
+    total_candidates = len(mapped_paths)
+    mapped_paths = mapped_paths[:limit]
+    limited = total_candidates > limit or len(rows) >= limit * 50
+    return {
+        "case_id": case_id,
+        "summary": {
+            "result_count": len(mapped_paths),
+            "limit": limit,
+            "limited": limited,
+            "raw_registry_rows_scanned": len(rows),
+        },
+        "limited": limited,
+        "limit_warning": (
+            "Returned rows reached the active mapped-network-paths limit; request a higher limit or export CSV/JSON for the full set."
+            if limited
+            else ""
+        ),
+        "mapped_network_paths": mapped_paths,
+    }
+
+
+def examiner_edge_artifacts_report(db: Database, case_id: str, *, limit: int = 250) -> dict[str, Any]:
+    """Surface high-value small artifacts that commonly produce examiner leads."""
+    limit = max(1, min(int(limit), 5000))
+    rows: list[dict[str, Any]] = []
+    counts: dict[str, int] = {}
+
+    if _report_table_columns(db, case_id, "package_artifacts"):
+        placeholders = ", ".join("?" for _ in EDGE_PACKAGE_RECORD_TYPES)
+        query_rows = _query_report_rows(
+            db,
+            case_id,
+            "package_artifacts",
+            f"""
+            SELECT id, case_id, computer_id, image_id,
+                   record_type AS artifact_type,
+                   user_profile,
+                   COALESCE(NULLIF(event_time_utc, ''), modified_utc) AS timestamp_utc,
+                   source_name,
+                   source_path,
+                   file_name,
+                   title,
+                   artifact_value,
+                   artifact_text,
+                   details_json,
+                   'package_artifacts' AS source_table
+            FROM package_artifacts
+            WHERE case_id = ?
+              AND record_type IN ({placeholders})
+            ORDER BY COALESCE(NULLIF(event_time_utc, ''), modified_utc) DESC, record_type, source_path
+            LIMIT ?
+            """,
+            [case_id, *sorted(EDGE_PACKAGE_RECORD_TYPES), limit],
+        )
+        for row in query_rows:
+            item = dict(row)
+            item["category"] = _edge_category(str(item.get("artifact_type") or ""))
+            item["summary"] = _edge_summary(item)
+            rows.append(item)
+            counts[item["category"]] = counts.get(item["category"], 0) + 1
+
+    if _report_table_columns(db, case_id, "telemetry_artifacts"):
+        query_rows = _query_report_rows(
+            db,
+            case_id,
+            "telemetry_artifacts",
+            """
+            SELECT id, case_id, computer_id, image_id,
+                   record_type AS artifact_type,
+                   user_profile,
+                   COALESCE(NULLIF(event_time_utc, ''), modified_utc) AS timestamp_utc,
+                   source_name,
+                   source_path,
+                   file_name,
+                   title,
+                   value_data AS artifact_value,
+                   artifact_text,
+                   details_json,
+                   'telemetry_artifacts' AS source_table
+            FROM telemetry_artifacts
+            WHERE case_id = ?
+              AND artifact_group = 'notifications'
+            ORDER BY COALESCE(NULLIF(event_time_utc, ''), modified_utc) DESC, record_type, source_path
+            LIMIT ?
+            """,
+            [case_id, limit],
+        )
+        for row in query_rows:
+            item = dict(row)
+            item["category"] = "notifications"
+            item["summary"] = _edge_summary(item)
+            rows.append(item)
+            counts["notifications"] = counts.get("notifications", 0) + 1
+
+    if _report_table_columns(db, case_id, "registry_artifacts"):
+        placeholders = ", ".join("?" for _ in EDGE_REGISTRY_ARTIFACTS)
+        query_rows = _query_report_rows(
+            db,
+            case_id,
+            "registry_artifacts",
+            f"""
+            SELECT id, case_id, computer_id, image_id,
+                   artifact AS artifact_type,
+                   user_profile,
+                   COALESCE(NULLIF(event_time_utc, ''), key_last_write_utc) AS timestamp_utc,
+                   category AS source_name,
+                   source_path,
+                   key_path AS file_name,
+                   display_name AS title,
+                   value_data AS artifact_value,
+                   notes AS artifact_text,
+                   value_name,
+                   value_type,
+                   'registry_artifacts' AS source_table
+            FROM registry_artifacts
+            WHERE case_id = ?
+              AND artifact IN ({placeholders})
+            ORDER BY COALESCE(NULLIF(event_time_utc, ''), key_last_write_utc) DESC, artifact, key_path
+            LIMIT ?
+            """,
+            [case_id, *sorted(EDGE_REGISTRY_ARTIFACTS), limit],
+        )
+        for row in query_rows:
+            item = dict(row)
+            item["category"] = _edge_category(str(item.get("artifact_type") or ""))
+            item["summary"] = _edge_summary(item)
+            rows.append(item)
+            counts[item["category"]] = counts.get(item["category"], 0) + 1
+
+    rows.sort(key=lambda row: str(row.get("timestamp_utc") or ""), reverse=True)
+    total_candidates = len(rows)
+    rows = rows[:limit]
+    limited = total_candidates > limit
+    return {
+        "case_id": case_id,
+        "summary": {
+            "result_count": len(rows),
+            "limit": limit,
+            "limited": limited,
+            "category_counts": counts,
+        },
+        "limited": limited,
+        "limit_warning": (
+            "Returned rows reached the active examiner-edge-artifacts limit; absence of additional rows is not evidence of absence."
+            if limited
+            else ""
+        ),
+        "items": rows,
+    }
+
+
+def _edge_category(artifact_type: str) -> str:
+    artifact = artifact_type.lower()
+    if "sticky" in artifact:
+        return "sticky_notes"
+    if "notification" in artifact:
+        return "notifications"
+    if "eventtranscript" in artifact:
+        return "diagnostic_telemetry"
+    if "tokenbroker" in artifact:
+        return "cloud_account_metadata"
+    if "thumbs_db" in artifact:
+        return "thumbnail_artifacts"
+    if "network" in artifact or "rdp" in artifact or "mountpoints" in artifact:
+        return "network_and_remote_access"
+    if "task" in artifact:
+        return "scheduled_tasks"
+    if "cryptnet" in artifact or artifact == "hosts_mapping" or artifact == "hosts_file":
+        return "network_resolution"
+    if "credential" in artifact or "vault" in artifact:
+        return "credential_metadata"
+    if "wsl" in artifact:
+        return "wsl"
+    if "windows_update" in artifact or artifact == "installed_applications":
+        return "software_inventory"
+    if "bluetooth" in artifact:
+        return "bluetooth"
+    if "swiftkey" in artifact:
+        return "typed_text_leads"
+    return "other"
+
+
+def _edge_summary(row: dict[str, Any]) -> str:
+    for key in ("title", "artifact_value", "artifact_text", "file_name", "source_path"):
+        value = str(row.get(key) or "").strip()
+        if value:
+            return re.sub(r"\s+", " ", value)[:500]
+    return str(row.get("artifact_type") or "")
+
+
 def _count(
     db: Database,
     table: str,
@@ -34861,8 +35888,6 @@ def _query_report_rows(
     sql: str,
     params: tuple[Any, ...] | list[Any],
 ) -> list[dict[str, Any]]:
-    if table in ANALYTICS_TABLES:
-        return _analytics_query_rows(db, table, sql, params)
     if _duckdb_table_available(db, case_id, table):
         db_path = _duckdb_path_for_case(db, case_id)
         conn, should_close = _duckdb_report_connection(db, case_id, db_path)
@@ -34873,6 +35898,8 @@ def _query_report_rows(
         finally:
             if should_close:
                 conn.close()
+    if table in ANALYTICS_TABLES:
+        return _analytics_query_rows(db, table, sql, params)
     rows = db.conn.execute(sql, params).fetchall()
     return [dict(row) for row in rows]
 

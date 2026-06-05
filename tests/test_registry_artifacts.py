@@ -46,6 +46,38 @@ def test_runmru_uses_mrulist_to_assign_event_time(monkeypatch, tmp_path):
     assert by_value["a"]["event_time_utc"] is None
 
 
+def test_mountpoints2_network_share_key_sets_normalized_unc_path(monkeypatch, tmp_path):
+    hive = tmp_path / "NTUSER.DAT"
+    hive.write_bytes(b"regf-test")
+    records = {
+        1: RegistryKeyRecord(1, "ROOT", 0xFFFFFFFF, {}),
+        2: RegistryKeyRecord(2, "Software", 1, {}),
+        3: RegistryKeyRecord(3, "Microsoft", 2, {}),
+        4: RegistryKeyRecord(4, "Windows", 3, {}),
+        5: RegistryKeyRecord(5, "CurrentVersion", 4, {}),
+        6: RegistryKeyRecord(6, "Explorer", 5, {}),
+        7: RegistryKeyRecord(7, "MountPoints2", 6, {}),
+        8: RegistryKeyRecord(
+            8,
+            "##fileserver#legal#case123",
+            7,
+            {"MUIVerb": 1},
+            {"MUIVerb": "@shell32.dll,-8507\x00".encode("utf-16-le")},
+            "2025-11-17T15:00:00Z",
+        ),
+    }
+    monkeypatch.setattr(
+        "forensic_orchestrator.tools.registry_artifacts.scan_registry_keys",
+        lambda _data: records,
+    )
+
+    rows = [row for row in parse_registry_artifacts(hive) if row["artifact"] == "mountpoints2"]
+
+    assert rows
+    assert rows[0]["normalized_path"] == "\\\\fileserver\\legal\\case123"
+    assert rows[0]["event_time_utc"] == "2025-11-17T15:00:00Z"
+
+
 def test_typedpaths_url1_gets_key_last_write_time(monkeypatch, tmp_path):
     hive = tmp_path / "NTUSER.DAT"
     hive.write_bytes(b"regf-test")
