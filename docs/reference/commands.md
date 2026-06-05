@@ -27,6 +27,11 @@ uv run relic standalone repair-dependencies --tools-dir ~/tools --env-file ~/too
 uv run relic standalone sample-fixture --output sample-live-case.zip --format table
 ```
 
+`install-tool all` includes `dislocker` and `bdemount` for BitLocker fallback
+coverage. Those are apt packages (`dislocker` and `libbde-utils`), so Relic
+uses non-interactive sudo. If sudo prompts for a password, install them manually
+with `sudo apt-get install -y dislocker libbde-utils` and rerun doctor.
+
 ## Processing
 
 ```bash

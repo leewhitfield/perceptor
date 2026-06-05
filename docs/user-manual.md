@@ -113,6 +113,10 @@ Important dependency nuance:
 - System packages such as Sleuth Kit, libewf, `ntfs-3g`, `qemu-img`, poppler,
   and tesseract are reported with install commands because they normally require
   privileged package management.
+- `install-tool all` attempts the BitLocker fallback apt packages
+  `dislocker` and `libbde-utils` with non-interactive sudo. If sudo requires a
+  password, run `sudo apt-get install -y dislocker libbde-utils` yourself and
+  rerun doctor.
 - Python tools such as `pypykatz` and Volatility can be installed by the app.
 - EZ tools are downloaded into the managed tools folder.
 - Managed tool archives are extracted with explicit path checks. Relic rejects
