@@ -4618,7 +4618,10 @@ def build_parser() -> argparse.ArgumentParser:
     standalone_tool_status.add_argument("--format", choices=["json", "table", "csv"], default="table")
     standalone_tool_status.add_argument("--output")
     standalone_install_tool = standalone_sub.add_parser("install-tool")
-    standalone_install_tool.add_argument("tool", help="eztools, bstrings, sidr, memprocfs, dotnet, pypykatz, volatility3, usnjrnl-forensic, or all")
+    standalone_install_tool.add_argument(
+        "tool",
+        help="eztools, bstrings, sidr, memprocfs, dotnet, pypykatz, volatility3, volatility3-symbols, usnjrnl-forensic, dislocker, bdemount, or all",
+    )
     standalone_install_tool.add_argument("--env-file", help="Write/read repaired tool environment variables from this file")
     standalone_install_tool.add_argument("--tools-dir", help="Managed tools directory")
     standalone_install_tool.add_argument("--force", action="store_true")

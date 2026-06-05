@@ -156,6 +156,8 @@ def test_tool_status_and_install_dry_run_use_managed_tools_dir(tmp_path):
     dry_run = install_third_party_tool("dotnet", tools_dir=tmp_path / "managed", apply=False)
     sidr_dry_run = install_third_party_tool("sidr", tools_dir=tmp_path / "managed", apply=False, force=True)
     ual_dry_run = install_third_party_tool("ual", tools_dir=tmp_path / "managed", apply=False)
+    bitlocker_dry_run = install_third_party_tool("bdemount", tools_dir=tmp_path / "managed", apply=False)
+    all_dry_run = install_third_party_tool("all", tools_dir=tmp_path / "managed", apply=False)
 
     assert sidr["managed_path"].endswith("managed/sidr/sidr")
     assert ual_timeliner["installable"] is True
@@ -164,6 +166,8 @@ def test_tool_status_and_install_dry_run_use_managed_tools_dir(tmp_path):
     assert sidr_dry_run["tools"][0]["repo"] == "https://github.com/strozfriedberg/sidr.git"
     assert ual_dry_run["tools"][0]["status"] == "would_run"
     assert "kev365/ual-timeliner" in " ".join(ual_dry_run["tools"][0]["command"])
+    assert bitlocker_dry_run["tools"][0]["command"][-3:] == ["install", "-y", "libbde-utils"]
+    assert {"dislocker", "bdemount"}.issubset({row["tool"] for row in all_dry_run["tools"]})
 
 
 def test_install_tool_reports_progress(tmp_path):

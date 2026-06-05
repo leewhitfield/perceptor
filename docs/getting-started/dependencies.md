@@ -6,6 +6,11 @@ Relic separates dependencies into three groups:
 - System packages installed with apt.
 - Relic-managed third-party tools downloaded or built under a tools directory.
 
+The default setup command can install both managed tools and the BitLocker
+fallback apt packages (`dislocker` and `libbde-utils`). If sudo requires a
+password, install those packages with the apt command below before running
+doctor.
+
 ## Python
 
 ```bash
@@ -32,7 +37,9 @@ Important binaries include `mmls`, `fsstat`, `fls`, `icat`, `ewfinfo`,
 
 ## Default Managed Tools
 
-Install all supported managed tools as part of setup:
+Install all supported managed tools as part of setup. This also attempts to
+install the BitLocker fallback apt packages `dislocker` and `libbde-utils`
+non-interactively when they are missing:
 
 ```bash
 uv run relic standalone install-tool all \
@@ -58,8 +65,8 @@ uv run relic standalone install-tool usnjrnl-forensic --tools-dir ~/tools --env-
 - SIDR is expected to be a native Linux Rust build, not upstream `sidr.exe`.
 - `usnjrnl-forensic` requires Rust 1.88.0 or newer.
 - `pypykatz`, Volatility 3, the Volatility Windows symbol pack, MemProcFS,
-  SIDR, `ual-timeliner`, and `usnjrnl-forensic` are treated as default coverage
-  tools by `install-tool all`.
+  SIDR, `ual-timeliner`, `usnjrnl-forensic`, `dislocker`, and `bdemount` are
+  treated as default coverage tools by `install-tool all`.
 - The Volatility Windows symbol pack is stored as
   `/opt/relic-tools/volatility3-symbols/windows.zip` by the managed installer.
   Structured memory analysis passes that directory to Volatility when present.

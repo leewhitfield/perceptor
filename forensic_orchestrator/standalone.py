@@ -91,6 +91,19 @@ SYSTEM_TOOL_REPAIRS = {
 
 LOCAL_ENV_TOOL_NAMES = {"bstrings", "sidr", "MemProcFS", "dotnet", "usnjrnl-forensic", "ual-timeliner"}
 
+MANAGED_SYSTEM_PACKAGES = {
+    "dislocker": {
+        "package": "dislocker",
+        "binary": "dislocker",
+        "purpose": "BitLocker unlock fallback",
+    },
+    "bdemount": {
+        "package": "libbde-utils",
+        "binary": "bdemount",
+        "purpose": "libbde BitLocker unlock fallback",
+    },
+}
+
 STANDALONE_BACKLOG = [
     "Package a stable CLI entrypoint and install profile.",
     "Define supported Python versions and OS targets.",
@@ -206,8 +219,11 @@ def tool_status_report(*, tools_dir: Path | None = None, env_file: Path | None =
                     "pypykatz",
                     "vol",
                     "volatility3",
+                    "volatility3-symbols",
                     "usnjrnl-forensic",
                     "ual-timeliner",
+                    "dislocker",
+                    "bdemount",
                 },
             }
         )
@@ -688,6 +704,8 @@ def _install_progress_note(name: str) -> str:
         "volatility3-symbols": " (official Windows symbol pack download may take a few minutes)",
         "ual-timeliner": " (uv Python tool install may take a few minutes)",
         "usnjrnl-forensic": " (Rust crate compile may take several minutes)",
+        "dislocker": " (apt package install may require sudo/root)",
+        "bdemount": " (apt package install may require sudo/root)",
     }
     return notes.get(normalized, "")
 
@@ -742,6 +760,8 @@ def _install_one_tool(tool: str, *, tools_dir: Path, env_file: Path, force: bool
         )
     if tool == "volatility3-symbols":
         return _install_volatility3_symbols(tools_dir=tools_dir, force=force, apply=apply)
+    if tool in MANAGED_SYSTEM_PACKAGES:
+        return _install_system_package_tool(tool, force=force, apply=apply)
     if tool == "sidr":
         return _install_sidr_from_source(tools_dir=tools_dir, force=force, apply=apply)
     if tool in {"eztools", "bstrings"}:
@@ -749,8 +769,63 @@ def _install_one_tool(tool: str, *, tools_dir: Path, env_file: Path, force: bool
     return {
         "tool": tool,
         "status": "unknown",
-        "reason": "Supported tools: eztools, bstrings, sidr, memprocfs, dotnet, pypykatz, volatility3, volatility3-symbols, ual-timeliner, usnjrnl-forensic, all.",
+        "reason": "Supported tools: eztools, bstrings, sidr, memprocfs, dotnet, pypykatz, volatility3, volatility3-symbols, ual-timeliner, usnjrnl-forensic, dislocker, bdemount, all.",
     }
+
+
+def _install_system_package_tool(tool: str, *, force: bool, apply: bool) -> dict[str, Any]:
+    recipe = MANAGED_SYSTEM_PACKAGES[tool]
+    binary = str(recipe["binary"])
+    package = str(recipe["package"])
+    existing = shutil.which(binary)
+    command = _apt_install_command(package)
+    if existing and not force:
+        return {"tool": tool, "status": "present", "path": existing, "package": package, "command": command}
+    if not apply:
+        return {"tool": tool, "status": "would_run", "package": package, "command": command}
+    if not shutil.which("apt-get"):
+        return {
+            "tool": tool,
+            "status": "missing_installer",
+            "package": package,
+            "command": command,
+            "reason": "apt-get is not available on this system.",
+        }
+    if command[0] == "sudo" and not shutil.which("sudo"):
+        return {
+            "tool": tool,
+            "status": "missing_installer",
+            "package": package,
+            "command": command,
+            "reason": "sudo is not available; run as root or install the package manually.",
+        }
+    completed = subprocess.run(command, capture_output=True, text=True, check=False, timeout=1800)
+    installed = shutil.which(binary)
+    stderr = completed.stderr.strip()
+    reason = ""
+    if completed.returncode != 0:
+        if "a password is required" in stderr.casefold() or "password is required" in stderr.casefold():
+            reason = "sudo requires a password; run the shown apt command in a terminal, then rerun doctor."
+        else:
+            reason = "Package installation failed; install manually with the shown command."
+    return {
+        "tool": tool,
+        "status": "installed" if completed.returncode == 0 and installed else "failed",
+        "path": installed or "",
+        "package": package,
+        "command": command,
+        "returncode": completed.returncode,
+        "stdout": completed.stdout.strip()[-2000:],
+        "stderr": stderr[-2000:],
+        "reason": reason,
+    }
+
+
+def _apt_install_command(package: str) -> list[str]:
+    command = ["apt-get", "install", "-y", package]
+    if hasattr(os, "geteuid") and os.geteuid() != 0:
+        return ["sudo", "-n", *command]
+    return command
 
 
 def _install_volatility3_symbols(*, tools_dir: Path, force: bool, apply: bool) -> dict[str, Any]:
@@ -1132,7 +1207,19 @@ def _linux_release() -> dict[str, str]:
 def _expand_tool_selection(tool: str) -> list[str]:
     normalized = _normalize_tool_name(tool)
     if normalized == "all":
-        return ["dotnet", "eztools", "sidr", "memprocfs", "pypykatz", "volatility3", "volatility3-symbols", "ual-timeliner", "usnjrnl-forensic"]
+        return [
+            "dotnet",
+            "eztools",
+            "sidr",
+            "memprocfs",
+            "pypykatz",
+            "volatility3",
+            "volatility3-symbols",
+            "ual-timeliner",
+            "usnjrnl-forensic",
+            "dislocker",
+            "bdemount",
+        ]
     return [normalized]
 
 
@@ -1315,6 +1402,9 @@ def _tools_dir(tools_dir: Path | None) -> Path:
 
 
 def _repair_tool(tool: str, *, apply: bool) -> dict[str, Any]:
+    normalized = _normalize_tool_name(tool)
+    if normalized in MANAGED_SYSTEM_PACKAGES:
+        return _install_system_package_tool(normalized, force=False, apply=apply)
     if tool in PYTHON_TOOL_REPAIRS:
         command = PYTHON_TOOL_REPAIRS[tool]
         if not apply:
