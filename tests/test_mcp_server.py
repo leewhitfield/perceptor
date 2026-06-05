@@ -693,6 +693,26 @@ def test_mcp_generate_report_prefers_existing_report(tmp_path):
     assert generated["content"]["text"] == "# Existing USB Files\n"
 
 
+def test_mcp_generate_report_defaults_to_export_sized_limit(tmp_path, monkeypatch):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.close()
+    server = RelicMcpServer(root=tmp_path)
+    captured: dict[str, list[str]] = {}
+
+    def fake_run(command):
+        captured["command"] = command
+        return {"status": "completed", "returncode": 0, "json": {"total_returned": 0, "limit": 10000}}
+
+    monkeypatch.setattr(server, "_run_cli_capture", fake_run)
+
+    result = server.generate_report({"case_id": "case-1", "report_name": "usb-files", "regenerate": True})
+
+    assert result["status"] == "completed"
+    limit_index = captured["command"].index("--limit") + 1
+    assert captured["command"][limit_index] == "10000"
+
+
 def test_mcp_write_review_packet_creates_resources(tmp_path):
     db = Database(tmp_path / "orchestrator.sqlite3")
     db.create_case("case-1", tmp_path / "cases" / "case-1")

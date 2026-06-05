@@ -4,6 +4,7 @@ import json
 import mimetypes
 import os
 import re
+import secrets
 import signal
 import subprocess
 import sys
@@ -17,7 +18,8 @@ import uuid
 
 from .config import default_plugin_path
 from .db import Database
-from .paths import WorkspacePaths
+from .jobs import command_timeout_seconds
+from .paths import WorkspacePaths, validate_workspace_id
 from .report_bundle import parser_coverage_report, progress_manifest_report, report_bundle_preflight_report
 from .reports import (
     artifact_lead_search_report,
@@ -29,6 +31,7 @@ from .reports import (
     case_review_report,
     case_dashboard_report,
     case_summary_report,
+    clipboard_report,
     cloud_artifacts_report,
     communications_report,
     external_storage_report,
@@ -73,12 +76,16 @@ SUPPORTED_MCP_REPORTS = {
     "external-storage",
     "suspicious-executions",
     "interesting-executables",
+    "event-interpretation",
     "file-movement-identity",
     "opened-from-removable-media",
     "opened-from-cloud-storage",
     "memory-analysis",
     "memory-artifacts",
     "cloud-artifacts",
+    "bits-activity",
+    "clipboard",
+    "windows-activities",
     "usb-files",
     "usb-timeline",
 }
@@ -86,6 +93,9 @@ MCP_JOB_INDEX = "index.json"
 MCP_AUDIT_LOG = "audit.jsonl"
 MCP_POLICY_FILE = "mcp-policy.json"
 MCP_RESOURCE_MAX_BYTES = 1_000_000
+DEFAULT_MCP_REPORT_EXPORT_LIMIT = 10_000
+DEFAULT_MCP_REPORT_BUNDLE_LIMIT = 50_000
+DEFAULT_MCP_MAX_RUNNING_JOBS = 4
 SENSITIVE_ARGUMENT_KEYS = {
     "password",
     "passphrase",
@@ -139,12 +149,16 @@ class RelicMcpServer:
         allow_sensitive: bool = False,
         allow_external_ai: bool = False,
         plugin_paths: list[Path] | None = None,
+        auth_token: str | None = None,
+        max_running_jobs: int | None = None,
     ) -> None:
         self.paths = WorkspacePaths(root)
         self.allow_processing = allow_processing
         self.allow_sensitive = allow_sensitive
         self.allow_external_ai = allow_external_ai
         self.plugin_paths = plugin_paths or [default_plugin_path()]
+        self.auth_token = auth_token if auth_token is not None else os.environ.get("RELIC_MCP_TOKEN")
+        self.max_running_jobs = max_running_jobs or _env_int("RELIC_MCP_MAX_RUNNING_JOBS", DEFAULT_MCP_MAX_RUNNING_JOBS)
         self.policy = self._load_mcp_policy()
         self._mcp_jobs: dict[str, dict[str, Any]] = self._load_mcp_job_index()
         self.tools = {tool.name: tool for tool in self._build_tools()}
@@ -158,6 +172,7 @@ class RelicMcpServer:
             self._handle_notification(method)
             return None
         try:
+            self._require_auth(message)
             if method == "initialize":
                 return self._response(request_id, self._initialize_result(message.get("params") or {}))
             if method == "ping":
@@ -172,9 +187,22 @@ class RelicMcpServer:
                 return self._response(request_id, self._call_tool(message.get("params") or {}, request_id=request_id))
             return self._error(request_id, -32601, f"Method not found: {method}")
         except ValueError as exc:
-            return self._error(request_id, -32602, str(exc), _error_details(exc))
+            return self._error(request_id, -32602, _safe_error_message(exc), _error_details(exc))
         except Exception as exc:  # pragma: no cover - defensive protocol boundary
-            return self._error(request_id, -32603, str(exc), _error_details(exc))
+            return self._error(request_id, -32603, "Internal MCP server error; inspect the MCP audit log for details.", _error_details(exc))
+
+    def _require_auth(self, message: dict[str, Any]) -> None:
+        if not self.auth_token:
+            return
+        params = message.get("params") if isinstance(message.get("params"), dict) else {}
+        token = (
+            str(params.get("auth_token") or "")
+            or str(params.get("authorization") or "")
+            or str(message.get("auth_token") or "")
+        )
+        token = token.removeprefix("Bearer ").strip()
+        if not secrets.compare_digest(token, self.auth_token):
+            raise ValueError("MCP authentication failed")
 
     def _handle_notification(self, method: str) -> None:
         if method in {"notifications/initialized", "notifications/cancelled"}:
@@ -224,6 +252,7 @@ class RelicMcpServer:
         self._require_policy(tool, arguments)
         try:
             result = tool.handler(arguments)
+            result = _add_result_limit_guidance(result, arguments, tool)
             duration_ms = _duration_ms(started)
             self._audit_tool_call(tool, arguments, status="ok", error=None, correlation_id=correlation_id, request_id=request_id, duration_ms=duration_ms)
             return _tool_result(result, tool=tool, correlation_id=correlation_id, duration_ms=duration_ms)
@@ -1207,7 +1236,14 @@ class RelicMcpServer:
                         "case_id": _string_schema("Relic case ID."),
                         "report_name": _string_schema("Supported report name."),
                         "format": {"type": "string", "enum": ["json", "table", "csv", "md"], "default": "json"},
-                        "limit": _integer_schema("Maximum rows to return.", default=100, minimum=1, maximum=1000),
+                        "category": _string_schema("Optional report-specific category filter. Supported by event-interpretation."),
+                        "contains": _string_schema("Optional report-specific text filter. Supported by clipboard."),
+                        "limit": _integer_schema(
+                            "Maximum rows to return. Defaults high for saved/generated reports; increase if result_limit_warning indicates truncation.",
+                            default=DEFAULT_MCP_REPORT_EXPORT_LIMIT,
+                            minimum=1,
+                            maximum=DEFAULT_MCP_REPORT_EXPORT_LIMIT,
+                        ),
                         "output": _string_schema("Optional output path. Must be under the workspace root."),
                         "regenerate": {"type": "boolean", "default": False},
                     },
@@ -1226,7 +1262,12 @@ class RelicMcpServer:
                         "case_id": _string_schema("Relic case ID."),
                         "output_dir": _string_schema("Output directory under the workspace root."),
                         "purpose": {"type": "string", "enum": ["full", "usb", "cloud", "execution", "memory", "triage", "review"], "default": "full"},
-                        "limit": _integer_schema("Maximum rows per report.", default=100, minimum=1, maximum=1000),
+                        "limit": _integer_schema(
+                            "Maximum rows per report. Defaults high for saved bundles; increase if any report indicates truncation.",
+                            default=DEFAULT_MCP_REPORT_BUNDLE_LIMIT,
+                            minimum=1,
+                            maximum=DEFAULT_MCP_REPORT_BUNDLE_LIMIT,
+                        ),
                     },
                     required=["case_id", "output_dir"],
                 ),
@@ -2755,13 +2796,13 @@ class RelicMcpServer:
             db.close()
 
     def ingest_triage_zip_preflight(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        report = report_bundle_preflight_report(Path(_required(arguments, "path")).expanduser())
+        report = report_bundle_preflight_report(_input_path(self.paths.root, _required(arguments, "path")))
         _enforce_uncompressed_limit(report, float(arguments.get("max_uncompressed_gb") or 0.0))
         return report
 
     def report_bundle_coverage(self, arguments: dict[str, Any]) -> dict[str, Any]:
         path = str(arguments.get("path") or "").strip()
-        return parser_coverage_report(Path(path).expanduser() if path else None)
+        return parser_coverage_report(_input_path(self.paths.root, path) if path else None)
 
     def profile_preview(self, arguments: dict[str, Any]) -> dict[str, Any]:
         return profile_extraction_preview(self._registry(), _required(arguments, "profile"))
@@ -2858,8 +2899,12 @@ class RelicMcpServer:
             "--format",
             fmt,
             "--limit",
-            str(_limit(arguments, default=100)),
+            str(_limit(arguments, default=DEFAULT_MCP_REPORT_EXPORT_LIMIT, maximum=DEFAULT_MCP_REPORT_EXPORT_LIMIT)),
         ]
+        if report_name == "event-interpretation":
+            _extend_optional(command, "--category", arguments.get("category"))
+        if report_name == "clipboard":
+            _extend_optional(command, "--contains", arguments.get("contains"))
         output = str(arguments.get("output") or "").strip()
         if output:
             command.extend(["--output", str(_workspace_path(self.paths.root, output))])
@@ -2878,7 +2923,7 @@ class RelicMcpServer:
                 db,
                 _required(arguments, "case_id"),
                 output_dir,
-                limit=_limit(arguments, default=100),
+                limit=_limit(arguments, default=DEFAULT_MCP_REPORT_BUNDLE_LIMIT, maximum=DEFAULT_MCP_REPORT_BUNDLE_LIMIT),
                 purpose=purpose,
             )
             result["resource_uris"] = _resource_uris_for_path(self.paths.root, output_dir)
@@ -2967,7 +3012,7 @@ class RelicMcpServer:
         return {**_public_job(job), "cancelled": True}
 
     def import_triage_zip(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        command = self._base_cli_command() + ["ingest", "triage-zip", "--path", str(Path(_required(arguments, "path")).expanduser())]
+        command = self._base_cli_command() + ["ingest", "triage-zip", "--path", str(_input_path(self.paths.root, _required(arguments, "path")))]
         _extend_optional(command, "--case", arguments.get("case_id"))
         if bool(arguments.get("accept_duplicate") or False):
             command.append("--accept-duplicate")
@@ -2992,7 +3037,7 @@ class RelicMcpServer:
         return result
 
     def import_report_bundle(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        command = self._base_cli_command() + ["report-bundle", "import", "--path", str(Path(_required(arguments, "path")).expanduser())]
+        command = self._base_cli_command() + ["report-bundle", "import", "--path", str(_input_path(self.paths.root, _required(arguments, "path")))]
         _extend_optional(command, "--case", arguments.get("case_id"))
         _extend_optional(command, "--computer", arguments.get("computer_id"))
         _extend_optional(command, "--computer-label", arguments.get("computer_label"))
@@ -3006,7 +3051,7 @@ class RelicMcpServer:
         command = self._base_cli_command(dry_run=bool(arguments.get("dry_run") or False)) + [
             "process",
             "--path",
-            str(Path(_required(arguments, "path")).expanduser()),
+            str(_input_path(self.paths.root, _required(arguments, "path"))),
             "--profile",
             str(arguments.get("profile") or "windows-basic"),
             "--workers",
@@ -3077,9 +3122,19 @@ class RelicMcpServer:
         return command
 
     def _run_cli_capture(self, command: list[str]) -> dict[str, Any]:
-        completed = subprocess.run(command, cwd=Path.cwd(), capture_output=True, text=True, check=False)
+        try:
+            completed = subprocess.run(command, cwd=Path.cwd(), capture_output=True, text=True, check=False, timeout=command_timeout_seconds())
+        except subprocess.TimeoutExpired as exc:
+            return {
+                "command": command,
+                "returncode": -9,
+                "status": "timeout",
+                "stdout": str(exc.stdout or "")[-100_000:],
+                "stderr": str(exc.stderr or "")[-20_000:],
+                "json": None,
+            }
         parsed_stdout = _json_value(completed.stdout, None) if completed.stdout.strip().startswith(("{", "[")) else None
-        return {
+        result = {
             "command": command,
             "returncode": completed.returncode,
             "status": "completed" if completed.returncode == 0 else "failed",
@@ -3087,8 +3142,16 @@ class RelicMcpServer:
             "stderr": completed.stderr[-20_000:],
             "json": parsed_stdout,
         }
+        if isinstance(parsed_stdout, dict):
+            for key in ("total_returned", "total_available", "total_matching", "limit", "limited"):
+                if key in parsed_stdout:
+                    result[key] = parsed_stdout.get(key)
+        return result
 
     def _start_mcp_process(self, name: str, command: list[str]) -> dict[str, Any]:
+        running = self._running_mcp_jobs()
+        if len(running) >= self.max_running_jobs:
+            raise ValueError(f"MCP processing job limit reached ({len(running)}/{self.max_running_jobs}); wait for a job to finish or cancel one.")
         job_id = str(uuid.uuid4())
         job_dir = self._mcp_jobs_dir() / job_id
         job_dir.mkdir(parents=True, exist_ok=True)
@@ -3125,6 +3188,16 @@ class RelicMcpServer:
         self._mcp_jobs[job_id] = job
         self._save_mcp_job_index()
         return _public_job(job)
+
+    def _running_mcp_jobs(self) -> list[dict[str, Any]]:
+        running: list[dict[str, Any]] = []
+        for job in self._mcp_jobs.values():
+            self._refresh_mcp_job(job)
+            if job.get("status") == "running":
+                running.append(job)
+        if running:
+            self._save_mcp_job_index()
+        return running
 
     def _audit_tool_call(
         self,
@@ -3243,6 +3316,8 @@ class RelicMcpServer:
         metadata = tool.metadata()
         category = str(metadata.get("category") or "")
         case_id = str(arguments.get("case_id") or "").strip()
+        if case_id:
+            validate_workspace_id(case_id, field="case_id")
         checks = (
             ("allowed_tools", tool.name, True),
             ("blocked_tools", tool.name, False),
@@ -3273,6 +3348,7 @@ class RelicMcpServer:
             "sensitive": self.allow_sensitive,
             "external_ai": self.allow_external_ai,
             "policy_configured": self.policy.get("status") == "loaded",
+            "auth_required": bool(self.auth_token),
         }
 
     @staticmethod
@@ -3294,6 +3370,8 @@ def run_mcp_server(
     allow_sensitive: bool = False,
     allow_external_ai: bool = False,
     plugin_paths: list[Path] | None = None,
+    auth_token: str | None = None,
+    max_running_jobs: int | None = None,
     stdin: TextIO = sys.stdin,
     stdout: TextIO = sys.stdout,
 ) -> int:
@@ -3303,6 +3381,8 @@ def run_mcp_server(
         allow_sensitive=allow_sensitive,
         allow_external_ai=allow_external_ai,
         plugin_paths=plugin_paths,
+        auth_token=auth_token,
+        max_running_jobs=max_running_jobs,
     )
     for line in stdin:
         line = line.strip()
@@ -3905,6 +3985,104 @@ def _tool_error_payload(tool: McpTool, exc: Exception, *, correlation_id: str) -
     }
 
 
+def _add_result_limit_guidance(result: dict[str, Any], arguments: dict[str, Any], tool: McpTool) -> dict[str, Any]:
+    if not isinstance(result, dict):
+        return result
+    output = dict(result)
+    limit = _result_limit(arguments, output)
+    returned = _result_returned_count(output)
+    total_matching = _safe_optional_int(output.get("total_matching"))
+    total_available = _safe_optional_int(output.get("total_available"))
+    possibly_limited = False
+    reason = ""
+    if bool(output.get("limited")):
+        possibly_limited = True
+        reason = "The report explicitly indicates that returned rows are limited."
+    elif total_available is not None and returned is not None and total_available > returned:
+        possibly_limited = True
+        reason = "The report returned fewer rows than the total available rows."
+    elif total_matching is not None and returned is not None and total_matching > returned:
+        possibly_limited = True
+        reason = "The tool returned fewer rows than the total matching rows."
+    elif limit is not None and returned is not None and returned >= limit:
+        possibly_limited = True
+        reason = "The returned row count reached the active limit."
+    elif limit is not None and _contains_capped_collection(output, limit):
+        possibly_limited = True
+        reason = "At least one returned collection reached the active limit."
+    if possibly_limited:
+        output["result_limit_warning"] = {
+            "limited": True,
+            "reason": reason,
+            "active_limit": limit,
+            "returned": returned,
+            "total_matching": total_matching,
+            "total_available": total_available,
+            "guidance": (
+                "This is not necessarily the full evidence picture. Re-run with a higher limit when appropriate, "
+                "read the generated full report/export if one exists, or ask for the full artifact dossier/context."
+            ),
+            "full_picture_options": _full_picture_options(tool.name),
+        }
+    elif limit is not None:
+        output.setdefault(
+            "result_limit",
+            {
+                "limited": False,
+                "active_limit": limit,
+                "returned": returned,
+                "guidance": "The result includes a limit value; increase it or request full artifact context if the artifact is material.",
+            },
+        )
+    return output
+
+
+def _result_limit(arguments: dict[str, Any], result: dict[str, Any]) -> int | None:
+    for source in (arguments, result.get("filters") if isinstance(result.get("filters"), dict) else {}, result.get("summary") if isinstance(result.get("summary"), dict) else {}):
+        if not isinstance(source, dict):
+            continue
+        value = source.get("limit")
+        if value is None:
+            continue
+        parsed = _safe_optional_int(value)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _result_returned_count(result: dict[str, Any]) -> int | None:
+    for key in ("total_returned", "returned", "count"):
+        parsed = _safe_optional_int(result.get(key))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _contains_capped_collection(result: dict[str, Any], limit: int) -> bool:
+    for value in result.values():
+        if isinstance(value, list) and len(value) >= limit:
+            return True
+    return False
+
+
+def _full_picture_options(tool_name: str) -> list[str]:
+    options = ["Increase the limit and rerun the same MCP tool.", "Use relic_discover_reports and relic_read_existing_report to inspect generated reports before raw artifact queries."]
+    if any(token in tool_name for token in ("file", "content", "filesystem", "usb")):
+        options.append("Use relic_file_dossier or relic_query_evidence_contents for full file/device context.")
+    if "timeline" in tool_name or "activity" in tool_name:
+        options.append("Use a wider relic_timeline_window and then follow report_hints/artifact_reference entries for supporting artifacts.")
+    if "search" in tool_name or "content" in tool_name:
+        options.append("Use relic_get_indexed_content for the full indexed body when search_content reports full_content_available.")
+    return options
+
+
+def _safe_optional_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _error_details(exc: Exception) -> dict[str, Any]:
     text = str(exc)
     lower = text.lower()
@@ -4088,12 +4266,12 @@ def _string_list(value: Any) -> list[str]:
     return [item.strip() for item in text.split(",") if item.strip()]
 
 
-def _limit(arguments: dict[str, Any], *, default: int) -> int:
+def _limit(arguments: dict[str, Any], *, default: int, maximum: int = 1000) -> int:
     try:
         limit = int(arguments.get("limit") or default)
     except (TypeError, ValueError):
         raise ValueError("limit must be an integer")
-    return max(1, min(limit, 1000))
+    return max(1, min(limit, maximum))
 
 
 def _bounded_int(arguments: dict[str, Any], key: str, *, default: int, minimum: int, maximum: int) -> int:
@@ -4137,6 +4315,59 @@ def _workspace_path(root: Path, value: str) -> Path:
     if resolved != root_resolved and root_resolved not in resolved.parents:
         raise ValueError(f"MCP output paths must stay under workspace root: {root_resolved}")
     return resolved
+
+
+def _input_path(root: Path, value: str) -> Path:
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = root / path
+    resolved = path.resolve()
+    allowed_roots = _allowed_input_roots(root)
+    if not any(resolved == allowed or _is_relative_to(resolved, allowed) for allowed in allowed_roots):
+        roots = ", ".join(_display_path(path) for path in allowed_roots)
+        raise ValueError(f"MCP input path is outside allowed evidence roots. Configure RELIC_MCP_ALLOWED_INPUT_ROOTS if needed. Allowed roots: {roots}")
+    return resolved
+
+
+def _allowed_input_roots(root: Path) -> list[Path]:
+    configured = os.environ.get("RELIC_MCP_ALLOWED_INPUT_ROOTS", "")
+    values = [value for value in configured.split(os.pathsep) if value.strip()]
+    if not values:
+        values = [str(root), str(Path.cwd()), str(Path.home()), "/mnt", "/media", "/tmp"]
+    roots: list[Path] = []
+    for value in values:
+        try:
+            resolved = Path(value).expanduser().resolve()
+        except OSError:
+            continue
+        if resolved not in roots:
+            roots.append(resolved)
+    return roots
+
+
+def _display_path(path: Path) -> str:
+    text = str(path)
+    home = str(Path.home())
+    if home and text.startswith(home):
+        return text.replace(home, "~", 1)
+    return text
+
+
+def _safe_error_message(exc: Exception) -> str:
+    text = str(exc)
+    for path in (Path.home(), Path.cwd()):
+        value = str(path)
+        if value:
+            text = text.replace(value, _display_path(path))
+    return text
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        value = int(os.environ.get(name, "") or default)
+    except ValueError:
+        return default
+    return max(1, value)
 
 
 def _is_relative_to(path: Path, root: Path) -> bool:
@@ -4746,13 +4977,86 @@ def _route_mcp_question(
         recommended_tool = "relic_read_existing_report"
         fallback_tools = ["relic_query_external_storage", "relic_query_usb_files", "relic_usb_dossier", "relic_query_evidence_contents"]
         reason = "USB/storage questions should begin with deduped storage reports, then storage-specific parsed tables."
-    elif _contains_any(text, {"suspicious", "execution", "executed", "executable", "program", "process", "runmru", "userassist", "prefetch"}):
+    elif _contains_any(
+        text,
+        {
+            "suspicious",
+            "execution",
+            "executed",
+            "executable",
+            "program",
+            "process",
+            "command line",
+            "4688",
+            "powershell",
+            "script block",
+            "4104",
+            "scheduled task",
+            "4698",
+            "4699",
+            "wmi",
+            "wmi-activity",
+            "event consumer",
+            "consumer binding",
+            "5861",
+            "5859",
+            "5860",
+            "print",
+            "printed",
+            "printer",
+            "printservice",
+            "spool",
+            "account created",
+            "account changed",
+            "account disabled",
+            "password reset",
+            "audit log",
+            "log cleared",
+            "1102",
+            "104",
+            "runmru",
+            "userassist",
+            "prefetch",
+        },
+    ):
         intent = "execution"
         report_purpose = "execution"
-        report_names = ["suspicious-executions", "execution", "execution-correlation", "program-provenance"]
+        report_names = ["event-interpretation", "suspicious-executions", "execution", "execution-correlation", "program-provenance"]
         recommended_tool = "relic_read_existing_report"
-        fallback_tools = ["relic_query_suspicious_executions", "relic_lead_search", "relic_query_registry_activity"]
-        reason = "Execution questions should start with generated execution and suspicious-execution reports."
+        fallback_tools = ["relic_generate_report", "relic_query_suspicious_executions", "relic_lead_search", "relic_query_registry_activity"]
+        reason = "Execution and high-value event-log questions should start with generated event-interpretation, execution, and suspicious-execution reports."
+    elif _contains_any(text, {"bits", "background intelligent transfer", "qmgr", "download transfer", "transfer job", "onedrive setup", "component updater"}):
+        intent = "bits_activity"
+        report_purpose = "full"
+        report_names = ["bits-activity"]
+        recommended_tool = "relic_generate_report"
+        fallback_tools = ["relic_timeline_window", "relic_search_artifacts", "relic_read_existing_report"]
+        reason = (
+            "BITS questions should use the BITS activity report because it correlates timestamped BITS Client EVTX rows "
+            "with qmgr database/carved rows by exact job ID or URL where available."
+        )
+        source_order = [
+            {"order": 1, "source": "generated_reports", "tools": ["relic_read_existing_report", "relic_generate_report"], "report_names": report_names},
+            {"order": 2, "source": "bits_activity_table", "tools": ["relic_generate_report"], "report_names": report_names},
+            {"order": 3, "source": "normalized_master_timeline", "tools": ["relic_timeline_window"], "tables": ["bits_activity"]},
+            {"order": 4, "source": "parsed_artifact_tables", "tools": ["relic_search_artifacts"], "tables": ["bits_activity", "bits_jobs", "evtx_events"]},
+        ]
+    elif _contains_any(text, {"clipboard", "copied", "paste", "pasted", "clip history", "cloud clipboard", "sync across devices"}):
+        intent = "clipboard_activity"
+        report_purpose = "full"
+        report_names = ["clipboard", "windows-activities"]
+        recommended_tool = "relic_read_existing_report"
+        fallback_tools = ["relic_generate_report", "relic_timeline_window", "relic_search_artifacts"]
+        reason = (
+            "Clipboard questions should start with the dedicated clipboard report, then use the normalized master timeline "
+            "for time-window context and Windows Activities only as secondary clipboard-adjacent evidence."
+        )
+        source_order = [
+            {"order": 1, "source": "generated_reports", "tools": ["relic_read_existing_report", "relic_generate_report"], "report_names": ["clipboard"]},
+            {"order": 2, "source": "clipboard_items_table", "tools": ["relic_generate_report", "relic_search_artifacts"], "tables": ["clipboard_items"]},
+            {"order": 3, "source": "normalized_master_timeline", "tools": ["relic_timeline_window"], "tables": ["clipboard_items"]},
+            {"order": 4, "source": "secondary_activity_artifacts", "tools": ["relic_generate_report", "relic_search_artifacts"], "tables": ["windows_activities", "browser_site_settings", "evtx_events"]},
+        ]
     elif has_wifi_terms:
         intent = "wifi_network_activity"
         first_source = "parsed_network_artifact_tables"

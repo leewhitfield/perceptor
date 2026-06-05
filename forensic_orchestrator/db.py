@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import sqlite3
+import threading
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -153,6 +154,9 @@ DEFAULT_PURGE_TABLES = (
     "ntfs_index_bitmaps",
     "srum_records",
     "ual_records",
+    "bits_jobs",
+    "bits_activity",
+    "clipboard_items",
     "windows_search_files",
     "windows_search_internet_history",
     "windows_search_activity_history",
@@ -249,6 +253,10 @@ TOOL_PURGE_TABLES = {
     "MFTECmdUSN": {"usn_journal_entries", "tool_outputs"},
     "USNRewind": {"usn_journal_entries", "tool_outputs"},
     "MFTECmdI30": {"ntfs_index_entries", "ntfs_index_bitmaps", "tool_outputs"},
+    "EvtxECmd": {"evtx_events", "bits_activity", "tool_outputs"},
+    "EvtxECmdTriage": {"evtx_events", "bits_activity", "tool_outputs"},
+    "BITSParser": {"bits_jobs", "tool_outputs"},
+    "ClipboardParser": {"clipboard_items", "tool_outputs"},
     "MailboxParser": {"mailbox_messages", "mailbox_attachments", "tool_outputs"},
     "ZoneIdentifierParser": {"zone_identifier_ads", "tool_outputs"},
     "RdpCacheParser": {
@@ -311,12 +319,14 @@ class Database:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(self.path, timeout=60)
         self.conn.row_factory = sqlite3.Row
+        self.conn.execute("PRAGMA foreign_keys=ON")
         self.conn.execute("PRAGMA busy_timeout=60000")
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.execute("PRAGMA temp_store=MEMORY")
         self.conn.create_function("host_from_url", 1, _host_from_url)
         self._defer_commit_depth = 0
+        self._transaction_lock = threading.RLock()
         self.analytics_mode = os.environ.get("FORENSIC_ANALYTICS_MODE", "duckdb").lower()
         if self.analytics_mode not in {"sqlite", "duckdb", "mirror"}:
             raise ValueError("FORENSIC_ANALYTICS_MODE must be one of: sqlite, duckdb, mirror")
@@ -330,6 +340,12 @@ class Database:
         if self.analytics is not None:
             self.analytics.close()
         self.conn.close()
+
+    def __enter__(self) -> "Database":
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        self.close()
 
     @contextmanager
     def _migration_lock(self):
@@ -347,17 +363,18 @@ class Database:
 
     @contextmanager
     def bulk_transaction(self):
-        self._defer_commit_depth += 1
-        try:
-            yield
-            if self._defer_commit_depth == 1:
-                self.conn.commit()
-        except Exception:
-            if self._defer_commit_depth == 1:
-                self.conn.rollback()
-            raise
-        finally:
-            self._defer_commit_depth -= 1
+        with self._transaction_lock:
+            self._defer_commit_depth += 1
+            try:
+                yield
+                if self._defer_commit_depth == 1:
+                    self.conn.commit()
+            except Exception:
+                if self._defer_commit_depth == 1:
+                    self.conn.rollback()
+                raise
+            finally:
+                self._defer_commit_depth -= 1
 
     def _commit(self) -> None:
         if self._defer_commit_depth == 0:
@@ -442,6 +459,66 @@ class Database:
 
             CREATE INDEX IF NOT EXISTS idx_image_metadata_image
               ON image_metadata(case_id, image_id);
+
+            CREATE TABLE IF NOT EXISTS image_hashes (
+              id TEXT PRIMARY KEY,
+              case_id TEXT NOT NULL REFERENCES cases(id),
+              image_id TEXT NOT NULL REFERENCES images(id),
+              algorithm TEXT NOT NULL,
+              digest TEXT,
+              size_bytes INTEGER,
+              source_path TEXT NOT NULL,
+              status TEXT NOT NULL,
+              error TEXT,
+              computed_at TEXT NOT NULL,
+              UNIQUE(case_id, image_id, algorithm)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_image_hashes_image
+              ON image_hashes(case_id, image_id);
+
+            CREATE TABLE IF NOT EXISTS image_verifications (
+              id TEXT PRIMARY KEY,
+              case_id TEXT NOT NULL REFERENCES cases(id),
+              image_id TEXT NOT NULL REFERENCES images(id),
+              algorithm TEXT NOT NULL,
+              expected_digest TEXT,
+              actual_digest TEXT,
+              source_path TEXT NOT NULL,
+              size_bytes INTEGER,
+              status TEXT NOT NULL,
+              error TEXT,
+              verified_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_image_verifications_image_time
+              ON image_verifications(case_id, image_id, verified_at);
+
+            CREATE TABLE IF NOT EXISTS evidence_file_extractions (
+              id TEXT PRIMARY KEY,
+              case_id TEXT NOT NULL REFERENCES cases(id),
+              computer_id TEXT,
+              image_id TEXT NOT NULL REFERENCES images(id),
+              artifact_name TEXT,
+              source_path TEXT,
+              extracted_path TEXT NOT NULL,
+              inode TEXT,
+              extraction_method TEXT NOT NULL,
+              sha256 TEXT,
+              size_bytes INTEGER,
+              created_utc TEXT,
+              modified_utc TEXT,
+              accessed_utc TEXT,
+              metadata_changed_utc TEXT,
+              status TEXT NOT NULL,
+              details_json TEXT NOT NULL,
+              created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_evidence_file_extractions_case
+              ON evidence_file_extractions(case_id, image_id, artifact_name);
+            CREATE INDEX IF NOT EXISTS idx_evidence_file_extractions_hash
+              ON evidence_file_extractions(case_id, sha256);
 
             CREATE TABLE IF NOT EXISTS mounts (
               id TEXT PRIMARY KEY,
@@ -1759,6 +1836,89 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_ual_records_output
               ON ual_records(tool_output_id);
 
+            CREATE TABLE IF NOT EXISTS bits_jobs (
+              id TEXT PRIMARY KEY,
+              case_id TEXT NOT NULL REFERENCES cases(id),
+              computer_id TEXT NOT NULL REFERENCES computers(id),
+              image_id TEXT NOT NULL REFERENCES images(id),
+              tool_output_id TEXT NOT NULL REFERENCES tool_outputs(id),
+              tool_name TEXT NOT NULL,
+              source_csv TEXT NOT NULL,
+              row_number INTEGER NOT NULL,
+              source_path TEXT,
+              database_file TEXT,
+              source_table TEXT,
+              record_id TEXT,
+              record_type TEXT,
+              job_id TEXT,
+              job_name TEXT,
+              job_owner TEXT,
+              job_state TEXT,
+              job_type TEXT,
+              priority TEXT,
+              created_utc TEXT,
+              modified_utc TEXT,
+              completed_utc TEXT,
+              expiration_utc TEXT,
+              url TEXT,
+              local_path TEXT,
+              remote_name TEXT,
+              file_size TEXT,
+              bytes_transferred TEXT,
+              raw_row_json TEXT NOT NULL DEFAULT '{}',
+              parser_status TEXT,
+              parser_error TEXT,
+              created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_bits_jobs_case_time
+              ON bits_jobs(case_id, created_utc, modified_utc, completed_utc);
+            CREATE INDEX IF NOT EXISTS idx_bits_jobs_case_job
+              ON bits_jobs(case_id, job_id);
+            CREATE INDEX IF NOT EXISTS idx_bits_jobs_case_url
+              ON bits_jobs(case_id, url);
+            CREATE INDEX IF NOT EXISTS idx_bits_jobs_output
+              ON bits_jobs(tool_output_id);
+
+            CREATE TABLE IF NOT EXISTS bits_activity (
+              id TEXT PRIMARY KEY,
+              case_id TEXT NOT NULL REFERENCES cases(id),
+              computer_id TEXT NOT NULL REFERENCES computers(id),
+              image_id TEXT NOT NULL REFERENCES images(id),
+              tool_output_id TEXT NOT NULL REFERENCES tool_outputs(id),
+              tool_name TEXT NOT NULL,
+              source_csv TEXT NOT NULL,
+              row_number INTEGER NOT NULL,
+              source_table TEXT NOT NULL,
+              source_row_id TEXT,
+              event_time_utc TEXT,
+              event_id TEXT,
+              event_type TEXT,
+              provider TEXT,
+              channel TEXT,
+              computer TEXT,
+              job_id TEXT,
+              job_name TEXT,
+              job_owner TEXT,
+              url TEXT,
+              peer TEXT,
+              file_count TEXT,
+              total_bytes TEXT,
+              bytes_transferred TEXT,
+              local_path TEXT,
+              matched_bits_job_id TEXT,
+              correlation_basis TEXT,
+              raw_fields_json TEXT NOT NULL DEFAULT '{}',
+              created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_bits_activity_case_time
+              ON bits_activity(case_id, event_time_utc);
+            CREATE INDEX IF NOT EXISTS idx_bits_activity_case_job
+              ON bits_activity(case_id, job_id);
+            CREATE INDEX IF NOT EXISTS idx_bits_activity_case_url
+              ON bits_activity(case_id, url);
+            CREATE INDEX IF NOT EXISTS idx_bits_activity_output
+              ON bits_activity(tool_output_id);
+
             CREATE TABLE IF NOT EXISTS windows_search_files (
               id TEXT PRIMARY KEY,
               case_id TEXT NOT NULL REFERENCES cases(id),
@@ -2485,8 +2645,8 @@ class Database:
               case_id TEXT NOT NULL REFERENCES cases(id),
               computer_id TEXT,
               image_id TEXT,
-              primary_event_id TEXT NOT NULL REFERENCES timeline_events(id),
-              duplicate_event_id TEXT NOT NULL REFERENCES timeline_events(id),
+              primary_event_id TEXT NOT NULL,
+              duplicate_event_id TEXT NOT NULL,
               source_scope TEXT NOT NULL,
               source_tool TEXT NOT NULL,
               source_table TEXT NOT NULL,
@@ -2536,7 +2696,7 @@ class Database:
               source_tool TEXT NOT NULL,
               source_table TEXT NOT NULL,
               source_row_id TEXT NOT NULL,
-              mft_entry_id TEXT NOT NULL REFERENCES mft_entries(id),
+              mft_entry_id TEXT NOT NULL,
               match_type TEXT NOT NULL,
               confidence TEXT NOT NULL,
               source_path TEXT,
@@ -3696,6 +3856,47 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_windows_activities_output
               ON windows_activities(tool_output_id);
 
+            CREATE TABLE IF NOT EXISTS clipboard_items (
+              id TEXT PRIMARY KEY,
+              case_id TEXT NOT NULL REFERENCES cases(id),
+              computer_id TEXT NOT NULL REFERENCES computers(id),
+              image_id TEXT NOT NULL REFERENCES images(id),
+              tool_output_id TEXT NOT NULL REFERENCES tool_outputs(id),
+              tool_name TEXT NOT NULL,
+              source_csv TEXT NOT NULL,
+              row_number INTEGER NOT NULL,
+              source_path TEXT,
+              user_profile TEXT,
+              source_type TEXT,
+              source_table TEXT,
+              row_identifier TEXT,
+              item_time_utc TEXT,
+              created_time_utc TEXT,
+              modified_time_utc TEXT,
+              last_used_time_utc TEXT,
+              sequence_number TEXT,
+              format_name TEXT,
+              content_type TEXT,
+              text_content TEXT,
+              file_uri TEXT,
+              html_content TEXT,
+              image_present TEXT,
+              payload_size TEXT,
+              cloud_sync_state TEXT,
+              cloud_sync_id TEXT,
+              device_id TEXT,
+              raw_payload_json TEXT,
+              parser_status TEXT,
+              parser_error TEXT,
+              created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_clipboard_items_case_time
+              ON clipboard_items(case_id, item_time_utc);
+            CREATE INDEX IF NOT EXISTS idx_clipboard_items_case_user
+              ON clipboard_items(case_id, user_profile);
+            CREATE INDEX IF NOT EXISTS idx_clipboard_items_output
+              ON clipboard_items(tool_output_id);
+
             CREATE TABLE IF NOT EXISTS webcache_entries (
               id TEXT PRIMARY KEY,
               case_id TEXT NOT NULL REFERENCES cases(id),
@@ -4529,6 +4730,28 @@ class Database:
                 "snapshot_index": "TEXT", "snapshot_created_utc": "TEXT",
                 "row_json": "TEXT NOT NULL DEFAULT '{}'",
             },
+            "bits_jobs": {
+                "source_path": "TEXT", "database_file": "TEXT", "source_table": "TEXT",
+                "record_id": "TEXT", "record_type": "TEXT", "job_id": "TEXT",
+                "job_name": "TEXT", "job_owner": "TEXT", "job_state": "TEXT",
+                "job_type": "TEXT", "priority": "TEXT", "created_utc": "TEXT",
+                "modified_utc": "TEXT", "completed_utc": "TEXT",
+                "expiration_utc": "TEXT", "url": "TEXT", "local_path": "TEXT",
+                "remote_name": "TEXT", "file_size": "TEXT",
+                "bytes_transferred": "TEXT", "raw_row_json": "TEXT NOT NULL DEFAULT '{}'",
+                "parser_status": "TEXT", "parser_error": "TEXT",
+            },
+            "bits_activity": {
+                "source_table": "TEXT NOT NULL DEFAULT 'evtx_events'",
+                "source_row_id": "TEXT", "event_time_utc": "TEXT",
+                "event_id": "TEXT", "event_type": "TEXT", "provider": "TEXT",
+                "channel": "TEXT", "computer": "TEXT", "job_id": "TEXT",
+                "job_name": "TEXT", "job_owner": "TEXT", "url": "TEXT",
+                "peer": "TEXT", "file_count": "TEXT", "total_bytes": "TEXT",
+                "bytes_transferred": "TEXT", "local_path": "TEXT",
+                "matched_bits_job_id": "TEXT", "correlation_basis": "TEXT",
+                "raw_fields_json": "TEXT NOT NULL DEFAULT '{}'",
+            },
             "windows_search_internet_history": {
                 "work_id": "TEXT", "gather_time": "TEXT", "item_url": "TEXT",
                 "target_url": "TEXT", "target_host": "TEXT", "target_path": "TEXT",
@@ -4976,6 +5199,17 @@ class Database:
                 "last_modified_utc": "TEXT", "expiration_time_utc": "TEXT",
                 "platform_device_id": "TEXT", "payload_json": "TEXT", "raw_json": "TEXT",
             },
+            "clipboard_items": {
+                "tool_name": "TEXT NOT NULL DEFAULT ''", "source_path": "TEXT",
+                "user_profile": "TEXT", "source_type": "TEXT", "source_table": "TEXT",
+                "row_identifier": "TEXT", "item_time_utc": "TEXT", "created_time_utc": "TEXT",
+                "modified_time_utc": "TEXT", "last_used_time_utc": "TEXT",
+                "sequence_number": "TEXT", "format_name": "TEXT", "content_type": "TEXT",
+                "text_content": "TEXT", "file_uri": "TEXT", "html_content": "TEXT",
+                "image_present": "TEXT", "payload_size": "TEXT",
+                "cloud_sync_state": "TEXT", "cloud_sync_id": "TEXT", "device_id": "TEXT",
+                "raw_payload_json": "TEXT", "parser_status": "TEXT", "parser_error": "TEXT",
+            },
             "webcache_entries": {
                 "tool_name": "TEXT NOT NULL DEFAULT ''", "source_database": "TEXT",
                 "source_table": "TEXT", "table_row_number": "TEXT", "container_id": "TEXT",
@@ -5126,10 +5360,126 @@ class Database:
             self._add_column_if_missing("evtx_events", column, "TEXT")
         self._add_column_if_missing("jobs", "source_scope", "TEXT NOT NULL DEFAULT 'live'")
         self._add_column_if_missing("process_timings", "source_scope", "TEXT NOT NULL DEFAULT 'live'")
+        self.conn.commit()
+        self._rebuild_legacy_invalid_foreign_key_tables()
         self._refresh_sqlite_table_column_cache()
         self.conn.commit()
         if self.analytics_mode == "duckdb":
             self.cleanup_empty_sqlite_analytics_tables()
+
+    def _rebuild_legacy_invalid_foreign_key_tables(self) -> None:
+        if self._foreign_key_targets("file_correlations") & {"mft_entries"}:
+            self._rebuild_file_correlations_without_invalid_fk()
+        if self._foreign_key_targets("timeline_event_sources") & {"timeline_events"}:
+            self._rebuild_timeline_event_sources_without_invalid_fk()
+
+    def _foreign_key_targets(self, table: str) -> set[str]:
+        if not self._sqlite_table_exists(table):
+            return set()
+        rows = self.conn.execute(f"PRAGMA foreign_key_list({self._quote_identifier(table)})").fetchall()
+        return {str(row["table"]) for row in rows}
+
+    def _rebuild_file_correlations_without_invalid_fk(self) -> None:
+        self._rebuild_table_without_foreign_keys(
+            "file_correlations",
+            """
+            CREATE TABLE file_correlations (
+              id TEXT PRIMARY KEY,
+              case_id TEXT NOT NULL REFERENCES cases(id),
+              computer_id TEXT,
+              image_id TEXT,
+              source_table TEXT NOT NULL,
+              source_row_id TEXT NOT NULL,
+              mft_entry_id TEXT,
+              confidence TEXT NOT NULL,
+              reason TEXT NOT NULL,
+              created_at TEXT NOT NULL
+            )
+            """,
+            [
+                "id", "case_id", "computer_id", "image_id", "source_table",
+                "source_row_id", "mft_entry_id", "confidence", "reason", "created_at",
+            ],
+            """
+            CREATE INDEX IF NOT EXISTS idx_file_correlations_case
+              ON file_correlations(case_id);
+            CREATE INDEX IF NOT EXISTS idx_file_correlations_source
+              ON file_correlations(source_table, source_row_id);
+            CREATE INDEX IF NOT EXISTS idx_file_correlations_mft
+              ON file_correlations(mft_entry_id);
+            """,
+        )
+
+    def _rebuild_timeline_event_sources_without_invalid_fk(self) -> None:
+        self._rebuild_table_without_foreign_keys(
+            "timeline_event_sources",
+            """
+            CREATE TABLE timeline_event_sources (
+              id TEXT PRIMARY KEY,
+              case_id TEXT NOT NULL REFERENCES cases(id),
+              computer_id TEXT,
+              image_id TEXT,
+              primary_event_id TEXT NOT NULL,
+              duplicate_event_id TEXT NOT NULL,
+              source_scope TEXT NOT NULL,
+              source_tool TEXT NOT NULL,
+              source_table TEXT NOT NULL,
+              source_row_id TEXT NOT NULL,
+              tool_output_id TEXT NOT NULL REFERENCES tool_outputs(id),
+              tool_output_path TEXT,
+              details_json TEXT NOT NULL,
+              created_at TEXT NOT NULL
+            )
+            """,
+            [
+                "id", "case_id", "computer_id", "image_id", "primary_event_id",
+                "duplicate_event_id", "source_scope", "source_tool", "source_table",
+                "source_row_id", "tool_output_id", "tool_output_path", "details_json",
+                "created_at",
+            ],
+            """
+            CREATE INDEX IF NOT EXISTS idx_timeline_event_sources_case_primary
+              ON timeline_event_sources(case_id, primary_event_id);
+            CREATE INDEX IF NOT EXISTS idx_timeline_event_sources_case_duplicate
+              ON timeline_event_sources(case_id, duplicate_event_id);
+            """,
+        )
+
+    def _rebuild_table_without_foreign_keys(
+        self,
+        table: str,
+        create_sql: str,
+        columns: list[str],
+        index_sql: str,
+    ) -> None:
+        if not self._sqlite_table_exists(table):
+            return
+        temp_table = f"{table}__legacy_fk"
+        quoted_table = self._quote_identifier(table)
+        quoted_temp = self._quote_identifier(temp_table)
+        common = [
+            column
+            for column in columns
+            if self._sqlite_table_has_column(table, column)
+        ]
+        if not common:
+            return
+        column_sql = ", ".join(self._quote_identifier(column) for column in common)
+        self.conn.commit()
+        self.conn.execute("PRAGMA foreign_keys=OFF")
+        try:
+            self.conn.execute(f"DROP TABLE IF EXISTS {quoted_temp}")
+            self.conn.execute(f"ALTER TABLE {quoted_table} RENAME TO {quoted_temp}")
+            self.conn.execute(create_sql)
+            self.conn.execute(
+                f"INSERT INTO {quoted_table} ({column_sql}) "
+                f"SELECT {column_sql} FROM {quoted_temp}"
+            )
+            self.conn.execute(f"DROP TABLE {quoted_temp}")
+            self.conn.executescript(index_sql)
+            self.conn.commit()
+        finally:
+            self.conn.execute("PRAGMA foreign_keys=ON")
 
     def _drop_sqlite_analytics_views(self) -> None:
         for table in sorted(ANALYTICS_TABLES):
@@ -5142,9 +5492,11 @@ class Database:
         self.conn.commit()
 
     def _add_column_if_missing(self, table: str, column: str, definition: str) -> None:
-        columns = {row["name"] for row in self.conn.execute(f"PRAGMA table_info({table})")}
+        table_sql = self._quote_identifier(table)
+        column_sql = self._quote_identifier(column)
+        columns = {row["name"] for row in self.conn.execute(f"PRAGMA table_info({table_sql})")}
         if column not in columns:
-            self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+            self.conn.execute(f"ALTER TABLE {table_sql} ADD COLUMN {column_sql} {definition}")
 
     def _refresh_sqlite_table_column_cache(self) -> None:
         tables = self.conn.execute(
@@ -5153,7 +5505,7 @@ class Database:
         self._sqlite_table_columns = {
             str(row["name"]): [
                 str(column["name"])
-                for column in self.conn.execute(f"PRAGMA table_info({row['name']})").fetchall()
+                for column in self.conn.execute(f"PRAGMA table_info({self._quote_identifier(str(row['name']))})").fetchall()
             ]
             for row in tables
         }
@@ -5327,6 +5679,168 @@ class Database:
                 ],
             )
         self._commit()
+
+    def replace_image_hashes(self, *, case_id: str, image_id: str, rows: list[dict[str, Any]]) -> None:
+        self.get_image(image_id, case_id)
+        self.conn.execute("DELETE FROM image_hashes WHERE case_id = ? AND image_id = ?", (case_id, image_id))
+        if rows:
+            computed_at = utc_now()
+            self.conn.executemany(
+                """
+                INSERT INTO image_hashes (
+                  id, case_id, image_id, algorithm, digest, size_bytes, source_path,
+                  status, error, computed_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        row.get("id") or str(uuid.uuid4()),
+                        case_id,
+                        image_id,
+                        str(row["algorithm"]).lower(),
+                        row.get("digest"),
+                        row.get("size_bytes"),
+                        str(row.get("source_path") or ""),
+                        str(row.get("status") or "computed"),
+                        row.get("error"),
+                        str(row.get("computed_at") or computed_at),
+                    )
+                    for row in rows
+                ],
+            )
+        self._commit()
+
+    def image_hashes(self, *, case_id: str, image_id: str | None = None) -> list[dict[str, Any]]:
+        where = ["case_id = ?"]
+        params: list[Any] = [case_id]
+        if image_id:
+            where.append("image_id = ?")
+            params.append(image_id)
+        rows = self.conn.execute(
+            f"""
+            SELECT *
+            FROM image_hashes
+            WHERE {' AND '.join(where)}
+            ORDER BY image_id, algorithm
+            """,
+            params,
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def record_image_verification(self, row: dict[str, Any]) -> None:
+        self.get_image(str(row["image_id"]), str(row["case_id"]))
+        self.conn.execute(
+            """
+            INSERT INTO image_verifications (
+              id, case_id, image_id, algorithm, expected_digest, actual_digest,
+              source_path, size_bytes, status, error, verified_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                row.get("id") or str(uuid.uuid4()),
+                row["case_id"],
+                row["image_id"],
+                str(row["algorithm"]).lower(),
+                row.get("expected_digest"),
+                row.get("actual_digest"),
+                str(row.get("source_path") or ""),
+                row.get("size_bytes"),
+                str(row.get("status") or "unknown"),
+                row.get("error"),
+                str(row.get("verified_at") or utc_now()),
+            ),
+        )
+        self._commit()
+
+    def image_verifications(self, *, case_id: str, image_id: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+        where = ["case_id = ?"]
+        params: list[Any] = [case_id]
+        if image_id:
+            where.append("image_id = ?")
+            params.append(image_id)
+        params.append(max(1, int(limit)))
+        rows = self.conn.execute(
+            f"""
+            SELECT *
+            FROM image_verifications
+            WHERE {' AND '.join(where)}
+            ORDER BY verified_at DESC, image_id, algorithm
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def insert_evidence_file_extractions(self, rows: list[dict[str, Any]]) -> None:
+        if not rows:
+            return
+        created_at = utc_now()
+        self.conn.executemany(
+            """
+            INSERT INTO evidence_file_extractions (
+              id, case_id, computer_id, image_id, artifact_name, source_path,
+              extracted_path, inode, extraction_method, sha256, size_bytes,
+              created_utc, modified_utc, accessed_utc, metadata_changed_utc,
+              status, details_json, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    row.get("id") or str(uuid.uuid4()),
+                    row["case_id"],
+                    row.get("computer_id"),
+                    row["image_id"],
+                    row.get("artifact_name"),
+                    row.get("source_path"),
+                    str(row["extracted_path"]),
+                    row.get("inode"),
+                    str(row.get("extraction_method") or "unknown"),
+                    row.get("sha256"),
+                    row.get("size_bytes"),
+                    row.get("created_utc"),
+                    row.get("modified_utc"),
+                    row.get("accessed_utc"),
+                    row.get("metadata_changed_utc"),
+                    str(row.get("status") or "extracted"),
+                    json.dumps(row.get("details") or {}, sort_keys=True),
+                    str(row.get("created_at") or created_at),
+                )
+                for row in rows
+            ],
+        )
+        self._commit()
+
+    def evidence_file_extractions(
+        self,
+        *,
+        case_id: str,
+        image_id: str | None = None,
+        artifact_name: str | None = None,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        where = ["case_id = ?"]
+        params: list[Any] = [case_id]
+        if image_id:
+            where.append("image_id = ?")
+            params.append(image_id)
+        if artifact_name:
+            where.append("artifact_name = ?")
+            params.append(artifact_name)
+        params.append(max(1, int(limit)))
+        rows = self.conn.execute(
+            f"""
+            SELECT *
+            FROM evidence_file_extractions
+            WHERE {' AND '.join(where)}
+            ORDER BY created_at DESC, artifact_name, source_path
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def image_metadata(self, *, case_id: str, image_id: str) -> list[dict[str, Any]]:
         rows = self.conn.execute(
@@ -5553,19 +6067,38 @@ class Database:
         self.conn.commit()
 
     def insert_tool_output(self, values: dict[str, Any]) -> str:
+        job_id = values.get("job_id")
+        if job_id:
+            self._ensure_job_parent(
+                job_id=str(job_id),
+                case_id=str(values["case_id"]),
+                image_id=str(values["image_id"]),
+                computer_id=str(values["computer_id"]),
+                tool_name=str(values["tool_name"]),
+            )
         self.conn.execute(
             """
             INSERT INTO tool_outputs (
               id, case_id, computer_id, image_id, job_id, tool_name,
               output_type, path, content_sha256, row_count, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              case_id = excluded.case_id,
+              computer_id = excluded.computer_id,
+              image_id = excluded.image_id,
+              job_id = excluded.job_id,
+              tool_name = excluded.tool_name,
+              output_type = excluded.output_type,
+              path = excluded.path,
+              content_sha256 = excluded.content_sha256,
+              row_count = excluded.row_count
             """,
             (
                 values["id"],
                 values["case_id"],
                 values["computer_id"],
                 values["image_id"],
-                values.get("job_id"),
+                job_id,
                 values["tool_name"],
                 values["output_type"],
                 str(values["path"]),
@@ -5576,6 +6109,70 @@ class Database:
         )
         self.conn.commit()
         return values["id"]
+
+    def ensure_tool_output_parent(
+        self,
+        *,
+        tool_output_id: str,
+        case_id: str,
+        computer_id: str,
+        image_id: str,
+        tool_name: str,
+        path: Path | str,
+    ) -> None:
+        created_at = utc_now()
+        self.conn.execute(
+            """
+            INSERT OR IGNORE INTO tool_outputs (
+              id, case_id, computer_id, image_id, job_id, tool_name, output_type,
+              path, content_sha256, row_count, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                tool_output_id,
+                case_id,
+                computer_id,
+                image_id,
+                None,
+                tool_name,
+                "synthetic_parent",
+                str(path),
+                None,
+                None,
+                created_at,
+            ),
+        )
+
+    def _ensure_job_parent(self, *, job_id: str, case_id: str, image_id: str, computer_id: str | None, tool_name: str) -> None:
+        if self.conn.execute("SELECT 1 FROM jobs WHERE id = ?", (job_id,)).fetchone() is not None:
+            return
+        now = utc_now()
+        self.conn.execute(
+            """
+            INSERT INTO jobs (
+              id, case_id, image_id, computer_id, source_scope, tool_name, tool_version,
+              command_json, start_time, end_time, exit_code, stdout_path, stderr_path,
+              output_folder, dry_run
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                job_id,
+                case_id,
+                image_id,
+                computer_id,
+                "live",
+                tool_name,
+                None,
+                "[]",
+                now,
+                now,
+                0,
+                "",
+                "",
+                "",
+                0,
+            ),
+        )
 
     def duplicate_tool_output(
         self, *, case_id: str, image_id: str, tool_name: str, content_sha256: str
@@ -5639,7 +6236,7 @@ class Database:
             return list(self._sqlite_table_columns[table])
         if table in ANALYTICS_TABLE_COLUMNS:
             return list(ANALYTICS_TABLE_COLUMNS[table])
-        rows = self.conn.execute(f"PRAGMA table_info({table})").fetchall()
+        rows = self.conn.execute(f"PRAGMA table_info({self._quote_identifier(table)})").fetchall()
         if not rows:
             raise ValueError(f"Unknown normalized artifact table: {table}")
         columns = [row["name"] for row in rows]
@@ -6110,30 +6707,30 @@ class Database:
         if image_id is not None:
             where.append("image_id = ?")
             params.append(image_id)
-        self.conn.execute(f"DELETE FROM artifact_correlations WHERE {' AND '.join(where)}", params)
-        if rows:
-            created_at = utc_now()
-            self.conn.executemany(
-                """
-                INSERT INTO artifact_correlations (
-                  id, case_id, computer_id, image_id,
-                  left_source_tool, left_source_table, left_source_row_id,
-                  right_source_tool, right_source_table, right_source_row_id,
-                  correlation_type, correlation_key, confidence, summary, details_json, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                [
-                    (
-                        row["id"], row["case_id"], row["computer_id"], row["image_id"],
-                        row.get("left_source_tool"), row["left_source_table"], row["left_source_row_id"],
-                        row.get("right_source_tool"), row["right_source_table"], row["right_source_row_id"],
-                        row["correlation_type"], row.get("correlation_key"), row["confidence"],
-                        row.get("summary"), json.dumps(row.get("details", {}), default=str), created_at,
-                    )
-                    for row in rows
-                ],
-            )
-        self._commit()
+        with self.bulk_transaction():
+            self.conn.execute(f"DELETE FROM artifact_correlations WHERE {' AND '.join(where)}", params)
+            if rows:
+                created_at = utc_now()
+                self.conn.executemany(
+                    """
+                    INSERT INTO artifact_correlations (
+                      id, case_id, computer_id, image_id,
+                      left_source_tool, left_source_table, left_source_row_id,
+                      right_source_tool, right_source_table, right_source_row_id,
+                      correlation_type, correlation_key, confidence, summary, details_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        (
+                            row["id"], row["case_id"], row["computer_id"], row["image_id"],
+                            row.get("left_source_tool"), row["left_source_table"], row["left_source_row_id"],
+                            row.get("right_source_tool"), row["right_source_table"], row["right_source_row_id"],
+                            row["correlation_type"], row.get("correlation_key"), row["confidence"],
+                            row.get("summary"), json.dumps(row.get("details", {}), default=str), created_at,
+                        )
+                        for row in rows
+                    ],
+                )
 
     def replace_computer_inventory(
         self,
@@ -6147,27 +6744,27 @@ class Database:
         if image_id is not None:
             where.append("image_id = ?")
             params.append(image_id)
-        self.conn.execute(f"DELETE FROM computer_inventory WHERE {' AND '.join(where)}", params)
-        if rows:
-            created_at = utc_now()
-            self.conn.executemany(
-                """
-                INSERT INTO computer_inventory (
-                  id, case_id, computer_id, image_id, category, name, value,
-                  source_table, source_row_id, confidence, details_json, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                [
-                    (
-                        row["id"], row["case_id"], row["computer_id"], row["image_id"],
-                        row["category"], row["name"], row.get("value"), row.get("source_table"),
-                        row.get("source_row_id"), row.get("confidence", "derived"),
-                        json.dumps(row.get("details", {}), default=str), created_at,
-                    )
-                    for row in rows
-                ],
-            )
-        self._commit()
+        with self.bulk_transaction():
+            self.conn.execute(f"DELETE FROM computer_inventory WHERE {' AND '.join(where)}", params)
+            if rows:
+                created_at = utc_now()
+                self.conn.executemany(
+                    """
+                    INSERT INTO computer_inventory (
+                      id, case_id, computer_id, image_id, category, name, value,
+                      source_table, source_row_id, confidence, details_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        (
+                            row["id"], row["case_id"], row["computer_id"], row["image_id"],
+                            row["category"], row["name"], row.get("value"), row.get("source_table"),
+                            row.get("source_row_id"), row.get("confidence", "derived"),
+                            json.dumps(row.get("details", {}), default=str), created_at,
+                        )
+                        for row in rows
+                    ],
+                )
 
     def insert_onedrive_items(self, rows: list[dict[str, Any]]) -> None:
         rows = self._strip_columns(rows, ("media_json", "hydration_json", "metadata_json"))
@@ -6221,6 +6818,24 @@ class Database:
                 "content_uri", "activation_uri", "fallback_uri", "start_time_utc",
                 "end_time_utc", "last_modified_utc", "expiration_time_utc",
                 "platform_device_id", "payload_json", "raw_json", "created_at",
+            ],
+            rows,
+        )
+
+    def insert_clipboard_items(self, rows: list[dict[str, Any]]) -> None:
+        rows = self._strip_columns(rows, ("raw_payload_json",))
+        self._insert_rows(
+            "clipboard_items",
+            [
+                "id", "case_id", "computer_id", "image_id", "tool_output_id",
+                "tool_name", "source_csv", "row_number", "source_path",
+                "user_profile", "source_type", "source_table", "row_identifier",
+                "item_time_utc", "created_time_utc", "modified_time_utc",
+                "last_used_time_utc", "sequence_number", "format_name",
+                "content_type", "text_content", "file_uri", "html_content",
+                "image_present", "payload_size", "cloud_sync_state",
+                "cloud_sync_id", "device_id", "raw_payload_json",
+                "parser_status", "parser_error", "created_at",
             ],
             rows,
         )
@@ -6775,6 +7390,7 @@ class Database:
         if not rows:
             return
         created_at = utc_now()
+        self._ensure_tool_output_parents(columns, rows)
         analytics_rows = [
             {
                 column: created_at if column == "created_at"
@@ -6787,16 +7403,51 @@ class Database:
         if self._analytics_insert(table, columns, analytics_rows):
             return
         placeholders = ", ".join("?" for _ in columns)
-        column_sql = ", ".join(columns)
+        table_sql = self._quote_identifier(table)
+        column_sql = ", ".join(self._quote_identifier(column) for column in columns)
         try:
             self.conn.executemany(
-                f"INSERT INTO {table} ({column_sql}) VALUES ({placeholders})",
+                f"INSERT INTO {table_sql} ({column_sql}) VALUES ({placeholders})",
                 [tuple(row.get(column) for column in columns) for row in analytics_rows],
             )
             self._commit()
         except Exception as exc:
             self._log_database_write_failure(table, analytics_rows, exc)
             raise
+
+    def _ensure_tool_output_parents(self, columns: list[str], rows: list[dict[str, Any]]) -> None:
+        if "tool_output_id" not in columns:
+            return
+        candidate_ids = sorted({str(row.get("tool_output_id") or "") for row in rows if row.get("tool_output_id")})
+        if not candidate_ids:
+            return
+        placeholders = ", ".join("?" for _ in candidate_ids)
+        existing = {
+            str(row["id"])
+            for row in self.conn.execute(f"SELECT id FROM tool_outputs WHERE id IN ({placeholders})", candidate_ids).fetchall()
+        }
+        missing = set(candidate_ids) - existing
+        if not missing:
+            return
+        emitted: set[str] = set()
+        for row in rows:
+            tool_output_id = str(row.get("tool_output_id") or "")
+            if tool_output_id not in missing or tool_output_id in emitted:
+                continue
+            case_id = row.get("case_id")
+            computer_id = row.get("computer_id")
+            image_id = row.get("image_id")
+            if not case_id or not computer_id or not image_id:
+                continue
+            self.ensure_tool_output_parent(
+                tool_output_id=tool_output_id,
+                case_id=str(case_id),
+                computer_id=str(computer_id),
+                image_id=str(image_id),
+                tool_name=str(row.get("tool_name") or "SyntheticImport"),
+                path=str(row.get("source_csv") or ""),
+            )
+            emitted.add(tool_output_id)
 
     def _log_database_write_failure(self, table: str, rows: list[dict[str, Any]], exc: Exception) -> None:
         row = rows[0] if rows else {}
@@ -7089,6 +7740,37 @@ class Database:
                 "client_name", "client_ip", "client_id", "first_seen",
                 "last_seen", "insert_date", "last_access", "access_count",
                 "activity_count", "day_count", "raw_time_bucket", "created_at",
+            ],
+            rows,
+        )
+
+    def insert_bits_jobs(self, rows: list[dict[str, Any]]) -> None:
+        self._insert_rows(
+            "bits_jobs",
+            [
+                "id", "case_id", "computer_id", "image_id", "tool_output_id",
+                "tool_name", "source_csv", "row_number", "source_path",
+                "database_file", "source_table", "record_id", "record_type",
+                "job_id", "job_name", "job_owner", "job_state", "job_type",
+                "priority", "created_utc", "modified_utc", "completed_utc",
+                "expiration_utc", "url", "local_path", "remote_name", "file_size",
+                "bytes_transferred", "raw_row_json", "parser_status",
+                "parser_error", "created_at",
+            ],
+            rows,
+        )
+
+    def insert_bits_activity(self, rows: list[dict[str, Any]]) -> None:
+        self._insert_rows(
+            "bits_activity",
+            [
+                "id", "case_id", "computer_id", "image_id", "tool_output_id",
+                "tool_name", "source_csv", "row_number", "source_table",
+                "source_row_id", "event_time_utc", "event_id", "event_type",
+                "provider", "channel", "computer", "job_id", "job_name",
+                "job_owner", "url", "peer", "file_count", "total_bytes",
+                "bytes_transferred", "local_path", "matched_bits_job_id",
+                "correlation_basis", "raw_fields_json", "created_at",
             ],
             rows,
         )
@@ -8059,7 +8741,33 @@ class Database:
         self._delete_sqlite_if_exists("timeline_events", " AND ".join(timeline_where), timeline_params)
         if self.analytics is not None:
             self.analytics.delete_case_image("timeline_events", case_id=case_id, image_id=image_id)
-        self._delete_sqlite_if_exists("file_correlations", " AND ".join(timeline_where), timeline_params)
+        file_correlation_where = ["case_id = ?"]
+        file_correlation_params: list[Any] = [case_id]
+        if image_id is not None:
+            file_correlation_where.append("image_id = ?")
+            file_correlation_params.append(image_id)
+        if tool_names:
+            source_tables = sorted(
+                {
+                    table
+                    for tool_name in tool_names
+                    for table in TOOL_PURGE_TABLES.get(tool_name, set())
+                    if table != "tool_outputs"
+                }
+            )
+            if source_tables:
+                placeholders = ", ".join("?" for _ in source_tables)
+                file_correlation_where.append(f"source_table IN ({placeholders})")
+                file_correlation_params.extend(source_tables)
+            else:
+                file_correlation_where = []
+                file_correlation_params = []
+        if file_correlation_where:
+            self._delete_sqlite_if_exists(
+                "file_correlations",
+                " AND ".join(file_correlation_where),
+                file_correlation_params,
+            )
         artifact_correlation_where = ["case_id = ?"]
         artifact_correlation_params: list[Any] = [case_id]
         if image_id is not None:
@@ -8088,7 +8796,7 @@ class Database:
 
     def _delete_sqlite_if_exists(self, table: str, where: str, params: list[Any]) -> None:
         if self._sqlite_table_exists(table):
-            self.conn.execute(f"DELETE FROM {table} WHERE {where}", params)
+            self.conn.execute(f"DELETE FROM {self._quote_identifier(table)} WHERE {where}", params)
 
     def _purge_where_for_table(
         self,
@@ -8099,7 +8807,7 @@ class Database:
         tool_names: list[str] | None,
     ) -> tuple[str, list[Any]]:
         columns = set(self._table_columns(table)) if table in self._sqlite_table_columns else {
-            str(row["name"]) for row in self.conn.execute(f"PRAGMA table_info({table})").fetchall()
+            str(row["name"]) for row in self.conn.execute(f"PRAGMA table_info({self._quote_identifier(table)})").fetchall()
         }
         if not columns:
             return "", []
@@ -8144,6 +8852,10 @@ class Database:
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
             (table,),
         ).fetchone() is not None
+
+    def _sqlite_table_has_column(self, table: str, column: str) -> bool:
+        rows = self.conn.execute(f"PRAGMA table_info({self._quote_identifier(table)})").fetchall()
+        return any(str(row["name"]) == column for row in rows)
 
     def log_activity(
         self,
@@ -8440,6 +9152,15 @@ class Database:
             """,
             (case_id,),
         ).fetchall()
+        image_hashes = self.conn.execute(
+            """
+            SELECT image_id, algorithm, digest, size_bytes, source_path, status, error, computed_at
+            FROM image_hashes
+            WHERE case_id = ?
+            ORDER BY image_id, algorithm
+            """,
+            (case_id,),
+        ).fetchall()
         computers = self.conn.execute(
             "SELECT id, label, hostname, notes, created_at FROM computers WHERE case_id = ? ORDER BY created_at",
             (case_id,),
@@ -8488,6 +9209,7 @@ class Database:
             "computers": [dict(row) for row in computers],
             "images": [dict(row) for row in images],
             "image_metadata": [dict(row) for row in image_metadata],
+            "image_hashes": [dict(row) for row in image_hashes],
             "mounts": [dict(row) for row in mounts],
             "artifacts": [dict(row) for row in artifacts],
             "outputs": [dict(row) for row in outputs],

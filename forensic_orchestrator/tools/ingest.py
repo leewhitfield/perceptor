@@ -4,7 +4,6 @@ import csv
 import hashlib
 import logging
 import os
-import sys
 import uuid
 from pathlib import Path
 
@@ -47,6 +46,9 @@ from forensic_orchestrator.tools.normalized import (
     normalized_rdp_visual_observation_row,
     normalized_browser_cookie_row,
     normalized_browser_artifact_row,
+    normalized_bits_activity_row_from_evtx,
+    normalized_bits_job_row,
+    normalized_clipboard_item_row,
     normalized_browser_cache_entry_row,
     normalized_browser_download_row,
     normalized_browser_history_row,
@@ -106,7 +108,8 @@ from forensic_orchestrator.tools.usp import normalized_usp_row
 
 LOGGER = logging.getLogger(__name__)
 INGEST_BATCH_SIZE = 5000
-csv.field_size_limit(sys.maxsize)
+DEFAULT_CSV_FIELD_SIZE_LIMIT = 100 * 1024 * 1024
+csv.field_size_limit(int(os.environ.get("RELIC_CSV_FIELD_SIZE_LIMIT", DEFAULT_CSV_FIELD_SIZE_LIMIT)))
 
 
 def load_artifact_manifest(path: Path) -> dict[str, dict[str, str]]:
@@ -140,6 +143,14 @@ def ingest_csv_output(
     path: Path,
     rebuild_correlations: bool = True,
 ) -> int:
+    db.ensure_tool_output_parent(
+        tool_output_id=tool_output_id,
+        case_id=case_id,
+        computer_id=computer_id,
+        image_id=image_id,
+        tool_name=tool_name,
+        path=path,
+    )
     rows = []
     shortcut_rows = []
     prefetch_rows = []
@@ -163,6 +174,8 @@ def ingest_csv_output(
     ntfs_index_bitmap_rows = []
     srum_rows = []
     ual_rows = []
+    bits_job_rows = []
+    bits_activity_rows = []
     windows_search_file_rows = []
     windows_search_internet_rows = []
     windows_search_activity_rows = []
@@ -201,6 +214,7 @@ def ingest_csv_output(
     package_artifact_rows = []
     spotify_artifact_rows = []
     telemetry_artifact_rows = []
+    clipboard_item_rows = []
     windows_activity_rows = []
     webcache_rows = []
     webcache_file_access_rows = []
@@ -247,6 +261,7 @@ def ingest_csv_output(
         "SQLECmd",
         "PackageArtifactsParser",
         "TelemetryParser",
+        "ClipboardParser",
         "WindowsActivitiesParser",
         "WebCacheParser",
         "FileMetadataExtractor",
@@ -259,6 +274,7 @@ def ingest_csv_output(
         "ArchiveInventoryParser",
         "MailboxParser",
         "OfficeBackstageParser",
+        "UserFileContentParser",
         "UserDictionaryParser",
         "ZoneIdentifierParser",
         "ThumbcacheParser",
@@ -306,6 +322,8 @@ def ingest_csv_output(
         nonlocal ntfs_index_bitmap_rows
         nonlocal srum_rows
         nonlocal ual_rows
+        nonlocal bits_job_rows
+        nonlocal bits_activity_rows
         nonlocal windows_search_file_rows
         nonlocal windows_search_internet_rows
         nonlocal windows_search_activity_rows
@@ -344,6 +362,7 @@ def ingest_csv_output(
         nonlocal package_artifact_rows
         nonlocal spotify_artifact_rows
         nonlocal telemetry_artifact_rows
+        nonlocal clipboard_item_rows
         nonlocal windows_activity_rows
         nonlocal webcache_rows
         nonlocal webcache_file_access_rows
@@ -414,6 +433,24 @@ def ingest_csv_output(
             content_indexer.add(document)
             if document:
                 content_reference_rows.append(_content_reference_from_document(row, document, "cloud_log_content"))
+        for row in clipboard_item_rows:
+            content_text = "\n".join(
+                str(row.get(key) or "")
+                for key in ("text_content", "html_content", "file_uri")
+                if row.get(key)
+            )
+            document = generic_content_document(
+                row,
+                source_type="clipboard",
+                source_table="clipboard_items",
+                content=content_text,
+                title=str(row.get("format_name") or row.get("content_type") or "Clipboard item"),
+                timestamp=row.get("item_time_utc") or row.get("created_time_utc"),
+                source_path=row.get("source_path") or row.get("source_csv"),
+            )
+            content_indexer.add(document)
+            if document:
+                content_reference_rows.append(_content_reference_from_document(row, document, "clipboard_content"))
         write_phase = "database"
         def insert_normalized(table: str, table_rows: list[dict[str, object]], legacy_insert) -> None:
             if db.analytics_only:
@@ -458,6 +495,8 @@ def ingest_csv_output(
         insert_normalized("ntfs_index_bitmaps", ntfs_index_bitmap_rows, db.insert_ntfs_index_bitmaps)
         insert_normalized("srum_records", srum_rows, db.insert_srum_records)
         insert_normalized("ual_records", ual_rows, db.insert_ual_records)
+        insert_normalized("bits_jobs", bits_job_rows, db.insert_bits_jobs)
+        insert_normalized("bits_activity", bits_activity_rows, db.insert_bits_activity)
         insert_normalized("windows_search_files", windows_search_file_rows, db.insert_windows_search_files)
         insert_normalized("windows_search_internet_history", windows_search_internet_rows, db.insert_windows_search_internet_history)
         insert_normalized("windows_search_activity_history", windows_search_activity_rows, db.insert_windows_search_activity_history)
@@ -496,6 +535,7 @@ def ingest_csv_output(
         insert_normalized("package_artifacts", package_artifact_rows, db.insert_package_artifacts)
         insert_normalized("spotify_artifacts", spotify_artifact_rows, db.insert_spotify_artifacts)
         insert_normalized("telemetry_artifacts", telemetry_artifact_rows, db.insert_telemetry_artifacts)
+        insert_normalized("clipboard_items", clipboard_item_rows, db.insert_clipboard_items)
         insert_normalized("windows_activities", windows_activity_rows, db.insert_windows_activities)
         insert_normalized("webcache_entries", webcache_rows, db.insert_webcache_entries)
         insert_normalized("webcache_file_accesses", webcache_file_access_rows, db.insert_webcache_file_accesses)
@@ -515,6 +555,7 @@ def ingest_csv_output(
                 + prefetch_rows
                 + sam_rows
                 + evtx_rows
+                + bits_activity_rows
                 + etl_rows
                 + recycle_item_rows
                 + firefox_history_rows
@@ -523,7 +564,9 @@ def ingest_csv_output(
                 + browser_cache_rows
                 + package_cache_rows
                 + package_artifact_rows
+                + bits_job_rows
                 + telemetry_artifact_rows
+                + clipboard_item_rows
                 + windows_activity_rows
                 + windows_search_gather_rows
                 + windows_error_report_rows
@@ -556,6 +599,8 @@ def ingest_csv_output(
         ntfs_index_bitmap_rows = []
         srum_rows = []
         ual_rows = []
+        bits_job_rows = []
+        bits_activity_rows = []
         windows_search_file_rows = []
         windows_search_internet_rows = []
         windows_search_activity_rows = []
@@ -594,6 +639,7 @@ def ingest_csv_output(
         package_artifact_rows = []
         spotify_artifact_rows = []
         telemetry_artifact_rows = []
+        clipboard_item_rows = []
         windows_activity_rows = []
         webcache_rows = []
         webcache_file_access_rows = []
@@ -896,6 +942,19 @@ def ingest_csv_output(
                     if tool_name == "UalParser":
                         ual_rows.append(
                             normalized_ual_record_row(
+                                case_id=case_id,
+                                computer_id=computer_id,
+                                image_id=image_id,
+                                tool_output_id=tool_output_id,
+                                tool_name=tool_name,
+                                source_csv=path,
+                                row_number=row_number,
+                                row=dict(row),
+                            )
+                        )
+                    if tool_name == "BITSParser":
+                        bits_job_rows.append(
+                            normalized_bits_job_row(
                                 case_id=case_id,
                                 computer_id=computer_id,
                                 image_id=image_id,
@@ -1289,6 +1348,9 @@ def ingest_csv_output(
                             row=dict(row),
                         )
                         evtx_rows.append(evtx_row)
+                        bits_activity_row = normalized_bits_activity_row_from_evtx(evtx_row)
+                        if bits_activity_row:
+                            bits_activity_rows.append(bits_activity_row)
                         usb_rows.extend(usb_rows_from_partition_diagnostic_event(evtx_row))
                     if tool_name == "EtlParser":
                         etl_rows.append(
@@ -1675,6 +1737,19 @@ def ingest_csv_output(
                     if tool_name == "TelemetryParser":
                         telemetry_artifact_rows.append(
                             normalized_telemetry_artifact_row(
+                                case_id=case_id,
+                                computer_id=computer_id,
+                                image_id=image_id,
+                                tool_output_id=tool_output_id,
+                                tool_name=tool_name,
+                                source_csv=path,
+                                row_number=row_number,
+                                row=dict(row),
+                            )
+                        )
+                    if tool_name == "ClipboardParser":
+                        clipboard_item_rows.append(
+                            normalized_clipboard_item_row(
                                 case_id=case_id,
                                 computer_id=computer_id,
                                 image_id=image_id,

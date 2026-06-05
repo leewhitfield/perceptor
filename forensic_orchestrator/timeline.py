@@ -15,6 +15,8 @@ def timeline_events_from_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]
             events.extend(_prefetch_events(row))
         elif tool_name in {"LECmd", "JLECmd"}:
             events.extend(_shortcut_events(row))
+        elif row.get("source_table") == "evtx_events" and str(row.get("event_type") or "").startswith("bits_"):
+            events.extend(_bits_activity_events(row))
         elif tool_name == "EvtxECmd":
             events.extend(_evtx_events(row))
         elif tool_name == "EtlParser":
@@ -33,8 +35,12 @@ def timeline_events_from_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]
             events.extend(_package_cache_events(row))
         elif tool_name == "PackageArtifactsParser":
             events.extend(_package_artifact_events(row))
+        elif tool_name == "BITSParser":
+            events.extend(_bits_events(row))
         elif tool_name == "TelemetryParser":
             events.extend(_telemetry_artifact_events(row))
+        elif tool_name == "ClipboardParser":
+            events.extend(_clipboard_events(row))
         elif tool_name == "WindowsActivitiesParser":
             events.extend(_windows_activity_events(row))
         elif tool_name == "WindowsSearchGatherParser":
@@ -135,6 +141,62 @@ def _timeline_duration_ms(start_timestamp: str | None, end_timestamp: str | None
     return duration if duration >= 0 else None
 
 
+def _truncate_detail(value: Any, limit: int) -> str:
+    text = str(value or "").strip()
+    return text[:limit]
+
+
+def _bits_events(row: dict[str, Any]) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    label = row.get("url") or row.get("local_path") or row.get("job_name") or row.get("database_file") or "BITS job"
+    details = {
+        "record_type": row.get("record_type"),
+        "job_id": row.get("job_id"),
+        "job_name": row.get("job_name"),
+        "job_owner": row.get("job_owner"),
+        "job_state": row.get("job_state"),
+        "url": row.get("url"),
+        "local_path": row.get("local_path"),
+        "database_file": row.get("database_file"),
+        "source_path": row.get("source_path"),
+        "parser_status": row.get("parser_status"),
+    }
+    for field, event_type in (
+        ("created_utc", "bits_job_created"),
+        ("modified_utc", "bits_job_modified"),
+        ("completed_utc", "bits_job_completed"),
+        ("expiration_utc", "bits_job_expiration"),
+    ):
+        event = _base(row, event_type, row.get(field), str(label), details)
+        if event:
+            events.append(event)
+    return events
+
+
+def _bits_activity_events(row: dict[str, Any]) -> list[dict[str, Any]]:
+    label = row.get("url") or row.get("local_path") or row.get("job_name") or row.get("job_id") or "BITS event"
+    event = _base(
+        row,
+        row.get("event_type") or "bits_event_log",
+        row.get("event_time_utc"),
+        str(label),
+        {
+            "event_id": row.get("event_id"),
+            "job_id": row.get("job_id"),
+            "job_name": row.get("job_name"),
+            "job_owner": row.get("job_owner"),
+            "url": row.get("url"),
+            "local_path": row.get("local_path"),
+            "total_bytes": row.get("total_bytes"),
+            "bytes_transferred": row.get("bytes_transferred"),
+            "provider": row.get("provider"),
+            "channel": row.get("channel"),
+            "correlation_basis": row.get("correlation_basis"),
+        },
+    )
+    return [event] if event else []
+
+
 def _source_scope(row: dict[str, Any]) -> str:
     if row.get("tool_name") == "MemoryStringScanner":
         artifact_type = str(row.get("source_artifact_type") or "memory").strip().lower()
@@ -184,8 +246,14 @@ def _source_table(row: dict[str, Any]) -> str:
         return "package_cache_entries"
     if tool_name == "PackageArtifactsParser":
         return "package_artifacts"
+    if tool_name == "BITSParser":
+        return "bits_jobs"
+    if row.get("source_table") == "evtx_events" and str(row.get("event_type") or "").startswith("bits_"):
+        return "bits_activity"
     if tool_name == "TelemetryParser":
         return "telemetry_artifacts"
+    if tool_name == "ClipboardParser":
+        return "clipboard_items"
     if tool_name == "WindowsActivitiesParser":
         return "windows_activities"
     if tool_name == "WindowsSearchGatherParser":
@@ -717,6 +785,43 @@ def _windows_activity_events(row: dict[str, Any]) -> list[dict[str, Any]]:
                 "payload_json": row.get("payload_json"),
             },
             raw_end_timestamp=row.get("end_time_utc") if field == "start_time_utc" else None,
+        )
+        if event:
+            events.append(event)
+    return events
+
+
+def _clipboard_events(row: dict[str, Any]) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    label = row.get("text_content") or row.get("file_uri") or row.get("format_name") or "Clipboard item"
+    details = {
+        "user_profile": row.get("user_profile"),
+        "source_type": row.get("source_type"),
+        "source_table": row.get("source_table"),
+        "row_identifier": row.get("row_identifier"),
+        "format_name": row.get("format_name"),
+        "content_type": row.get("content_type"),
+        "text_preview": _truncate_detail(row.get("text_content"), 500),
+        "file_uri": row.get("file_uri"),
+        "image_present": row.get("image_present"),
+        "payload_size": row.get("payload_size"),
+        "cloud_sync_state": row.get("cloud_sync_state"),
+        "cloud_sync_id": row.get("cloud_sync_id"),
+        "device_id": row.get("device_id"),
+        "parser_status": row.get("parser_status"),
+    }
+    for field, event_type in (
+        ("item_time_utc", "clipboard_item"),
+        ("created_time_utc", "clipboard_item_created"),
+        ("modified_time_utc", "clipboard_item_modified"),
+        ("last_used_time_utc", "clipboard_item_used"),
+    ):
+        event = _base(
+            row,
+            event_type,
+            row.get(field),
+            _truncate_detail(label, 500),
+            {"timestamp_field": field, **details},
         )
         if event:
             events.append(event)

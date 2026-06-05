@@ -16,7 +16,7 @@ from forensic_orchestrator.encryption_preflight import (
     log_encryption_preflight_inconclusive,
 )
 from forensic_orchestrator.evidence_sources import prepare_mount_source
-from forensic_orchestrator.jobs import JobRunner
+from forensic_orchestrator.jobs import JobRunner, command_timeout_seconds
 from forensic_orchestrator.models import EvidenceImage, Partition
 from forensic_orchestrator.paths import WorkspacePaths
 from forensic_orchestrator.safety import MountError, PartitionError, ToolError, require_dependency
@@ -151,7 +151,7 @@ def _run_mmls(
     output_folder: Path,
 ) -> subprocess.CompletedProcess[str]:
     command = build_mmls_command(source)
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=command_timeout_seconds())
     _record_mmls_job(
         db=db,
         case_id=case_id,
@@ -176,7 +176,7 @@ def _run_fsstat(
     expected_probe_failure: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     command = build_fsstat_command(source, offset_sectors=offset_sectors)
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=command_timeout_seconds())
     _record_command_job(
         db=db,
         case_id=case_id,

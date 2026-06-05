@@ -28,6 +28,38 @@ ZIP preflight checks unsafe names, member count, compressed size, uncompressed
 size, and available workspace space. There is no fixed evidence-size cap; the
 workspace must have enough free space to expand safely with reserve.
 
+## Evidence Integrity
+
+Disk images added with `image add` or `process --path` are hashed on import with
+MD5, SHA1, and SHA256. Relic stores those hashes separately from generic image
+metadata so an examiner can re-verify the evidence later:
+
+```bash
+uv run relic --root ROOT image integrity --case CASE_ID --image IMAGE_ID --format table
+uv run relic --root ROOT image verify --case CASE_ID --image IMAGE_ID --format table
+```
+
+Relic records each verification attempt. A mismatch means the current bytes at
+the image path no longer match the hashes captured when the image was added.
+
+Relic mounts evidence read-only when mounting is requested. The preferred
+processing path is a read-only filesystem mount under `/tmp`, with direct TSK
+fallback only for recovery or artifacts that cannot be read through the mount.
+
+## Extraction Audit
+
+Files materialized from evidence through TSK `icat` are recorded in
+`evidence_file_extractions` with the source path, inode, extracted path, size,
+SHA256, and available filesystem timestamps. Use:
+
+```bash
+uv run relic --root ROOT report evidence-extractions --case CASE_ID --format table
+```
+
+The extraction hash is the hash of the extracted copy Relic analyzed. It is the
+database-backed link between the evidence source entry and the local parser
+input.
+
 ## Secrets
 
 BitLocker unlock material should be provided with key files where possible.

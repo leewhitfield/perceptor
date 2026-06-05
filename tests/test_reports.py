@@ -9586,14 +9586,175 @@ def test_event_interpretation_report_classifies_provider_specific_events(tmp_pat
                 "executable_info": None,
                 "source_file": "TaskScheduler.evtx",
             },
+            {
+                **base,
+                "id": "evtx-wmi",
+                "row_number": 3,
+                "record_number": "3",
+                "event_record_id": "3",
+                "time_created": "2020-01-02T10:02:00Z",
+                "event_id": "5861",
+                "provider": "Microsoft-Windows-WMI-Activity",
+                "channel": "Microsoft-Windows-WMI-Activity/Operational",
+                "map_description": "WMI filter-to-consumer binding operation",
+                "payload_data1": "ConsumerName: CommandLineEventConsumer",
+                "payload_data2": "Query: SELECT * FROM __InstanceModificationEvent",
+                "payload_data3": None,
+                "payload_data4": None,
+                "payload_data5": None,
+                "payload_data6": None,
+                "executable_info": None,
+                "source_file": "WMI-Activity.evtx",
+            },
+            {
+                **base,
+                "id": "evtx-print",
+                "row_number": 4,
+                "record_number": "4",
+                "event_record_id": "4",
+                "time_created": "2020-01-02T10:03:00Z",
+                "event_id": "307",
+                "provider": "Microsoft-Windows-PrintService",
+                "channel": "Microsoft-Windows-PrintService/Operational",
+                "map_description": "Document printed",
+                "payload_data1": "Document Name: strategy.docx",
+                "payload_data2": "Printer Name: HP LaserJet",
+                "payload_data3": None,
+                "payload_data4": None,
+                "payload_data5": None,
+                "payload_data6": None,
+                "executable_info": None,
+                "source_file": "PrintService.evtx",
+            },
         ]
     )
 
     powershell = event_interpretation_report(db, case.id, category="powershell")
     tasks = event_interpretation_report(db, case.id, category="scheduled_task")
+    wmi = event_interpretation_report(db, case.id, category="wmi_persistence")
+    print_events = event_interpretation_report(db, case.id, category="print")
 
     assert powershell["events"][0]["evidence_tags"] == ["powershell_event", "script_block_logging"]
     assert tasks["events"][0]["evidence_tags"] == ["task_definition_changed", "task_scheduler_event"]
+    assert wmi["events"][0]["evidence_tags"] == ["wmi_activity_event", "wmi_filter_consumer_binding"]
+    assert wmi["events"][0]["wmi_consumer"] == "CommandLineEventConsumer"
+    assert print_events["events"][0]["evidence_tags"] == ["document_printed", "print_event"]
+    assert print_events["events"][0]["print_document"] == "strategy.docx"
+    assert print_events["events"][0]["printer_name"] == "HP LaserJet"
+
+
+def test_event_interpretation_report_identifies_high_value_security_events(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    base = {
+        "case_id": case.id,
+        "computer_id": "computer-1",
+        "image_id": "image-1",
+        "tool_output_id": "output-evtx",
+        "tool_name": "EvtxECmd",
+        "source_csv": tmp_path / "evtx.csv",
+        "level": "Information",
+        "provider": "Microsoft-Windows-Security-Auditing",
+        "channel": "Security",
+        "process_id": None,
+        "thread_id": None,
+        "computer": "DESKTOP",
+        "user_id": None,
+        "user_name": None,
+        "remote_host": None,
+        "source_file": "Security.evtx",
+        "payload": None,
+    }
+    db.insert_evtx_events(
+        [
+            {
+                **base,
+                "id": "evtx-account",
+                "row_number": 1,
+                "record_number": "1",
+                "event_record_id": "1",
+                "time_created": "2020-01-02T10:00:00Z",
+                "event_id": "4720",
+                "map_description": "A user account was created",
+                "payload_data1": "New Account: analyst",
+                "payload_data2": "Subject User Name: admin",
+                "payload_data3": None,
+                "payload_data4": None,
+                "payload_data5": None,
+                "payload_data6": None,
+                "executable_info": None,
+            },
+            {
+                **base,
+                "id": "evtx-clear",
+                "row_number": 2,
+                "record_number": "2",
+                "event_record_id": "2",
+                "time_created": "2020-01-02T10:01:00Z",
+                "event_id": "1102",
+                "map_description": "The audit log was cleared",
+                "payload_data1": "Subject User Name: admin",
+                "payload_data2": None,
+                "payload_data3": None,
+                "payload_data4": None,
+                "payload_data5": None,
+                "payload_data6": None,
+                "executable_info": None,
+            },
+            {
+                **base,
+                "id": "evtx-process",
+                "row_number": 3,
+                "record_number": "3",
+                "event_record_id": "3",
+                "time_created": "2020-01-02T10:02:00Z",
+                "event_id": "4688",
+                "map_description": "A new process has been created",
+                "payload_data1": "New Process Name: C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+                "payload_data2": "Command Line: powershell.exe -EncodedCommand AAAA",
+                "payload_data3": None,
+                "payload_data4": None,
+                "payload_data5": None,
+                "payload_data6": None,
+                "executable_info": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+            },
+            {
+                **base,
+                "id": "evtx-task-security",
+                "row_number": 4,
+                "record_number": "4",
+                "event_record_id": "4",
+                "time_created": "2020-01-02T10:03:00Z",
+                "event_id": "4698",
+                "map_description": "A scheduled task was created",
+                "payload_data1": "Task Name: \\Microsoft\\Windows\\Updater",
+                "payload_data2": None,
+                "payload_data3": None,
+                "payload_data4": None,
+                "payload_data5": None,
+                "payload_data6": None,
+                "executable_info": None,
+            },
+        ]
+    )
+
+    report = event_interpretation_report(db, case.id, limit=20)
+    by_category = {row["category"]: row for row in report["events"]}
+
+    assert by_category["account_manipulation"]["evidence_tags"] == ["account_change_event", "account_created"]
+    assert by_category["account_manipulation"]["target_account"] == "analyst"
+    assert by_category["audit_log_clearing"]["severity"] == "critical"
+    assert by_category["process_creation"]["process_or_script"] == "powershell.exe -EncodedCommand AAAA"
+    assert "living_off_land_or_shell" in by_category["process_creation"]["evidence_tags"]
+    assert by_category["scheduled_task"]["evidence_tags"] == ["scheduled_task_created", "scheduled_task_security_event"]
+    assert by_category["scheduled_task"]["task_name"] == "\\Microsoft\\Windows\\Updater"
+
+    account_only = event_interpretation_report(db, case.id, category="account_manipulation", limit=20)
+    assert account_only["total_returned"] == 1
+    assert account_only["events"][0]["category"] == "account_manipulation"
+    db.close()
 
 
 def test_file_movement_identity_report_and_derived_timeline_use_new_artifacts(tmp_path):

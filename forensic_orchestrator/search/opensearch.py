@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import ssl
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -640,7 +641,17 @@ class OpenSearchRestClient:
                 for item in response.get("items", [])
                 if item.get("index", {}).get("error")
             ]
-            raise OrchestratorError(f"OpenSearch bulk index reported {len(failures)} failures")
+            examples = []
+            for item in failures[:5]:
+                index = item.get("index", {})
+                examples.append(
+                    {
+                        "id": index.get("_id"),
+                        "status": index.get("status"),
+                        "error": index.get("error"),
+                    }
+                )
+            raise OrchestratorError(f"OpenSearch bulk index reported {len(failures)} failures; examples={json.dumps(examples, default=str)[:4000]}")
 
     def request(
         self,
@@ -662,14 +673,22 @@ class OpenSearchRestClient:
         if self.config.username is not None and self.config.password is not None:
             token = base64.b64encode(f"{self.config.username}:{self.config.password}".encode()).decode()
             request.add_header("Authorization", f"Basic {token}")
-        try:
-            with urllib.request.urlopen(request, context=self.context, timeout=120) as response:
-                raw = response.read().decode("utf-8", errors="replace")
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise OrchestratorError(f"OpenSearch request failed: HTTP {exc.code} {detail}") from exc
-        except urllib.error.URLError as exc:
-            raise OrchestratorError(f"OpenSearch request failed: {exc}") from exc
+        raw = ""
+        attempts = int(os.environ.get("RELIC_OPENSEARCH_RETRIES", "2") or "2") + 1
+        for attempt in range(1, max(1, attempts) + 1):
+            try:
+                with urllib.request.urlopen(request, context=self.context, timeout=120) as response:
+                    raw = response.read().decode("utf-8", errors="replace")
+                break
+            except urllib.error.HTTPError as exc:
+                detail = exc.read().decode("utf-8", errors="replace")
+                if exc.code not in {408, 429, 500, 502, 503, 504} or attempt >= attempts:
+                    raise OrchestratorError(f"OpenSearch request failed: HTTP {exc.code} {detail}") from exc
+                time.sleep(min(2 ** (attempt - 1), 8))
+            except urllib.error.URLError as exc:
+                if attempt >= attempts:
+                    raise OrchestratorError(f"OpenSearch request failed: {exc}") from exc
+                time.sleep(min(2 ** (attempt - 1), 8))
         if not raw.strip():
             return {}
         try:

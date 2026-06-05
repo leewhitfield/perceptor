@@ -25,6 +25,7 @@ from .analytics_query import (
 )
 from .db import ANALYTICS_TABLES, Database, utc_now
 from .interesting_executables import load_interesting_executable_rules
+from .report_domains.system_users import accounts_report, system_users_report
 from .report_paths import display_evidence_path
 from .storage_policy import CONTENT_HEAVY_TABLES, storage_policy_items
 from .timestamps import normalize_timestamp, parse_timestamp
@@ -127,6 +128,13 @@ ARTIFACT_SEARCH_SPECS = [
         "fields": ["prefetch_name", "artifact_path", "original_path", "executable_name", "referenced_strings", "resolved_reference_path"],
         "display": ["last_run_time_utc", "executable_name", "original_path", "run_count"],
         "timestamp": "last_run_time_utc",
+    },
+    {
+        "table": "clipboard_items",
+        "category": "user_activity",
+        "fields": ["text_content", "file_uri", "html_content", "format_name", "content_type", "cloud_sync_id", "device_id", "source_path"],
+        "display": ["item_time_utc", "user_profile", "format_name", "text_content", "file_uri", "cloud_sync_state"],
+        "timestamp": "item_time_utc",
     },
     {
         "table": "amcache_entries",
@@ -847,258 +855,6 @@ def cleanup_candidates_report(db: Database, case_id: str, *, limit: int = 100) -
         "database": storage["database"],
         "candidates": candidates[:limit],
     }
-
-
-def accounts_report(db: Database, case_id: str) -> dict[str, Any]:
-    db.get_case(case_id)
-    rows = _query_report_rows(
-        db,
-        case_id,
-        "sam_accounts",
-        """
-        SELECT sam_accounts.*, NULL AS computer_label, NULL AS image_path
-        FROM sam_accounts
-        WHERE sam_accounts.case_id = ?
-        ORDER BY sam_accounts.image_id, TRY_CAST(sam_accounts.rid AS INTEGER)
-        """,
-        (case_id,),
-    )
-    accounts = []
-    computer_labels = _computer_labels(db, case_id)
-    image_paths = _image_paths(db, case_id)
-    for row in rows:
-        accounts.append(
-            {
-                "computer_id": row["computer_id"],
-                "computer_label": row["computer_label"] or computer_labels.get(str(row["computer_id"])),
-                "image_id": row["image_id"],
-                "image_path": row["image_path"] or image_paths.get(str(row["image_id"])),
-                "username": row["username"],
-                "rid": row["rid"],
-                "rid_hex": row["rid_hex"],
-                "account_category": row["account_category"],
-                "last_login_utc": row["last_login_utc"],
-                "password_last_set_utc": row["password_last_set_utc"],
-                "last_bad_password_utc": row["last_bad_password_utc"],
-                "account_expires_utc": row["account_expires_utc"],
-                "logon_count": row["logon_count"],
-                "bad_password_count": row["bad_password_count"],
-                "account_flags_hex": row["account_flags_hex"],
-                "account_flags": row["account_flags"],
-                "account_flags_unknown_hex": row["account_flags_unknown_hex"],
-                "registry_path": row["registry_path"],
-            }
-        )
-    return {"case_id": case_id, "accounts": accounts, "total_accounts": len(accounts)}
-
-
-def system_users_report(
-    db: Database,
-    case_id: str,
-    *,
-    computer_id: str | None = None,
-    include_builtin: bool = True,
-    limit: int = 500,
-) -> dict[str, Any]:
-    db.get_case(case_id)
-    filters = ["case_id = ?"]
-    params: list[Any] = [case_id]
-    if computer_id:
-        filters.append("computer_id = ?")
-        params.append(computer_id)
-    rows = _query_report_rows(
-        db,
-        case_id,
-        "sam_accounts",
-        f"""
-        SELECT *
-        FROM sam_accounts
-        WHERE {' AND '.join(filters)}
-        ORDER BY image_id, TRY_CAST(rid AS INTEGER), username
-        LIMIT ?
-        """,
-        [*params, max(limit * 4, limit)],
-    )
-    computer_labels = _computer_labels(db, case_id)
-    image_paths = _image_paths(db, case_id)
-    sid_by_key = _system_user_sid_lookup(db, case_id, computer_id=computer_id)
-    cloud_by_key = _system_user_cloud_account_lookup(db, case_id, computer_id=computer_id)
-    users: list[dict[str, Any]] = []
-    seen: set[tuple[str, str, str, str]] = set()
-    for row in rows:
-        rid = str(row.get("rid") or "").strip()
-        username = str(row.get("username") or "").strip()
-        if not username:
-            continue
-        category = str(row.get("account_category") or "").strip() or _sam_account_category(rid)
-        if not include_builtin and category == "builtin":
-            continue
-        key = (str(row.get("computer_id") or ""), str(row.get("image_id") or ""), rid, username.casefold())
-        if key in seen:
-            continue
-        seen.add(key)
-        lookup_key = (str(row.get("computer_id") or ""), str(row.get("image_id") or ""), rid)
-        cloud = cloud_by_key.get(lookup_key) or cloud_by_key.get(("", "", rid)) or {}
-        sid = sid_by_key.get(lookup_key) or sid_by_key.get((str(row.get("computer_id") or ""), "", rid)) or sid_by_key.get(("", "", rid))
-        internet_username = cloud.get("internet_username")
-        account_type = "microsoft_account" if internet_username else ("builtin" if category == "builtin" else "local_account")
-        users.append(
-            {
-                "computer_id": row.get("computer_id"),
-                "computer_label": computer_labels.get(str(row.get("computer_id") or "")),
-                "image_id": row.get("image_id"),
-                "image_path": image_paths.get(str(row.get("image_id") or "")),
-                "username": username,
-                "first_name": None,
-                "last_name": None,
-                "sid": sid,
-                "rid": rid,
-                "rid_hex": row.get("rid_hex") or _rid_hex(rid),
-                "account_type": account_type,
-                "account_category": category,
-                "internet_username": internet_username,
-                "internet_provider": cloud.get("internet_provider"),
-                "last_login_utc": row.get("last_login_utc"),
-                "password_last_set_utc": row.get("password_last_set_utc"),
-                "last_bad_password_utc": row.get("last_bad_password_utc"),
-                "logon_count": row.get("logon_count"),
-                "account_flags": row.get("account_flags"),
-                "profile_path": _profile_path_for_username(username),
-                "evidence_sources": [
-                    {
-                        "source_table": "sam_accounts",
-                        "source_row_id": row.get("id"),
-                        "source_tool": row.get("tool_name"),
-                        "field_basis": ["username", "rid", "account_category", "last_login_utc", "account_flags"],
-                    },
-                    *cloud.get("evidence_sources", []),
-                    *(
-                        [
-                            {
-                                "source_table": "registry_artifacts",
-                                "field_basis": ["user_sid"],
-                                "note": "SID inferred by matching RID suffix from registry artifacts.",
-                            }
-                        ]
-                        if sid
-                        else []
-                    ),
-                ],
-            }
-        )
-        if len(users) >= limit:
-            break
-    return {
-        "case_id": case_id,
-        "filters": {"computer_id": computer_id, "include_builtin": include_builtin, "limit": limit},
-        "users": users,
-        "total_returned": len(users),
-        "source_of_truth": ["sam_accounts", "registry_artifacts cloud_account_details", "registry_artifacts user_sid"],
-        "caveats": [
-            "First and last names are only populated when a parsed artifact provides them; SAM usernames are not split into names.",
-            "Microsoft account attribution is based on cloud_account_details InternetUserName values keyed to the SAM RID.",
-        ],
-    }
-
-
-def _system_user_sid_lookup(db: Database, case_id: str, *, computer_id: str | None) -> dict[tuple[str, str, str], str]:
-    filters = ["case_id = ?", "COALESCE(user_sid, '') != ''"]
-    params: list[Any] = [case_id]
-    if computer_id:
-        filters.append("computer_id = ?")
-        params.append(computer_id)
-    rows = _query_report_rows(
-        db,
-        case_id,
-        "registry_artifacts",
-        f"""
-        SELECT DISTINCT computer_id, image_id, user_sid
-        FROM registry_artifacts
-        WHERE {' AND '.join(filters)}
-        """,
-        params,
-    )
-    lookup: dict[tuple[str, str, str], str] = {}
-    for row in rows:
-        sid = str(row.get("user_sid") or "")
-        rid = sid.rsplit("-", 1)[-1] if "-" in sid else ""
-        if not rid.isdigit():
-            continue
-        lookup.setdefault((str(row.get("computer_id") or ""), str(row.get("image_id") or ""), rid), sid)
-        lookup.setdefault((str(row.get("computer_id") or ""), "", rid), sid)
-        lookup.setdefault(("", "", rid), sid)
-    return lookup
-
-
-def _system_user_cloud_account_lookup(db: Database, case_id: str, *, computer_id: str | None) -> dict[tuple[str, str, str], dict[str, Any]]:
-    filters = ["case_id = ?", "artifact = 'cloud_account_details'"]
-    params: list[Any] = [case_id]
-    if computer_id:
-        filters.append("computer_id = ?")
-        params.append(computer_id)
-    rows = _query_report_rows(
-        db,
-        case_id,
-        "registry_artifacts",
-        f"""
-        SELECT id, computer_id, image_id, key_path, value_name, value_data, key_last_write_utc
-        FROM registry_artifacts
-        WHERE {' AND '.join(filters)}
-        ORDER BY key_last_write_utc DESC, row_number
-        """,
-        params,
-    )
-    grouped: dict[tuple[str, str, str], dict[str, Any]] = {}
-    for row in rows:
-        rid = _rid_from_sam_user_key(row.get("key_path"))
-        if not rid:
-            continue
-        key = (str(row.get("computer_id") or ""), str(row.get("image_id") or ""), rid)
-        item = grouped.setdefault(key, {"evidence_sources": []})
-        value_name = str(row.get("value_name") or "")
-        value_data = str(row.get("value_data") or "")
-        if value_name == "InternetUserName" and value_data:
-            item["internet_username"] = value_data
-        elif value_name == "InternetProviderName" and value_data:
-            item["internet_provider"] = value_data
-        item["evidence_sources"].append(
-            {
-                "source_table": "registry_artifacts",
-                "source_row_id": row.get("id"),
-                "field_basis": [value_name],
-                "key_path": row.get("key_path"),
-                "key_last_write_utc": row.get("key_last_write_utc"),
-            }
-        )
-    return grouped
-
-
-def _rid_from_sam_user_key(value: Any) -> str | None:
-    text = str(value or "")
-    match = re.search(r"Users[\\/]+([0-9A-Fa-f]{8})\b", text)
-    if not match:
-        return None
-    return str(int(match.group(1), 16))
-
-
-def _rid_hex(value: Any) -> str | None:
-    rid = _safe_int(value, -1)
-    if rid < 0:
-        return None
-    return f"{rid:08X}"
-
-
-def _sam_account_category(rid: str) -> str:
-    rid_int = _safe_int(rid, -1)
-    if 0 <= rid_int < 1000:
-        return "builtin"
-    return "local"
-
-
-def _profile_path_for_username(username: str) -> str | None:
-    if not username:
-        return None
-    return f"C:\\Users\\{username}"
 
 
 def prefetch_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str, Any]:
@@ -7661,6 +7417,105 @@ def file_metadata_summary_report(db: Database, case_id: str, *, limit: int = 100
     }
 
 
+def bits_activity_report(db: Database, case_id: str, *, limit: int = 250) -> dict[str, Any]:
+    db.get_case(case_id)
+    total_row = _query_report_rows(
+        db,
+        case_id,
+        "bits_activity",
+        "SELECT COUNT(*) AS count FROM bits_activity WHERE case_id = ?",
+        (case_id,),
+    )
+    total_available = int(total_row[0].get("count") or 0) if total_row else 0
+    if _table_exists(db, "bits_jobs") or _duckdb_table_available(db, case_id, "bits_jobs"):
+        rows = _query_report_rows(
+            db,
+            case_id,
+            "bits_activity",
+            """
+            SELECT
+              bits_activity.*,
+              bits_jobs.id AS matched_bits_job_row_id,
+              bits_jobs.database_file AS matched_database_file,
+              bits_jobs.record_type AS matched_record_type,
+              bits_jobs.parser_status AS matched_parser_status,
+              bits_jobs.local_path AS matched_local_path,
+              CASE
+                WHEN bits_activity.job_id IS NOT NULL AND bits_jobs.job_id = bits_activity.job_id THEN 'job_id'
+                WHEN bits_activity.url IS NOT NULL AND bits_jobs.url = bits_activity.url THEN 'url'
+                ELSE bits_activity.correlation_basis
+              END AS match_basis
+            FROM bits_activity
+            LEFT JOIN bits_jobs
+              ON bits_jobs.case_id = bits_activity.case_id
+             AND (
+                  (bits_activity.job_id IS NOT NULL AND bits_activity.job_id <> '' AND bits_jobs.job_id = bits_activity.job_id)
+                  OR (bits_activity.url IS NOT NULL AND bits_activity.url <> '' AND bits_jobs.url = bits_activity.url)
+             )
+            WHERE bits_activity.case_id = ?
+            ORDER BY bits_activity.event_time_utc, bits_activity.row_number
+            LIMIT ?
+            """,
+            (case_id, limit),
+        )
+    else:
+        rows = _query_report_rows(
+            db,
+            case_id,
+            "bits_activity",
+            """
+            SELECT
+              bits_activity.*,
+              NULL AS matched_bits_job_row_id,
+              NULL AS matched_database_file,
+              NULL AS matched_record_type,
+              NULL AS matched_parser_status,
+              NULL AS matched_local_path,
+              bits_activity.correlation_basis AS match_basis
+            FROM bits_activity
+            WHERE bits_activity.case_id = ?
+            ORDER BY bits_activity.event_time_utc, bits_activity.row_number
+            LIMIT ?
+            """,
+            (case_id, limit),
+        )
+    computer_labels = _computer_labels(db, case_id)
+    image_paths = _image_paths(db, case_id)
+    for row in rows:
+        computer_id = row.get("computer_id")
+        image_id = row.get("image_id")
+        row["computer_label"] = computer_labels.get(str(computer_id)) if computer_id else None
+        row["image_path"] = image_paths.get(str(image_id)) if image_id else None
+    counts = _query_report_rows(
+        db,
+        case_id,
+        "bits_activity",
+        """
+        SELECT event_type, COUNT(*) AS count, MIN(event_time_utc) AS first_seen_utc, MAX(event_time_utc) AS last_seen_utc
+        FROM bits_activity
+        WHERE case_id = ?
+        GROUP BY event_type
+        ORDER BY count DESC, event_type
+        """,
+        (case_id,),
+    )
+    return {
+        "case_id": case_id,
+        "bits_activity": rows,
+        "event_type_counts": counts,
+        "total_returned": len(rows),
+        "total_available": total_available,
+        "limited": total_available > len(rows),
+        "limit": limit,
+        "notes": [
+            "Timestamped rows come from BITS Client EVTX events.",
+            "qmgr database/carved rows are correlated by exact job ID or URL when available.",
+            "Carved qmgr rows without native timestamps remain investigative leads and are not treated as timestamp sources.",
+            "If limited is true, regenerate with a higher --limit before relying on absence of a row.",
+        ],
+    }
+
+
 def evtx_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str, Any]:
     return _table_report(db, case_id, "evtx_events", "events", limit)
 
@@ -9277,6 +9132,81 @@ def windows_activities_report(
         "filters": {"user": user, "app": app, "include_auxiliary": include_auxiliary, "files_only": files_only},
         "activities": [dict(row) for row in rows],
         "total_returned": len(rows),
+    }
+
+
+def clipboard_report(
+    db: Database,
+    case_id: str,
+    *,
+    limit: int = 100,
+    user: str | None = None,
+    contains: str | None = None,
+    include_empty: bool = False,
+) -> dict[str, Any]:
+    db.get_case(case_id)
+    filters = ["clipboard_items.case_id = ?"]
+    params: list[Any] = [case_id]
+    if user:
+        filters.append("LOWER(COALESCE(clipboard_items.user_profile, '')) LIKE LOWER(?)")
+        params.append(f"%{user}%")
+    if contains:
+        filters.append(
+            """
+            (
+              LOWER(COALESCE(clipboard_items.text_content, '')) LIKE LOWER(?)
+              OR LOWER(COALESCE(clipboard_items.file_uri, '')) LIKE LOWER(?)
+              OR LOWER(COALESCE(clipboard_items.html_content, '')) LIKE LOWER(?)
+              OR LOWER(COALESCE(clipboard_items.raw_payload_json, '')) LIKE LOWER(?)
+            )
+            """
+        )
+        token = f"%{contains}%"
+        params.extend([token, token, token, token])
+    if not include_empty:
+        filters.append(
+            """
+            (
+              COALESCE(clipboard_items.text_content, '') != ''
+              OR COALESCE(clipboard_items.file_uri, '') != ''
+              OR COALESCE(clipboard_items.html_content, '') != ''
+              OR COALESCE(clipboard_items.image_present, '') = 'true'
+              OR COALESCE(clipboard_items.parser_status, '') NOT IN ('', 'parsed')
+            )
+            """
+        )
+    where_sql = " AND ".join(filters)
+    total_rows = _query_report_rows(
+        db,
+        case_id,
+        "clipboard_items",
+        f"SELECT COUNT(*) AS count FROM clipboard_items WHERE {where_sql}",
+        params,
+    )
+    rows = _query_report_rows(
+        db,
+        case_id,
+        "clipboard_items",
+        f"""
+        SELECT clipboard_items.*
+        FROM clipboard_items
+        WHERE {where_sql}
+        ORDER BY COALESCE(clipboard_items.item_time_utc, clipboard_items.created_time_utc,
+                          clipboard_items.modified_time_utc, clipboard_items.last_used_time_utc,
+                          clipboard_items.created_at) DESC,
+                 clipboard_items.row_number DESC
+        LIMIT ?
+        """,
+        [*params, limit],
+    )
+    return {
+        "case_id": case_id,
+        "filters": {"user": user, "contains": contains, "include_empty": include_empty},
+        "clipboard_items": rows,
+        "total_returned": len(rows),
+        "total_available": int(total_rows[0].get("count") or 0) if total_rows else len(rows),
+        "limit": limit,
+        "limited": bool(total_rows and int(total_rows[0].get("count") or 0) > len(rows)),
     }
 
 
@@ -11868,7 +11798,11 @@ def event_interpretation_report(
     db.get_case(case_id)
     rows = []
     computer_labels = _computer_labels(db, case_id)
-    for row in _query_report_rows(
+    candidate_limit = max(limit * 50, 100_000)
+    total_available = 0
+    returned_category_counts: dict[str, int] = {}
+    category_counts: dict[str, int] = {}
+    candidate_rows = _query_report_rows(
         db,
         case_id,
         "evtx_events",
@@ -11876,11 +11810,35 @@ def event_interpretation_report(
         SELECT *
         FROM evtx_events
         WHERE case_id = ?
+          AND (
+            event_id IN (
+              '104', '1102',
+              '400', '403', '600', '800', '4103', '4104', '4105', '4106',
+              '4624', '4634', '4647', '4648', '4672', '4776',
+              '4688',
+              '4697', '4698', '4699',
+              '4720', '4722', '4724', '4725', '4726', '4728', '4729', '4732', '4733', '4738', '4756', '4757',
+              '7045',
+              '5857', '5858', '5859', '5860', '5861',
+              '307', '805', '842',
+              '4663', '4656', '4660', '4658', '4664',
+              '1006', '1007', '1015', '1116', '1117', '1118', '1119', '5007',
+              '106', '129', '140', '141', '200', '201',
+              '21', '22', '24', '25', '1024', '1149',
+              '20221', '20223', '20226'
+            )
+            OR LOWER(COALESCE(provider, '') || ' ' || COALESCE(channel, '') || ' ' || COALESCE(source_file, '')) LIKE '%powershell%'
+            OR LOWER(COALESCE(provider, '') || ' ' || COALESCE(channel, '') || ' ' || COALESCE(source_file, '')) LIKE '%taskscheduler%'
+            OR LOWER(COALESCE(provider, '') || ' ' || COALESCE(channel, '') || ' ' || COALESCE(source_file, '')) LIKE '%task scheduler%'
+            OR LOWER(COALESCE(provider, '') || ' ' || COALESCE(channel, '') || ' ' || COALESCE(source_file, '')) LIKE '%wmi-activity%'
+            OR LOWER(COALESCE(provider, '') || ' ' || COALESCE(channel, '') || ' ' || COALESCE(source_file, '')) LIKE '%printservice%'
+          )
         ORDER BY time_created DESC
         LIMIT ?
         """,
-        (case_id, limit * 20),
-    ):
+        (case_id, candidate_limit),
+    )
+    for row in candidate_rows:
         if not row.get("computer_label"):
             row["computer_label"] = computer_labels.get(row.get("computer_id"))
         interpreted = _interpret_evtx_row(row)
@@ -11888,18 +11846,24 @@ def event_interpretation_report(
             continue
         if category and interpreted["category"] != category:
             continue
-        rows.append(interpreted)
-        if len(rows) >= limit:
-            break
-    category_counts: dict[str, int] = {}
-    for row in rows:
-        category_counts[row["category"]] = category_counts.get(row["category"], 0) + 1
+        total_available += 1
+        category_counts[interpreted["category"]] = category_counts.get(interpreted["category"], 0) + 1
+        if len(rows) < limit:
+            rows.append(interpreted)
+            returned_category_counts[interpreted["category"]] = returned_category_counts.get(interpreted["category"], 0) + 1
     return {
         "case_id": case_id,
         "filters": {"category": category},
         "category_counts": category_counts,
+        "returned_category_counts": returned_category_counts,
         "events": rows,
         "total_returned": len(rows),
+        "total_available": total_available,
+        "limited": total_available > len(rows),
+        "limit": limit,
+        "candidate_rows_scanned": len(candidate_rows),
+        "candidate_scan_limit": candidate_limit,
+        "candidate_scan_limited": len(candidate_rows) >= candidate_limit,
     }
 
 
@@ -22220,10 +22184,10 @@ def _sqlite_inventory_for_carve(row: dict[str, Any], *, sample_rows: int) -> dic
         for table in tables:
             columns = [
                 {"name": col["name"], "type": col["type"], "notnull": col["notnull"], "pk": col["pk"]}
-                for col in conn.execute(f'PRAGMA table_info("{table}")').fetchall()
+                for col in conn.execute(f"PRAGMA table_info({_quote_identifier(table)})").fetchall()
             ]
             try:
-                row_count = int(conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0])
+                row_count = int(conn.execute(f"SELECT COUNT(*) FROM {_quote_identifier(table)}").fetchone()[0])
             except sqlite3.Error:
                 row_count = None
             samples = []
@@ -27276,21 +27240,85 @@ def _interpret_evtx_row(row: Any) -> dict[str, Any] | None:
     source_file = str(row["source_file"] or "")
     payload = " ".join(
         str(row[key] or "")
-        for key in ("map_description", "payload_data1", "payload_data2", "payload_data3", "payload", "executable_info")
+        for key in (
+            "map_description",
+            "payload_data1",
+            "payload_data2",
+            "payload_data3",
+            "payload_data4",
+            "payload_data5",
+            "payload_data6",
+            "payload",
+            "executable_info",
+        )
     )
     text = f"{channel} {source_file} {payload}".lower()
     provider = str(row["provider"] or "").lower()
     category = None
     tags: list[str] = []
-    if (
+    severity = "info"
+    if event_id in {"4720", "4722", "4724", "4725", "4726", "4728", "4729", "4732", "4733", "4738", "4756", "4757"}:
+        category = "account_manipulation"
+        tags.append("account_change_event")
+        severity = "high"
+        if event_id == "4720":
+            tags.append("account_created")
+        elif event_id == "4722":
+            tags.append("account_enabled")
+        elif event_id == "4724":
+            tags.append("password_reset_attempt")
+        elif event_id == "4725":
+            tags.append("account_disabled")
+        elif event_id == "4726":
+            tags.append("account_deleted")
+        elif event_id in {"4728", "4732", "4756"}:
+            tags.append("group_membership_added")
+        elif event_id in {"4729", "4733", "4757"}:
+            tags.append("group_membership_removed")
+        elif event_id == "4738":
+            tags.append("account_changed")
+    elif event_id == "1102" or (
+        event_id == "104"
+        and (
+            "eventlog" in provider
+            or "event log" in text
+            or " log was cleared" in text
+            or "clear" in text
+        )
+    ):
+        category = "audit_log_clearing"
+        tags.append("audit_log_cleared")
+        severity = "critical"
+        if event_id == "1102":
+            tags.append("security_log_cleared")
+        else:
+            tags.append("event_log_cleared")
+    elif event_id == "4688":
+        category = "process_creation"
+        tags.append("process_creation_event")
+        severity = "medium"
+        if any(token in text for token in ("powershell", "cmd.exe", "wscript", "cscript", "rundll32", "regsvr32", "mshta")):
+            tags.append("living_off_land_or_shell")
+    elif event_id in {"4698", "4699"}:
+        category = "scheduled_task"
+        tags.append("scheduled_task_security_event")
+        severity = "high"
+        tags.append("scheduled_task_created" if event_id == "4698" else "scheduled_task_deleted")
+    elif event_id in {"4697", "7045"}:
+        category = "service_install"
+        tags.append("service_install_event")
+        severity = "high"
+    elif (
         "powershell" in provider
         or "powershell" in text
-        or event_id in {"400", "403", "600", "800", "4103", "4104", "4105", "4106"}
+        or (event_id in {"4103", "4104", "4105", "4106"} and "powershell" in f"{provider} {text}")
     ):
         category = "powershell"
         tags.append("powershell_event")
+        severity = "medium"
         if event_id == "4104":
             tags.append("script_block_logging")
+            severity = "high"
         elif event_id == "4103":
             tags.append("module_logging")
         elif event_id in {"400", "403", "600"}:
@@ -27321,10 +27349,30 @@ def _interpret_evtx_row(row: Any) -> dict[str, Any] | None:
     ):
         category = "scheduled_task"
         tags.append("task_scheduler_event")
+        severity = "medium"
         if event_id in {"106", "140", "141"}:
             tags.append("task_definition_changed")
         elif event_id in {"200", "201"}:
             tags.append("task_action_execution")
+    elif (
+        "wmi-activity" in provider
+        or "wmi-activity" in text
+        or "microsoft-windows-wmi-activity" in text
+        or (event_id in {"5857", "5858", "5859", "5860", "5861"} and "wmi" in text)
+    ):
+        category = "wmi_persistence"
+        tags.append("wmi_activity_event")
+        severity = "high" if event_id in {"5859", "5860", "5861"} else "medium"
+        if event_id == "5859":
+            tags.append("wmi_event_filter")
+        elif event_id == "5860":
+            tags.append("wmi_event_consumer")
+        elif event_id == "5861":
+            tags.append("wmi_filter_consumer_binding")
+        elif event_id == "5858":
+            tags.append("wmi_operation_error")
+        elif event_id == "5857":
+            tags.append("wmi_provider_loaded")
     elif (
         "terminalservices" in provider
         or "terminalservices" in text
@@ -27345,7 +27393,8 @@ def _interpret_evtx_row(row: Any) -> dict[str, Any] | None:
         "smbclient" in provider
         or "smbclient" in text
         or "smb client" in text
-        or "\\\\" in payload
+        or "server-share" in text
+        or "tree connect" in text
     ):
         category = "network_share"
         tags.append("smb_client_event")
@@ -27359,9 +27408,24 @@ def _interpret_evtx_row(row: Any) -> dict[str, Any] | None:
     ):
         category = "print"
         tags.append("print_event")
+        severity = "medium"
         if event_id == "307":
             tags.append("document_printed")
-    elif "partition%4diagnostic" in text or "usbstor" in text or event_id in {"1006", "20001", "20003", "2100", "2102"}:
+        elif event_id == "805":
+            tags.append("print_job_rendered")
+        elif event_id == "842":
+            tags.append("print_job_spooled")
+    elif (
+        "partition%4diagnostic" in text
+        or "usbstor" in text
+        or "usb " in text
+        or "usb-" in text
+        or (
+            event_id in {"20001", "20003", "2100", "2102"}
+            and any(token in text for token in ("usb", "usbstor", "partition", "device setup"))
+        )
+        or (event_id == "1006" and any(token in text for token in ("usb", "usbstor", "partition")))
+    ):
         category = "usb"
         tags.append("usb_event")
     elif (
@@ -27414,6 +27478,26 @@ def _interpret_evtx_row(row: Any) -> dict[str, Any] | None:
         tags.append("logon_event")
     if category is None:
         return None
+    process_or_script = (
+        _extract_labeled_evtx_value(
+            row,
+            "Command Line",
+            "New Process Name",
+            "Process Name",
+            "ScriptBlock Text",
+            "ScriptBlockText",
+            "HostApplication",
+            "Script Name",
+        )
+        or row["executable_info"]
+    )
+    target_account = _extract_labeled_evtx_value(row, "Target Account", "TargetUserName", "Account Name", "New Account", "Target")
+    subject_user = _extract_labeled_evtx_value(row, "Subject User Name", "SubjectUserName", "User")
+    task_name = _extract_labeled_evtx_value(row, "Task Name", "TaskName", "Task")
+    wmi_query = _extract_labeled_evtx_value(row, "Query", "QueryLanguage", "EventNamespace", "Namespace")
+    wmi_consumer = _extract_labeled_evtx_value(row, "Consumer", "ConsumerName", "Consumer Name", "ConsumerType")
+    print_document = _extract_labeled_evtx_value(row, "Document Name", "DocumentName", "Document", "Param1")
+    printer_name = _extract_labeled_evtx_value(row, "Printer Name", "PrinterName", "Printer", "Param2")
     return {
         "id": row["id"],
         "case_id": row["case_id"],
@@ -27422,6 +27506,7 @@ def _interpret_evtx_row(row: Any) -> dict[str, Any] | None:
         "image_id": row["image_id"],
         "tool_output_id": row["tool_output_id"],
         "category": category,
+        "severity": severity,
         "event_id": event_id,
         "time_created": row["time_created"],
         "channel": channel,
@@ -27432,8 +27517,46 @@ def _interpret_evtx_row(row: Any) -> dict[str, Any] | None:
         "payload_data1": row["payload_data1"],
         "payload_data2": row["payload_data2"],
         "payload_data3": row["payload_data3"],
+        "payload_data4": row["payload_data4"],
+        "payload_data5": row["payload_data5"],
+        "payload_data6": row["payload_data6"],
+        "executable_info": row["executable_info"],
+        "process_or_script": process_or_script,
+        "target_account": target_account,
+        "subject_user": subject_user,
+        "task_name": task_name,
+        "wmi_query": wmi_query,
+        "wmi_consumer": wmi_consumer,
+        "print_document": print_document,
+        "printer_name": printer_name,
         "evidence_tags": sorted(set(tags)),
     }
+
+
+def _extract_labeled_evtx_value(row: Any, *labels: str) -> str | None:
+    parts = [
+        str(row[key] or "")
+        for key in (
+            "map_description",
+            "payload_data1",
+            "payload_data2",
+            "payload_data3",
+            "payload_data4",
+            "payload_data5",
+            "payload_data6",
+            "payload",
+            "executable_info",
+        )
+    ]
+    text = "\n".join(part for part in parts if part)
+    for label in labels:
+        pattern = re.compile(rf"(?im)(?:^|[;,\n\r])\s*{re.escape(label)}\s*[:=]\s*([^\n\r;]+)")
+        match = pattern.search(text)
+        if match:
+            value = match.group(1).strip()
+            if value:
+                return value
+    return None
 
 
 def _rows_with_details(rows: list[Any]) -> list[dict[str, Any]]:
@@ -33708,7 +33831,7 @@ def _table_has_column(db: Database, table: str, column: str) -> bool:
         return column in _analytics_table_columns(db, table)
     if not _table_exists(db, table):
         return False
-    return any(row["name"] == column for row in db.conn.execute(f"PRAGMA table_info({table})").fetchall())
+    return any(row["name"] == column for row in db.conn.execute(f"PRAGMA table_info({_quote_identifier(table)})").fetchall())
 
 
 def _tool_output_bytes(db: Database, case_id: str) -> dict[str, Any]:
@@ -34649,11 +34772,11 @@ def _report_table_columns(db: Database, case_id: str, table: str) -> set[str]:
         db_path = _duckdb_path_for_case(db, case_id)
         conn, should_close = _duckdb_report_connection(db, case_id, db_path)
         try:
-            return {str(row[1]) for row in conn.execute(f"PRAGMA table_info('{table}')").fetchall()}
+            return {str(row[1]) for row in conn.execute(f"PRAGMA table_info({_quote_identifier(table)})").fetchall()}
         finally:
             if should_close:
                 conn.close()
-    return {str(row["name"]) for row in db.conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    return {str(row["name"]) for row in db.conn.execute(f"PRAGMA table_info({_quote_identifier(table)})").fetchall()}
 
 
 def _row_value(row: Any, key: str) -> Any:

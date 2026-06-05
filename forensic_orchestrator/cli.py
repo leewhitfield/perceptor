@@ -19,10 +19,13 @@ from pathlib import Path
 from typing import Any, Callable
 import zipfile
 
+DEFAULT_REPORT_EXPORT_LIMIT = 50_000
+
 from .config import load_config
 from .analytics_query import query_one as analytics_query_one
 from .db import Database
 from .evidence import add_image, create_case, create_computer
+from .image_integrity import verify_image_hashes
 from .logging_config import configure_logging
 from .mounting.workflow import mount_image, unmount_image
 from .mounting.bitlocker import BitLockerUnlockOptions
@@ -45,6 +48,7 @@ from .report_paths import sanitize_report_paths, sanitize_report_text
 from .common_dialog import rebuild_common_dialog_items
 from .copied_indicators import rebuild_copied_file_indicators
 from .correlation import rebuild_file_correlations
+from .bits_activity import rebuild_bits_activity
 from .filesystem_review import rebuild_filesystem_review
 from .filesystem_inventory import scan_mounted_filesystem, scan_tsk_filesystem
 from .deleted_file_recovery import recover_deleted_files
@@ -65,6 +69,7 @@ from .reports import (
     artifact_summary_report,
     autostarts_markdown,
     autostarts_report,
+    bits_activity_report,
     browser_profile_activity_report,
     browser_deep_storage_report,
     browser_downloads_report,
@@ -84,6 +89,7 @@ from .reports import (
     carve_coverage_report,
     cd_burning_activity_markdown,
     cd_burning_activity_report,
+    clipboard_report,
     cloud_artifacts_report,
     cloud_configuration_report,
     cloud_files_report,
@@ -374,6 +380,7 @@ from .tools.carve import (
     summarize_sqlite_carve,
 )
 from .tools.chromium import parse_chromium_artifacts_to_csv
+from .tools.clipboard import parse_clipboard_artifacts_to_csv
 from .tools.firefox import parse_firefox_artifacts_to_csv
 from .tools.activities import parse_windows_activities_to_csv
 from .tools.memory_strings import scan_memory_strings_to_csv
@@ -1027,6 +1034,8 @@ def _sqlite_artifact_route(name: str):
         return "ChromiumParser", parse_chromium_artifacts_to_csv, name
     if lower == "activitiescache.db":
         return "WindowsActivitiesParser", parse_windows_activities_to_csv, name
+    if lower in {"clipboard.db", "clipboard.sqlite"}:
+        return "ClipboardParser", parse_clipboard_artifacts_to_csv, name
     return None
 
 
@@ -1057,11 +1066,11 @@ def _bundle_report_names_for_purpose(purpose: str) -> set[str] | None:
         "usn-lifecycle",
     }
     groups = {
-        "triage": common | {"suspicious-executions", "user-intent", "file-movement-identity", "opened-from-removable-media", "opened-from-cloud-storage", "cloud-mounts", "cloud-removable-overlap", "artifact-processing-status", "lead-search-usb", "lead-search-execution", "lead-search-cloud", "lead-search-browser", "lead-search-documents", "lead-search-communications", "lead-search-usb-summary", "lead-search-execution-summary", "lead-search-cloud-summary", "lead-search-browser-summary", "lead-search-documents-summary", "lead-search-communications-summary"},
-        "review": common | usb_reports | {"activity-digest", "next-actions", "workspace-map", "artifact-search-sources", "suspicious-executions", "opened-from-cloud-storage", "cloud-mounts", "artifact-processing-status", "lead-search-usb", "lead-search-execution", "lead-search-cloud", "lead-search-browser", "lead-search-documents", "lead-search-communications", "lead-search-usb-summary", "lead-search-execution-summary", "lead-search-cloud-summary", "lead-search-browser-summary", "lead-search-documents-summary", "lead-search-communications-summary", "changed-search-packets"},
+        "triage": common | {"suspicious-executions", "event-interpretation", "user-intent", "file-movement-identity", "opened-from-removable-media", "opened-from-cloud-storage", "cloud-mounts", "cloud-removable-overlap", "artifact-processing-status", "lead-search-usb", "lead-search-execution", "lead-search-cloud", "lead-search-browser", "lead-search-documents", "lead-search-communications", "lead-search-usb-summary", "lead-search-execution-summary", "lead-search-cloud-summary", "lead-search-browser-summary", "lead-search-documents-summary", "lead-search-communications-summary"},
+        "review": common | usb_reports | {"activity-digest", "next-actions", "workspace-map", "artifact-search-sources", "suspicious-executions", "event-interpretation", "opened-from-cloud-storage", "cloud-mounts", "bits-activity", "artifact-processing-status", "lead-search-usb", "lead-search-execution", "lead-search-cloud", "lead-search-browser", "lead-search-documents", "lead-search-communications", "lead-search-usb-summary", "lead-search-execution-summary", "lead-search-cloud-summary", "lead-search-browser-summary", "lead-search-documents-summary", "lead-search-communications-summary", "changed-search-packets"},
         "usb": common | usb_reports,
         "cloud": common | {"cloud-artifacts", "opened-from-cloud-storage", "cloud-mounts", "cloud-removable-overlap", "user-intent"},
-        "execution": common | {"execution", "execution-correlation", "suspicious-executions", "program-provenance", "remote-access", "user-intent"},
+        "execution": common | {"execution", "execution-correlation", "suspicious-executions", "event-interpretation", "program-provenance", "remote-access", "bits-activity", "user-intent"},
         "memory": common | {"memory-analysis", "memory-credentials", "memory-disk-correlations", "memory-support-files", "combined-artifacts", "crash-dump-analysis", "memory-artifacts"},
     }
     return groups.get(purpose, groups["triage"])
@@ -1077,7 +1086,7 @@ def write_case_report_bundle(
     case_id: str,
     output_dir: Path,
     *,
-    limit: int = 100,
+    limit: int = DEFAULT_REPORT_EXPORT_LIMIT,
     purpose: str = "full",
     progress: Callable[[str], None] | None = None,
 ) -> dict[str, object]:
@@ -1171,7 +1180,10 @@ def write_case_report_bundle(
         ("execution", "md", "Execution", lambda: execution_markdown(execution_report(db, case_id, limit=limit))),
         ("execution-correlation", "json", "Execution correlation", lambda: execution_correlation_report(db, case_id, limit=limit)),
         ("suspicious-executions", "md", "Suspicious executions", lambda: suspicious_executions_markdown(suspicious())),
+        ("event-interpretation", "json", "High-value event log interpretation", lambda: event_interpretation_report(db, case_id, limit=limit)),
         ("program-provenance", "md", "Program provenance", lambda: program_provenance_markdown(program_provenance_report(db, case_id, limit=limit))),
+        ("bits-activity", "json", "BITS activity", lambda: bits_activity_report(db, case_id, limit=limit)),
+        ("clipboard", "json", "Windows clipboard history", lambda: clipboard_report(db, case_id, limit=limit)),
         ("memory-artifacts", "md", "Memory artifact inventory", lambda: memory_artifacts_markdown(memory_artifacts_report(db, case_id, limit=limit))),
         ("deep-recovery-status", "md", "Deep recovery status", lambda: deep_recovery_status_markdown(deep_recovery_status_report(db, case_id, limit=limit))),
         ("user-intent", "md", "User intent artifacts", lambda: user_intent_artifacts_markdown(user_intent())),
@@ -2415,6 +2427,8 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_serve.add_argument("--allow-processing", action="store_true", help="Permit MCP import and processing tools")
     mcp_serve.add_argument("--allow-sensitive", action="store_true", help="Reserve permission for future sensitive MCP tools")
     mcp_serve.add_argument("--allow-external-ai", action="store_true", help="Reserve permission for future external-AI MCP tools")
+    mcp_serve.add_argument("--auth-token", help="Require this token on MCP JSON-RPC requests; RELIC_MCP_TOKEN is also honored")
+    mcp_serve.add_argument("--max-running-jobs", type=int, help="Maximum concurrent MCP-launched processing jobs; defaults to RELIC_MCP_MAX_RUNNING_JOBS or 4")
 
     case = subparsers.add_parser("case")
     case_sub = case.add_subparsers(dest="action", required=True)
@@ -2579,6 +2593,17 @@ def build_parser() -> argparse.ArgumentParser:
     image_add.add_argument("--case", required=True, dest="case_id")
     image_add.add_argument("--path", required=True)
     image_add.add_argument("--computer", dest="computer_id")
+    image_verify = image_sub.add_parser("verify")
+    image_verify.add_argument("--case", required=True, dest="case_id")
+    image_verify.add_argument("--image", required=True, dest="image_id")
+    image_verify.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    image_verify.add_argument("--output")
+    image_integrity = image_sub.add_parser("integrity")
+    image_integrity.add_argument("--case", required=True, dest="case_id")
+    image_integrity.add_argument("--image", dest="image_id")
+    image_integrity.add_argument("--limit", type=int, default=100)
+    image_integrity.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    image_integrity.add_argument("--output")
     image_mount = image_sub.add_parser("mount")
     image_mount.add_argument("--case", required=True, dest="case_id")
     image_mount.add_argument("--image", required=True, dest="image_id")
@@ -3416,6 +3441,14 @@ def build_parser() -> argparse.ArgumentParser:
     report_windows_activities.add_argument("--limit", type=int, default=100)
     report_windows_activities.add_argument("--format", choices=["json", "table", "csv"], default="json")
     report_windows_activities.add_argument("--output")
+    report_clipboard = report_sub.add_parser("clipboard")
+    report_clipboard.add_argument("--case", required=True, dest="case_id")
+    report_clipboard.add_argument("--user")
+    report_clipboard.add_argument("--contains")
+    report_clipboard.add_argument("--include-empty", action="store_true")
+    report_clipboard.add_argument("--limit", type=int, default=100)
+    report_clipboard.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    report_clipboard.add_argument("--output")
     report_webcache = report_sub.add_parser("webcache")
     report_webcache.add_argument("--case", required=True, dest="case_id")
     report_webcache.add_argument("--limit", type=int, default=100)
@@ -3574,7 +3607,29 @@ def build_parser() -> argparse.ArgumentParser:
     report_search_runs.add_argument("--output")
     report_event_interpretation = report_sub.add_parser("event-interpretation")
     report_event_interpretation.add_argument("--case", required=True, dest="case_id")
-    report_event_interpretation.add_argument("--category", choices=["usb", "wifi", "cloud", "file_activity", "logon"])
+    report_event_interpretation.add_argument(
+        "--category",
+        choices=[
+            "account_manipulation",
+            "audit_log_clearing",
+            "bitlocker",
+            "cloud",
+            "defender",
+            "file_activity",
+            "logon",
+            "network_share",
+            "powershell",
+            "print",
+            "process_creation",
+            "remote_access",
+            "scheduled_task",
+            "service_install",
+            "usb",
+            "vpn",
+            "wifi",
+            "wmi_persistence",
+        ],
+    )
     report_event_interpretation.add_argument("--limit", type=int, default=100)
     report_event_interpretation.add_argument("--format", choices=["json", "table", "csv"], default="json")
     report_event_interpretation.add_argument("--output")
@@ -3689,6 +3744,12 @@ def build_parser() -> argparse.ArgumentParser:
     report_ual.add_argument("--limit", type=int, default=100)
     report_ual.add_argument("--format", choices=["json", "table", "csv"], default="json")
     report_ual.add_argument("--output")
+    report_bits_activity = report_sub.add_parser("bits-activity")
+    report_bits_activity.add_argument("--case", required=True, dest="case_id")
+    report_bits_activity.add_argument("--limit", type=int, default=250)
+    report_bits_activity.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    report_bits_activity.add_argument("--output")
+    report_bits_activity.add_argument("--rebuild", action="store_true")
     report_srum_networks = report_sub.add_parser("srum-networks")
     report_srum_networks.add_argument("--case", required=True, dest="case_id")
     report_srum_networks.add_argument("--include-zero", action="store_true")
@@ -3822,6 +3883,13 @@ def build_parser() -> argparse.ArgumentParser:
     report_device_inventory.add_argument("--limit", type=int, default=250)
     report_device_inventory.add_argument("--format", choices=["json", "table", "csv"], default="json")
     report_device_inventory.add_argument("--output")
+    report_evidence_extractions = report_sub.add_parser("evidence-extractions")
+    report_evidence_extractions.add_argument("--case", required=True, dest="case_id")
+    report_evidence_extractions.add_argument("--image", dest="image_id")
+    report_evidence_extractions.add_argument("--artifact", dest="artifact_name")
+    report_evidence_extractions.add_argument("--limit", type=int, default=1000)
+    report_evidence_extractions.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    report_evidence_extractions.add_argument("--output")
     report_usb_files = report_sub.add_parser("usb-files")
     report_usb_files.add_argument("--case", required=True, dest="case_id")
     report_usb_files.add_argument("--limit", type=int, default=500)
@@ -4090,7 +4158,15 @@ def build_parser() -> argparse.ArgumentParser:
     report_regression_smoke.add_argument("--output-dir")
     report_write_bundle = report_sub.add_parser("write-bundle")
     report_write_bundle.add_argument("--case", required=True, dest="case_id")
-    report_write_bundle.add_argument("--limit", type=int, default=100)
+    report_write_bundle.add_argument(
+        "--limit",
+        type=int,
+        default=DEFAULT_REPORT_EXPORT_LIMIT,
+        help=(
+            "Maximum rows per bounded report export. Defaults to 10000 for saved bundles; "
+            "reports that hit the limit should be regenerated with a higher value."
+        ),
+    )
     report_write_bundle.add_argument("--output-dir", help="Directory for bundle files; defaults to cases/CASE_ID/outputs/reports/PURPOSE-bundle")
     report_write_bundle.add_argument("--purpose", choices=["full", "usb", "cloud", "execution", "memory", "triage", "review"], default="full")
     report_write_bundle.add_argument("--no-progress", action="store_true", help="Suppress timestamped bundle generation progress messages on stderr")
@@ -4520,6 +4596,8 @@ def run(args: argparse.Namespace) -> int:
             allow_sensitive=args.allow_sensitive,
             allow_external_ai=args.allow_external_ai,
             plugin_paths=config.plugin_paths,
+            auth_token=args.auth_token,
+            max_running_jobs=args.max_running_jobs,
         )
     if args.resource == "report-bundle" and args.action == "coverage":
         report = parser_coverage_report(Path(args.path) if args.path else None)
@@ -6108,8 +6186,51 @@ def run(args: argparse.Namespace) -> int:
                     "case_id": image.case_id,
                     "computer_id": image.computer_id,
                     "path": str(image.path),
+                    "hashes": db.image_hashes(case_id=image.case_id, image_id=image.id),
                 }
             )
+            return 0
+
+        if args.resource == "image" and args.action == "verify":
+            result = verify_image_hashes(db, case_id=args.case_id, image_id=args.image_id)
+            if args.format == "json":
+                write_text_output(json.dumps(result, indent=2, default=str), args.output)
+            else:
+                write_report_output(
+                    result,
+                    result["verifications"],
+                    args.format,
+                    args.output,
+                    title=f"Image verification for {args.image_id}",
+                    columns=["algorithm", "status", "expected_digest", "actual_digest", "size_bytes", "source_path", "error"],
+                )
+            return 0 if result.get("status") == "verified" else 1
+
+        if args.resource == "image" and args.action == "integrity":
+            report = {
+                "case_id": args.case_id,
+                "image_id": args.image_id,
+                "hashes": db.image_hashes(case_id=args.case_id, image_id=args.image_id),
+                "recent_verifications": db.image_verifications(case_id=args.case_id, image_id=args.image_id, limit=args.limit),
+            }
+            rows = [
+                {"record_type": "stored_hash", **row}
+                for row in report["hashes"]
+            ] + [
+                {"record_type": "verification", **row}
+                for row in report["recent_verifications"]
+            ]
+            if args.format == "json":
+                write_text_output(json.dumps(report, indent=2, default=str), args.output)
+            else:
+                write_report_output(
+                    report,
+                    rows,
+                    args.format,
+                    args.output,
+                    title="Image integrity",
+                    columns=["record_type", "image_id", "algorithm", "status", "digest", "expected_digest", "actual_digest", "size_bytes", "source_path", "error", "computed_at", "verified_at"],
+                )
             return 0
 
         if args.resource == "image" and args.action == "mount":
@@ -7373,6 +7494,35 @@ def run(args: argparse.Namespace) -> int:
             )
             return 0
 
+        if args.resource == "report" and args.action == "evidence-extractions":
+            rows = db.evidence_file_extractions(
+                case_id=args.case_id,
+                image_id=args.image_id,
+                artifact_name=args.artifact_name,
+                limit=args.limit,
+            )
+            report = {
+                "case_id": args.case_id,
+                "image_id": args.image_id,
+                "artifact_name": args.artifact_name,
+                "limit": args.limit,
+                "returned": len(rows),
+                "extractions": rows,
+                "note": "Rows show files Relic materialized from evidence for parser use; sha256 hashes are of the extracted copies.",
+            }
+            if args.format == "json":
+                write_text_output(json.dumps(report, indent=2, default=str), args.output)
+            else:
+                write_report_output(
+                    report,
+                    rows,
+                    args.format,
+                    args.output,
+                    title=f"Evidence extractions for case {args.case_id}",
+                    columns=["created_at", "artifact_name", "source_path", "inode", "extracted_path", "size_bytes", "sha256", "status"],
+                )
+            return 0
+
         if args.resource == "report" and args.action == "unmapped-imports":
             report = unmapped_imports_report(db, args.case_id, limit=args.limit)
             write_report_output(
@@ -8235,6 +8385,39 @@ def run(args: argparse.Namespace) -> int:
                     "access_count",
                     "activity_count",
                     "database_file",
+                    "source_table",
+                    "source_csv",
+                    "row_number",
+                ],
+            )
+            return 0
+
+        if args.resource == "report" and args.action == "bits-activity":
+            if args.rebuild:
+                rebuild_bits_activity(db, case_id=args.case_id)
+            report = bits_activity_report(db, args.case_id, limit=args.limit)
+            write_report_output(
+                report,
+                report["bits_activity"],
+                args.format,
+                args.output,
+                title=f"BITS activity for case {args.case_id}",
+                columns=[
+                    "event_time_utc",
+                    "event_type",
+                    "event_id",
+                    "job_name",
+                    "job_id",
+                    "url",
+                    "local_path",
+                    "total_bytes",
+                    "bytes_transferred",
+                    "job_owner",
+                    "computer_label",
+                    "matched_database_file",
+                    "matched_record_type",
+                    "matched_parser_status",
+                    "match_basis",
                     "source_table",
                     "source_csv",
                     "row_number",
@@ -9219,6 +9402,36 @@ def run(args: argparse.Namespace) -> int:
                 args.output,
                 title=f"Windows Activities for case {args.case_id}",
                 columns=["user_profile", "app_display_name", "activity_type", "start_time_utc", "end_time_utc", "file_name", "display_text", "content_uri", "activation_uri", "fallback_uri"],
+            )
+            return 0
+
+        if args.resource == "report" and args.action == "clipboard":
+            report = clipboard_report(
+                db,
+                args.case_id,
+                limit=args.limit,
+                user=args.user,
+                contains=args.contains,
+                include_empty=args.include_empty,
+            )
+            write_report_output(
+                report,
+                report["clipboard_items"],
+                args.format,
+                args.output,
+                title=f"Windows Clipboard history for case {args.case_id}",
+                columns=[
+                    "item_time_utc",
+                    "user_profile",
+                    "format_name",
+                    "content_type",
+                    "text_content",
+                    "file_uri",
+                    "image_present",
+                    "cloud_sync_state",
+                    "cloud_sync_id",
+                    "source_path",
+                ],
             )
             return 0
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import re
 import uuid
 from dataclasses import dataclass
@@ -10,7 +11,7 @@ import subprocess
 import time
 
 from forensic_orchestrator.db import Database, utc_now
-from forensic_orchestrator.jobs import JobRunner
+from forensic_orchestrator.jobs import JobRunner, command_timeout_seconds
 from forensic_orchestrator.models import ArtifactDefinition, ExtractedArtifact
 from forensic_orchestrator.safety import ToolError, require_dependency
 
@@ -45,11 +46,20 @@ def build_fls_command(raw_image: Path, offset_sectors: int, *, filesystem_type: 
 
 
 def build_icat_command(raw_image: Path, offset_sectors: int, inode: str, *, filesystem_type: str | None = None) -> list[str]:
+    inode = _validate_inode(inode)
     return ["icat", "-f", _tsk_filesystem_type(filesystem_type), "-o", str(offset_sectors), str(raw_image), inode]
 
 
 def build_istat_command(raw_image: Path, offset_sectors: int, inode: str, *, filesystem_type: str | None = None) -> list[str]:
+    inode = _validate_inode(inode)
     return ["istat", "-f", _tsk_filesystem_type(filesystem_type), "-o", str(offset_sectors), str(raw_image), inode]
+
+
+def _validate_inode(inode: str) -> str:
+    text = str(inode or "").strip()
+    if not text or text.startswith("-") or not re.fullmatch(r"[A-Za-z0-9:._-]+", text):
+        raise ToolError(f"Unsafe Sleuth Kit inode value: {inode!r}")
+    return text
 
 
 def validate_tsk_available() -> None:
@@ -151,7 +161,13 @@ def list_files(
             "dry_run": False,
         }
     )
-    completed = subprocess.run(command, capture_output=True, text=True, check=False)
+    try:
+        completed = subprocess.run(command, capture_output=True, text=True, check=False, timeout=command_timeout_seconds())
+    except subprocess.TimeoutExpired as exc:
+        stdout_path.write_text(exc.stdout or "", encoding="utf-8", errors="replace")
+        stderr_path.write_text(exc.stderr or "", encoding="utf-8", errors="replace")
+        db.finish_job(job_id, utc_now(), -9)
+        raise ToolError(f"fls timed out after {command_timeout_seconds()} seconds; stderr={stderr_path}") from exc
     stdout_path.write_text(completed.stdout)
     stderr_path.write_text(completed.stderr)
     db.finish_job(job_id, utc_now(), completed.returncode)
@@ -178,6 +194,55 @@ def _safe_relative_path(value: str) -> Path:
     clean = value.replace("\\", "/").lstrip("/")
     parts = [part for part in clean.split("/") if part not in {"", ".", ".."}]
     return Path(*parts) if parts else Path("artifact")
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _extraction_audit_row(
+    *,
+    case_id: str,
+    image_id: str,
+    computer_id: str | None,
+    artifact_name: str,
+    source_path: str,
+    extracted_path: Path,
+    inode: str,
+    metadata: dict[str, str] | None = None,
+    status: str = "extracted",
+    details: dict[str, object] | None = None,
+) -> dict[str, object]:
+    metadata = metadata or {}
+    try:
+        stat = extracted_path.stat()
+        size_bytes = stat.st_size
+        sha256 = _sha256_file(extracted_path)
+    except OSError:
+        size_bytes = None
+        sha256 = ""
+    return {
+        "case_id": case_id,
+        "computer_id": computer_id,
+        "image_id": image_id,
+        "artifact_name": artifact_name,
+        "source_path": source_path,
+        "extracted_path": str(extracted_path),
+        "inode": inode,
+        "extraction_method": "icat",
+        "sha256": sha256,
+        "size_bytes": size_bytes,
+        "created_utc": metadata.get("created_utc"),
+        "modified_utc": metadata.get("modified_utc"),
+        "accessed_utc": metadata.get("accessed_utc"),
+        "metadata_changed_utc": metadata.get("metadata_changed_utc"),
+        "status": status,
+        "details": details or {},
+    }
 
 
 def _run_icat_to_file(
@@ -234,8 +299,13 @@ def _run_icat_to_file(
             "dry_run": False,
         }
     )
-    with destination.open("wb") as extracted, stderr_path.open("wb") as stderr:
-        completed = subprocess.run(command, stdout=extracted, stderr=stderr, check=False)
+    try:
+        with destination.open("wb") as extracted, stderr_path.open("wb") as stderr:
+            completed = subprocess.run(command, stdout=extracted, stderr=stderr, check=False, timeout=command_timeout_seconds())
+    except subprocess.TimeoutExpired as exc:
+        stderr_path.write_bytes((exc.stderr or b"") if isinstance(exc.stderr, bytes) else str(exc.stderr or "").encode("utf-8", errors="replace"))
+        db.finish_job(job_id, utc_now(), -9)
+        raise ToolError(f"icat timed out for inode {inode}; stderr={stderr_path}") from exc
     stdout_path.write_text(str(destination) + "\n")
     end_time = utc_now()
     db.finish_job(job_id, end_time, completed.returncode)
@@ -282,7 +352,7 @@ def read_file_metadata(
     if dry_run:
         return {}
     command = build_istat_command(raw_image, offset_sectors, inode, filesystem_type=filesystem_type)
-    completed = subprocess.run(command, capture_output=True, text=True, check=False)
+    completed = subprocess.run(command, capture_output=True, text=True, check=False, timeout=command_timeout_seconds())
     if completed.returncode != 0:
         raise ToolError(f"istat failed for inode {inode}: {completed.stderr.strip()}")
     return parse_istat_metadata(completed.stdout)
@@ -470,6 +540,32 @@ def extract_artifact(
             dry_run=dry_run,
             filesystem_type=filesystem_type,
         )
+        if not dry_run:
+            try:
+                metadata = read_file_metadata(
+                    raw_image=raw_image,
+                    offset_sectors=offset_sectors,
+                    inode=artifact.inode,
+                    filesystem_type=filesystem_type,
+                    dry_run=dry_run,
+                )
+            except ToolError:
+                metadata = {}
+            db.insert_evidence_file_extractions(
+                [
+                    _extraction_audit_row(
+                        case_id=case_id,
+                        image_id=image_id,
+                        computer_id=computer_id,
+                        artifact_name=artifact.name,
+                        source_path=artifact.source,
+                        extracted_path=destination,
+                        inode=artifact.inode,
+                        metadata=metadata,
+                        details={"source": artifact.source, "mode": "direct_inode"},
+                    )
+                ]
+            )
         db.insert_artifact(
             {
                 "id": str(uuid.uuid4()),
@@ -644,6 +740,32 @@ def extract_artifact(
                     **metadata,
                 }
             )
+        db.insert_evidence_file_extractions(
+            [
+                _extraction_audit_row(
+                    case_id=case_id,
+                    image_id=image_id,
+                    computer_id=computer_id,
+                    artifact_name=artifact.name,
+                    source_path=str(row.get("original_path") or ""),
+                    extracted_path=Path(str(row.get("artifact_path") or "")),
+                    inode=str(row.get("inode") or ""),
+                    metadata={
+                        "created_utc": str(row.get("created_utc") or ""),
+                        "modified_utc": str(row.get("modified_utc") or ""),
+                        "accessed_utc": str(row.get("accessed_utc") or ""),
+                        "metadata_changed_utc": str(row.get("metadata_changed_utc") or ""),
+                    },
+                    details={
+                        "source": artifact.source,
+                        "partial": row.get("partial"),
+                        "recovery_limited": row.get("recovery_limited"),
+                        "limit_reason": row.get("limit_reason"),
+                    },
+                )
+                for row in manifest_rows
+            ]
+        )
         limited = bool(limit_reason)
         write_extraction_manifest(destination, manifest_rows)
         db.insert_artifact(
@@ -794,6 +916,32 @@ def extract_artifact(
         dry_run=dry_run,
         filesystem_type=filesystem_type,
     )
+    if not dry_run:
+        try:
+            metadata = read_file_metadata(
+                raw_image=raw_image,
+                offset_sectors=offset_sectors,
+                inode=matches[0].inode,
+                filesystem_type=filesystem_type,
+                dry_run=dry_run,
+            )
+        except ToolError:
+            metadata = {}
+        db.insert_evidence_file_extractions(
+            [
+                _extraction_audit_row(
+                    case_id=case_id,
+                    image_id=image_id,
+                    computer_id=computer_id,
+                    artifact_name=artifact.name,
+                    source_path=matches[0].path,
+                    extracted_path=destination,
+                    inode=matches[0].inode,
+                    metadata=metadata,
+                    details={"source": artifact.source, "mode": "path_match"},
+                )
+            ]
+        )
     db.insert_artifact(
         {
             "id": str(uuid.uuid4()),

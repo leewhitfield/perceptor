@@ -208,7 +208,7 @@ def test_google_takeout_imports_mail_mbox_drive_inventory_and_searchable_drive_c
     assert content_row[0] == "/Report.docx"
     assert content_row[1] == "Report.docx"
     assert int(content_row[2]) == len("Searchable Drive Takeout contract language")
-    assert any(document["source_type"] == "indexed_file_content" and "contract language" in document["content"] for document in documents)
+    assert any(document["source_type"] == "direct_file_content" and "contract language" in document["content"] for document in documents)
 
 
 def _docx_bytes(text: str) -> bytes:

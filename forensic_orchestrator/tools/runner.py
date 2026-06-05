@@ -21,7 +21,9 @@ from forensic_orchestrator.safety import MissingDependencyError, ToolError, requ
 
 from .ingest import ingest_csv_output
 from .archive_inventory import parse_archive_inventory_to_csv
+from .bits import parse_bits_artifacts_to_csv
 from .chromium import parse_chromium_artifacts_to_csv
+from .clipboard import parse_clipboard_artifacts_to_csv
 from .browser_cache import parse_browser_cache_artifacts_to_csv
 from .cloud_sync import parse_cloud_sync_artifacts_to_csv
 from .etl import parse_etl_artifacts_to_csv
@@ -183,6 +185,8 @@ def validate_tool(
         "internal_ual",
         "internal_chromium",
         "internal_browser_cache",
+        "internal_bits",
+        "internal_clipboard",
         "internal_cloud_sync",
         "internal_onedrive_explorer",
         "internal_onedrive_odl",
@@ -626,6 +630,35 @@ def run_internal_ual_tool(
         artifact_name="ual_sum_dir",
         parser_description="internal UAL/SUM ESE parser",
         parse_to_csv=parse_ual_artifacts_to_csv,
+    )
+
+
+def run_internal_bits_tool(
+    *,
+    db: Database,
+    case_id: str,
+    image_id: str,
+    computer_id: str | None,
+    tool: ToolDefinition,
+    command: list[str],
+    output: Path,
+    artifacts: dict[str, Path],
+    dry_run: bool,
+) -> object:
+    return run_internal_csv_tool(
+        db=db,
+        case_id=case_id,
+        image_id=image_id,
+        computer_id=computer_id,
+        tool=tool,
+        command=command,
+        output=output,
+        artifacts=artifacts,
+        dry_run=dry_run,
+        artifact_name="bits_downloader",
+        parser_description="internal BITS job-store parser",
+        parse_to_csv=parse_bits_artifacts_to_csv,
+        allow_missing_source=True,
     )
 
 
@@ -1110,6 +1143,35 @@ def run_internal_windows_activities_tool(
         artifact_name="windows_activities",
         parser_description="internal Windows Activities parser",
         parse_to_csv=parse_windows_activities_to_csv,
+        allow_missing_source=True,
+    )
+
+
+def run_internal_clipboard_tool(
+    *,
+    db: Database,
+    case_id: str,
+    image_id: str,
+    computer_id: str | None,
+    tool: ToolDefinition,
+    command: list[str],
+    output: Path,
+    artifacts: dict[str, Path],
+    dry_run: bool,
+) -> object:
+    return run_internal_csv_tool(
+        db=db,
+        case_id=case_id,
+        image_id=image_id,
+        computer_id=computer_id,
+        tool=tool,
+        command=command,
+        output=output,
+        artifacts=artifacts,
+        dry_run=dry_run,
+        artifact_name="clipboard_store",
+        parser_description="internal Windows Clipboard parser",
+        parse_to_csv=parse_clipboard_artifacts_to_csv,
         allow_missing_source=True,
     )
 
@@ -1989,6 +2051,18 @@ def run_tool(
             artifacts=artifact_paths,
             dry_run=dry_run,
         )
+    elif tool.type == "internal_bits":
+        result = run_internal_bits_tool(
+            db=db,
+            case_id=case_id,
+            image_id=image_id,
+            computer_id=computer_id,
+            tool=tool,
+            command=command,
+            output=output,
+            artifacts=artifact_paths,
+            dry_run=dry_run,
+        )
     elif tool.type == "internal_office_backstage":
         result = run_internal_office_backstage_tool(
             db=db,
@@ -2171,6 +2245,18 @@ def run_tool(
         )
     elif tool.type == "internal_windows_activities":
         result = run_internal_windows_activities_tool(
+            db=db,
+            case_id=case_id,
+            image_id=image_id,
+            computer_id=computer_id,
+            tool=tool,
+            command=command,
+            output=output,
+            artifacts=artifact_paths,
+            dry_run=dry_run,
+        )
+    elif tool.type == "internal_clipboard":
+        result = run_internal_clipboard_tool(
             db=db,
             case_id=case_id,
             image_id=image_id,

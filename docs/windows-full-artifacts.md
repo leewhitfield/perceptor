@@ -705,6 +705,18 @@ internal-onedrive-odl-parser {artifact:onedrive_logs} --csv {output}
 internal-windows-activities-parser {artifact:windows_activities} --csv {output}
 ```
 
+### ClipboardParser
+
+- Type: `internal_clipboard`
+- Outputs: `csv`
+- Artifact inputs:
+  - name=`clipboard_store`; source=`Users`; destination=`Clipboard`
+- Command template:
+
+```text
+internal-clipboard-parser {artifact:clipboard_store} --csv {output}
+```
+
 ### EtlParser
 
 - Type: `internal_etl`

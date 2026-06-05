@@ -1026,6 +1026,54 @@ def normalized_ual_record_row(
     }
 
 
+def normalized_bits_job_row(
+    *,
+    case_id: str,
+    computer_id: str,
+    image_id: str,
+    tool_output_id: str,
+    tool_name: str,
+    source_csv: Path,
+    row_number: int,
+    row: dict[str, Any],
+) -> dict[str, Any]:
+    raw_row_json = _first_text(row, "raw_row_json", "RawRowJson") or "{}"
+    return {
+        "id": str(uuid.uuid4()),
+        "case_id": case_id,
+        "computer_id": computer_id,
+        "image_id": image_id,
+        "tool_output_id": tool_output_id,
+        "tool_name": tool_name,
+        "source_csv": source_csv,
+        "row_number": row_number,
+        "source_path": _first_text(row, "source_path", "SourcePath"),
+        "database_file": _first_text(row, "database_file", "DatabaseFile"),
+        "source_table": _first_text(row, "source_table", "SourceTable"),
+        "record_id": _first_text(row, "record_id", "RecordId", "Id", "ID"),
+        "record_type": _first_text(row, "record_type", "RecordType"),
+        "job_id": _first_text(row, "job_id", "JobId", "JobID"),
+        "job_name": _first_text(row, "job_name", "JobName", "DisplayName"),
+        "job_owner": _first_text(row, "job_owner", "JobOwner", "Owner"),
+        "job_state": _first_text(row, "job_state", "JobState", "State"),
+        "job_type": _first_text(row, "job_type", "JobType", "Type"),
+        "priority": _first_text(row, "priority", "Priority"),
+        "created_utc": _first_timestamp(row, "created_utc", "CreatedUtc", "Created"),
+        "modified_utc": _first_timestamp(row, "modified_utc", "ModifiedUtc", "Modified"),
+        "completed_utc": _first_timestamp(row, "completed_utc", "CompletedUtc", "Completed"),
+        "expiration_utc": _first_timestamp(row, "expiration_utc", "ExpirationUtc", "Expiration"),
+        "url": _first_text(row, "url", "URL"),
+        "local_path": _first_text(row, "local_path", "LocalPath"),
+        "remote_name": _first_text(row, "remote_name", "RemoteName"),
+        "file_size": _first_text(row, "file_size", "FileSize"),
+        "bytes_transferred": _first_text(row, "bytes_transferred", "BytesTransferred"),
+        "raw_row_json": raw_row_json if raw_row_json.strip().startswith("{") else "{}",
+        "parser_status": _first_text(row, "parser_status", "ParserStatus"),
+        "parser_error": _first_text(row, "parser_error", "ParserError"),
+        "created_at": utc_now(),
+    }
+
+
 def normalized_windows_search_file_row(
     *,
     case_id: str,
@@ -1907,6 +1955,124 @@ def normalized_taskbar_feature_usage_row_from_registry_artifact(
     }
 
 
+_BITS_EVENT_TYPES = {
+    "3": "bits_job_created",
+    "4": "bits_job_completed",
+    "5": "bits_job_cancelled",
+    "59": "bits_transfer_started",
+    "60": "bits_transfer_stopped",
+    "61": "bits_transfer_error",
+    "16403": "bits_job_file_queued",
+}
+
+
+def normalized_bits_activity_row_from_evtx(row: dict[str, Any]) -> dict[str, Any] | None:
+    provider = str(row.get("provider") or "")
+    channel = str(row.get("channel") or "")
+    payload_text = _bits_payload_text(row)
+    event_id = _text(row.get("event_id"))
+    provider_channel_text = f"{provider} {channel} {payload_text}".casefold()
+    if "bits-client" not in provider_channel_text and "background intelligent transfer" not in provider_channel_text:
+        return None
+    if not any(token in provider_channel_text for token in ("bits", "jobtitle", "jobid", "url:")):
+        return None
+    fields = _bits_payload_fields(row)
+    job_id = fields.get("jobid") or fields.get("job id")
+    job_name = fields.get("jobtitle") or fields.get("job title")
+    url = fields.get("url")
+    total_bytes, transferred = _bits_total_bytes(fields.get("total bytes"))
+    raw_fields = {
+        "payload_data1": row.get("payload_data1"),
+        "payload_data2": row.get("payload_data2"),
+        "payload_data3": row.get("payload_data3"),
+        "payload_data4": row.get("payload_data4"),
+        "payload_data5": row.get("payload_data5"),
+        "payload_data6": row.get("payload_data6"),
+        "map_description": row.get("map_description"),
+        "payload": row.get("payload"),
+    }
+    return {
+        "id": str(uuid.uuid4()),
+        "case_id": row["case_id"],
+        "computer_id": row["computer_id"],
+        "image_id": row["image_id"],
+        "tool_output_id": row["tool_output_id"],
+        "tool_name": row["tool_name"],
+        "source_csv": row.get("source_csv"),
+        "row_number": row.get("row_number"),
+        "source_table": "evtx_events",
+        "source_row_id": row.get("id"),
+        "event_time_utc": _first_timestamp(row, "time_created"),
+        "event_id": event_id,
+        "event_type": _BITS_EVENT_TYPES.get(str(event_id or "").strip(), "bits_event_log"),
+        "provider": row.get("provider"),
+        "channel": row.get("channel"),
+        "computer": row.get("computer"),
+        "job_id": job_id,
+        "job_name": job_name,
+        "job_owner": fields.get("jobowner") or fields.get("job owner"),
+        "url": url,
+        "peer": fields.get("peer"),
+        "file_count": fields.get("filecount") or fields.get("file count"),
+        "total_bytes": total_bytes,
+        "bytes_transferred": transferred or fields.get("bytes transferred"),
+        "local_path": fields.get("localpath") or fields.get("local path") or fields.get("path"),
+        "matched_bits_job_id": None,
+        "correlation_basis": "evtx_bits_client",
+        "raw_fields_json": json.dumps(raw_fields, sort_keys=True),
+        "created_at": utc_now(),
+    }
+
+
+def _bits_payload_text(row: dict[str, Any]) -> str:
+    return " ".join(
+        str(row.get(key) or "")
+        for key in (
+            "provider",
+            "channel",
+            "map_description",
+            "payload_data1",
+            "payload_data2",
+            "payload_data3",
+            "payload_data4",
+            "payload_data5",
+            "payload_data6",
+            "payload",
+        )
+    )
+
+
+def _bits_payload_fields(row: dict[str, Any]) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    for key in ("payload_data1", "payload_data2", "payload_data3", "payload_data4", "payload_data5", "payload_data6"):
+        value = str(row.get(key) or "").strip()
+        if ":" not in value:
+            continue
+        name, data = value.split(":", 1)
+        name = name.strip().lower()
+        data = data.strip()
+        if name and data:
+            fields[name] = data
+    payload = str(row.get("payload") or "")
+    for name in ("jobTitle", "jobId", "URL", "Peer", "Total Bytes", "fileCount", "jobOwner", "Bytes Transferred"):
+        match = re.search(rf'"@Name"\s*:\s*"{re.escape(name)}".*?"#text"\s*:\s*"([^"]*)"', payload)
+        if match:
+            fields.setdefault(name.lower(), match.group(1).strip())
+    return fields
+
+
+def _bits_total_bytes(value: str | None) -> tuple[str | None, str | None]:
+    if not value:
+        return None, None
+    text = str(value).strip()
+    total_match = re.search(r"(\d+)", text)
+    transferred_match = re.search(r"Transferred:\s*(\d+)", text, re.IGNORECASE)
+    return (
+        total_match.group(1) if total_match else text,
+        transferred_match.group(1) if transferred_match else None,
+    )
+
+
 def normalized_evtx_event_row(
     *,
     case_id: str,
@@ -2598,6 +2764,53 @@ def normalized_windows_activity_row(
         "platform_device_id": _text(row.get("platform_device_id")),
         "payload_json": _text(row.get("payload_json")),
         "raw_json": _text(row.get("raw_json")),
+    }
+
+
+def normalized_clipboard_item_row(
+    *,
+    case_id: str,
+    computer_id: str,
+    image_id: str,
+    tool_output_id: str,
+    tool_name: str,
+    source_csv: Path,
+    row_number: int,
+    row: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "id": str(uuid.uuid4()),
+        "case_id": case_id,
+        "computer_id": computer_id,
+        "image_id": image_id,
+        "tool_output_id": tool_output_id,
+        "tool_name": tool_name,
+        "source_csv": source_csv,
+        "row_number": row_number,
+        "source_path": _text(row.get("source_path")),
+        "user_profile": _text(row.get("user_profile")),
+        "source_type": _text(row.get("source_type")),
+        "source_table": _text(row.get("source_table")),
+        "row_identifier": _text(row.get("row_identifier")),
+        "item_time_utc": _timestamp(row.get("item_time_utc")),
+        "created_time_utc": _timestamp(row.get("created_time_utc")),
+        "modified_time_utc": _timestamp(row.get("modified_time_utc")),
+        "last_used_time_utc": _timestamp(row.get("last_used_time_utc")),
+        "sequence_number": _text(row.get("sequence_number")),
+        "format_name": _text(row.get("format_name")),
+        "content_type": _text(row.get("content_type")),
+        "text_content": _text(row.get("text_content")),
+        "file_uri": _text(row.get("file_uri")),
+        "html_content": _text(row.get("html_content")),
+        "image_present": _text(row.get("image_present")),
+        "payload_size": _text(row.get("payload_size")),
+        "cloud_sync_state": _text(row.get("cloud_sync_state")),
+        "cloud_sync_id": _text(row.get("cloud_sync_id")),
+        "device_id": _text(row.get("device_id")),
+        "raw_payload_json": _text(row.get("raw_payload_json")),
+        "parser_status": _text(row.get("parser_status")),
+        "parser_error": _text(row.get("parser_error")),
+        "created_at": utc_now(),
     }
 
 

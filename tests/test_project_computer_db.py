@@ -6,6 +6,7 @@ import pytest
 
 from forensic_orchestrator.db import Database
 from forensic_orchestrator.evidence import add_image
+from forensic_orchestrator.image_integrity import verify_image_hashes
 from forensic_orchestrator.paths import WorkspacePaths
 from forensic_orchestrator.reports import (
     process_timing_report,
@@ -57,6 +58,27 @@ def test_add_image_records_sqlite_image_metadata(tmp_path):
     assert values[("filesystem", "size_bytes")] == str(len(b"not a real ewf"))
     assert db.conn.execute("SELECT COUNT(*) AS count FROM image_metadata").fetchone()["count"] >= 2
     assert db.case_status(case.id)["image_metadata"]
+
+
+def test_add_image_records_and_verifies_image_hashes(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    paths = WorkspacePaths(tmp_path / "workspace")
+    case = db.create_case("case-1", paths.case_dir("case-1"))
+    image_path = tmp_path / "evidence.raw"
+    image_path.write_bytes(b"stable evidence bytes")
+
+    image = add_image(db, paths, case.id, image_path)
+
+    hashes = {row["algorithm"]: row["digest"] for row in db.image_hashes(case_id=case.id, image_id=image.id)}
+    assert set(hashes) == {"md5", "sha1", "sha256"}
+    assert hashes["sha256"]
+    assert verify_image_hashes(db, case_id=case.id, image_id=image.id)["status"] == "verified"
+
+    image_path.write_bytes(b"changed evidence bytes")
+    result = verify_image_hashes(db, case_id=case.id, image_id=image.id)
+
+    assert result["status"] == "mismatch"
+    assert db.image_verifications(case_id=case.id, image_id=image.id)[0]["status"] == "mismatch"
 
 
 def test_process_timings_record_start_end_and_report(tmp_path):

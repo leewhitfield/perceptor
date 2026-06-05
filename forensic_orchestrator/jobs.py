@@ -2,11 +2,23 @@ from __future__ import annotations
 
 import subprocess
 import uuid
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
 from .db import Database, utc_now
 from .safety import ToolError
+
+
+DEFAULT_COMMAND_TIMEOUT_SECONDS = 3600
+
+
+def command_timeout_seconds() -> int:
+    try:
+        value = int(os.environ.get("RELIC_COMMAND_TIMEOUT_SECONDS", "") or DEFAULT_COMMAND_TIMEOUT_SECONDS)
+    except ValueError:
+        return DEFAULT_COMMAND_TIMEOUT_SECONDS
+    return max(1, value)
 
 
 @dataclass(frozen=True)
@@ -38,6 +50,7 @@ class JobRunner:
         nonzero_level: str = "error",
         nonzero_event: str = "job.finished",
         nonzero_message: str | None = None,
+        timeout: int | None = None,
     ) -> CommandResult:
         job_id = str(uuid.uuid4())
         job_dir = output_folder / "_job"
@@ -89,8 +102,30 @@ class JobRunner:
             )
             return CommandResult(job_id, 0, stdout_path, stderr_path, output_folder)
 
-        with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
-            completed = subprocess.run(command, stdout=stdout, stderr=stderr, check=False)
+        try:
+            with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
+                completed = subprocess.run(
+                    command,
+                    stdout=stdout,
+                    stderr=stderr,
+                    check=False,
+                    timeout=timeout or command_timeout_seconds(),
+                )
+        except subprocess.TimeoutExpired as exc:
+            end_time = utc_now()
+            self.db.finish_job(job_id, end_time, -9)
+            stderr_path.write_bytes((exc.stderr or b"") if isinstance(exc.stderr, bytes) else str(exc.stderr or "").encode("utf-8", errors="replace"))
+            self.db.log_activity(
+                case_id=case_id,
+                computer_id=computer_id,
+                image_id=image_id,
+                job_id=job_id,
+                level="error",
+                event="job.timeout",
+                message=f"{tool_name} timed out after {timeout or command_timeout_seconds()} seconds",
+                details={"command": command, "stdout_path": str(stdout_path), "stderr_path": str(stderr_path)},
+            )
+            raise ToolError(f"{tool_name} timed out after {timeout or command_timeout_seconds()} seconds; stdout={stdout_path} stderr={stderr_path}") from exc
 
         end_time = utc_now()
         self.db.finish_job(job_id, end_time, completed.returncode)

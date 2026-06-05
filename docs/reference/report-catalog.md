@@ -11,7 +11,7 @@ reports have narrower options. Use `uv run relic report REPORT_NAME --help` for
 the exact switches.
 
 This catalog is generated from the current `report --help` command set and
-groups all 219 report subcommands by topic.
+groups all 221 report subcommands by topic.
 
 ## Core Case Review
 
@@ -35,6 +35,7 @@ groups all 219 report subcommands by topic.
 - `artifact-processing-status`
 - `combined-artifacts`
 - `operation-manifest`
+- `evidence-extractions`
 
 ## Validation, Specs, and Storage
 
@@ -73,6 +74,7 @@ groups all 219 report subcommands by topic.
 - `suspicious-timeline-windows`
 - `data-exfiltration`
 - `account-compromise`
+- `bits-activity`
 - `program-provenance`
 - `cd-burning`
 - `prefetch`
@@ -187,6 +189,7 @@ groups all 219 report subcommands by topic.
 - `timeline-review`
 - `derived-timeline-events`
 - `event-interpretation`
+- `clipboard`
 - `artifact-sources`
 - `artifact-correlations`
 - `correlation-groups`

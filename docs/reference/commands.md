@@ -61,9 +61,22 @@ uv run relic --root ROOT recover deleted-files --case CASE_ID --image IMAGE_ID -
 ## Image Maintenance
 
 ```bash
+uv run relic --root ROOT image add --case CASE_ID --path /evidence/host.E01 --computer COMPUTER_ID
+uv run relic --root ROOT image integrity --case CASE_ID --image IMAGE_ID --format table
+uv run relic --root ROOT image verify --case CASE_ID --image IMAGE_ID --format table
 uv run relic --root ROOT image cleanup-stale-mounts --format table
 uv run relic --root ROOT image mount --case CASE_ID --image IMAGE_ID --filesystem --sudo
 uv run relic --root ROOT image unmount --case CASE_ID --image IMAGE_ID --sudo
+```
+
+`image add` hashes the evidence with MD5, SHA1, and SHA256. `image verify`
+recomputes the stored algorithms and records the verification result.
+
+## Extraction Audit
+
+```bash
+uv run relic --root ROOT report evidence-extractions --case CASE_ID --format table
+uv run relic --root ROOT report evidence-extractions --case CASE_ID --image IMAGE_ID --artifact lnk_files --format csv --output extracted-lnk.csv
 ```
 
 ## MCP

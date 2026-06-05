@@ -44,8 +44,10 @@ WINDOWS_OLD_EXCLUDED_TOOLS = {
     "MFTECmdI30",
 }
 TIMELINE_TOOLS = {
+    "BITSParser",
     "BrowserCacheParser",
     "ChromiumParser",
+    "ClipboardParser",
     "EtlParser",
     "EvtxECmd",
     "FirefoxParser",
@@ -67,6 +69,7 @@ TIMELINE_TOOLS = {
 ARTIFACT_DEDUPE_TOOLS = {
     "BrowserCacheParser",
     "ChromiumParser",
+    "ClipboardParser",
     "FirefoxParser",
     "LECmd",
     "JLECmd",

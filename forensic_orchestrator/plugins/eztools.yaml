@@ -230,6 +230,42 @@ tools:
     outputs:
       - csv
 
+  BITSParser:
+    enabled: true
+    type: internal_bits
+    executable: esedbexport
+    artifacts:
+      - name: bits_downloader
+        source: "ProgramData/Microsoft/Network/Downloader"
+        destination: "ProgramData/Microsoft/Network/Downloader"
+        recursive: true
+        optional: true
+        patterns:
+          - "qmgr.db"
+          - "qmgr.jfm"
+          - "qmgr0.dat"
+          - "qmgr1.dat"
+          - "qmgr0.bak"
+          - "qmgr1.bak"
+          - "edb.chk"
+          - "edb.log"
+          - "edbtmp.log"
+          - "edb*.log"
+          - "edbres*.jrs"
+        recovery:
+          deleted_files: true
+          orphaned_files: true
+          cost: low
+          noise: low
+    command:
+      - internal-bits-parser
+      - "{artifact:bits_downloader}"
+      - "--csv"
+      - "{output}"
+    required_paths: []
+    outputs:
+      - csv
+
   SIDR:
     enabled: true
     type: binary
@@ -1825,6 +1861,40 @@ tools:
     outputs:
       - csv
 
+  ClipboardParser:
+    enabled: true
+    type: internal_clipboard
+    executable:
+    artifacts:
+      - name: clipboard_store
+        source: "Users"
+        destination: "Clipboard"
+        recursive: true
+        optional: true
+        recovery:
+          deleted_files: true
+          orphaned_files: true
+          cost: medium
+          noise: low
+        patterns:
+          - "clipboard.db"
+          - "clipboard.sqlite"
+          - "*.json"
+          - "*.jsonl"
+          - "*"
+        include_path_patterns:
+          - "*/AppData/Local/Microsoft/Clipboard/*"
+          - "*/AppData/Local/Microsoft/Windows/Clipboard/*"
+          - "*/AppData/Local/Packages/Microsoft.Windows.Clipboard*/*"
+    command:
+      - internal-clipboard-parser
+      - "{artifact:clipboard_store}"
+      - "--csv"
+      - "{output}"
+    required_paths: []
+    outputs:
+      - csv
+
   EtlParser:
     enabled: true
     type: internal_etl
@@ -2264,6 +2334,7 @@ profiles:
       - SetupApiParser
       - SrumParser
       - UalParser
+      - BITSParser
       - AmcacheParser
       - AppCompatCacheParser
       - SBECmd
@@ -2311,6 +2382,7 @@ profiles:
       - SetupApiParser
       - SrumParser
       - UalParser
+      - BITSParser
       - EvtxECmdTriage
       - FirefoxParser
       - ChromiumParser
@@ -2322,6 +2394,7 @@ profiles:
       - CloudSyncParser
       - OneDriveOdlParser
       - WindowsActivitiesParser
+      - ClipboardParser
       - EtlParser
       - WindowsErrorReportingParser
       - WindowsDefenderParser
@@ -2426,6 +2499,7 @@ profiles:
       - SetupApiParser
       - SrumParser
       - UalParser
+      - BITSParser
       - AmcacheParser
       - AppCompatCacheParser
       - SBECmd
@@ -2462,6 +2536,7 @@ profiles:
       - SetupApiParser
       - SrumParser
       - UalParser
+      - BITSParser
       - AmcacheParser
       - AppCompatCacheParser
       - SBECmd
@@ -2506,6 +2581,7 @@ profiles:
       - SetupApiParser
       - SrumParser
       - UalParser
+      - BITSParser
       - AmcacheParser
       - AppCompatCacheParser
       - SBECmd
@@ -2546,6 +2622,7 @@ profiles:
       - SetupApiParser
       - SrumParser
       - UalParser
+      - BITSParser
       - AmcacheParser
       - AppCompatCacheParser
       - SBECmd
@@ -2583,6 +2660,7 @@ profiles:
       - SetupApiParser
       - SrumParser
       - UalParser
+      - BITSParser
       - AmcacheParser
       - AppCompatCacheParser
       - SBECmd
@@ -2622,6 +2700,7 @@ profiles:
         - RegistryArtifactParser
         - SrumParser
         - WindowsActivitiesParser
+        - ClipboardParser
       file_folder_opening:
         - JLECmd
         - LECmd
@@ -2684,12 +2763,14 @@ profiles:
         - LECmd
         - RegistryArtifactParser
         - SrumParser
+        - BITSParser
       system_information:
         - SetupApiParser
         - RegistryArtifactParser
         - RegistryParser
         - RECmd
         - UalParser
+        - BITSParser
         - WindowsDefenderParser
         - WindowsErrorReportingParser
       communications_user_content:
@@ -2707,6 +2788,7 @@ profiles:
       - MFTECmdI30
       - SrumParser
       - UalParser
+      - BITSParser
       - SIDR
       - WindowsSearchESEParser
       - WindowsSearchGatherParser
@@ -2742,6 +2824,7 @@ profiles:
       - OneDriveExplorer
       - OneDriveOdlParser
       - WindowsActivitiesParser
+      - ClipboardParser
       - EtlParser
       - MailboxParser
       - WindowsMailParser
@@ -2774,6 +2857,7 @@ profiles:
       - MFTECmdI30
       - SrumParser
       - UalParser
+      - BITSParser
       - SIDR
       - WindowsSearchESEParser
       - WindowsSearchGatherParser
@@ -2809,11 +2893,17 @@ profiles:
       - OneDriveExplorer
       - OneDriveOdlParser
       - WindowsActivitiesParser
+      - ClipboardParser
       - EtlParser
       - MailboxParser
       - WindowsMailParser
       - MessagingParser
       - ArchiveInventoryParser
+      - FileMetadataOffice
+      - FileMetadataDocuments
+      - FileMetadataPicturesUserContent
+      - FileMetadataVideos
+      - FileMetadataExecutables
       - JLECmd
       - LECmd
       - SBECmd
@@ -2824,6 +2914,7 @@ profiles:
     tools:
       - SrumParser
       - UalParser
+      - BITSParser
       - SIDR
       - WindowsSearchESEParser
       - WindowsSearchGatherParser
@@ -2857,6 +2948,7 @@ profiles:
       - OneDriveExplorer
       - OneDriveOdlParser
       - WindowsActivitiesParser
+      - ClipboardParser
       - EtlParser
       - MailboxParser
       - WindowsMailParser
@@ -2909,6 +3001,7 @@ profiles:
       - RegistryArtifactParser
       - SrumParser
       - UalParser
+      - BITSParser
       - AmcacheParser
       - AppCompatCacheParser
       - SBECmd
@@ -3001,6 +3094,11 @@ profiles:
     tools:
       - WindowsSearchESEParser
 
+  windows-bits:
+    description: Parse BITS job-store databases from ProgramData/Microsoft/Network/Downloader
+    tools:
+      - BITSParser
+
   windows-communications:
     description: Parse local email containers and common messaging app stores
     tools:
@@ -3044,11 +3142,13 @@ profiles:
       - BrowserCacheParser
       - WebCacheParser
       - WindowsActivitiesParser
+      - ClipboardParser
 
   windows-activities:
     description: Parse Windows 10/11 ActivitiesCache.db timeline artifacts
     tools:
       - WindowsActivitiesParser
+      - ClipboardParser
 
   windows-etl:
     description: Parse Windows ETL traces, including AutoLogger process execution evidence where decodable

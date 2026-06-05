@@ -48,6 +48,70 @@ relic_discover_report_exports
 Generate or regenerate reports only when existing reports are absent, stale, or
 the user explicitly asks.
 
+## Indexed File Content
+
+For questions about file content, search the OpenSearch-backed content index
+before attempting direct file extraction:
+
+```text
+relic_search_content
+relic_get_indexed_content
+```
+
+`relic_search_content` returns snippets and reports when full indexed content is
+available. Snippets are not the whole body. Use `relic_get_indexed_content` with
+the returned document ID when the user asks to read the full indexed content.
+
+## BITS and qmgr Questions
+
+For Background Intelligent Transfer Service, qmgr, OneDrive updater, component
+updater, or transfer-job questions, use:
+
+```text
+relic_generate_report
+```
+
+with `report_name: "bits-activity"`.
+
+`bits-activity` is the source of truth because it correlates timestamped BITS
+Client EVTX rows with qmgr database/carved rows by exact job ID or URL where
+available. qmgr carved rows without native timestamps are leads only; the
+timestamp source is the EVTX event.
+
+## High-Value Event Log Questions
+
+For account changes, audit-log clearing, PowerShell script blocks, scheduled
+task creation/deletion, WMI event subscription indicators, print-service
+history, service installs, or process creation with command-line context, use
+existing/generated reports first:
+
+```text
+relic_read_existing_report
+relic_generate_report
+```
+
+with `report_name: "event-interpretation"`.
+
+Use category-specific filtering when the user asks a narrow question, such as
+`powershell`, `account_manipulation`, `audit_log_clearing`, `scheduled_task`,
+`wmi_persistence`, `print`, `service_install`, or `process_creation`.
+
+## Clipboard Questions
+
+For clipboard, copied, pasted, cloud clipboard, or sync-across-devices
+questions, use existing/generated reports first:
+
+```text
+relic_read_existing_report
+relic_generate_report
+```
+
+with `report_name: "clipboard"`.
+
+Use `relic_timeline_window` for time-window context after the clipboard report.
+Treat Windows Activities clipboard payloads as secondary clipboard-adjacent
+evidence, not the primary dedicated clipboard store.
+
 ## Processing and Recovery
 
 Processing tools require both:

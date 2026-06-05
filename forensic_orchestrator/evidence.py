@@ -4,6 +4,7 @@ import uuid
 from pathlib import Path
 
 from .db import Database
+from .image_integrity import image_hash_rows
 from .image_metadata import collect_image_metadata
 from .models import Computer, EvidenceImage
 from .paths import WorkspacePaths
@@ -49,4 +50,5 @@ def add_image(
     resolved = image_path.resolve()
     image = db.add_image(image_id, case_id, resolved, computer_id=computer_id)
     db.replace_image_metadata(case_id=case_id, image_id=image.id, rows=collect_image_metadata(resolved))
+    db.replace_image_hashes(case_id=case_id, image_id=image.id, rows=image_hash_rows(resolved))
     return image

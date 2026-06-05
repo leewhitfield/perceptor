@@ -243,6 +243,10 @@ automatically writes a mounted filesystem inventory to
 `filesystem_entries`. This gives removable volumes a file listing even when
 there is no `$MFT`.
 
+Disk images added through `process --path` are hashed on import with MD5, SHA1,
+and SHA256. Use `image verify` later to prove the current image bytes still
+match the stored hashes.
+
 Use `--dry-run` before a first profile run:
 
 ```bash
@@ -305,6 +309,8 @@ possible.
 uv run relic --root ROOT computer add --case CASE_ID --label HOST01
 uv run relic --root ROOT computer list --case CASE_ID
 uv run relic --root ROOT image add --case CASE_ID --path /evidence/host.E01 --computer COMPUTER_ID
+uv run relic --root ROOT image integrity --case CASE_ID --image IMAGE_ID --format table
+uv run relic --root ROOT image verify --case CASE_ID --image IMAGE_ID --format table
 uv run relic --root ROOT image mount --case CASE_ID --image IMAGE_ID --filesystem
 uv run relic --root ROOT image mount --case CASE_ID --image IMAGE_ID --filesystem --sudo
 uv run relic --root ROOT image mount --case CASE_ID --image IMAGE_ID --filesystem --unlock-bitlocker --bitlocker-key-file /secure/recovery-key.txt
@@ -316,6 +322,9 @@ uv run relic --root ROOT image cleanup-stale-mounts --case CASE_ID --apply --sud
 Mounting nuances:
 
 - Mounts are read-only.
+- `image add` stores MD5, SHA1, and SHA256 evidence hashes. `image verify`
+  records a verification attempt and returns non-zero if the current image bytes
+  do not match.
 - Use `--sudo` only when non-interactive sudo is configured.
 - BitLocker unlock is opt-in and only applies to `--filesystem` mounts. `auto`
   tries `cryptsetup`, then `dislocker`, then `bdemount`. Use a recovery key,
@@ -674,11 +683,15 @@ Opt-in switches:
 Read-only MCP tools:
 
 - `relic_workspace_summary`
+- `relic_route_question`
+- `relic_mcp_workflow_guide`
 - `relic_list_cases`
 - `relic_case_summary`
 - `relic_case_evidence_map`
 - `relic_case_readiness`
 - `relic_discover_reports`
+- `relic_discover_report_exports`
+- `relic_read_existing_report`
 - `relic_case_dashboard`
 - `relic_processing_progress`
 - `relic_resume_plan`
@@ -689,6 +702,7 @@ Read-only MCP tools:
 - `relic_get_job`
 - `relic_timeline`
 - `relic_timeline_window`
+- `relic_activity_windows`
 - `relic_file_dossier`
 - `relic_usb_dossier`
 - `relic_user_activity`
@@ -697,9 +711,12 @@ Read-only MCP tools:
 - `relic_profile_preview`
 - `relic_doctor`
 - `relic_list_report_types`
+- `relic_query_evidence_contents`
+- `relic_query_filesystem_listings`
 - `relic_query_suspicious_executions`
 - `relic_query_external_storage`
 - `relic_query_usb_files`
+- `relic_query_usb_contents`
 - `relic_query_file_movement_identity`
 - `relic_query_opened_from_removable_media`
 - `relic_query_opened_from_cloud_storage`
@@ -709,10 +726,13 @@ Read-only MCP tools:
 - `relic_query_registry_activity`
 - `relic_query_shortcuts`
 - `relic_query_communications`
+- `relic_query_system_users`
 - `relic_case_review`
 - `relic_workspace_map`
 - `relic_artifact_search_sources`
 - `relic_search_artifacts`
+- `relic_search_content`
+- `relic_get_indexed_content`
 - `relic_lead_search`
 - `relic_case_activity_digest`
 - `relic_case_next_actions`
@@ -726,6 +746,7 @@ Read-only MCP tools:
 - `relic_list_mcp_jobs`
 - `relic_get_mcp_job_output`
 - `relic_get_mcp_job_progress`
+- `relic_list_progress_manifests`
 - `relic_mcp_tool_reference`
 
 Safe-write MCP tools:
@@ -843,6 +864,13 @@ Not every report supports every format or filter. Use:
 uv run relic report REPORT_NAME --help
 ```
 
+Interactive report commands may use preview-sized default limits so terminal
+output remains usable. Saved report bundles default to broader exports
+(`--limit 50000`) so MCP and later review have the full available picture for
+most artifacts. If a JSON report includes `limited: true`, do not treat missing
+rows as evidence of absence; regenerate that report or bundle with a higher
+`--limit`.
+
 `report-bundle coverage --path PATH` reports parser coverage for live-response
 CSV folders/zips with computer attribution, mapped parser, row count, and a
 recommendation for unmapped files. It also groups unmapped files by header
@@ -877,6 +905,8 @@ Purpose bundles:
 - `write-bundle` writes to `cases/CASE_ID/outputs/reports/PURPOSE-bundle`
   by default. Use `--output-dir` only when you intentionally need a different
   location.
+- `write-bundle` defaults to `--limit 50000` per bounded report export. Raise
+  this if a report indicates `limited: true`.
 - `usb`: removable media, shellbags, shortcuts, object IDs, USN lifecycle.
 - `cloud`: cloud artifacts, opened-from-cloud, virtual mounts.
 - `execution`: execution, suspicious execution, provenance, remote access.
@@ -897,9 +927,11 @@ High-value report families:
 - Case health: `summary`, `dashboard`, `case-overview`, `executive-summary`,
   `case-review`, `issues`, `evidence-gaps`, `evidence-quality`,
   `artifact-completeness`.
-- Execution: `execution`, `execution-correlation`, `suspicious-executions`,
+- Execution and event logs: `execution`, `execution-correlation`,
+  `suspicious-executions`, `event-interpretation`,
   `suspicious-timeline-windows`, `program-provenance`, `prefetch`, `amcache`,
-  `shimcache`, `autostarts`, `persistence`, `malware-hiding-places`.
+  `shimcache`, `autostarts`, `persistence`, `malware-hiding-places`,
+  `bits-activity`.
 - Filesystem and file movement: `mft`, `ntfs-index`, `ntfs-logfile`,
   `ntfs-namespace`, `filesystem-review`, `files`, `file-names`,
   `file-name-drilldown`, `file-history`, `file-dossier`, `file-intelligence`,
@@ -929,7 +961,7 @@ High-value report families:
   `registry-activity`, `office-trust`, `office-backstage`,
   `taskbar-feature-usage`, `taskbar-pins`, `common-dialog-items`,
   `activity-summary`, `user-activity`, `users`, `accounts`, `shellbags`,
-  `windows-activities`, `ual`, `srum`, `srum-context`, `srum-networks`,
+  `windows-activities`, `clipboard`, `ual`, `bits-activity`, `srum`, `srum-context`, `srum-networks`,
   `srum-app-usage`.
 - Windows Search and memory: `windows-search`, `windows-search-combined`,
   `search-index-runs`, `memory-artifacts`, `memory-support-files`,
@@ -949,6 +981,35 @@ High-value report families:
   `encrypted-volumes`, `phone-link`, `virtualization`, `thumbcache`,
   `cd-burning`, `brute-force`, `data-exfiltration`, `account-compromise`,
   `sdelete`, `usn-*`.
+
+High-value event-log analytics:
+
+```bash
+uv run relic --root ROOT report event-interpretation --case CASE_ID --format json
+uv run relic --root ROOT report event-interpretation --case CASE_ID --category powershell --format table
+uv run relic --root ROOT report event-interpretation --case CASE_ID --category account_manipulation --format table
+uv run relic --root ROOT report event-interpretation --case CASE_ID --category audit_log_clearing --format table
+uv run relic --root ROOT report event-interpretation --case CASE_ID --category process_creation --format table
+uv run relic --root ROOT report event-interpretation --case CASE_ID --category wmi_persistence --format table
+uv run relic --root ROOT report event-interpretation --case CASE_ID --category print --format table
+```
+
+The event interpretation report targets account manipulation, audit log
+clearing, PowerShell script-block/module logging, scheduled task creation or
+deletion, WMI event subscription indicators, print-service history, service
+installs, and process creation with command-line context when present.
+
+Windows clipboard history:
+
+```bash
+uv run relic --root ROOT report clipboard --case CASE_ID --format table
+uv run relic --root ROOT report clipboard --case CASE_ID --contains "copied text" --format json
+```
+
+`clipboard` parses `%LocalAppData%\Microsoft\Clipboard` stores when present.
+It records text, file URI, HTML payload indicators, item timestamps, image
+presence, and cloud sync identifiers/state. Windows Activities clipboard rows
+remain secondary clipboard-adjacent evidence.
 
 ## Search Commands
 
@@ -1042,6 +1103,11 @@ uv run relic --root ROOT standalone benchmark --case CASE_ID --baseline benchmar
 ## Safety and Evidence Handling
 
 - Keep original evidence read-only.
+- Relic hashes disk images on import and stores verification history. Run
+  `image integrity` to review stored hashes and `image verify` before producing
+  final reports or testimony material.
+- Relic records TSK `icat` materializations in `report evidence-extractions`
+  with source path, inode, extracted path, size, and SHA256.
 - Prefer `--filesystem` read-only mounts for speed when processing disk images.
 - Use `--keep-mounted` only when you need manual review.
 - Run `image cleanup-stale-mounts` after crashes or interrupted sessions.

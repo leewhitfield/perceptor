@@ -681,6 +681,8 @@ def infer_report_candidate(path: Path) -> ReportCandidate | None:
         return ReportCandidate(path, "WindowsActivitiesParser", _transform_windows_activity, "Windows Activity CSV normalized")
     if re.match(r".+_activity_packageids\.csv$", lower):
         return ReportCandidate(path, "WindowsActivitiesParser", _transform_windows_activity_package, "Windows Activity package mapping normalized")
+    if lower in {"clipboarditems.csv", "clipboard_items.csv"}:
+        return ReportCandidate(path, "ClipboardParser", note="Windows Clipboard parser CSV detected by name")
     if lower.endswith("_ntuser.csv") or lower.endswith("_usrclass.csv"):
         return ReportCandidate(path, "SBECmd")
     if lower == "mftecmd_$mft_output.csv":

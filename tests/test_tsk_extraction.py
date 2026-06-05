@@ -267,6 +267,11 @@ def test_extract_artifact_passes_filesystem_type_to_icat(monkeypatch, tmp_path):
     )
 
     assert filesystems == ["fat32", "fat32"]
+    rows = db.evidence_file_extractions(case_id=case.id, image_id="image-1", artifact_name="metadata_files")
+    assert len(rows) == 2
+    assert {row["source_path"] for row in rows} == {"Alex.docx", "_WRD0001.tmp"}
+    assert all(row["sha256"] for row in rows)
+    assert all(row["extraction_method"] == "icat" for row in rows)
 
 
 def test_extract_artifact_can_include_start_menu_lnk(monkeypatch, tmp_path):

@@ -7,9 +7,21 @@ server.
 
 - `relic_route_question`
 - `relic_mcp_workflow_guide`
+- `relic_mcp_tool_reference`
+- `relic_workspace_summary`
 - `relic_workspace_map`
+- `relic_workspace_health`
 - `relic_case_evidence_map`
 - `relic_case_readiness`
+- `relic_list_cases`
+- `relic_list_computers`
+- `relic_list_images`
+- `relic_list_jobs`
+- `relic_get_job`
+- `relic_processing_progress`
+- `relic_resume_plan`
+- `relic_profile_preview`
+- `relic_doctor`
 - `relic_discover_reports`
 - `relic_discover_report_exports`
 - `relic_read_existing_report`
@@ -23,12 +35,15 @@ server.
 - `relic_case_runbook`
 - `relic_timeline`
 - `relic_timeline_window`
+- `relic_activity_windows`
 
 ## Artifact Queries
 
 - `relic_query_evidence_contents`
 - `relic_query_filesystem_listings`
 - `relic_search_artifacts`
+- `relic_search_content`
+- `relic_get_indexed_content`
 - `relic_lead_search`
 - `relic_artifact_search_sources`
 - `relic_file_dossier`
@@ -37,6 +52,7 @@ server.
 - `relic_query_suspicious_executions`
 - `relic_query_external_storage`
 - `relic_query_usb_files`
+- `relic_query_usb_contents`
 - `relic_query_file_movement_identity`
 - `relic_query_opened_from_removable_media`
 - `relic_query_opened_from_cloud_storage`
@@ -46,6 +62,7 @@ server.
 - `relic_query_registry_activity`
 - `relic_query_shortcuts`
 - `relic_query_communications`
+- `relic_query_system_users`
 
 ## Packets and Jobs
 
@@ -60,6 +77,7 @@ server.
 - `relic_get_mcp_job`
 - `relic_get_mcp_job_output`
 - `relic_get_mcp_job_progress`
+- `relic_list_progress_manifests`
 - `relic_cancel_mcp_job`
 
 ## Gated Processing
@@ -83,3 +101,24 @@ command used for each recovered or failed candidate.
 - `relic_write_report_bundle`
 - `relic_report_bundle_coverage`
 - `relic_ingest_triage_zip_preflight`
+
+Use `relic_generate_report` with `report_name: "bits-activity"` for BITS,
+qmgr, OneDrive updater, component updater, or transfer-job questions. The report
+uses timestamped BITS Client EVTX rows and shows qmgr database/carved
+correlations when exact job ID or URL matches are available.
+
+Use `relic_generate_report` with `report_name: "event-interpretation"` for
+high-value EVTX questions involving account manipulation, log clearing,
+PowerShell, scheduled tasks, WMI persistence indicators, print-service history,
+service installs, or 4688 process creation.
+
+Use `relic_generate_report` with `report_name: "clipboard"` for clipboard
+history, copied/pasted content, or cloud clipboard sync questions. The report
+uses the dedicated Windows clipboard store where available; Windows Activities
+is secondary context.
+
+MCP interactive query tools keep row limits for model usability. Direct
+generated-report responses remain bounded, while saved report bundles default to
+broader exports. If an MCP response contains `result_limit_warning` or a
+generated report contains `limited: true`, read or regenerate the saved export
+with a higher limit before making a negative finding.
