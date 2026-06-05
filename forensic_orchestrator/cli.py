@@ -18,8 +18,11 @@ from importlib import metadata
 from pathlib import Path
 from typing import Any, Callable
 import zipfile
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 DEFAULT_REPORT_EXPORT_LIMIT = 50_000
+OUTPUT_TIMEZONE: ZoneInfo | None = None
+OUTPUT_TIMEZONE_NAME: str | None = None
 
 from .config import load_config
 from .analytics_query import query_one as analytics_query_one
@@ -226,6 +229,7 @@ from .reports import (
     resume_plan_report,
     processing_decision_markdown,
     processing_decision_report,
+    processing_disk_estimate_report,
     processing_readiness_markdown,
     processing_readiness_report,
     program_provenance_markdown,
@@ -386,6 +390,7 @@ from .tools.activities import parse_windows_activities_to_csv
 from .tools.memory_strings import scan_memory_strings_to_csv
 from .timeline import timeline_events_from_rows
 from .tools.windows_search_memory import parse_windows_search_memory_carves
+from .timestamps import parse_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -444,6 +449,7 @@ def write_text_output(text: str, output: str | None = None) -> None:
 
 
 def write_json_output(value: object, output: str | None = None) -> None:
+    value = _with_display_timezone(value)
     text = json.dumps(sanitize_report_paths(value), indent=2, default=str)
     if output:
         Path(output).write_text(text, encoding="utf-8")
@@ -459,7 +465,7 @@ def _standalone_install_progress(args: argparse.Namespace) -> Callable[[str], No
 
 
 def write_csv_rows(rows: list[dict[str, object]], output: str | None = None) -> None:
-    rows = [_flatten_row(sanitize_report_paths(row)) for row in rows]
+    rows = [_flatten_row(sanitize_report_paths(_with_display_timezone(row))) for row in rows]
     fieldnames = _csv_fieldnames(rows)
     if output:
         with Path(output).open("w", newline="", encoding="utf-8") as handle:
@@ -572,7 +578,8 @@ def _flatten_row(row: dict[str, object]) -> dict[str, object]:
 
 
 def generic_table(title: str, rows: list[dict[str, object]], columns: list[str]) -> str:
-    rows = sanitize_report_paths(rows)
+    rows = sanitize_report_paths(_with_display_timezone(rows))
+    columns = _display_columns(columns, rows)
     lines = [title, f"Rows shown: {len(rows)}", ""]
     for row in rows:
         parts = [f"{column}={row.get(column)}" for column in columns if row.get(column) not in (None, "")]
@@ -580,7 +587,28 @@ def generic_table(title: str, rows: list[dict[str, object]], columns: list[str])
     return "\n".join(lines).rstrip()
 
 
+def _display_columns(columns: list[str], rows: object) -> list[str]:
+    if OUTPUT_TIMEZONE is None:
+        return columns
+    available: set[str] = set()
+    if isinstance(rows, list):
+        for row in rows:
+            if isinstance(row, dict):
+                available.update(str(key) for key in row)
+    expanded: list[str] = []
+    for column in columns:
+        expanded.append(column)
+        local_column = f"{column}_local"
+        if local_column in available:
+            expanded.append(local_column)
+    if "display_timezone" in available and "display_timezone" not in expanded:
+        expanded.append("display_timezone")
+    return expanded
+
+
 def write_report_output(report: dict[str, object], rows: list[dict[str, object]], fmt: str, output: str | None, *, title: str, columns: list[str]) -> None:
+    report = _with_display_timezone(report)
+    rows = _with_display_timezone(rows)
     report = sanitize_report_paths(report)
     rows = sanitize_report_paths(rows)
     if fmt == "csv":
@@ -589,6 +617,69 @@ def write_report_output(report: dict[str, object], rows: list[dict[str, object]]
         write_text_output(generic_table(title, rows, columns), output)
     else:
         write_json_output(report, output)
+
+
+def _configure_output_timezone(value: str | None) -> None:
+    global OUTPUT_TIMEZONE, OUTPUT_TIMEZONE_NAME
+    if not value:
+        OUTPUT_TIMEZONE = None
+        OUTPUT_TIMEZONE_NAME = None
+        return
+    try:
+        OUTPUT_TIMEZONE = ZoneInfo(value)
+    except ZoneInfoNotFoundError as exc:
+        raise OrchestratorError(f"Unknown timezone {value!r}; use an IANA name such as America/New_York or Europe/London.") from exc
+    OUTPUT_TIMEZONE_NAME = value
+
+
+def _with_display_timezone(value: object) -> object:
+    if OUTPUT_TIMEZONE is None:
+        return value
+    if isinstance(value, dict):
+        enriched: dict[str, object] = {}
+        for key, item in value.items():
+            enriched[key] = _with_display_timezone(item)
+            if _is_timestamp_display_field(str(key)):
+                local_value = _format_local_timestamp(item)
+                if local_value:
+                    enriched[f"{key}_local"] = local_value
+        if "display_timezone" not in enriched and any(str(key).endswith("_local") for key in enriched):
+            enriched["display_timezone"] = OUTPUT_TIMEZONE_NAME or ""
+        return enriched
+    if isinstance(value, list):
+        return [_with_display_timezone(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_with_display_timezone(item) for item in value)
+    return value
+
+
+def _is_timestamp_display_field(key: str) -> bool:
+    lowered = key.lower()
+    if lowered.endswith("_local"):
+        return False
+    if "utc" in lowered and any(token in lowered for token in ("time", "date", "timestamp", "created", "modified", "accessed", "deleted", "started", "ended")):
+        return True
+    return lowered in {
+        "timestamp",
+        "end_timestamp",
+        "start_time",
+        "end_time",
+        "created_at",
+        "updated_at",
+        "computed_at",
+        "verified_at",
+    }
+
+
+def _format_local_timestamp(value: object) -> str:
+    if OUTPUT_TIMEZONE is None:
+        return ""
+    if not isinstance(value, str) or not value.strip():
+        return ""
+    parsed = parse_timestamp(value)
+    if parsed is None:
+        return ""
+    return parsed.astimezone(OUTPUT_TIMEZONE).isoformat()
 
 
 def _mount_path_state(path: Path) -> tuple[str, str]:
@@ -2418,6 +2509,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", help="YAML config file with root and plugins values")
     parser.add_argument("--plugin", action="append", help="Tool plugin YAML path")
     parser.add_argument("--dry-run", action="store_true", help="Record and print commands without executing")
+    parser.add_argument(
+        "--timezone",
+        help=(
+            "Optional IANA timezone for display-only companion fields such as timestamp_utc_local. "
+            "UTC fields remain unchanged and are the default when omitted."
+        ),
+    )
 
     subparsers = parser.add_subparsers(dest="resource", required=True)
 
@@ -4068,6 +4166,13 @@ def build_parser() -> argparse.ArgumentParser:
     report_workspace_health.add_argument("--min-free-gb", type=float, default=10.0)
     report_workspace_health.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
     report_workspace_health.add_argument("--output")
+    report_processing_estimate = report_sub.add_parser("processing-estimate")
+    report_processing_estimate.add_argument("--case", required=True, dest="case_id")
+    report_processing_estimate.add_argument("--image", dest="image_id")
+    report_processing_estimate.add_argument("--profile")
+    report_processing_estimate.add_argument("--min-free-gb", type=float, default=10.0)
+    report_processing_estimate.add_argument("--format", choices=["json", "table", "csv"], default="json")
+    report_processing_estimate.add_argument("--output")
     report_workspace_map = report_sub.add_parser("workspace-map")
     report_workspace_map.add_argument("--case", dest="case_id")
     report_workspace_map.add_argument("--limit", type=int, default=100)
@@ -4586,6 +4691,7 @@ def standalone_smoke_regression_report(registry: ToolRegistry, plugin_paths: lis
 
 def run(args: argparse.Namespace) -> int:
     configure_logging()
+    _configure_output_timezone(args.timezone)
     config = load_config(root=args.root, plugins=args.plugin, config_path=args.config)
     paths = WorkspacePaths(config.root)
     registry = ToolRegistry.from_files(config.plugin_paths)
@@ -7467,6 +7573,24 @@ def run(args: argparse.Namespace) -> int:
                     args.output,
                     title="Workspace health",
                     columns=["label", "status", "path", "free_gb", "total_gb", "used_pct", "min_free_gb"],
+            )
+            return 0
+
+        if args.resource == "report" and args.action == "processing-estimate":
+            report = processing_disk_estimate_report(
+                db,
+                args.case_id,
+                image_id=args.image_id,
+                profile=args.profile,
+                min_free_gb=args.min_free_gb,
+            )
+            write_report_output(
+                report,
+                report["images"],
+                args.format,
+                args.output,
+                title=f"Processing disk estimate for case {args.case_id}",
+                columns=["status", "image_id", "computer_id", "size_gb", "estimated_processing_gb", "profile", "multiplier", "path"],
             )
             return 0
 

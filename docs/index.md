@@ -16,6 +16,10 @@ so it can be hosted as a small internal manual.
   verification.
 - [Disk Images](workflows/disk-images.md): full image processing workflow.
 - [Live-Case and Report ZIPs](workflows/live-case-zips.md): bulk import workflow.
+- [Supported Artifacts](reference/supported-artifacts.md): artifact families,
+  sources, and current coverage boundaries.
+- [Field Readiness](operations/field-readiness.md): evidence integrity,
+  preflight checks, limits, resumability, and field caveats.
 - [MCP Overview](mcp/overview.md): connecting Relic to MCP-capable clients.
 
 ## Current Support Boundary

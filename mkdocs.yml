@@ -31,6 +31,7 @@ nav:
   - Reports:
       - Report Overview: reference/reports.md
       - Report Catalog: reference/report-catalog.md
+      - Supported Artifacts: reference/supported-artifacts.md
       - Report Specs: report-specs.md
       - Artifact Coverage: artifact-coverage-matrix.md
       - Windows Full Artifacts: windows-full-artifacts.md
@@ -44,6 +45,7 @@ nav:
   - Operations:
       - Command Reference: reference/commands.md
       - Security Model: operations/security.md
+      - Field Readiness: operations/field-readiness.md
       - Troubleshooting: operations/troubleshooting.md
       - Release Checklist: release-checklist.md
 not_in_nav: |

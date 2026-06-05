@@ -8,6 +8,14 @@ investigator-facing reports.
 This page is the legacy single-page operator manual. The MkDocs-ready topic
 manual starts at [Documentation Home](index.md).
 
+Useful topic pages:
+
+- [Supported Artifacts](reference/supported-artifacts.md): artifact families,
+  tables, reports, and search coverage.
+- [Field Readiness](operations/field-readiness.md): evidence integrity,
+  preflight estimates, resume behavior, reporting limits, and known operational
+  caveats.
+
 The executable names are:
 
 - `relic`
@@ -44,6 +52,9 @@ Global switches:
 - `--config CONFIG`: YAML config containing root, tool paths, and plugin paths.
 - `--plugin PLUGIN`: additional tool plugin YAML path.
 - `--dry-run`: record and print commands without executing where supported.
+- `--timezone AREA/LOCATION`: optional display-only timezone. UTC remains
+  unchanged and authoritative; Relic adds companion fields such as
+  `timestamp_utc_local` only when this switch is supplied.
 
 If a command creates or writes case data, always pass the same `--root` each
 time. A common layout is:
@@ -871,6 +882,11 @@ most artifacts. If a JSON report includes `limited: true`, do not treat missing
 rows as evidence of absence; regenerate that report or bundle with a higher
 `--limit`.
 
+MCP tools are also bounded for usability. If a response includes `result_limit`
+or `result_limit_warning`, treat the answer as a preview. Increase the tool
+limit, read an existing generated report/export, or request a dossier/full
+context before relying on absence.
+
 `report-bundle coverage --path PATH` reports parser coverage for live-response
 CSV folders/zips with computer attribution, mapped parser, row count, and a
 recommendation for unmapped files. It also groups unmapped files by header
@@ -884,6 +900,7 @@ uv run relic --root ROOT report dashboard --case CASE_ID --format table
 uv run relic --root ROOT report progress --case CASE_ID --format table
 uv run relic --root ROOT report resume-plan --case CASE_ID --format table
 uv run relic --root ROOT report workspace-health --case CASE_ID --format md
+uv run relic --root ROOT report processing-estimate --case CASE_ID --profile windows-full --format table
 uv run relic --root ROOT report workspace-map --case CASE_ID --format json
 uv run relic --root ROOT report unmapped-imports --case CASE_ID --format table
 uv run relic --root ROOT report validate-outputs --path REPORT_DIR --format table
@@ -1059,6 +1076,7 @@ uv run relic --root ROOT report dashboard --case CASE_ID --format table
 uv run relic --root ROOT report progress --case CASE_ID --format table
 uv run relic --root ROOT report resume-plan --case CASE_ID --format table
 uv run relic --root ROOT report workspace-health --case CASE_ID --format md
+uv run relic --root ROOT report processing-estimate --case CASE_ID --profile windows-full --format table
 ```
 
 Resume a bulk live-case zip:
@@ -1103,6 +1121,9 @@ uv run relic --root ROOT standalone benchmark --case CASE_ID --baseline benchmar
 ## Safety and Evidence Handling
 
 - Keep original evidence read-only.
+- UTC is the default and primary timestamp basis for storage, correlation,
+  reports, exports, and MCP context. Use `--timezone America/New_York` only when
+  you need local display companion fields; do not replace UTC fields.
 - Relic hashes disk images on import and stores verification history. Run
   `image integrity` to review stored hashes and `image verify` before producing
   final reports or testimony material.

@@ -3,6 +3,17 @@
 Use `relic_mcp_tool_reference` for the live tool list exposed by the running
 server.
 
+## Result Limits
+
+MCP tools intentionally return bounded result sets. A bounded response is not
+evidence of absence.
+
+- `result_limit` means a limit was active.
+- `result_limit_warning` means the returned rows reached or appear to have hit a
+  limit.
+- Increase the tool `limit`, read an existing generated report/export, or ask
+  for a dossier/full context before relying on absence.
+
 ## Routing and Discovery
 
 - `relic_route_question`

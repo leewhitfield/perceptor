@@ -25,6 +25,13 @@ Inputs:
 3. Generated resources, packets, and job output.
 4. Direct image access, mounts, FLS, recovery, or processing.
 
+## Result Limits
+
+MCP answers are bounded for usability. Treat `result_limit` and
+`result_limit_warning` as analyst-facing caveats. A bounded response is not
+evidence that no additional records exist; increase the limit, read the saved
+report/export, or request a dossier/full context for material findings.
+
 ## Filesystem Questions
 
 For questions like "pull a list of contents for the USB drive", use:

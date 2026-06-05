@@ -101,6 +101,18 @@ Most reports support:
 Use Markdown for examiner review, CSV for spreadsheet review, and JSON for
 automation.
 
+## Limits
+
+Interactive reports and MCP tools may use bounded defaults so output stays
+readable. A bounded response is a preview, not evidence that no additional
+records exist.
+
+When JSON includes `limited: true`, `limit`, `total_available`,
+`result_limit`, or `result_limit_warning`, regenerate the saved report/export
+with a higher `--limit` or request the full report context before relying on
+absence. Report bundles default to broader exports, but very large cases can
+still require an explicit higher limit.
+
 ## Output Path
 
 ```bash

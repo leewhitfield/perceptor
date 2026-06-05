@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from forensic_orchestrator.db import Database, utc_now
 from forensic_orchestrator.common_dialog import rebuild_common_dialog_items
 from forensic_orchestrator.copied_indicators import rebuild_copied_file_indicators
-from forensic_orchestrator.jobs import JobRunner
+from forensic_orchestrator.jobs import JobRunner, command_timeout_seconds
 from forensic_orchestrator.models import ToolDefinition
 from forensic_orchestrator.namespace_reconcile import rebuild_ntfs_namespace_reconciliation
 from forensic_orchestrator.paths import WorkspacePaths
@@ -288,9 +288,13 @@ def generate_external_tool_outputs(
             stderr_path.write_text(str(exc) + "\n")
             exit_code = 1
     else:
-        with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
-            completed = subprocess.run(command, stdout=stdout, stderr=stderr, check=False)
-        exit_code = completed.returncode
+        try:
+            with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
+                completed = subprocess.run(command, stdout=stdout, stderr=stderr, check=False, timeout=command_timeout_seconds())
+            exit_code = completed.returncode
+        except subprocess.TimeoutExpired as exc:
+            stderr_path.write_bytes((exc.stderr or b"") if isinstance(exc.stderr, bytes) else str(exc.stderr or "").encode("utf-8", errors="replace"))
+            exit_code = -9
     return GeneratedToolOutput(
         tool_name=tool.name,
         tool_version=tool_version,
@@ -1744,10 +1748,15 @@ def run_internal_ntfs_logfile_ntfsparse_tool(
             "-d",
             str(error_dir),
         ]
-        completed = subprocess.run(run_command, capture_output=True, text=True, check=False)
-        stdout_path.write_text((completed.stdout or "") + "\n" + repr(run_command) + "\n")
-        stderr_path.write_text(completed.stderr or "")
-        exit_code = completed.returncode
+        try:
+            completed = subprocess.run(run_command, capture_output=True, text=True, check=False, timeout=command_timeout_seconds())
+            stdout_path.write_text((completed.stdout or "") + "\n" + repr(run_command) + "\n")
+            stderr_path.write_text(completed.stderr or "")
+            exit_code = completed.returncode
+        except subprocess.TimeoutExpired as exc:
+            stdout_path.write_text((exc.stdout or "") if isinstance(exc.stdout, str) else (exc.stdout or b"").decode("utf-8", errors="replace"))
+            stderr_path.write_text((exc.stderr or "") if isinstance(exc.stderr, str) else (exc.stderr or b"").decode("utf-8", errors="replace"))
+            exit_code = -9
     except Exception as exc:
         stdout_path.write_text("")
         stderr_path.write_text(str(exc) + "\n")

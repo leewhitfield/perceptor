@@ -11,7 +11,7 @@ reports have narrower options. Use `uv run relic report REPORT_NAME --help` for
 the exact switches.
 
 This catalog is generated from the current `report --help` command set and
-groups all 221 report subcommands by topic.
+groups all 222 report subcommands by topic.
 
 ## Core Case Review
 
@@ -49,6 +49,7 @@ groups all 221 report subcommands by topic.
 - `db-storage`
 - `regression-smoke`
 - `workspace-health`
+- `processing-estimate`
 - `workspace-map`
 - `unmapped-imports`
 - `progress`

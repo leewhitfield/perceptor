@@ -4019,7 +4019,8 @@ def _add_result_limit_guidance(result: dict[str, Any], arguments: dict[str, Any]
             "total_matching": total_matching,
             "total_available": total_available,
             "guidance": (
-                "This is not necessarily the full evidence picture. Re-run with a higher limit when appropriate, "
+                "This MCP response is a bounded preview, not proof that no additional evidence exists. "
+                "Do not treat omitted rows as evidence of absence. Re-run with a higher limit when appropriate, "
                 "read the generated full report/export if one exists, or ask for the full artifact dossier/context."
             ),
             "full_picture_options": _full_picture_options(tool.name),
@@ -4031,7 +4032,10 @@ def _add_result_limit_guidance(result: dict[str, Any], arguments: dict[str, Any]
                 "limited": False,
                 "active_limit": limit,
                 "returned": returned,
-                "guidance": "The result includes a limit value; increase it or request full artifact context if the artifact is material.",
+                "guidance": (
+                    "MCP responses are intentionally bounded for usability. UTC/source data remains in the case database; "
+                    "increase the limit, read an existing report/export, or request full artifact context when this item is material."
+                ),
             },
         )
     return output

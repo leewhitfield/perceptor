@@ -21607,6 +21607,111 @@ def workspace_health_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def processing_disk_estimate_report(
+    db: Database,
+    case_id: str,
+    *,
+    image_id: str | None = None,
+    profile: str | None = None,
+    min_free_gb: float = 10.0,
+) -> dict[str, Any]:
+    db.get_case(case_id)
+    where = ["case_id = ?"]
+    params: list[Any] = [case_id]
+    if image_id:
+        where.append("id = ?")
+        params.append(image_id)
+    image_rows = [
+        dict(row)
+        for row in db.conn.execute(
+            f"SELECT id, computer_id, path, created_at FROM images WHERE {' AND '.join(where)} ORDER BY created_at",
+            params,
+        ).fetchall()
+    ]
+    profile_text = (profile or "").casefold()
+    multiplier = 0.75
+    if "deep" in profile_text or "recovery" in profile_text:
+        multiplier = 1.25
+    elif "full" in profile_text:
+        multiplier = 1.0
+    elif "basic" in profile_text:
+        multiplier = 0.5
+    estimates: list[dict[str, Any]] = []
+    total_image_bytes = 0
+    missing_sizes = 0
+    for image in image_rows:
+        path = Path(str(image.get("path") or ""))
+        size_bytes: int | None
+        try:
+            size_bytes = path.stat().st_size
+        except OSError:
+            size_bytes = None
+            missing_sizes += 1
+        if size_bytes:
+            total_image_bytes += size_bytes
+        estimated_output_bytes = int((size_bytes or 0) * multiplier)
+        estimates.append(
+            {
+                "image_id": image.get("id"),
+                "computer_id": image.get("computer_id"),
+                "path": str(path),
+                "size_gb": round((size_bytes or 0) / (1024**3), 2) if size_bytes is not None else None,
+                "estimated_processing_gb": round(estimated_output_bytes / (1024**3), 2),
+                "profile": profile or "",
+                "multiplier": multiplier,
+                "status": "size_unavailable" if size_bytes is None else "estimated",
+            }
+        )
+    estimated_processing_bytes = int(total_image_bytes * multiplier)
+    reserve_bytes = int(min_free_gb * 1024**3)
+    required_bytes = estimated_processing_bytes + reserve_bytes
+    health = workspace_health_report(db, case_id, min_free_gb=min_free_gb)
+    free_values = [
+        float(row.get("free_gb") or 0)
+        for row in health.get("paths") or []
+        if row.get("label") in {"workspace", "case_root", "case_analytics", "case_outputs", "temporary_directory"}
+    ]
+    min_free_observed_gb = min(free_values) if free_values else 0.0
+    estimated_processing_gb = round(estimated_processing_bytes / (1024**3), 2)
+    required_gb = round(required_bytes / (1024**3), 2)
+    status = "ok"
+    warnings: list[str] = []
+    if not image_rows:
+        status = "warning"
+        warnings.append("No registered images matched the estimate request.")
+    if missing_sizes:
+        status = "warning"
+        warnings.append(f"{missing_sizes} image path(s) could not be stat()ed; estimates exclude unavailable sizes.")
+    if min_free_observed_gb and min_free_observed_gb < required_gb:
+        status = "low_space"
+        warnings.append(
+            f"Observed free space floor {round(min_free_observed_gb, 2)} GB is below estimated processing need plus reserve {required_gb} GB."
+        )
+    return {
+        "case_id": case_id,
+        "image_id": image_id or "",
+        "profile": profile or "",
+        "summary": {
+            "status": status,
+            "image_count": len(image_rows),
+            "total_image_gb": round(total_image_bytes / (1024**3), 2),
+            "estimated_processing_gb": estimated_processing_gb,
+            "reserve_gb": min_free_gb,
+            "required_free_gb": required_gb,
+            "free_space_floor_gb": round(min_free_observed_gb, 2),
+            "warning_count": len(warnings),
+        },
+        "notes": [
+            "Estimate is conservative and intended for preflight warning, not exact output prediction.",
+            "UTC/report data is not changed by this estimate.",
+            "Deep recovery and carving profiles can exceed this estimate on fragmented or artifact-heavy images.",
+        ],
+        "warnings": warnings,
+        "images": estimates,
+        "workspace_health": health,
+    }
+
+
 def unmapped_imports_report(db: Database, case_id: str, *, limit: int = 250) -> dict[str, Any]:
     db.get_case(case_id)
     rows = []
@@ -33198,7 +33303,14 @@ def artifact_search_report(
             "searched_tables": searched_tables,
             "result_count": len(results),
             "limit": limit,
+            "limited": len(results) >= limit,
         },
+        "limited": len(results) >= limit,
+        "limit_warning": (
+            "Returned rows reached the active artifact-search limit; absence of additional rows is not evidence of absence."
+            if len(results) >= limit
+            else ""
+        ),
         "results": results,
     }
 

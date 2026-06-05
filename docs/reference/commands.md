@@ -8,6 +8,13 @@ This is a compact operator reference for common Relic commands.
 uv run relic [--root ROOT] [--config CONFIG] [--plugin PLUGIN] [--dry-run] COMMAND ...
 ```
 
+UTC is the default timestamp display. Add `--timezone AREA/LOCATION` only when
+you want display-only local companion fields while keeping UTC fields unchanged:
+
+```bash
+uv run relic --root ROOT --timezone America/New_York report timeline --case CASE_ID --format csv --output timeline.csv
+```
+
 ## Standalone
 
 ```bash
@@ -46,6 +53,7 @@ uv run relic --root ROOT report-bundle import-many --path live-case.zip --accept
 ```bash
 uv run relic --root ROOT report dashboard --case CASE_ID --format table
 uv run relic --root ROOT report progress --case CASE_ID --format table
+uv run relic --root ROOT report processing-estimate --case CASE_ID --profile windows-full --format table
 uv run relic --root ROOT report runbook --case CASE_ID --format md
 uv run relic --root ROOT report review-status --case CASE_ID --format table
 uv run relic --root ROOT report bundle --case CASE_ID --purpose review

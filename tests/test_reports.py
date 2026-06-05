@@ -90,6 +90,7 @@ from forensic_orchestrator.reports import (
     memory_support_files_report,
     processing_decision_markdown,
     processing_decision_report,
+    processing_disk_estimate_report,
     processing_progress_report,
     case_dashboard_report,
     processing_readiness_markdown,
@@ -1686,6 +1687,53 @@ def test_mft_report_reads_duckdb_artifact_rows_by_default(tmp_path, monkeypatch)
     assert report["mft_entries"][0]["computer_label"] == "Desktop"
     assert report["mft_entries"][0]["image_path"] == "/evidence/desktop.E01"
     assert db.conn.execute("SELECT COUNT(*) FROM mft_entries WHERE case_id = ?", (case.id,)).fetchone()[0] == 0
+
+
+def test_artifact_search_warns_when_limit_is_reached(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    db.insert_normalized_artifact_rows(
+        "mft_entries",
+        [
+            {
+                "id": f"mft-{idx}",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "output-1",
+                "tool_name": "MFTECmd",
+                "source_csv": tmp_path / "mft.csv",
+                "row_number": idx,
+                "file_name": f"needle-{idx}.docx",
+                "parent_path": "Users/Fred/Documents",
+                "created_at": "2026-05-19T00:00:00Z",
+            }
+            for idx in range(3)
+        ],
+    )
+
+    report = artifact_search_report(db, case.id, query="needle", limit=2)
+
+    assert report["limited"] is True
+    assert report["summary"]["limited"] is True
+    assert "not evidence of absence" in report["limit_warning"]
+
+
+def test_processing_disk_estimate_reports_registered_image_size(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    image_path = tmp_path / "evidence.raw"
+    image_path.write_bytes(b"x" * 1024 * 1024)
+    db.add_image("image-1", case.id, image_path, computer_id="computer-1")
+
+    report = processing_disk_estimate_report(db, case.id, profile="windows-full", min_free_gb=0.1)
+
+    assert report["summary"]["image_count"] == 1
+    assert report["images"][0]["status"] == "estimated"
+    assert report["images"][0]["multiplier"] == 1.0
 
 
 def test_report_specs_load_and_run_duckdb_sql(tmp_path, monkeypatch):
