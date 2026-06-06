@@ -7,20 +7,6 @@ Items here are intentionally separate from the operator workflows. Do not treat
 them as supported case-processing paths until they move into the normal
 documentation and pass release verification.
 
-## Windows Recall
-
-Add Windows Recall artifact support when evidence availability, schema behavior,
-privacy constraints, and parsing expectations are better defined.
-
-Potential work:
-
-- Detect Recall databases, screenshots, and related metadata.
-- Parse bounded metadata into DuckDB.
-- Route screenshot OCR or extracted text through the content indexing policy.
-- Add Recall-specific reports and timeline integration.
-- Define privacy and sensitive-content handling rules before exposing results
-  through MCP.
-
 ## Windows Search SQL Processing
 
 Relic parses supported Windows Search outputs and records unsupported encrypted
