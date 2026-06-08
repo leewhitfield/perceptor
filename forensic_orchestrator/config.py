@@ -26,6 +26,7 @@ def load_config(root: str | None = None, plugins: list[str] | None = None, confi
     configured_root = Path(
         root
         or config.get("root")
+        or os.environ.get("PERCEPTOR_ROOT")
         or os.environ.get("FORENSIC_ORCHESTRATOR_ROOT", DEFAULT_ROOT)
     )
     configured_plugins = plugins or config.get("plugins")
@@ -37,7 +38,7 @@ def load_config(root: str | None = None, plugins: list[str] | None = None, confi
 
 
 def _load_config_file(config_path: str | None) -> dict:
-    path_value = config_path or os.environ.get("FORENSIC_ORCHESTRATOR_CONFIG")
+    path_value = config_path or os.environ.get("PERCEPTOR_CONFIG") or os.environ.get("FORENSIC_ORCHESTRATOR_CONFIG")
     if not path_value:
         return {}
     path = Path(path_value).expanduser()
@@ -51,6 +52,7 @@ def _load_config_file(config_path: str | None) -> dict:
 
 def _apply_tool_environment(config: dict, *, tools_root: Path | None, eztools_root: Path | None) -> None:
     if tools_root:
+        os.environ.setdefault("PERCEPTOR_TOOLS_ROOT", str(tools_root))
         os.environ.setdefault("FORENSIC_ORCHESTRATOR_TOOLS_ROOT", str(tools_root))
     if eztools_root:
         os.environ.setdefault("EZTOOLS_ROOT", str(eztools_root))
@@ -58,9 +60,11 @@ def _apply_tool_environment(config: dict, *, tools_root: Path | None, eztools_ro
         "bstrings_bin": "BSTRINGS_BIN",
         "sidr_bin": "SIDR_BIN",
         "memprocfs_bin": "MEMPROCFS_BIN",
-        "dotnet_bin": "FORENSIC_ORCHESTRATOR_DOTNET",
+        "dotnet_bin": "PERCEPTOR_DOTNET",
         "usnjrnl_forensic_bin": "USNJRNL_FORENSIC_BIN",
     }
     for key, variable in env_map.items():
         if config.get(key):
             os.environ.setdefault(variable, str(Path(config[key]).expanduser()))
+            if variable == "PERCEPTOR_DOTNET":
+                os.environ.setdefault("FORENSIC_ORCHESTRATOR_DOTNET", str(Path(config[key]).expanduser()))

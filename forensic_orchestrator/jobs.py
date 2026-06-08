@@ -15,7 +15,11 @@ DEFAULT_COMMAND_TIMEOUT_SECONDS = 3600
 
 def command_timeout_seconds() -> int:
     try:
-        value = int(os.environ.get("RELIC_COMMAND_TIMEOUT_SECONDS", "") or DEFAULT_COMMAND_TIMEOUT_SECONDS)
+        value = int(
+            os.environ.get("PERCEPTOR_COMMAND_TIMEOUT_SECONDS")
+            or os.environ.get("RELIC_COMMAND_TIMEOUT_SECONDS", "")
+            or DEFAULT_COMMAND_TIMEOUT_SECONDS
+        )
     except ValueError:
         return DEFAULT_COMMAND_TIMEOUT_SECONDS
     return max(1, value)

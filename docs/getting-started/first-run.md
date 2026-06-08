@@ -5,37 +5,37 @@ Run these checks before processing real evidence.
 ## Version
 
 ```bash
-uv run relic standalone version
+uv run perceptor standalone version
 ```
 
 ## Dependencies
 
 ```bash
-uv run relic standalone dependencies --format table
+uv run perceptor standalone dependencies --format table
 ```
 
 ## Doctor
 
 ```bash
-uv run relic standalone doctor --smoke --format table
+uv run perceptor standalone doctor --smoke --format table
 ```
 
 For a real workspace:
 
 ```bash
-uv run relic --root ~/analysis/case01 standalone doctor --smoke --format table
+uv run perceptor --root ~/analysis/case01 standalone doctor --smoke --format table
 ```
 
 ## Smoke Regression
 
 ```bash
-uv run relic standalone smoke-regression --format table
+uv run perceptor standalone smoke-regression --format table
 ```
 
 ## Dry Run an Image
 
 ```bash
-uv run relic --root ~/analysis/case01 --dry-run process \
+uv run perceptor --root ~/analysis/case01 --dry-run process \
   --path ~/evidence/host.E01 \
   --computer-label HOST01 \
   --profile windows-full \
@@ -45,7 +45,7 @@ uv run relic --root ~/analysis/case01 --dry-run process \
 ```
 
 `--filesystem` is the switch that enables mounted-volume processing. If it is
-left out, Relic will not mount the image and will use Sleuth Kit extraction
+left out, Perceptor will not mount the image and will use Sleuth Kit extraction
 where possible. Use `--sudo` only after configuring the passwordless mount rule
 in [Mounted Image Notes](../mounted-image-notes.md).
 

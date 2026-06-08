@@ -1,6 +1,6 @@
-# Relic User Manual
+# Perceptor User Manual
 
-Relic is a CLI-first forensic processing and reporting tool. It can process
+Perceptor is a CLI-first forensic processing and reporting tool. It can process
 Windows disk images, import pre-generated triage/report bundles, normalize many
 artifact outputs into a case database, dedupe derived artifacts, and generate
 investigator-facing reports.
@@ -18,10 +18,11 @@ Useful topic pages:
 
 The executable names are:
 
-- `relic`
+- `perceptor`
+- `relic` (legacy alias)
 - `forensic-orchestrator`
 
-Examples below use `uv run relic`. If Relic is installed as a console script,
+Examples below use `uv run perceptor`. If Perceptor is installed as a console script,
 drop `uv run`.
 
 ## Core Concepts
@@ -43,7 +44,7 @@ drop `uv run`.
 ## Global Command Shape
 
 ```bash
-uv run relic [--root ROOT] [--config CONFIG] [--plugin PLUGIN] [--dry-run] COMMAND ...
+uv run perceptor [--root ROOT] [--config CONFIG] [--plugin PLUGIN] [--dry-run] COMMAND ...
 ```
 
 Global switches:
@@ -53,35 +54,35 @@ Global switches:
 - `--plugin PLUGIN`: additional tool plugin YAML path.
 - `--dry-run`: record and print commands without executing where supported.
 - `--timezone AREA/LOCATION`: optional display-only timezone. UTC remains
-  unchanged and authoritative; Relic adds companion fields such as
+  unchanged and authoritative; Perceptor adds companion fields such as
   `timestamp_utc_local` only when this switch is supplied.
 
 If a command creates or writes case data, always pass the same `--root` each
 time. A common layout is:
 
 ```bash
-uv run relic --root ~/analysis/my-case-root ...
+uv run perceptor --root ~/analysis/my-case-root ...
 ```
 
 ## Configuration
 
-Relic can be run entirely with command-line switches, but a config file is
+Perceptor can be run entirely with command-line switches, but a config file is
 cleaner for repeated use.
 
 Example `config.yaml`:
 
 ```yaml
-root: /analysis/relic
-tools_root: /opt/relic-tools
-eztools_root: /opt/relic-tools/eztools
+root: /analysis/perceptor
+tools_root: /opt/perceptor-tools
+eztools_root: /opt/perceptor-tools/eztools
 plugins:
-  - /opt/relic/forensic_orchestrator/plugins/eztools.yaml
+  - /opt/perceptor/forensic_orchestrator/plugins/eztools.yaml
 ```
 
 Run with:
 
 ```bash
-uv run relic --config config.yaml standalone doctor
+uv run perceptor --config config.yaml standalone doctor
 ```
 
 Command-line `--root` and `--plugin` override config values.
@@ -92,20 +93,20 @@ Check the install:
 
 ```bash
 uv sync
-uv run relic standalone version
-uv run relic standalone dependencies --format table
-uv run relic standalone doctor --smoke --format table
-uv run relic standalone smoke-regression --format table
+uv run perceptor standalone version
+uv run perceptor standalone dependencies --format table
+uv run perceptor standalone doctor --smoke --format table
+uv run perceptor standalone smoke-regression --format table
 ```
 
 Repair or install managed third-party tools:
 
 ```bash
-uv run relic standalone repair-dependencies --tools-dir ~/tools --env-file ~/tools/forensic-orchestrator.env
-uv run relic standalone install-tool eztools --tools-dir ~/tools --env-file ~/tools/forensic-orchestrator.env
-uv run relic standalone install-tool sidr --tools-dir ~/tools --env-file ~/tools/forensic-orchestrator.env
-uv run relic standalone install-tool all --tools-dir ~/tools --env-file ~/tools/forensic-orchestrator.env
-source ~/tools/forensic-orchestrator.env
+uv run perceptor standalone repair-dependencies --tools-dir ~/tools --env-file ~/tools/perceptor.env
+uv run perceptor standalone install-tool eztools --tools-dir ~/tools --env-file ~/tools/perceptor.env
+uv run perceptor standalone install-tool sidr --tools-dir ~/tools --env-file ~/tools/perceptor.env
+uv run perceptor standalone install-tool all --tools-dir ~/tools --env-file ~/tools/perceptor.env
+source ~/tools/perceptor.env
 ```
 
 Important dependency nuance:
@@ -119,13 +120,13 @@ Important dependency nuance:
   rerun doctor.
 - Python tools such as `pypykatz` and Volatility can be installed by the app.
 - EZ tools are downloaded into the managed tools folder.
-- Managed tool archives are extracted with explicit path checks. Relic rejects
+- Managed tool archives are extracted with explicit path checks. Perceptor rejects
   absolute paths, drive-letter paths, parent-directory traversal, and archive
   link/device entries during extraction.
 - EZ tools are SHA1 checked when the download catalog provides a valid SHA1
   value. The managed `!!!RemoteFileDetails.csv` records whether a SHA1 was
   verified for each downloaded item.
-- SIDR is built as the native Linux Rust binary from source. Relic does not use
+- SIDR is built as the native Linux Rust binary from source. Perceptor does not use
   the upstream Windows `sidr.exe` for Linux parsing.
 - Optional tools reduce coverage but should not stop workflows unless the
   selected artifact requires them.
@@ -137,13 +138,13 @@ Use this for a zip containing one top-level folder per computer/device.
 1. Generate a tiny sample zip if you want to test the workflow:
 
 ```bash
-uv run relic standalone sample-fixture --output sample-live-case.zip --format table
+uv run perceptor standalone sample-fixture --output sample-live-case.zip --format table
 ```
 
 2. Preflight the real zip:
 
 ```bash
-uv run relic --root ~/analysis/case-root ingest triage-zip \
+uv run perceptor --root ~/analysis/case-root ingest triage-zip \
   --path ~/evidence/live-case.zip \
   --preflight \
   --format table \
@@ -160,7 +161,7 @@ Preflight does not import data. It reports:
 
 Mounting a ZIP evidence file also performs a safety preflight before extraction.
 This applies when the ZIP is being treated as evidence that contains a disk
-image or virtual disk. Relic rejects:
+image or virtual disk. Perceptor rejects:
 
 - unsafe member paths, including absolute paths, drive-letter paths, empty paths,
   and parent-directory traversal,
@@ -175,7 +176,7 @@ available workspace disk space minus the reserve.
 3. Import:
 
 ```bash
-uv run relic --root ~/analysis/case-root ingest triage-zip \
+uv run perceptor --root ~/analysis/case-root ingest triage-zip \
   --path ~/evidence/live-case.zip \
   --accept-duplicate \
   --report-purpose triage
@@ -190,15 +191,15 @@ file path explicitly.
 4. Check progress/status:
 
 ```bash
-uv run relic --root ~/analysis/case-root report dashboard --case CASE_ID --format table
-uv run relic --root ~/analysis/case-root report progress --case CASE_ID --format table
-uv run relic --root ~/analysis/case-root report unmapped-imports --case CASE_ID --format table
+uv run perceptor --root ~/analysis/case-root report dashboard --case CASE_ID --format table
+uv run perceptor --root ~/analysis/case-root report progress --case CASE_ID --format table
+uv run perceptor --root ~/analysis/case-root report unmapped-imports --case CASE_ID --format table
 ```
 
 5. Validate generated reports:
 
 ```bash
-uv run relic --root ~/analysis/case-root report validate-outputs \
+uv run perceptor --root ~/analysis/case-root report validate-outputs \
   --path ~/analysis/case-root/cases/CASE_ID/outputs/reports/triage-bundle \
   --format table
 ```
@@ -208,7 +209,7 @@ uv run relic --root ~/analysis/case-root report validate-outputs \
 For E01/raw/virtual disk evidence:
 
 ```bash
-uv run relic --root ~/analysis/case-root process \
+uv run perceptor --root ~/analysis/case-root process \
   --path ~/evidence/host.E01 \
   --computer-label HOST01 \
   --profile windows-full \
@@ -234,9 +235,9 @@ Common processing switches:
   or fallback chain.
 - `--bitlocker-method recovery-key|password|bek|fvek`: choose the protector
   type for tools that support it.
-- `--bitlocker-key-file PATH`: read unlock material from a file. Relic supplies
+- `--bitlocker-key-file PATH`: read unlock material from a file. Perceptor supplies
   the value through stdin where supported and does not log the secret. If no
-  file is supplied, Relic prompts after BitLocker detection.
+  file is supplied, Perceptor prompts after BitLocker detection.
 - `--workers N`: parallel external tool/output generation slots. Database ingest
   and internal parser writes remain serialized.
 - `--include-memory-profile`: run memory support-file processing after the
@@ -253,7 +254,7 @@ Common processing switches:
 - `--include-windows-old`: process Windows.old artifacts into a Windows.old
   namespace.
 
-When `--filesystem` mounts a non-NTFS volume such as FAT32 or exFAT, Relic
+When `--filesystem` mounts a non-NTFS volume such as FAT32 or exFAT, Perceptor
 automatically writes a mounted filesystem inventory to
 `filesystem_entries`. This gives removable volumes a file listing even when
 there is no `$MFT`.
@@ -265,7 +266,7 @@ match the stored hashes.
 Use `--dry-run` before a first profile run:
 
 ```bash
-uv run relic --root ~/analysis/case-root --dry-run process \
+uv run perceptor --root ~/analysis/case-root --dry-run process \
   --path ~/evidence/host.E01 \
   --profile windows-full \
   --filesystem
@@ -277,14 +278,14 @@ uv run relic --root ~/analysis/case-root --dry-run process \
 whichever reads more clearly for your workflow.
 
 ```bash
-uv run relic --root ROOT case create
-uv run relic --root ROOT case status CASE_ID
-uv run relic --root ROOT case describe CASE_ID
-uv run relic --root ROOT case describe CASE_ID --description "Brief matter context"
-uv run relic --root ROOT case describe CASE_ID --description-file ./case-description.md --write-notes
-uv run relic --root ROOT case activity CASE_ID
-uv run relic --root ROOT case activity CASE_ID --level warning
-uv run relic --root ROOT case activity CASE_ID --level error
+uv run perceptor --root ROOT case create
+uv run perceptor --root ROOT case status CASE_ID
+uv run perceptor --root ROOT case describe CASE_ID
+uv run perceptor --root ROOT case describe CASE_ID --description "Brief matter context"
+uv run perceptor --root ROOT case describe CASE_ID --description-file ./case-description.md --write-notes
+uv run perceptor --root ROOT case activity CASE_ID
+uv run perceptor --root ROOT case activity CASE_ID --level warning
+uv run perceptor --root ROOT case activity CASE_ID --level error
 ```
 
 `case describe` stores short matter context in SQLite so reports and MCP case
@@ -295,13 +296,13 @@ notes reference.
 Post-processing rebuilds:
 
 ```bash
-uv run relic --root ROOT case rebuild-postprocess CASE_ID
-uv run relic --root ROOT case rebuild-timeline-dedupe CASE_ID
-uv run relic --root ROOT case rebuild-artifact-dedupe CASE_ID
-uv run relic --root ROOT case rebuild-correlations CASE_ID
-uv run relic --root ROOT case rebuild-sessions CASE_ID
-uv run relic --root ROOT case rebuild-derived-timeline CASE_ID
-uv run relic --root ROOT project rebuild-distinct-artifacts CASE_ID
+uv run perceptor --root ROOT case rebuild-postprocess CASE_ID
+uv run perceptor --root ROOT case rebuild-timeline-dedupe CASE_ID
+uv run perceptor --root ROOT case rebuild-artifact-dedupe CASE_ID
+uv run perceptor --root ROOT case rebuild-correlations CASE_ID
+uv run perceptor --root ROOT case rebuild-sessions CASE_ID
+uv run perceptor --root ROOT case rebuild-derived-timeline CASE_ID
+uv run perceptor --root ROOT project rebuild-distinct-artifacts CASE_ID
 ```
 
 `rebuild-derived-timeline` adds normalized correlation/session events such as
@@ -311,7 +312,7 @@ references, and file-identity correlations to the master timeline.
 Destructive cleanup:
 
 ```bash
-uv run relic --root ROOT case purge-output CASE_ID --yes
+uv run perceptor --root ROOT case purge-output CASE_ID --yes
 ```
 
 Nuance: do not purge output unless you intend to remove parsed output rows for
@@ -321,17 +322,17 @@ possible.
 ## Computer and Image Commands
 
 ```bash
-uv run relic --root ROOT computer add --case CASE_ID --label HOST01
-uv run relic --root ROOT computer list --case CASE_ID
-uv run relic --root ROOT image add --case CASE_ID --path /evidence/host.E01 --computer COMPUTER_ID
-uv run relic --root ROOT image integrity --case CASE_ID --image IMAGE_ID --format table
-uv run relic --root ROOT image verify --case CASE_ID --image IMAGE_ID --format table
-uv run relic --root ROOT image mount --case CASE_ID --image IMAGE_ID --filesystem
-uv run relic --root ROOT image mount --case CASE_ID --image IMAGE_ID --filesystem --sudo
-uv run relic --root ROOT image mount --case CASE_ID --image IMAGE_ID --filesystem --unlock-bitlocker --bitlocker-key-file /secure/recovery-key.txt
-uv run relic --root ROOT image unmount --case CASE_ID --image IMAGE_ID
-uv run relic --root ROOT image cleanup-stale-mounts --case CASE_ID
-uv run relic --root ROOT image cleanup-stale-mounts --case CASE_ID --apply --sudo
+uv run perceptor --root ROOT computer add --case CASE_ID --label HOST01
+uv run perceptor --root ROOT computer list --case CASE_ID
+uv run perceptor --root ROOT image add --case CASE_ID --path /evidence/host.E01 --computer COMPUTER_ID
+uv run perceptor --root ROOT image integrity --case CASE_ID --image IMAGE_ID --format table
+uv run perceptor --root ROOT image verify --case CASE_ID --image IMAGE_ID --format table
+uv run perceptor --root ROOT image mount --case CASE_ID --image IMAGE_ID --filesystem
+uv run perceptor --root ROOT image mount --case CASE_ID --image IMAGE_ID --filesystem --sudo
+uv run perceptor --root ROOT image mount --case CASE_ID --image IMAGE_ID --filesystem --unlock-bitlocker --bitlocker-key-file /secure/recovery-key.txt
+uv run perceptor --root ROOT image unmount --case CASE_ID --image IMAGE_ID
+uv run perceptor --root ROOT image cleanup-stale-mounts --case CASE_ID
+uv run perceptor --root ROOT image cleanup-stale-mounts --case CASE_ID --apply --sudo
 ```
 
 Mounting nuances:
@@ -355,7 +356,7 @@ Mounting nuances:
 Single folder import:
 
 ```bash
-uv run relic --root ROOT report-bundle import \
+uv run perceptor --root ROOT report-bundle import \
   --path /evidence/HOST01-reports \
   --computer-label HOST01 \
   --accept-duplicate
@@ -364,7 +365,7 @@ uv run relic --root ROOT report-bundle import \
 Bulk folder/zip import:
 
 ```bash
-uv run relic --root ROOT report-bundle import-many \
+uv run perceptor --root ROOT report-bundle import-many \
   --path /evidence/live-case.zip \
   --accept-duplicate \
   --write-reports \
@@ -374,7 +375,7 @@ uv run relic --root ROOT report-bundle import-many \
 Coverage scan:
 
 ```bash
-uv run relic report-bundle coverage --path /evidence/live-case.zip --format table
+uv run perceptor report-bundle coverage --path /evidence/live-case.zip --format table
 ```
 
 Important switches:
@@ -400,7 +401,7 @@ checking parser routes or input coverage.
 Currently the main high-level ingest command is:
 
 ```bash
-uv run relic --root ROOT ingest triage-zip --path evidence.zip
+uv run perceptor --root ROOT ingest triage-zip --path evidence.zip
 ```
 
 Switches:
@@ -430,7 +431,7 @@ to fit in the workspace filesystem with a 10 GB free-space reserve.
 Run the combined memory workflow:
 
 ```bash
-uv run relic --root ROOT memory workflow --case CASE_ID --workers 4
+uv run perceptor --root ROOT memory workflow --case CASE_ID --workers 4
 ```
 
 Switches:
@@ -449,7 +450,7 @@ Switches:
 Scan a specific memory-like file:
 
 ```bash
-uv run relic --root ROOT memory strings \
+uv run perceptor --root ROOT memory strings \
   --case CASE_ID \
   --path /evidence/pagefile.sys \
   --min-length 6
@@ -458,13 +459,13 @@ uv run relic --root ROOT memory strings \
 Crash dumps:
 
 ```bash
-uv run relic --root ROOT memory crash-dumps --case CASE_ID --workers 4 --copy
+uv run perceptor --root ROOT memory crash-dumps --case CASE_ID --workers 4 --copy
 ```
 
 Windows Search SQLite memory carves:
 
 ```bash
-uv run relic --root ROOT memory windows-search-carves \
+uv run perceptor --root ROOT memory windows-search-carves \
   --case CASE_ID \
   --path /evidence/search-carves \
   --max-rows-per-table 100
@@ -487,9 +488,9 @@ Volume Shadow Copy support is separate from normal processing.
 Common commands:
 
 ```bash
-uv run relic --root ROOT vsc list --case CASE_ID --image IMAGE_ID
-uv run relic --root ROOT vsc mount --case CASE_ID --image IMAGE_ID --snapshot 1 --sudo
-uv run relic --root ROOT vsc unmount --case CASE_ID --image IMAGE_ID --snapshot 1 --sudo
+uv run perceptor --root ROOT vsc list --case CASE_ID --image IMAGE_ID
+uv run perceptor --root ROOT vsc mount --case CASE_ID --image IMAGE_ID --snapshot 1 --sudo
+uv run perceptor --root ROOT vsc unmount --case CASE_ID --image IMAGE_ID --snapshot 1 --sudo
 ```
 
 VSC profile scans are used for targeted follow-up rather than default
@@ -502,13 +503,13 @@ Windows Search, or NTFS namespace deltas.
 List configured tools:
 
 ```bash
-uv run relic --root ROOT tools list
+uv run perceptor --root ROOT tools list
 ```
 
 Preview a profile:
 
 ```bash
-uv run relic --root ROOT tools profile-preview --profile windows-full
+uv run perceptor --root ROOT tools profile-preview --profile windows-full
 ```
 
 Use `standalone profile-catalog` and `standalone artifact-capability` for a more
@@ -521,7 +522,7 @@ than `process`, which can create/register evidence and optionally mount the
 filesystem in one command.
 
 ```bash
-uv run relic --root ROOT run \
+uv run perceptor --root ROOT run \
   --case CASE_ID \
   --image IMAGE_ID \
   --profile windows-full \
@@ -551,7 +552,7 @@ already been added/mounted and you want to rerun one profile by image ID.
 SQLite carving:
 
 ```bash
-uv run relic --root ROOT carve sqlite \
+uv run perceptor --root ROOT carve sqlite \
   --case CASE_ID \
   --path /evidence/pagefile.sys \
   --profile windows-database-carve \
@@ -563,7 +564,7 @@ uv run relic --root ROOT carve sqlite \
 ESE carving:
 
 ```bash
-uv run relic --root ROOT carve ese \
+uv run perceptor --root ROOT carve ese \
   --case CASE_ID \
   --path /evidence/pagefile.sys \
   --profile windows-database-carve \
@@ -600,7 +601,7 @@ false positives are acceptable.
 Import server-side cloud logs:
 
 ```bash
-uv run relic --root ROOT cloud import-logs \
+uv run perceptor --root ROOT cloud import-logs \
   --case CASE_ID \
   --path /evidence/cloud-logs \
   --provider Google \
@@ -620,29 +621,29 @@ context but are not disk image mounts.
 
 ## Standalone Commands
 
-Relic's supported install target is Ubuntu 24.04 LTS on x86_64, either bare
+Perceptor's supported install target is Ubuntu 24.04 LTS on x86_64, either bare
 metal or VM. Native macOS, native Windows, Docker full-image mounting, WSL full
 mounting, ARM64, and non-Ubuntu Linux are not primary support targets. See
 `docs/ubuntu-install.md` for the current install contract and
 `docs/release-checklist.md` for release verification.
 
 ```bash
-uv run relic standalone version --format table
-uv run relic standalone dependencies --format table
-uv run relic standalone repair-dependencies --tools-dir ~/tools --env-file ~/tools/forensic-orchestrator.env
-uv run relic standalone tool-status --tools-dir ~/tools --format table
-uv run relic standalone install-tool all --tools-dir ~/tools --env-file ~/tools/forensic-orchestrator.env
-uv run relic standalone profile-catalog --format table
-uv run relic standalone artifact-capability --profile windows-full --format table
-uv run relic standalone schema-status --format table
-uv run relic standalone doctor --smoke --format table
-uv run relic standalone backup --case CASE_ID --output-dir /safe/backups
-uv run relic standalone jobs --case CASE_ID --format table
-uv run relic standalone benchmark --case CASE_ID --write-baseline benchmark.json
-uv run relic standalone benchmark --case CASE_ID --baseline benchmark.json --format table
-uv run relic standalone sample-fixture --output sample-live-case.zip --format table
-uv run relic standalone verify-install --format table
-uv run relic standalone backlog --format table
+uv run perceptor standalone version --format table
+uv run perceptor standalone dependencies --format table
+uv run perceptor standalone repair-dependencies --tools-dir ~/tools --env-file ~/tools/perceptor.env
+uv run perceptor standalone tool-status --tools-dir ~/tools --format table
+uv run perceptor standalone install-tool all --tools-dir ~/tools --env-file ~/tools/perceptor.env
+uv run perceptor standalone profile-catalog --format table
+uv run perceptor standalone artifact-capability --profile windows-full --format table
+uv run perceptor standalone schema-status --format table
+uv run perceptor standalone doctor --smoke --format table
+uv run perceptor standalone backup --case CASE_ID --output-dir /safe/backups
+uv run perceptor standalone jobs --case CASE_ID --format table
+uv run perceptor standalone benchmark --case CASE_ID --write-baseline benchmark.json
+uv run perceptor standalone benchmark --case CASE_ID --baseline benchmark.json --format table
+uv run perceptor standalone sample-fixture --output sample-live-case.zip --format table
+uv run perceptor standalone verify-install --format table
+uv run perceptor standalone backlog --format table
 ```
 
 Key standalone switches:
@@ -665,13 +666,13 @@ Key standalone switches:
 
 ## MCP Server
 
-Relic can run as a local MCP stdio server so an MCP-capable client can inspect a
-workspace and call approved Relic tools.
+Perceptor can run as a local MCP stdio server so an MCP-capable client can inspect a
+workspace and call approved Perceptor tools.
 
 Start the server against one workspace root:
 
 ```bash
-uv run relic --root ROOT mcp serve
+uv run perceptor --root ROOT mcp serve
 ```
 
 For clients that use a JSON command configuration, use the same command and args:
@@ -679,7 +680,7 @@ For clients that use a JSON command configuration, use the same command and args
 ```json
 {
   "command": "uv",
-  "args": ["run", "relic", "--root", "ROOT", "mcp", "serve"]
+  "args": ["run", "perceptor", "--root", "ROOT", "mcp", "serve"]
 }
 ```
 
@@ -784,7 +785,7 @@ command, and stdout/stderr paths under `ROOT/mcp-jobs/`. MCP job metadata is
 persisted in `ROOT/mcp-jobs/index.json`, so a new MCP server process can still
 inspect jobs launched earlier.
 Add `dry_run: true` to `relic_process_image` arguments to launch the normal
-Relic process command in CLI dry-run mode before real processing.
+Perceptor process command in CLI dry-run mode before real processing.
 
 Operational MCP tools:
 
@@ -808,7 +809,7 @@ Case-navigation MCP tools:
 - `relic_case_readiness`: combines doctor, workspace health, processing
   readiness, processing progress, and resume-plan signals.
 - `relic_discover_reports`: returns report bundle files as
-  `relic://workspace/...` resource URIs, optionally filtered by bundle purpose.
+  `perceptor://workspace/...` resource URIs, optionally filtered by bundle purpose.
 - `relic_workspace_map`: returns cases, computers, images, generated reports,
   saved packets, progress manifests, and MCP jobs in one structure.
 - `relic_artifact_search_sources`: returns the artifact tables, categories,
@@ -851,7 +852,7 @@ MCP audit entries are written to `ROOT/mcp-jobs/audit.jsonl`. Each entry records
 the tool name, permission tier, status, timestamp, argument keys, and bounded
 case/path context.
 
-Use `relic_list_jobs` or `relic_processing_progress` for Relic's internal
+Use `relic_list_jobs` or `relic_processing_progress` for Perceptor's internal
 parser/tool job records created by the subprocess itself.
 
 MCP resources:
@@ -860,7 +861,7 @@ MCP resources:
   the workspace root.
 - `resources/list` accepts optional `case_id`, `kind`, and `limit` parameters.
   Supported kinds are `report`, `manifest`, `log`, `mcp-job`, and `progress`.
-- `resources/read` reads those files through `relic://workspace/...` URIs.
+- `resources/read` reads those files through `perceptor://workspace/...` URIs.
 - Individual resource reads are limited to 1 MB to avoid accidentally returning
   large evidence or bulk artifact files.
 
@@ -876,7 +877,7 @@ Reports usually share these switches:
 Not every report supports every format or filter. Use:
 
 ```bash
-uv run relic report REPORT_NAME --help
+uv run perceptor report REPORT_NAME --help
 ```
 
 Interactive report commands may use preview-sized default limits so terminal
@@ -900,21 +901,21 @@ implementation target.
 Operational reports:
 
 ```bash
-uv run relic --root ROOT report dashboard --case CASE_ID --format table
-uv run relic --root ROOT report progress --case CASE_ID --format table
-uv run relic --root ROOT report resume-plan --case CASE_ID --format table
-uv run relic --root ROOT report workspace-health --case CASE_ID --format md
-uv run relic --root ROOT report processing-estimate --case CASE_ID --profile windows-full --format table
-uv run relic --root ROOT report workspace-map --case CASE_ID --format json
-uv run relic --root ROOT report unmapped-imports --case CASE_ID --format table
-uv run relic --root ROOT report validate-outputs --path REPORT_DIR --format table
-uv run relic --root ROOT report regression-smoke --case CASE_ID --format table
-uv run relic --root ROOT report artifact-search-sources --case CASE_ID --format table
-uv run relic --root ROOT report changed-search-packets --case CASE_ID --format md
-uv run relic --root ROOT report review-status --case CASE_ID --format table
-uv run relic --root ROOT report runbook --case CASE_ID --format md
-uv run relic --root ROOT report write-bundle --case CASE_ID --purpose review
-uv run relic --root ROOT report handoff-package --case CASE_ID --bundle-dir REPORT_DIR --output CASE_ID-handoff.zip
+uv run perceptor --root ROOT report dashboard --case CASE_ID --format table
+uv run perceptor --root ROOT report progress --case CASE_ID --format table
+uv run perceptor --root ROOT report resume-plan --case CASE_ID --format table
+uv run perceptor --root ROOT report workspace-health --case CASE_ID --format md
+uv run perceptor --root ROOT report processing-estimate --case CASE_ID --profile windows-full --format table
+uv run perceptor --root ROOT report workspace-map --case CASE_ID --format json
+uv run perceptor --root ROOT report unmapped-imports --case CASE_ID --format table
+uv run perceptor --root ROOT report validate-outputs --path REPORT_DIR --format table
+uv run perceptor --root ROOT report regression-smoke --case CASE_ID --format table
+uv run perceptor --root ROOT report artifact-search-sources --case CASE_ID --format table
+uv run perceptor --root ROOT report changed-search-packets --case CASE_ID --format md
+uv run perceptor --root ROOT report review-status --case CASE_ID --format table
+uv run perceptor --root ROOT report runbook --case CASE_ID --format md
+uv run perceptor --root ROOT report write-bundle --case CASE_ID --purpose review
+uv run perceptor --root ROOT report handoff-package --case CASE_ID --bundle-dir REPORT_DIR --output CASE_ID-handoff.zip
 ```
 
 Purpose bundles:
@@ -1010,13 +1011,13 @@ High-value report families:
 High-value event-log analytics:
 
 ```bash
-uv run relic --root ROOT report event-interpretation --case CASE_ID --format json
-uv run relic --root ROOT report event-interpretation --case CASE_ID --category powershell --format table
-uv run relic --root ROOT report event-interpretation --case CASE_ID --category account_manipulation --format table
-uv run relic --root ROOT report event-interpretation --case CASE_ID --category audit_log_clearing --format table
-uv run relic --root ROOT report event-interpretation --case CASE_ID --category process_creation --format table
-uv run relic --root ROOT report event-interpretation --case CASE_ID --category wmi_persistence --format table
-uv run relic --root ROOT report event-interpretation --case CASE_ID --category print --format table
+uv run perceptor --root ROOT report event-interpretation --case CASE_ID --format json
+uv run perceptor --root ROOT report event-interpretation --case CASE_ID --category powershell --format table
+uv run perceptor --root ROOT report event-interpretation --case CASE_ID --category account_manipulation --format table
+uv run perceptor --root ROOT report event-interpretation --case CASE_ID --category audit_log_clearing --format table
+uv run perceptor --root ROOT report event-interpretation --case CASE_ID --category process_creation --format table
+uv run perceptor --root ROOT report event-interpretation --case CASE_ID --category wmi_persistence --format table
+uv run perceptor --root ROOT report event-interpretation --case CASE_ID --category print --format table
 ```
 
 The event interpretation report targets account manipulation, audit log
@@ -1027,8 +1028,8 @@ installs, and process creation with command-line context when present.
 Windows clipboard history:
 
 ```bash
-uv run relic --root ROOT report clipboard --case CASE_ID --format table
-uv run relic --root ROOT report clipboard --case CASE_ID --contains "copied text" --format json
+uv run perceptor --root ROOT report clipboard --case CASE_ID --format table
+uv run perceptor --root ROOT report clipboard --case CASE_ID --contains "copied text" --format json
 ```
 
 `clipboard` parses `%LocalAppData%\Microsoft\Clipboard` stores when present.
@@ -1039,11 +1040,11 @@ remain secondary clipboard-adjacent evidence.
 Examiner-edge and filesystem edge reports:
 
 ```bash
-uv run relic --root ROOT report examiner-edge-artifacts --case CASE_ID --format table
-uv run relic --root ROOT report mapped-network-paths --case CASE_ID --format table
-uv run relic --root ROOT report non-standard-ads --case CASE_ID --format table
-uv run relic --root ROOT report ntfs-security-descriptors --case CASE_ID --format table
-uv run relic --root ROOT report remote-access-tool-logs --case CASE_ID --format table
+uv run perceptor --root ROOT report examiner-edge-artifacts --case CASE_ID --format table
+uv run perceptor --root ROOT report mapped-network-paths --case CASE_ID --format table
+uv run perceptor --root ROOT report non-standard-ads --case CASE_ID --format table
+uv run perceptor --root ROOT report ntfs-security-descriptors --case CASE_ID --format table
+uv run perceptor --root ROOT report remote-access-tool-logs --case CASE_ID --format table
 ```
 
 `examiner-edge-artifacts` includes Sticky Notes, notification database rows,
@@ -1056,12 +1057,12 @@ decoding is required.
 
 ## Search Commands
 
-Relic has an OpenSearch-backed search surface for indexed content where
+Perceptor has an OpenSearch-backed search surface for indexed content where
 configured:
 
 ```bash
-uv run relic --root ROOT search query --case CASE_ID --query "report.docx" --limit 25
-uv run relic --root ROOT search show --case CASE_ID --source-table TABLE --source-id ID
+uv run perceptor --root ROOT search query --case CASE_ID --query "report.docx" --limit 25
+uv run perceptor --root ROOT search show --case CASE_ID --source-table TABLE --source-id ID
 ```
 
 Search options include:
@@ -1098,17 +1099,17 @@ Exact paths are returned in command JSON output and report manifests.
 Check state:
 
 ```bash
-uv run relic --root ROOT report dashboard --case CASE_ID --format table
-uv run relic --root ROOT report progress --case CASE_ID --format table
-uv run relic --root ROOT report resume-plan --case CASE_ID --format table
-uv run relic --root ROOT report workspace-health --case CASE_ID --format md
-uv run relic --root ROOT report processing-estimate --case CASE_ID --profile windows-full --format table
+uv run perceptor --root ROOT report dashboard --case CASE_ID --format table
+uv run perceptor --root ROOT report progress --case CASE_ID --format table
+uv run perceptor --root ROOT report resume-plan --case CASE_ID --format table
+uv run perceptor --root ROOT report workspace-health --case CASE_ID --format md
+uv run perceptor --root ROOT report processing-estimate --case CASE_ID --profile windows-full --format table
 ```
 
 Resume a bulk live-case zip:
 
 ```bash
-uv run relic --root ROOT ingest triage-zip \
+uv run perceptor --root ROOT ingest triage-zip \
   --path /evidence/live-case.zip \
   --resume-from-manifest /analysis/root/cases/CASE_ID/outputs/reports/report-bundle-bulk-import-CASE_ID.manifest.json
 ```
@@ -1116,7 +1117,7 @@ uv run relic --root ROOT ingest triage-zip \
 Run post-processing rebuilds:
 
 ```bash
-uv run relic --root ROOT case rebuild-postprocess CASE_ID
+uv run perceptor --root ROOT case rebuild-postprocess CASE_ID
 ```
 
 Nuance: if DuckDB temp storage failed during distinct-table rebuilds, the import
@@ -1135,13 +1136,13 @@ to avoid corruption and lock contention.
 Record a baseline:
 
 ```bash
-uv run relic --root ROOT standalone benchmark --case CASE_ID --write-baseline benchmark.json
+uv run perceptor --root ROOT standalone benchmark --case CASE_ID --write-baseline benchmark.json
 ```
 
 Compare later:
 
 ```bash
-uv run relic --root ROOT standalone benchmark --case CASE_ID --baseline benchmark.json --format table
+uv run perceptor --root ROOT standalone benchmark --case CASE_ID --baseline benchmark.json --format table
 ```
 
 ## Safety and Evidence Handling
@@ -1150,10 +1151,10 @@ uv run relic --root ROOT standalone benchmark --case CASE_ID --baseline benchmar
 - UTC is the default and primary timestamp basis for storage, correlation,
   reports, exports, and MCP context. Use `--timezone America/New_York` only when
   you need local display companion fields; do not replace UTC fields.
-- Relic hashes disk images on import and stores verification history. Run
+- Perceptor hashes disk images on import and stores verification history. Run
   `image integrity` to review stored hashes and `image verify` before producing
   final reports or testimony material.
-- Relic records TSK `icat` materializations in `report evidence-extractions`
+- Perceptor records TSK `icat` materializations in `report evidence-extractions`
   with source path, inode, extracted path, size, and SHA256.
 - Prefer `--filesystem` read-only mounts for speed when processing disk images.
 - Use `--keep-mounted` only when you need manual review.
@@ -1174,22 +1175,22 @@ uv run relic --root ROOT standalone benchmark --case CASE_ID --baseline benchmar
 ## Common End-to-End Live-Case Workflow
 
 ```bash
-uv run relic standalone doctor --smoke --format table
+uv run perceptor standalone doctor --smoke --format table
 
-uv run relic --root ~/analysis/live-case ingest triage-zip \
+uv run perceptor --root ~/analysis/live-case ingest triage-zip \
   --path ~/evidence/live-case.zip \
   --preflight \
   --format table \
   --max-uncompressed-gb 75
 
-uv run relic --root ~/analysis/live-case ingest triage-zip \
+uv run perceptor --root ~/analysis/live-case ingest triage-zip \
   --path ~/evidence/live-case.zip \
   --accept-duplicate \
   --report-purpose triage
 
-uv run relic --root ~/analysis/live-case report dashboard --case CASE_ID --format table
-uv run relic --root ~/analysis/live-case report unmapped-imports --case CASE_ID --format table
-uv run relic --root ~/analysis/live-case report write-bundle \
+uv run perceptor --root ~/analysis/live-case report dashboard --case CASE_ID --format table
+uv run perceptor --root ~/analysis/live-case report unmapped-imports --case CASE_ID --format table
+uv run perceptor --root ~/analysis/live-case report write-bundle \
   --case CASE_ID \
   --purpose usb
 ```
@@ -1197,24 +1198,24 @@ uv run relic --root ~/analysis/live-case report write-bundle \
 ## Common End-to-End Disk Image Workflow
 
 ```bash
-uv run relic standalone doctor --smoke --format table
+uv run perceptor standalone doctor --smoke --format table
 
-uv run relic --root ~/analysis/disk-case --dry-run process \
+uv run perceptor --root ~/analysis/disk-case --dry-run process \
   --path ~/evidence/host.E01 \
   --computer-label HOST01 \
   --profile windows-full \
   --filesystem \
   --workers 4
 
-uv run relic --root ~/analysis/disk-case process \
+uv run perceptor --root ~/analysis/disk-case process \
   --path ~/evidence/host.E01 \
   --computer-label HOST01 \
   --profile windows-full \
   --filesystem \
   --workers 4
 
-uv run relic --root ~/analysis/disk-case report dashboard --case CASE_ID --format table
-uv run relic --root ~/analysis/disk-case report write-bundle \
+uv run perceptor --root ~/analysis/disk-case report dashboard --case CASE_ID --format table
+uv run perceptor --root ~/analysis/disk-case report write-bundle \
   --case CASE_ID \
   --purpose full
 ```

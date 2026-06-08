@@ -66,7 +66,7 @@ def run_vsc_ntfs_delta_scan(
     require_dependency("fls")
     mftecmd = _resolve_eztool("MFTECmd", "MFTECmd.dll")
     if not mftecmd:
-        raise MountError("MFTECmd.dll not found. Set EZTOOLS_ROOT or install EZ Tools under /opt/relic-tools/eztools.")
+        raise MountError("MFTECmd.dll not found. Set EZTOOLS_ROOT or install EZ Tools under /opt/perceptor-tools/eztools.")
     dotnet = Path(resolve_dotnet_runtime())
 
     db_path = paths.vsc_parsed_db_path(case_id)
@@ -1130,9 +1130,13 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 def _resolve_eztool(tool_dir: str, dll_name: str) -> Path | None:
     roots = [
         Path(os.environ["EZTOOLS_ROOT"]).expanduser() if os.environ.get("EZTOOLS_ROOT") else None,
+        Path(os.environ["PERCEPTOR_TOOLS_ROOT"]).expanduser() / "eztools"
+        if os.environ.get("PERCEPTOR_TOOLS_ROOT")
+        else None,
         Path(os.environ["FORENSIC_ORCHESTRATOR_TOOLS_ROOT"]).expanduser() / "eztools"
         if os.environ.get("FORENSIC_ORCHESTRATOR_TOOLS_ROOT")
         else None,
+        Path("/opt/perceptor-tools/eztools"),
         Path("/opt/relic-tools/eztools"),
         Path("/opt/eztools"),
         Path.home() / "tools" / "eztools",

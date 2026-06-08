@@ -9,22 +9,22 @@ For the complete list of report subcommands, see
 ## Common Reports
 
 ```bash
-uv run relic --root ~/analysis/case-root report dashboard --case CASE_ID --format table
-uv run relic --root ~/analysis/case-root report progress --case CASE_ID --format table
-uv run relic --root ~/analysis/case-root report suspicious-executions --case CASE_ID --format md
-uv run relic --root ~/analysis/case-root report external-storage --case CASE_ID --format md
-uv run relic --root ~/analysis/case-root report usb-files --case CASE_ID --format md
-uv run relic --root ~/analysis/case-root report opened-from-removable-media --case CASE_ID --format md
-uv run relic --root ~/analysis/case-root report opened-from-cloud-storage --case CASE_ID --format md
-uv run relic --root ~/analysis/case-root report file-movement-identity --case CASE_ID --format md
-uv run relic --root ~/analysis/case-root report memory-analysis --case CASE_ID --format md
-uv run relic --root ~/analysis/case-root report structured-memory --case CASE_ID --format md
-uv run relic --root ~/analysis/case-root report bits-activity --case CASE_ID --format table
-uv run relic --root ~/analysis/case-root report examiner-edge-artifacts --case CASE_ID --format table
-uv run relic --root ~/analysis/case-root report mapped-network-paths --case CASE_ID --format table
-uv run relic --root ~/analysis/case-root report non-standard-ads --case CASE_ID --format table
-uv run relic --root ~/analysis/case-root report ntfs-security-descriptors --case CASE_ID --format table
-uv run relic --root ~/analysis/case-root report remote-access-tool-logs --case CASE_ID --format table
+uv run perceptor --root ~/analysis/case-root report dashboard --case CASE_ID --format table
+uv run perceptor --root ~/analysis/case-root report progress --case CASE_ID --format table
+uv run perceptor --root ~/analysis/case-root report suspicious-executions --case CASE_ID --format md
+uv run perceptor --root ~/analysis/case-root report external-storage --case CASE_ID --format md
+uv run perceptor --root ~/analysis/case-root report usb-files --case CASE_ID --format md
+uv run perceptor --root ~/analysis/case-root report opened-from-removable-media --case CASE_ID --format md
+uv run perceptor --root ~/analysis/case-root report opened-from-cloud-storage --case CASE_ID --format md
+uv run perceptor --root ~/analysis/case-root report file-movement-identity --case CASE_ID --format md
+uv run perceptor --root ~/analysis/case-root report memory-analysis --case CASE_ID --format md
+uv run perceptor --root ~/analysis/case-root report structured-memory --case CASE_ID --format md
+uv run perceptor --root ~/analysis/case-root report bits-activity --case CASE_ID --format table
+uv run perceptor --root ~/analysis/case-root report examiner-edge-artifacts --case CASE_ID --format table
+uv run perceptor --root ~/analysis/case-root report mapped-network-paths --case CASE_ID --format table
+uv run perceptor --root ~/analysis/case-root report non-standard-ads --case CASE_ID --format table
+uv run perceptor --root ~/analysis/case-root report ntfs-security-descriptors --case CASE_ID --format table
+uv run perceptor --root ~/analysis/case-root report remote-access-tool-logs --case CASE_ID --format table
 ```
 
 ## Examiner Edge Artifacts
@@ -98,7 +98,7 @@ For an existing case processed before BITS activity support was added, rebuild
 the derived table from stored EVTX rows:
 
 ```bash
-uv run relic --root ~/analysis/case-root report bits-activity \
+uv run perceptor --root ~/analysis/case-root report bits-activity \
   --case CASE_ID \
   --rebuild \
   --format table
@@ -129,7 +129,7 @@ correlation separately.
 Example:
 
 ```bash
-uv run relic --root ~/analysis/case-root report event-interpretation \
+uv run perceptor --root ~/analysis/case-root report event-interpretation \
   --case CASE_ID \
   --category powershell \
   --format table
@@ -145,7 +145,7 @@ ID, source device ID, and parser status.
 Example:
 
 ```bash
-uv run relic --root ~/analysis/case-root report clipboard \
+uv run perceptor --root ~/analysis/case-root report clipboard \
   --case CASE_ID \
   --contains "copied text" \
   --format table
@@ -178,7 +178,7 @@ still require an explicit higher limit.
 ## Output Path
 
 ```bash
-uv run relic --root ~/analysis/case-root report usb-files \
+uv run perceptor --root ~/analysis/case-root report usb-files \
   --case CASE_ID \
   --format md \
   --output ~/analysis/case-root/cases/CASE_ID/outputs/reports/usb-files.md
@@ -186,5 +186,5 @@ uv run relic --root ~/analysis/case-root report usb-files \
 
 ## Distinct Tables
 
-Relic rebuilds distinct/deduped artifact tables after imports and processing.
+Perceptor rebuilds distinct/deduped artifact tables after imports and processing.
 Reports should prefer these deduped views when available.

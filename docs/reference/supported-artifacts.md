@@ -1,6 +1,6 @@
 # Supported Artifacts
 
-Relic normalizes artifact output into SQLite/DuckDB tables and indexes large
+Perceptor normalizes artifact output into SQLite/DuckDB tables and indexes large
 searchable content in OpenSearch. UTC is the default and authoritative timestamp
 basis. Local timezone display is optional and display-only.
 
@@ -55,7 +55,7 @@ Primary reports include `shortcuts`, `jumplists`, `shellbags`,
 - Scheduled Task XML definitions under `Windows/System32/Tasks`.
 - Hosts file mappings and modification time.
 - CryptnetUrlCache metadata and cached URL/string indicators.
-- Credential Manager and Windows Vault file metadata. Relic records presence,
+- Credential Manager and Windows Vault file metadata. Perceptor records presence,
   size, and timestamps; decrypted credential contents require DPAPI context.
 - WSL `ext4.vhdx` presence/size and WSL shell-history files where present.
 - Windows Update registry context and `DataStore.edb` presence metadata.

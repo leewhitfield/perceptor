@@ -1,6 +1,6 @@
 # Ubuntu Install
 
-Relic currently supports Ubuntu 24.04 LTS x86_64. A VM is acceptable. Native
+Perceptor currently supports Ubuntu 24.04 LTS x86_64. A VM is acceptable. Native
 macOS, native Windows, WSL, Docker, ARM64, and older Ubuntu releases are
 best-effort or unsupported for full image processing.
 
@@ -15,13 +15,13 @@ scripts/bootstrap-ubuntu.sh
 Useful options:
 
 ```bash
-scripts/bootstrap-ubuntu.sh --tools-dir ~/tools --env-file ~/tools/forensic-orchestrator.env
+scripts/bootstrap-ubuntu.sh --tools-dir ~/tools --env-file ~/tools/perceptor.env
 scripts/bootstrap-ubuntu.sh --skip-tools
 scripts/bootstrap-ubuntu.sh --skip-smoke
 ```
 
 The bootstrap script installs apt packages, installs `uv` if needed, runs
-`uv sync`, installs Relic-managed tools unless skipped, writes a tool environment
+`uv sync`, installs Perceptor-managed tools unless skipped, writes a tool environment
 file, and runs `standalone doctor --smoke`.
 
 ## Manual Install
@@ -47,8 +47,8 @@ exec "$SHELL" -l
 Clone and sync:
 
 ```bash
-git clone https://github.com/example/relic.git
-cd relic
+git clone https://github.com/example/perceptor.git
+cd perceptor
 uv sync
 ```
 
@@ -56,22 +56,22 @@ Install managed third-party tools. This is part of the default setup, not an
 extra step for advanced users:
 
 ```bash
-uv run relic standalone install-tool all \
+uv run perceptor standalone install-tool all \
   --tools-dir ~/tools \
-  --env-file ~/tools/forensic-orchestrator.env
+  --env-file ~/tools/perceptor.env
 
-source ~/tools/forensic-orchestrator.env
+source ~/tools/perceptor.env
 ```
 
 ## Verify
 
 ```bash
-uv run relic standalone doctor --smoke --format table
-uv run relic standalone smoke-regression --format table
+uv run perceptor standalone doctor --smoke --format table
+uv run perceptor standalone smoke-regression --format table
 ```
 
 For a specific workspace:
 
 ```bash
-uv run relic --root ~/analysis/case01 standalone doctor --smoke --format table
+uv run perceptor --root ~/analysis/case01 standalone doctor --smoke --format table
 ```

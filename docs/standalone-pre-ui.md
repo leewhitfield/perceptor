@@ -4,7 +4,7 @@ This is the pre-UI operator surface for running the project as a standalone CLI
 tool.
 
 For the full operator manual, including common workflows, command switches, and
-report families, see [Relic User Manual](user-manual.md).
+report families, see [Perceptor User Manual](user-manual.md).
 
 Supported install target: Ubuntu 24.04 LTS on x86_64, bare metal or VM. Other
 platforms are best-effort or unsupported for full mounted-image workflows. See
@@ -24,14 +24,14 @@ and default memory coverage tooling.
 
 ## Config File
 
-Use `--config` or `FORENSIC_ORCHESTRATOR_CONFIG` with YAML:
+Use `--config` or `PERCEPTOR_CONFIG` with YAML:
 
 ```yaml
 root: /mnt/forensic-ssd/forensic-orchestrator
-tools_root: /opt/relic-tools
-eztools_root: /opt/relic-tools/eztools
+tools_root: /opt/perceptor-tools
+eztools_root: /opt/perceptor-tools/eztools
 plugins:
-  - /opt/relic/forensic_orchestrator/plugins/eztools.yaml
+  - /opt/perceptor/forensic_orchestrator/plugins/eztools.yaml
 ```
 
 Command-line `--root` and `--plugin` values override the file.
@@ -59,14 +59,14 @@ uv run forensic-orchestrator --config config.yaml standalone repair-dependencies
 uv run forensic-orchestrator --config config.yaml standalone install-tool eztools
 uv run forensic-orchestrator --config config.yaml standalone install-tool sidr
 uv run forensic-orchestrator --config config.yaml standalone install-tool memprocfs
-source ~/tools/forensic-orchestrator.env
+source ~/tools/perceptor.env
 uv run forensic-orchestrator --config config.yaml standalone doctor
 ```
 
 `repair-dependencies` installs Python CLI tools such as `pypykatz` and
 Volatility with `uv tool install`, discovers local tool installs under
 `~/tools`, and writes a sourceable env file for values such as `BSTRINGS_BIN`,
-`SIDR_BIN`, `MEMPROCFS_BIN`, and `FORENSIC_ORCHESTRATOR_DOTNET`.
+`SIDR_BIN`, `MEMPROCFS_BIN`, and `PERCEPTOR_DOTNET`.
 System packages such as Sleuth Kit, libewf, ntfs-3g, cryptsetup, dislocker,
 libbde-utils, poppler, or tesseract are reported with apt commands because they
 require an interactive privileged install on most workstations.
@@ -131,7 +131,7 @@ mount paths become inaccessible.
 Common pre-UI run:
 
 ```bash
-uv run relic --root /analysis/case-root ingest triage-zip \
+uv run perceptor --root /analysis/case-root ingest triage-zip \
   --path /evidence/live-case.zip \
   --report-purpose triage
 ```
@@ -142,16 +142,16 @@ imported/skipped/failed CSVs, generated evidence IDs, row counts, warnings, and
 per-computer import reports. If the run is interrupted, use:
 
 ```bash
-uv run relic --root /analysis/case-root report progress --case CASE_ID
-uv run relic --root /analysis/case-root report resume-plan --case CASE_ID
-uv run relic --root /analysis/case-root report workspace-health --case CASE_ID
+uv run perceptor --root /analysis/case-root report progress --case CASE_ID
+uv run perceptor --root /analysis/case-root report resume-plan --case CASE_ID
+uv run perceptor --root /analysis/case-root report workspace-health --case CASE_ID
 ```
 
 Then resume from the bulk import manifest. Completed computer folders from the
 manifest are skipped:
 
 ```bash
-uv run relic --root /analysis/case-root ingest triage-zip \
+uv run perceptor --root /analysis/case-root ingest triage-zip \
   --path /evidence/live-case.zip \
   --resume-from-manifest /analysis/case-root/cases/CASE_ID/outputs/reports/report-bundle-bulk-import-CASE_ID.manifest.json
 ```
@@ -159,13 +159,13 @@ uv run relic --root /analysis/case-root ingest triage-zip \
 Before importing unfamiliar export sets, check parser coverage:
 
 ```bash
-uv run relic --root /analysis/case-root ingest triage-zip \
+uv run perceptor --root /analysis/case-root ingest triage-zip \
   --path /evidence/live-case.zip \
   --preflight \
   --format table \
   --max-uncompressed-gb 75
 
-uv run relic --root /analysis/case-root report-bundle coverage \
+uv run perceptor --root /analysis/case-root report-bundle coverage \
   --path /evidence/live-case.zip \
   --format table
 ```
@@ -174,9 +174,9 @@ After import, unsupported CSVs are also stored as case activity and can be
 reported later:
 
 ```bash
-uv run relic --root /analysis/case-root report unmapped-imports --case CASE_ID --format table
-uv run relic --root /analysis/case-root report dashboard --case CASE_ID --format table
-uv run relic --root /analysis/case-root report validate-outputs \
+uv run perceptor --root /analysis/case-root report unmapped-imports --case CASE_ID --format table
+uv run perceptor --root /analysis/case-root report dashboard --case CASE_ID --format table
+uv run perceptor --root /analysis/case-root report validate-outputs \
   --path /analysis/case-root/cases/CASE_ID/outputs/reports/triage-bundle \
   --format table
 ```
@@ -184,7 +184,7 @@ uv run relic --root /analysis/case-root report validate-outputs \
 Purpose bundles keep review output focused:
 
 ```bash
-uv run relic --root /analysis/case-root report write-bundle \
+uv run perceptor --root /analysis/case-root report write-bundle \
   --case CASE_ID \
   --purpose review
 ```
@@ -199,7 +199,7 @@ checks. Bundle generation prints timestamped progress to stderr unless
 Memory workflow shortcut:
 
 ```bash
-uv run relic --root /analysis/case-root memory workflow \
+uv run perceptor --root /analysis/case-root memory workflow \
   --case CASE_ID \
   --workers 4
 ```

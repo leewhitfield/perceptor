@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "forensic-orchestrator"
+name = "perceptor"
 version = "0.1.0"
-description = "CLI-first forensic processing orchestration MVP"
+description = "CLI-first forensic processing and reporting"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -36,6 +36,7 @@ dev = [
 ]
 
 [project.scripts]
+perceptor = "forensic_orchestrator.cli:main"
 forensic-orchestrator = "forensic_orchestrator.cli:main"
 relic = "forensic_orchestrator.cli:main"
 

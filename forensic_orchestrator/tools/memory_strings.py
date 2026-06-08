@@ -347,7 +347,7 @@ def _bstrings_command() -> list[str] | None:
     ):
         if Path(candidate).exists():
             candidates.append(candidate)
-    dotnet = os.environ.get("FORENSIC_ORCHESTRATOR_DOTNET") or shutil.which("dotnet")
+    dotnet = os.environ.get("PERCEPTOR_DOTNET") or os.environ.get("FORENSIC_ORCHESTRATOR_DOTNET") or shutil.which("dotnet")
     for candidate in candidates:
         if not candidate:
             continue
@@ -362,10 +362,10 @@ def _bstrings_command() -> list[str] | None:
 
 def _tool_root_candidates(*relative_paths: str) -> list[str]:
     roots: list[Path] = []
-    explicit = os.environ.get("FORENSIC_ORCHESTRATOR_TOOLS_ROOT")
+    explicit = os.environ.get("PERCEPTOR_TOOLS_ROOT") or os.environ.get("FORENSIC_ORCHESTRATOR_TOOLS_ROOT")
     if explicit:
         roots.append(Path(explicit).expanduser())
-    roots.extend([Path("/opt/relic-tools"), Path.home() / "tools"])
+    roots.extend([Path("/opt/perceptor-tools"), Path("/opt/relic-tools"), Path.home() / "tools"])
     output: list[str] = []
     seen: set[str] = set()
     for root in roots:

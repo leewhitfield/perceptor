@@ -415,7 +415,7 @@ Units are in 512-byte sectors
         return BitLockerUnlockResult(
             source_path=unlocked,
             source_type="direct-e01-bitlocker-cryptsetup",
-            cleanup=[{"kind": "cryptsetup", "name": "relic-test"}, {"kind": "loop", "device": "/dev/loop7"}],
+            cleanup=[{"kind": "cryptsetup", "name": "perceptor-test"}, {"kind": "loop", "device": "/dev/loop7"}],
             tool="cryptsetup",
             method="recovery-key",
             offset_bytes=partition.offset_bytes,

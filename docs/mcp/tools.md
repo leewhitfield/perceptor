@@ -102,7 +102,7 @@ These require `--allow-processing`:
 - `relic_recover_deleted_files`
 
 `relic_recover_deleted_files` starts a tracked MCP job. The job record stores the
-Relic CLI command, and the recovery output manifest stores the exact `icat`
+Perceptor CLI command, and the recovery output manifest stores the exact `icat`
 command used for each recovered or failed candidate.
 
 ## Reports
@@ -126,7 +126,7 @@ SwiftKey/InputPersonalization questions.
 
 Use `relic_generate_report` with `report_name: "mapped-network-paths"` for
 mapped network drives, UNC shares, or MountPoints2 keys that look like
-`##host#share#path`. Relic decodes those keys into `\\host\share\path` and
+`##host#share#path`. Perceptor decodes those keys into `\\host\share\path` and
 returns the user profile plus first/last observed registry timestamps.
 
 Use `relic_generate_report` with `report_name: "non-standard-ads"` for hidden

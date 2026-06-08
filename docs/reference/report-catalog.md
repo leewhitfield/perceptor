@@ -3,11 +3,11 @@
 Run reports with:
 
 ```bash
-uv run relic --root ROOT report REPORT_NAME --case CASE_ID --format table
+uv run perceptor --root ROOT report REPORT_NAME --case CASE_ID --format table
 ```
 
 Most reports support `json`, `table`, `csv`, and `md`, but some specialized
-reports have narrower options. Use `uv run relic report REPORT_NAME --help` for
+reports have narrower options. Use `uv run perceptor report REPORT_NAME --help` for
 the exact switches.
 
 This catalog is generated from the current `report --help` command set and

@@ -1,6 +1,6 @@
 # Security Model
 
-Relic processes untrusted evidence and third-party tool outputs. Treat the
+Perceptor processes untrusted evidence and third-party tool outputs. Treat the
 workspace as sensitive.
 
 ## Paths
@@ -31,18 +31,18 @@ workspace must have enough free space to expand safely with reserve.
 ## Evidence Integrity
 
 Disk images added with `image add` or `process --path` are hashed on import with
-MD5, SHA1, and SHA256. Relic stores those hashes separately from generic image
+MD5, SHA1, and SHA256. Perceptor stores those hashes separately from generic image
 metadata so an examiner can re-verify the evidence later:
 
 ```bash
-uv run relic --root ROOT image integrity --case CASE_ID --image IMAGE_ID --format table
-uv run relic --root ROOT image verify --case CASE_ID --image IMAGE_ID --format table
+uv run perceptor --root ROOT image integrity --case CASE_ID --image IMAGE_ID --format table
+uv run perceptor --root ROOT image verify --case CASE_ID --image IMAGE_ID --format table
 ```
 
-Relic records each verification attempt. A mismatch means the current bytes at
+Perceptor records each verification attempt. A mismatch means the current bytes at
 the image path no longer match the hashes captured when the image was added.
 
-Relic mounts evidence read-only when mounting is requested. The preferred
+Perceptor mounts evidence read-only when mounting is requested. The preferred
 processing path is a read-only filesystem mount under `/tmp`, with direct TSK
 fallback only for recovery or artifacts that cannot be read through the mount.
 
@@ -53,17 +53,17 @@ Files materialized from evidence through TSK `icat` are recorded in
 SHA256, and available filesystem timestamps. Use:
 
 ```bash
-uv run relic --root ROOT report evidence-extractions --case CASE_ID --format table
+uv run perceptor --root ROOT report evidence-extractions --case CASE_ID --format table
 ```
 
-The extraction hash is the hash of the extracted copy Relic analyzed. It is the
+The extraction hash is the hash of the extracted copy Perceptor analyzed. It is the
 database-backed link between the evidence source entry and the local parser
 input.
 
 ## Secrets
 
 BitLocker unlock material should be provided with key files where possible.
-Relic avoids logging unlock material.
+Perceptor avoids logging unlock material.
 
 MCP credential reveal is gated by `--allow-sensitive`.
 

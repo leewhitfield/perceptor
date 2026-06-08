@@ -18,7 +18,7 @@ Use deep recovery when:
 Use the deep profile explicitly:
 
 ```bash
-uv run relic --root ~/analysis/case-root process \
+uv run perceptor --root ~/analysis/case-root process \
   --path ~/evidence/host.E01 \
   --case CASE_ID \
   --profile windows-deep \

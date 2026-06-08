@@ -479,7 +479,12 @@ def _volatility_symbol_dirs() -> str:
     explicit = os.environ.get("VOLATILITY3_SYMBOL_DIR")
     if explicit:
         candidates.append(Path(explicit).expanduser())
-    for root in (os.environ.get("FORENSIC_ORCHESTRATOR_TOOLS_ROOT"), "/opt/relic-tools", str(Path.home() / "tools")):
+    for root in (
+        os.environ.get("PERCEPTOR_TOOLS_ROOT") or os.environ.get("FORENSIC_ORCHESTRATOR_TOOLS_ROOT"),
+        "/opt/perceptor-tools",
+        "/opt/relic-tools",
+        str(Path.home() / "tools"),
+    ):
         if not root:
             continue
         candidates.append(Path(root) / "volatility3-symbols")
@@ -494,7 +499,12 @@ def _memprocfs_command() -> list[str] | None:
         found = shutil.which(name)
         if found:
             candidates.append(found)
-    for root in (os.environ.get("FORENSIC_ORCHESTRATOR_TOOLS_ROOT"), "/opt/relic-tools", str(Path.home() / "tools")):
+    for root in (
+        os.environ.get("PERCEPTOR_TOOLS_ROOT") or os.environ.get("FORENSIC_ORCHESTRATOR_TOOLS_ROOT"),
+        "/opt/perceptor-tools",
+        "/opt/relic-tools",
+        str(Path.home() / "tools"),
+    ):
         if not root:
             continue
         for relative in ("MemProcFS/memprocfs", "memprocfs/memprocfs"):

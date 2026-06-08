@@ -41,7 +41,7 @@ def display_evidence_path(value: Any) -> str:
     for pattern in (
         r"^cases/[0-9a-fA-F-]{36}/(?:artifacts|mounts/volumes)/[^/]+/",
         r"/cases/[0-9a-fA-F-]{36}/(?:artifacts|mounts/volumes)/[^/]+/",
-        r"^/tmp/forensic-orchestrator-mounts/cases/[0-9a-fA-F-]{36}/volumes/[^/]+/",
+        r"^/tmp/(?:perceptor|forensic-orchestrator)-mounts/cases/[0-9a-fA-F-]{36}/volumes/[^/]+/",
         r"/artifacts/[^/]+/",
         r"/mounts/volumes/[^/]+/",
     ):
@@ -101,7 +101,7 @@ def sanitize_report_text(text: str) -> str:
         text,
     )
     text = re.sub(
-        r"/tmp/forensic-orchestrator-mounts/cases/[0-9a-fA-F-]{36}/volumes/[^/\s`'\"<>)]*/",
+        r"/tmp/(?:perceptor|forensic-orchestrator)-mounts/cases/[0-9a-fA-F-]{36}/volumes/[^/\s`'\"<>)]*/",
         "/",
         text,
     )

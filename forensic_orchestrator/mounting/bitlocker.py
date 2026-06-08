@@ -522,7 +522,7 @@ def _normalized_method(method: str) -> str:
 
 
 def _mapper_name(case_id: str, image_id: str, partition_id: str) -> str:
-    raw = f"relic-{case_id[:8]}-{image_id[:8]}-{partition_id}"
+    raw = f"perceptor-{case_id[:8]}-{image_id[:8]}-{partition_id}"
     return "".join(ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in raw)[:120]
 
 

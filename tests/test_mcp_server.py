@@ -8,12 +8,12 @@ from io import StringIO
 from pathlib import Path
 
 from forensic_orchestrator.db import Database
-from forensic_orchestrator.mcp_server import RelicMcpServer, _tool_result, run_mcp_server
+from forensic_orchestrator.mcp_server import PerceptorMcpServer, _tool_result, run_mcp_server
 from forensic_orchestrator.search.opensearch import OpenSearchRestClient
 
 
 def test_mcp_initialize_and_list_tools(tmp_path):
-    server = RelicMcpServer(root=tmp_path)
+    server = PerceptorMcpServer(root=tmp_path)
 
     initialized = server.handle_message(
         {
@@ -30,7 +30,9 @@ def test_mcp_initialize_and_list_tools(tmp_path):
     tools = listed["result"]["tools"]
     names = {tool["name"] for tool in tools}
     assert "relic_workspace_summary" in names
+    assert "perceptor_workspace_summary" in names
     assert "relic_case_summary" in names
+    assert "perceptor_case_summary" in names
     assert "relic_ingest_triage_zip_preflight" in names
     assert "relic_import_triage_zip" in names
     assert "relic_query_suspicious_executions" in names
@@ -114,7 +116,7 @@ def test_mcp_initialize_and_list_tools(tmp_path):
     assert "source-of-truth order" in route_tool["description"]
     process_tool = next(tool for tool in tools if tool["name"] == "relic_process_image")
     assert process_tool["metadata"]["version"] == "1.0"
-    assert "relic CLI" in process_tool["metadata"]["dependencies"]
+    assert "perceptor CLI" in process_tool["metadata"]["dependencies"]
     assert process_tool["metadata"]["examples"]
     assert process_tool["metadata"]["category"] == "processing"
     assert process_tool["metadata"]["error_handling"]["error_shape"]["retryable"] == "boolean"
@@ -127,7 +129,7 @@ def test_mcp_workspace_and_case_summary_tools(tmp_path):
     db.add_image("image-1", case.id, tmp_path / "host.E01", computer_id=computer.id)
     db.close()
 
-    server = RelicMcpServer(root=tmp_path)
+    server = PerceptorMcpServer(root=tmp_path)
     workspace = server.handle_message(
         {
             "jsonrpc": "2.0",
@@ -256,7 +258,7 @@ def test_mcp_timeline_window_uses_master_timeline_for_time_bounds(tmp_path):
     )
     db.close()
 
-    server = RelicMcpServer(root=tmp_path)
+    server = PerceptorMcpServer(root=tmp_path)
     result = server.timeline_window(
         {
             "case_id": "case-1",
@@ -342,7 +344,7 @@ def test_mcp_stdio_server_roundtrip(tmp_path):
 
 
 def test_mcp_processing_tool_requires_opt_in(tmp_path):
-    server = RelicMcpServer(root=tmp_path)
+    server = PerceptorMcpServer(root=tmp_path)
 
     response = server.handle_message(
         {
@@ -361,7 +363,7 @@ def test_mcp_triage_zip_preflight(tmp_path):
     zip_path = tmp_path / "case.zip"
     with zipfile.ZipFile(zip_path, "w") as archive:
         archive.writestr("HOST01/Registry.csv", "a,b\n1,2\n")
-    server = RelicMcpServer(root=tmp_path)
+    server = PerceptorMcpServer(root=tmp_path)
 
     response = server.handle_message(
         {
@@ -381,7 +383,7 @@ def test_mcp_artifact_queries_and_case_review_are_structured(tmp_path):
     db = Database(tmp_path / "orchestrator.sqlite3")
     db.create_case("case-1", tmp_path)
     db.close()
-    server = RelicMcpServer(root=tmp_path)
+    server = PerceptorMcpServer(root=tmp_path)
 
     suspicious = server.handle_message(
         {
@@ -490,7 +492,7 @@ def test_mcp_usb_files_filters_existing_report_rows(tmp_path):
     )
     db.close()
 
-    server = RelicMcpServer(root=tmp_path)
+    server = PerceptorMcpServer(root=tmp_path)
     response = server.handle_message(
         {
             "jsonrpc": "2.0",
@@ -557,7 +559,7 @@ def test_mcp_usb_contents_resolves_volume_label_to_filesystem_listing(tmp_path, 
     )
     db.close()
 
-    server = RelicMcpServer(root=tmp_path)
+    server = PerceptorMcpServer(root=tmp_path)
     result = server.query_usb_contents({"case_id": case.id, "volume_name": "BYEBYE"})
 
     assert result["source_of_truth"] == "filesystem_entries_and_usb_file_correlations"
@@ -571,7 +573,7 @@ def test_mcp_usb_contents_resolves_volume_label_to_filesystem_listing(tmp_path, 
 
 
 def test_mcp_job_persists_and_output_can_be_read(tmp_path):
-    server = RelicMcpServer(root=tmp_path)
+    server = PerceptorMcpServer(root=tmp_path)
     started = server._start_mcp_process("test", [sys.executable, "-c", "import json; print(json.dumps({'ok': True}))"])
     job_id = started["mcp_job_id"]
 
@@ -581,7 +583,7 @@ def test_mcp_job_persists_and_output_can_be_read(tmp_path):
             break
         time.sleep(0.05)
 
-    reloaded = RelicMcpServer(root=tmp_path)
+    reloaded = PerceptorMcpServer(root=tmp_path)
     persisted = reloaded.get_mcp_job({"mcp_job_id": job_id})
     assert persisted["mcp_job_id"] == job_id
     output = reloaded.get_mcp_job_output({"mcp_job_id": job_id})
@@ -591,7 +593,7 @@ def test_mcp_job_persists_and_output_can_be_read(tmp_path):
 
 
 def test_mcp_job_progress_parses_report_bundle_many_lines(tmp_path):
-    server = RelicMcpServer(root=tmp_path)
+    server = PerceptorMcpServer(root=tmp_path)
     started = server._start_mcp_process(
         "progress",
         [
@@ -615,7 +617,7 @@ def test_mcp_job_progress_parses_report_bundle_many_lines(tmp_path):
 
 
 def test_mcp_cancel_job_requires_processing_and_records_cancelled(tmp_path):
-    server = RelicMcpServer(root=tmp_path, allow_processing=True)
+    server = PerceptorMcpServer(root=tmp_path, allow_processing=True)
     started = server._start_mcp_process("sleep", [sys.executable, "-c", "import time; time.sleep(30)"])
 
     response = server.handle_message(
@@ -636,15 +638,18 @@ def test_mcp_resources_list_and_read_workspace_reports(tmp_path):
     report = tmp_path / "cases" / "case-1" / "reports" / "summary.md"
     report.parent.mkdir(parents=True)
     report.write_text("# Summary\n", encoding="utf-8")
-    server = RelicMcpServer(root=tmp_path)
+    server = PerceptorMcpServer(root=tmp_path)
 
     listed = server.handle_message({"jsonrpc": "2.0", "id": 1, "method": "resources/list", "params": {"case_id": "case-1", "kind": "report"}})
     resources = listed["result"]["resources"]
     uri = resources[0]["uri"]
-    assert uri.startswith("relic://workspace/")
+    assert uri.startswith("perceptor://workspace/")
 
     read = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "resources/read", "params": {"uri": uri}})
     assert read["result"]["contents"][0]["text"] == "# Summary\n"
+    legacy_uri = uri.replace("perceptor://workspace/", "relic://workspace/")
+    legacy_read = server.handle_message({"jsonrpc": "2.0", "id": 3, "method": "resources/read", "params": {"uri": legacy_uri}})
+    assert legacy_read["result"]["contents"][0]["text"] == "# Summary\n"
 
 
 def test_mcp_discover_reports_returns_resource_uris(tmp_path):
@@ -655,13 +660,13 @@ def test_mcp_discover_reports_returns_resource_uris(tmp_path):
         '{"purpose":"usb","reports":[{"name":"opened-from-removable-media","filename":"opened-from-removable-media.md","tags":["usb","review"]}]}',
         encoding="utf-8",
     )
-    server = RelicMcpServer(root=tmp_path)
+    server = PerceptorMcpServer(root=tmp_path)
 
     discovered = server.discover_reports({"case_id": "case-1", "purpose": "usb"})
     exports = server.discover_report_exports({"case_id": "case-1", "purpose": "usb", "tags": ["usb"]})
 
     assert discovered["summary"]["resource_count"] >= 2
-    assert any(item["uri"].startswith("relic://workspace/") for item in discovered["resources"])
+    assert any(item["uri"].startswith("perceptor://workspace/") for item in discovered["resources"])
     assert any(item["name"] == "opened-from-removable-media" for item in discovered["resources"])
     assert any(item["name"] == "opened-from-removable-media" for item in exports["resources"])
     read_existing = server.read_existing_report(
@@ -684,7 +689,7 @@ def test_mcp_generate_report_prefers_existing_report(tmp_path):
     db = Database(tmp_path / "orchestrator.sqlite3")
     db.create_case("case-1", tmp_path / "cases" / "case-1")
     db.close()
-    server = RelicMcpServer(root=tmp_path)
+    server = PerceptorMcpServer(root=tmp_path)
 
     generated = server.generate_report({"case_id": "case-1", "report_name": "usb-files"})
 
@@ -697,7 +702,7 @@ def test_mcp_generate_report_defaults_to_export_sized_limit(tmp_path, monkeypatc
     db = Database(tmp_path / "orchestrator.sqlite3")
     db.create_case("case-1", tmp_path / "cases" / "case-1")
     db.close()
-    server = RelicMcpServer(root=tmp_path)
+    server = PerceptorMcpServer(root=tmp_path)
     captured: dict[str, list[str]] = {}
 
     def fake_run(command):
@@ -717,7 +722,7 @@ def test_mcp_write_review_packet_creates_resources(tmp_path):
     db = Database(tmp_path / "orchestrator.sqlite3")
     db.create_case("case-1", tmp_path / "cases" / "case-1")
     db.close()
-    server = RelicMcpServer(root=tmp_path)
+    server = PerceptorMcpServer(root=tmp_path)
 
     packet = server.write_review_packet(
         {
@@ -725,7 +730,7 @@ def test_mcp_write_review_packet_creates_resources(tmp_path):
             "title": "Lead Review",
             "notes": "Review this lead.",
             "findings": [{"title": "Finding"}],
-            "report_uris": ["relic://workspace/cases/case-1/reports/index.md"],
+            "report_uris": ["perceptor://workspace/cases/case-1/reports/index.md"],
         }
     )
 
@@ -778,7 +783,7 @@ def test_mcp_artifact_search_and_progress_manifests(tmp_path, monkeypatch):
         json.dumps({"stage": "completed", "case_id": "case-1", "computers_total": 2, "computers_done": 2, "imported_rows": 42}),
         encoding="utf-8",
     )
-    server = RelicMcpServer(root=tmp_path)
+    server = PerceptorMcpServer(root=tmp_path)
 
     found = server.search_artifacts({"case_id": "case-1", "query": "powershell", "computer": "HOST01"})
     assert found["summary"]["result_count"] == 1
@@ -827,7 +832,7 @@ def test_mcp_artifact_search_and_progress_manifests(tmp_path, monkeypatch):
 
 
 def test_mcp_route_question_enforces_truth_order(tmp_path):
-    server = RelicMcpServer(root=tmp_path)
+    server = PerceptorMcpServer(root=tmp_path)
 
     contents = server.route_question({"case_id": "case-1", "question": "Can you pull a list of contents for the USB drive?"})
     assert contents["intent"] == "evidence_contents"
@@ -896,7 +901,7 @@ def test_mcp_route_question_enforces_truth_order(tmp_path):
     assert recovery["processing_allowed"] is False
     assert recovery["blocked_actions"][0]["action"] == "processing_or_recovery"
 
-    recovery_allowed = RelicMcpServer(root=tmp_path, allow_processing=True).route_question(
+    recovery_allowed = PerceptorMcpServer(root=tmp_path, allow_processing=True).route_question(
         {
             "case_id": "case-1",
             "question": "Recover the deleted timeline.docx file",
@@ -940,7 +945,7 @@ def test_mcp_search_content_wraps_opensearch_without_password_argument(tmp_path,
         }
 
     monkeypatch.setattr("forensic_orchestrator.mcp_server.search_case_content", fake_search_case_content)
-    server = RelicMcpServer(root=tmp_path)
+    server = PerceptorMcpServer(root=tmp_path)
 
     result = server.search_content(
         {
@@ -1008,7 +1013,7 @@ def test_mcp_get_indexed_content_returns_full_opensearch_document(tmp_path, monk
         }
 
     monkeypatch.setattr(OpenSearchRestClient, "request", fake_request)
-    server = RelicMcpServer(root=tmp_path)
+    server = PerceptorMcpServer(root=tmp_path)
 
     result = server.get_indexed_content(
         {
@@ -1107,7 +1112,7 @@ def test_mcp_filesystem_listing_uses_generated_inventory(tmp_path, monkeypatch):
         ]
     )
     db.close()
-    server = RelicMcpServer(root=tmp_path)
+    server = PerceptorMcpServer(root=tmp_path)
 
     result = server.query_filesystem_listings({"case_id": "case-1", "contains": "Alex"})
 
@@ -1132,7 +1137,7 @@ def test_mcp_filesystem_listing_uses_generated_inventory(tmp_path, monkeypatch):
 
 
 def test_mcp_tool_reference_and_audit_log(tmp_path):
-    server = RelicMcpServer(root=tmp_path)
+    server = PerceptorMcpServer(root=tmp_path)
     response = server.handle_message(
         {
             "jsonrpc": "2.0",
@@ -1160,7 +1165,7 @@ def test_mcp_tool_reference_and_audit_log(tmp_path):
 
 
 def test_mcp_error_payload_and_audit_redacts_sensitive_arguments(tmp_path):
-    server = RelicMcpServer(root=tmp_path)
+    server = PerceptorMcpServer(root=tmp_path)
     response = server.handle_message(
         {
             "jsonrpc": "2.0",
@@ -1190,7 +1195,7 @@ def test_mcp_policy_blocks_tool_category_and_case(tmp_path):
         json.dumps({"blocked_tools": ["relic_list_cases"], "blocked_categories": ["processing"], "blocked_case_ids": ["case-blocked"]}),
         encoding="utf-8",
     )
-    server = RelicMcpServer(root=tmp_path, allow_processing=True)
+    server = PerceptorMcpServer(root=tmp_path, allow_processing=True)
 
     blocked_tool = server.handle_message(
         {
@@ -1227,7 +1232,7 @@ def test_mcp_policy_blocks_tool_category_and_case(tmp_path):
 
 
 def test_mcp_process_image_dry_run_command(tmp_path):
-    server = RelicMcpServer(root=tmp_path, allow_processing=True)
+    server = PerceptorMcpServer(root=tmp_path, allow_processing=True)
     captured = {}
 
     def fake_start(name, command):
@@ -1243,7 +1248,7 @@ def test_mcp_process_image_dry_run_command(tmp_path):
 
 
 def test_mcp_recover_deleted_files_requires_processing_and_builds_command(tmp_path):
-    locked = RelicMcpServer(root=tmp_path)
+    locked = PerceptorMcpServer(root=tmp_path)
     denied = locked.handle_message(
         {
             "jsonrpc": "2.0",
@@ -1255,7 +1260,7 @@ def test_mcp_recover_deleted_files_requires_processing_and_builds_command(tmp_pa
     assert denied["error"]["code"] == -32602
     assert "--allow-processing" in denied["error"]["message"]
 
-    server = RelicMcpServer(root=tmp_path, allow_processing=True)
+    server = PerceptorMcpServer(root=tmp_path, allow_processing=True)
     captured = {}
 
     def fake_start(name, command):

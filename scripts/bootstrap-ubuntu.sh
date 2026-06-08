@@ -5,12 +5,12 @@ usage() {
   cat <<'USAGE'
 Usage: scripts/bootstrap-ubuntu.sh [--tools-dir DIR] [--env-file FILE] [--skip-tools] [--skip-smoke]
 
-Bootstraps Relic on the supported platform: Ubuntu 24.04 LTS x86_64.
+Bootstraps Perceptor on the supported platform: Ubuntu 24.04 LTS x86_64.
 
 Options:
   --tools-dir DIR   Managed third-party tools directory. Default: ~/tools
-  --env-file FILE   Tool environment file. Default: ~/tools/forensic-orchestrator.env
-  --skip-tools      Skip Relic-managed third-party tool installation.
+  --env-file FILE   Tool environment file. Default: ~/tools/perceptor.env
+  --skip-tools      Skip Perceptor-managed third-party tool installation.
   --skip-smoke      Skip standalone doctor smoke verification.
   -h, --help        Show this help.
 USAGE
@@ -52,7 +52,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$ENV_FILE" ]]; then
-  ENV_FILE="${TOOLS_DIR}/forensic-orchestrator.env"
+  ENV_FILE="${TOOLS_DIR}/perceptor.env"
 fi
 
 if [[ -r /etc/os-release ]]; then
@@ -66,7 +66,7 @@ fi
 ARCH="$(uname -m)"
 if [[ "${ID:-}" != "ubuntu" || "${VERSION_ID:-}" != "24.04" || "$ARCH" != "x86_64" ]]; then
   echo "Unsupported platform: ${PRETTY_NAME:-unknown} ${ARCH}" >&2
-  echo "Relic currently supports Ubuntu 24.04 LTS x86_64." >&2
+  echo "Perceptor currently supports Ubuntu 24.04 LTS x86_64." >&2
   exit 1
 fi
 
@@ -90,7 +90,7 @@ uv sync
 mkdir -p "$TOOLS_DIR"
 
 if [[ "$SKIP_TOOLS" -eq 0 ]]; then
-  uv run relic standalone install-tool all \
+  uv run perceptor standalone install-tool all \
     --tools-dir "$TOOLS_DIR" \
     --env-file "$ENV_FILE"
 fi
@@ -101,7 +101,7 @@ if [[ -f "$ENV_FILE" ]]; then
 fi
 
 if [[ "$SKIP_SMOKE" -eq 0 ]]; then
-  uv run relic standalone doctor --smoke --format table
+  uv run perceptor standalone doctor --smoke --format table
 fi
 
 echo

@@ -139,9 +139,9 @@ STANDALONE_BACKLOG = [
 def version_report(root: Path, plugin_paths: list[Path]) -> dict[str, Any]:
     platform_support = _platform_support_report()
     return {
-        "application": "Relic",
-        "package": "forensic-orchestrator",
-        "cli_aliases": ["relic", "forensic-orchestrator"],
+        "application": "Perceptor",
+        "package": "perceptor",
+        "cli_aliases": ["perceptor", "relic", "forensic-orchestrator"],
         "version": _package_version(),
         "python": sys.version.split()[0],
         "python_supported": sys.version_info >= (3, 11),
@@ -163,13 +163,13 @@ def _platform_support_report() -> dict[str, Any]:
     status = "supported" if supported else "unsupported"
     notes = []
     if system != "linux":
-        notes.append("Relic currently supports Ubuntu 24.04 LTS on x86_64 only. Native macOS and Windows are unsupported.")
+        notes.append("Perceptor currently supports Ubuntu 24.04 LTS on x86_64 only. Native macOS and Windows are unsupported.")
     elif os_release.get("ID", "").lower() != "ubuntu":
-        notes.append("Relic currently supports Ubuntu 24.04 LTS on x86_64 only. Other Linux distributions are best-effort.")
+        notes.append("Perceptor currently supports Ubuntu 24.04 LTS on x86_64 only. Other Linux distributions are best-effort.")
     elif ubuntu_version != "24.04":
-        notes.append("Relic currently supports Ubuntu 24.04 LTS. Other Ubuntu releases are best-effort.")
+        notes.append("Perceptor currently supports Ubuntu 24.04 LTS. Other Ubuntu releases are best-effort.")
     if machine not in {"x86_64", "amd64"}:
-        notes.append("Relic currently supports x86_64. ARM64 is best-effort and some third-party tools may not install.")
+        notes.append("Perceptor currently supports x86_64. ARM64 is best-effort and some third-party tools may not install.")
     return {
         "status": status,
         "supported": supported,
@@ -448,7 +448,7 @@ def create_sample_report_bundle_fixture(output_path: Path) -> dict[str, Any]:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     computers = {
         "ComputerA": {
-            "metadata.json": '{"computer_name":"ComputerA","fixture":"relic-live-case"}\n',
+            "metadata.json": '{"computer_name":"ComputerA","fixture":"perceptor-live-case"}\n',
             "MFT/ComputerA_$MFT.csv": (
                 "EntryNumber,SequenceNumber,ParentPath,FileName,Created0x10\n"
                 "42,3,C:/Users/ComputerA,note.txt,2024-01-01 00:00:00\n"
@@ -459,7 +459,7 @@ def create_sample_report_bundle_fixture(output_path: Path) -> dict[str, Any]:
             ),
         },
         "ComputerB": {
-            "metadata.json": '{"computer_name":"ComputerB","fixture":"relic-live-case"}\n',
+            "metadata.json": '{"computer_name":"ComputerB","fixture":"perceptor-live-case"}\n',
             "UAL/UalRecords.csv": (
                 "database_file,source_table,role_name,client_name,client_ip,first_seen,last_seen\n"
                 "SystemIdentity.mdb,RoleAccess,File Server,HOST02,10.0.0.2,2024-01-01,2024-01-03\n"
@@ -560,7 +560,7 @@ def doctor_report(
 
 
 def standalone_smoke_report() -> dict[str, Any]:
-    with tempfile.TemporaryDirectory(prefix="relic-smoke-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="perceptor-smoke-") as tmp:
         root = Path(tmp) / "workspace"
         smoke_paths = WorkspacePaths(root)
         smoke_paths.ensure_root()
@@ -598,7 +598,7 @@ def repair_dependencies(
     apply: bool = True,
 ) -> dict[str, Any]:
     tools_dir = _tools_dir(tools_dir)
-    env_file = (env_file or tools_dir / "forensic-orchestrator.env").expanduser()
+    env_file = (env_file or tools_dir / "perceptor.env").expanduser()
     before = dependency_report(env_file=env_file if env_file.exists() else None)
     targets = [row for row in before["required"] if not row["available"]]
     if include_default_coverage:
@@ -658,7 +658,7 @@ def install_third_party_tool(
     progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     tools_dir = _tools_dir(tools_dir)
-    env_file = (env_file or tools_dir / "forensic-orchestrator.env").expanduser()
+    env_file = (env_file or tools_dir / "perceptor.env").expanduser()
     names = _expand_tool_selection(tool)
     results = []
     total = len(names)
@@ -1396,6 +1396,8 @@ def _resolve_eztools_root(tools_dir: Path) -> Path | None:
 def _tools_dir(tools_dir: Path | None) -> Path:
     if tools_dir:
         return tools_dir.expanduser()
+    if os.environ.get("PERCEPTOR_TOOLS_ROOT"):
+        return Path(os.environ["PERCEPTOR_TOOLS_ROOT"]).expanduser()
     if os.environ.get("FORENSIC_ORCHESTRATOR_TOOLS_ROOT"):
         return Path(os.environ["FORENSIC_ORCHESTRATOR_TOOLS_ROOT"]).expanduser()
     return Path.home() / "tools"
@@ -1465,6 +1467,10 @@ def _discover_local_env_updates(tools_dir: Path) -> dict[str, str]:
             tools_dir / "bin" / "ual-timeliner",
             Path.home() / ".local" / "bin" / "ual-timeliner",
         ],
+        "PERCEPTOR_DOTNET": [
+            tools_dir / "dotnet" / "dotnet",
+            Path.home() / ".dotnet" / "dotnet",
+        ],
         "FORENSIC_ORCHESTRATOR_DOTNET": [
             tools_dir / "dotnet" / "dotnet",
             Path.home() / ".dotnet" / "dotnet",
@@ -1480,6 +1486,7 @@ def _discover_local_env_updates(tools_dir: Path) -> dict[str, str]:
         if variable not in updates and existing:
             continue
     if tools_dir.exists():
+        updates["PERCEPTOR_TOOLS_ROOT"] = str(tools_dir)
         updates["FORENSIC_ORCHESTRATOR_TOOLS_ROOT"] = str(tools_dir)
     return updates
 
@@ -1578,6 +1585,8 @@ def _which(name: str) -> str | None:
         ],
         "volatility3-symbols": [
             _tools_dir(None) / "volatility3-symbols" / "windows.zip",
+            Path("/opt/perceptor-tools") / "volatility3-symbols" / "windows.zip",
+            Path("/opt/relic-tools") / "volatility3-symbols" / "windows.zip",
             Path.home() / "tools" / "volatility3-symbols" / "windows.zip",
         ],
         "ual-timeliner": [
@@ -1593,10 +1602,12 @@ def _which(name: str) -> str | None:
 
 
 def _package_version() -> str:
-    try:
-        return metadata.version("forensic-orchestrator")
-    except metadata.PackageNotFoundError:
-        return "0.1.0"
+    for package in ("perceptor", "forensic-orchestrator"):
+        try:
+            return metadata.version(package)
+        except metadata.PackageNotFoundError:
+            continue
+    return "0.1.0"
 
 
 def _job_status(row: dict[str, Any]) -> str:

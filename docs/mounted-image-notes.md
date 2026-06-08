@@ -3,7 +3,7 @@
 Durable case data lives under the configured workspace root, for example:
 
 ```text
-/analysis/relic/example-case
+/analysis/perceptor/example-case
 ```
 
 Do not store evidence, databases, artifacts, reports, logs, or parser output
@@ -13,8 +13,8 @@ Live EWF and NTFS mount points are intentionally temporary. By default they live
 under:
 
 ```text
-/tmp/forensic-orchestrator-mounts/cases/<case_id>/ewf/ewf1
-/tmp/forensic-orchestrator-mounts/cases/<case_id>/volumes/<partition_id>
+/tmp/perceptor-mounts/cases/<case_id>/ewf/ewf1
+/tmp/perceptor-mounts/cases/<case_id>/volumes/<partition_id>
 ```
 
 This keeps the sudoers rule stable across cases. If `/tmp` is cleared or the
@@ -23,44 +23,44 @@ that require filesystem access.
 
 ## Passwordless Mount Sudoers
 
-Relic uses non-interactive sudo. If `--sudo` is supplied but the sudoers rule is
+Perceptor uses non-interactive sudo. If `--sudo` is supplied but the sudoers rule is
 missing, the mount will fail instead of prompting for a password.
 
 Create a dedicated sudoers entry with `visudo`. Replace `analyst` with the Linux
-user that runs Relic:
+user that runs Perceptor:
 
 ```text
-analyst ALL=(root) NOPASSWD: /usr/bin/ntfs-3g -o ro\,show_sys_files\,streams_interface\=windows\,norecover\,offset\=* /tmp/forensic-orchestrator-mounts/cases/*/ewf/ewf1 /tmp/forensic-orchestrator-mounts/cases/*/volumes/*, /usr/bin/umount /tmp/forensic-orchestrator-mounts/cases/*/volumes/*
+analyst ALL=(root) NOPASSWD: /usr/bin/ntfs-3g -o ro\,show_sys_files\,streams_interface\=windows\,norecover\,offset\=* /tmp/perceptor-mounts/cases/*/ewf/ewf1 /tmp/perceptor-mounts/cases/*/volumes/*, /usr/bin/umount /tmp/perceptor-mounts/cases/*/volumes/*
 ```
 
 Recommended editor flow:
 
 ```bash
-sudo visudo -f /etc/sudoers.d/relic-mounts
+sudo visudo -f /etc/sudoers.d/perceptor-mounts
 ```
 
 Set safe permissions after saving:
 
 ```bash
-sudo chmod 0440 /etc/sudoers.d/relic-mounts
+sudo chmod 0440 /etc/sudoers.d/perceptor-mounts
 ```
 
-## Mount with Relic
+## Mount with Perceptor
 
-Mounted processing requires `--filesystem`. Without it, Relic will not attempt a
+Mounted processing requires `--filesystem`. Without it, Perceptor will not attempt a
 mount and will use Sleuth Kit extraction where possible.
 
 Mount with the normal workflow:
 
 ```bash
-uv run relic --root /analysis/relic/example-case \
+uv run perceptor --root /analysis/perceptor/example-case \
   image mount --case CASE_ID --image IMAGE_ID --filesystem --sudo
 ```
 
 Process with mounted-volume access:
 
 ```bash
-uv run relic --root /analysis/relic/example-case process \
+uv run perceptor --root /analysis/perceptor/example-case process \
   --path /evidence/host.E01 \
   --computer-label HOST01 \
   --profile windows-full \
@@ -72,8 +72,8 @@ uv run relic --root /analysis/relic/example-case process \
 Verify:
 
 ```bash
-findmnt /tmp/forensic-orchestrator-mounts/cases/CASE_ID/volumes/PARTITION_ID
-ls /tmp/forensic-orchestrator-mounts/cases/CASE_ID/volumes/PARTITION_ID/Windows
+findmnt /tmp/perceptor-mounts/cases/CASE_ID/volumes/PARTITION_ID
+ls /tmp/perceptor-mounts/cases/CASE_ID/volumes/PARTITION_ID/Windows
 ```
 
 Full profiles should run against a mounted NTFS path. The broad recursive TSK

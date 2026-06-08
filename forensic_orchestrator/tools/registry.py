@@ -164,7 +164,7 @@ def build_tool_command(
 
 
 def resolve_dotnet_runtime() -> str:
-    configured = os.environ.get("FORENSIC_ORCHESTRATOR_DOTNET") or os.environ.get("DOTNET_BIN")
+    configured = os.environ.get("PERCEPTOR_DOTNET") or os.environ.get("FORENSIC_ORCHESTRATOR_DOTNET") or os.environ.get("DOTNET_BIN")
     if configured:
         return configured
     on_path = shutil.which("dotnet")

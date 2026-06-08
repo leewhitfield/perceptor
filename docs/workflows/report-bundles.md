@@ -6,7 +6,7 @@ consumption.
 ## Write a Bundle
 
 ```bash
-uv run relic --root ~/analysis/case-root report bundle \
+uv run perceptor --root ~/analysis/case-root report bundle \
   --case CASE_ID \
   --purpose triage \
   --output ~/analysis/case-root/cases/CASE_ID/outputs/reports/triage-bundle
@@ -25,7 +25,7 @@ Common purposes:
 ## Validate Outputs
 
 ```bash
-uv run relic --root ~/analysis/case-root report validate-outputs \
+uv run perceptor --root ~/analysis/case-root report validate-outputs \
   --path ~/analysis/case-root/cases/CASE_ID/outputs/reports/triage-bundle \
   --format table
 ```
@@ -33,7 +33,7 @@ uv run relic --root ~/analysis/case-root report validate-outputs \
 ## Import a Bundle
 
 ```bash
-uv run relic --root ~/analysis/case-root report-bundle import \
+uv run perceptor --root ~/analysis/case-root report-bundle import \
   --path ~/reports/HOST01 \
   --case CASE_ID \
   --computer-label HOST01
@@ -44,7 +44,7 @@ uv run relic --root ~/analysis/case-root report-bundle import \
 Use this when a folder or ZIP contains multiple computer folders:
 
 ```bash
-uv run relic --root ~/analysis/case-root report-bundle import-many \
+uv run perceptor --root ~/analysis/case-root report-bundle import-many \
   --path ~/evidence/live-case.zip \
   --accept-duplicate
 ```
@@ -52,7 +52,7 @@ uv run relic --root ~/analysis/case-root report-bundle import-many \
 ## Coverage
 
 ```bash
-uv run relic --root ~/analysis/case-root report-bundle coverage \
+uv run perceptor --root ~/analysis/case-root report-bundle coverage \
   --path ~/evidence/live-case.zip \
   --format table
 ```

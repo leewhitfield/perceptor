@@ -1,12 +1,12 @@
 # BitLocker Images
 
-Relic performs an encryption preflight before mounting or running a profile.
+Perceptor performs an encryption preflight before mounting or running a profile.
 When BitLocker is detected, unlocking must be explicit.
 
 ## Process with Unlock
 
 ```bash
-uv run relic --root ~/analysis/case-root process \
+uv run perceptor --root ~/analysis/case-root process \
   --path ~/evidence/host.E01 \
   --computer-label HOST01 \
   --profile windows-full \
@@ -38,7 +38,7 @@ Choose a protector type:
 
 ## Secret Handling
 
-Use `--bitlocker-key-file PATH` where possible. Relic supplies unlock material
+Use `--bitlocker-key-file PATH` where possible. Perceptor supplies unlock material
 through stdin for supported tools and does not log the secret.
 
 If BitLocker is detected without `--unlock-bitlocker`, processing stops and

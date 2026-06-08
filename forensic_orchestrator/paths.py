@@ -5,8 +5,8 @@ import re
 from pathlib import Path
 
 
-DEFAULT_ROOT = Path("/var/lib/forensic-orchestrator")
-DEFAULT_LIVE_MOUNT_ROOT = Path("/tmp/forensic-orchestrator-mounts")
+DEFAULT_ROOT = Path("/var/lib/perceptor")
+DEFAULT_LIVE_MOUNT_ROOT = Path("/tmp/perceptor-mounts")
 _SAFE_PATH_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
 
@@ -26,7 +26,7 @@ def validate_workspace_id(value: str, *, field: str = "identifier") -> str:
 class WorkspacePaths:
     def __init__(self, root: Path | str = DEFAULT_ROOT, live_mount_root: Path | str | None = None) -> None:
         self.root = Path(root)
-        configured_mount_root = live_mount_root or os.environ.get("FORENSIC_MOUNT_ROOT")
+        configured_mount_root = live_mount_root or os.environ.get("PERCEPTOR_MOUNT_ROOT") or os.environ.get("FORENSIC_MOUNT_ROOT")
         self.live_mount_root = Path(configured_mount_root) if configured_mount_root else DEFAULT_LIVE_MOUNT_ROOT
 
     def case_dir(self, case_id: str) -> Path:

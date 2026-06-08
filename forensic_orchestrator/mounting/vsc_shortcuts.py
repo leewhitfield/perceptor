@@ -445,9 +445,13 @@ def _dotnet_executable() -> Path:
 def _resolve_eztools_root() -> Path:
     candidates = [
         Path(os.environ["EZTOOLS_ROOT"]).expanduser() if os.environ.get("EZTOOLS_ROOT") else None,
+        Path(os.environ["PERCEPTOR_TOOLS_ROOT"]).expanduser() / "eztools"
+        if os.environ.get("PERCEPTOR_TOOLS_ROOT")
+        else None,
         Path(os.environ["FORENSIC_ORCHESTRATOR_TOOLS_ROOT"]).expanduser() / "eztools"
         if os.environ.get("FORENSIC_ORCHESTRATOR_TOOLS_ROOT")
         else None,
+        Path("/opt/perceptor-tools/eztools"),
         Path("/opt/relic-tools/eztools"),
         Path("/opt/eztools"),
         Path.home() / "tools" / "eztools",
@@ -455,7 +459,7 @@ def _resolve_eztools_root() -> Path:
     for candidate in candidates:
         if candidate and candidate.exists():
             return candidate
-    return Path("/opt/relic-tools/eztools")
+    return Path("/opt/perceptor-tools/eztools")
 
 
 def _shortcut_artifact_type(path: str) -> str | None:

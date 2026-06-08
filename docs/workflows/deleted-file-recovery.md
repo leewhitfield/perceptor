@@ -1,6 +1,6 @@
 # Deleted File Recovery
 
-Relic can recover selected deleted files from parsed filesystem listings and MFT
+Perceptor can recover selected deleted files from parsed filesystem listings and MFT
 rows. Recovery is intentionally explicit and separate from normal listing or
 report questions.
 
@@ -9,13 +9,13 @@ report questions.
 - FAT, FAT32, and exFAT candidates from `filesystem_entries`.
 - NTFS candidates from `mft_entries`.
 
-For FAT-style filesystems, Relic resolves the deleted address with `fls` and
-extracts with `icat`. For NTFS, Relic uses the MFT entry number with `icat`.
+For FAT-style filesystems, Perceptor resolves the deleted address with `fls` and
+extracts with `icat`. For NTFS, Perceptor uses the MFT entry number with `icat`.
 
 ## Recover a File
 
 ```bash
-uv run relic --root ~/analysis/case-root recover deleted-files \
+uv run perceptor --root ~/analysis/case-root recover deleted-files \
   --case CASE_ID \
   --image IMAGE_ID \
   --name timeline.docx \
@@ -37,7 +37,7 @@ uv run relic --root ~/analysis/case-root recover deleted-files \
 
 ## Output
 
-Relic writes recovered files plus:
+Perceptor writes recovered files plus:
 
 - `deleted-file-recovery-manifest.csv`
 - `deleted-file-recovery-manifest.json`
@@ -54,7 +54,7 @@ for example:
 ["icat", "-f", "fat", "-o", "240", "/evidence/usb.img", "9"]
 ```
 
-For FAT-style rows where the inode is not stored in `filesystem_entries`, Relic
+For FAT-style rows where the inode is not stored in `filesystem_entries`, Perceptor
 first resolves the deleted metadata address with `fls`. The extraction manifest
 records the final `icat` command used to recover the file.
 
@@ -64,6 +64,6 @@ MCP clients should first use `relic_query_evidence_contents` to identify the
 target. `relic_recover_deleted_files` requires the MCP server to be started with
 `--allow-processing`.
 
-MCP also records the launched Relic command under `ROOT/mcp-jobs/<job-id>/` and
+MCP also records the launched Perceptor command under `ROOT/mcp-jobs/<job-id>/` and
 in `ROOT/mcp-jobs/index.json`. The per-file `icat` command is stored in the
 deleted-file recovery manifests written to the recovery output directory.

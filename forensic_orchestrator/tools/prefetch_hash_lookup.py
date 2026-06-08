@@ -10,6 +10,7 @@ from pathlib import Path
 
 DEFAULT_LOOKUP_PATHS: tuple[Path, ...] = ()
 DEFAULT_LOOKUP_DIRS = (
+    Path("/opt/perceptor-reference"),
     Path("/opt/relic-reference"),
     Path.home() / "reference",
 )

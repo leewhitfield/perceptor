@@ -8,7 +8,7 @@ import secrets
 import signal
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -146,7 +146,28 @@ class McpTool:
         return _tool_metadata(self)
 
 
-class RelicMcpServer:
+def _mcp_tool_aliases(tools: list[McpTool]) -> dict[str, McpTool]:
+    aliases: dict[str, McpTool] = {}
+    for tool in tools:
+        if tool.name.startswith("relic_"):
+            perceptor_name = "perceptor_" + tool.name.removeprefix("relic_")
+            aliases[perceptor_name] = replace(
+                tool,
+                name=perceptor_name,
+                title=tool.title.replace("relic", "perceptor"),
+                description=tool.description.replace("relic_", "perceptor_").replace("perceptor CLI", "perceptor CLI"),
+            )
+        aliases[tool.name] = tool
+    return aliases
+
+
+def _legacy_mcp_tool_name(name: str) -> str:
+    if name.startswith("perceptor_"):
+        return "relic_" + name.removeprefix("perceptor_")
+    return name
+
+
+class PerceptorMcpServer:
     def __init__(
         self,
         *,
@@ -163,11 +184,16 @@ class RelicMcpServer:
         self.allow_sensitive = allow_sensitive
         self.allow_external_ai = allow_external_ai
         self.plugin_paths = plugin_paths or [default_plugin_path()]
-        self.auth_token = auth_token if auth_token is not None else os.environ.get("RELIC_MCP_TOKEN")
-        self.max_running_jobs = max_running_jobs or _env_int("RELIC_MCP_MAX_RUNNING_JOBS", DEFAULT_MCP_MAX_RUNNING_JOBS)
+        self.auth_token = auth_token if auth_token is not None else (
+            os.environ.get("PERCEPTOR_MCP_TOKEN") or os.environ.get("RELIC_MCP_TOKEN")
+        )
+        self.max_running_jobs = max_running_jobs or _env_int(
+            "PERCEPTOR_MCP_MAX_RUNNING_JOBS",
+            _env_int("RELIC_MCP_MAX_RUNNING_JOBS", DEFAULT_MCP_MAX_RUNNING_JOBS),
+        )
         self.policy = self._load_mcp_policy()
         self._mcp_jobs: dict[str, dict[str, Any]] = self._load_mcp_job_index()
-        self.tools = {tool.name: tool for tool in self._build_tools()}
+        self.tools = _mcp_tool_aliases(self._build_tools())
 
     def handle_message(self, message: dict[str, Any]) -> dict[str, Any] | None:
         if not isinstance(message, dict):
@@ -220,24 +246,24 @@ class RelicMcpServer:
         return {
             "protocolVersion": protocol_version,
             "capabilities": {"tools": {"listChanged": False}, "resources": {"subscribe": False, "listChanged": False}},
-            "serverInfo": {"name": "relic", "version": _package_version()},
+            "serverInfo": {"name": "perceptor", "version": _package_version()},
             "instructions": (
-                "Relic MCP exposes forensic workspace tools. Inspection and report-generation tools are available by default. "
-                "For broad questions, call relic_route_question first to classify the request and receive the source-of-truth order. "
-                "For matter background or scope context, call relic_case_summary or relic_report_case_overview first; case descriptions "
+                "Perceptor MCP exposes forensic workspace tools. Inspection and report-generation tools are available by default. "
+                "For broad questions, call perceptor_route_question first to classify the request and receive the source-of-truth order. "
+                "For matter background or scope context, call perceptor_case_summary or perceptor_report_case_overview first; case descriptions "
                 "stored with `case describe` are returned there. "
-                "For report-backed questions, call relic_read_existing_report or relic_discover_reports first and treat generated reports "
+                "For report-backed questions, call perceptor_read_existing_report or perceptor_discover_reports first and treat generated reports "
                 "as the source of truth before querying raw artifacts or starting processing. "
                 "For questions phrased as evidence contents, drive contents, files on a volume, or list files, call "
-                "relic_query_evidence_contents; do not start filesystem processing, mounts, or SleuthKit/FLS unless stored "
+                "perceptor_query_evidence_contents; do not start filesystem processing, mounts, or SleuthKit/FLS unless stored "
                 "listings are absent, stale, or the user explicitly requests new processing. "
-                "For filesystem/file-listing questions, call relic_query_filesystem_listings first because it reads generated "
+                "For filesystem/file-listing questions, call perceptor_query_filesystem_listings first because it reads generated "
                 "case file listings and avoids slow image tooling. "
-                "For Wi-Fi, WLAN, SSID, or network-connection questions, call relic_query_wifi_activity because it reconciles "
+                "For Wi-Fi, WLAN, SSID, or network-connection questions, call perceptor_query_wifi_activity because it reconciles "
                 "WLAN/NetworkProfile EVTX, SRUM, and NetworkList registry evidence. "
-                "For questions about what happened during a Wi-Fi connection, first call relic_query_wifi_activity to resolve "
-                "the session window, then call relic_timeline_window with that start/end. "
-                "For file-content, document-text, body-text, or indexed-content search questions, call relic_search_content after "
+                "For questions about what happened during a Wi-Fi connection, first call perceptor_query_wifi_activity to resolve "
+                "the session window, then call perceptor_timeline_window with that start/end. "
+                "For file-content, document-text, body-text, or indexed-content search questions, call perceptor_search_content after "
                 "checking relevant generated reports; it queries OpenSearch indexed content and does not start image processing. "
                 "Import and processing calls require --allow-processing. Sensitive credential reveal, external AI upload, "
                 "and destructive actions are not implemented in the default MCP surface."
@@ -249,7 +275,7 @@ class RelicMcpServer:
         arguments = params.get("arguments") or {}
         if not isinstance(arguments, dict):
             raise ValueError("tools/call arguments must be an object")
-        tool = self.tools.get(name)
+        tool = self.tools.get(name) or self.tools.get(_legacy_mcp_tool_name(name))
         if tool is None:
             raise ValueError(f"Unknown tool: {name}")
         correlation_id = str(uuid.uuid4())
@@ -274,31 +300,31 @@ class RelicMcpServer:
         return [
             McpTool(
                 name="relic_workspace_summary",
-                title="Relic Workspace Summary",
-                description="Summarize the configured Relic workspace and top-level case/job counts.",
+                title="Perceptor Workspace Summary",
+                description="Summarize the configured Perceptor workspace and top-level case/job counts.",
                 input_schema=_object_schema({}),
                 handler=self.workspace_summary,
                 annotations=read_only,
             ),
             McpTool(
                 name="relic_list_cases",
-                title="List Relic Cases",
-                description="List cases in the configured Relic workspace.",
+                title="List Perceptor Cases",
+                description="List cases in the configured Perceptor workspace.",
                 input_schema=_object_schema({"limit": _integer_schema("Maximum cases to return.", default=100, minimum=1, maximum=1000)}),
                 handler=self.list_cases,
                 annotations=read_only,
             ),
             McpTool(
                 name="relic_case_summary",
-                title="Relic Case Summary",
+                title="Perceptor Case Summary",
                 description="Return computers, images, parsed row counts, artifacts, jobs, warnings, and errors for a case.",
-                input_schema=_object_schema({"case_id": _string_schema("Relic case ID.")}, required=["case_id"]),
+                input_schema=_object_schema({"case_id": _string_schema("Perceptor case ID.")}, required=["case_id"]),
                 handler=self.case_summary,
                 annotations=read_only,
             ),
             McpTool(
                 name="relic_case_evidence_map",
-                title="Relic Case Evidence Map",
+                title="Perceptor Case Evidence Map",
                 description="Return case computers, images, report resources, memory sources, jobs, and processing state in one response.",
                 input_schema=_case_limit_schema(default=100),
                 handler=self.case_evidence_map,
@@ -306,7 +332,7 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_workspace_map",
-                title="Relic Workspace Map",
+                title="Perceptor Workspace Map",
                 description="Return cases, computers, images, reports, progress manifests, MCP packets, and active jobs in one structure.",
                 input_schema=_object_schema(
                     {
@@ -319,7 +345,7 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_mcp_workflow_guide",
-                title="Relic MCP Workflow Guide",
+                title="Perceptor MCP Workflow Guide",
                 description="Return the recommended MCP workflow for case review, lead searches, drilldowns, packets, and exports.",
                 input_schema=_object_schema({}),
                 handler=self.mcp_workflow_guide,
@@ -327,16 +353,16 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_route_question",
-                title="Relic Route Question",
+                title="Perceptor Route Question",
                 description=(
-                    "Classify an examiner question and return the correct Relic source-of-truth order. "
+                    "Classify an examiner question and return the correct Perceptor source-of-truth order. "
                     "Use this before answering broad MCP questions, especially filesystem, USB, report, memory, "
                     "timeline, processing, recovery, credential, or external-AI requests."
                 ),
                 input_schema=_object_schema(
                     {
                         "question": _string_schema("Natural-language examiner question to route."),
-                        "case_id": _string_schema("Optional Relic case ID for report candidate discovery."),
+                        "case_id": _string_schema("Optional Perceptor case ID for report candidate discovery."),
                         "evidence_hint": _string_schema("Optional evidence, image, device, drive, volume, or computer hint."),
                         "allow_processing": {"type": "boolean", "default": False},
                     },
@@ -347,11 +373,11 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_case_readiness",
-                title="Relic Case Readiness",
+                title="Perceptor Case Readiness",
                 description="Return MCP-friendly doctor, workspace health, processing readiness, progress, and resume signals.",
                 input_schema=_object_schema(
                     {
-                        "case_id": _string_schema("Optional Relic case ID."),
+                        "case_id": _string_schema("Optional Perceptor case ID."),
                         "profile": _string_schema("Optional profile name."),
                         "limit": _integer_schema("Maximum rows to return.", default=50, minimum=1, maximum=1000),
                         "smoke": {"type": "boolean", "default": False},
@@ -362,11 +388,11 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_discover_reports",
-                title="Relic Discover Reports",
+                title="Perceptor Discover Reports",
                 description="Discover existing report bundle files and resource URIs for a case. Use this before raw artifact queries or report generation.",
                 input_schema=_object_schema(
                     {
-                        "case_id": _string_schema("Relic case ID."),
+                        "case_id": _string_schema("Perceptor case ID."),
                         "purpose": {"type": "string", "enum": ["full", "usb", "cloud", "execution", "memory", "triage", "review"], "default": "full"},
                         "limit": _integer_schema("Maximum resources to return.", default=250, minimum=1, maximum=1000),
                     },
@@ -377,11 +403,11 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_discover_report_exports",
-                title="Relic Discover Report Exports",
+                title="Perceptor Discover Report Exports",
                 description="Discover existing report bundle exports by purpose and report-index tags. Use this before raw artifact queries or report generation.",
                 input_schema=_object_schema(
                     {
-                        "case_id": _string_schema("Relic case ID."),
+                        "case_id": _string_schema("Perceptor case ID."),
                         "purpose": {"type": "string", "enum": ["full", "usb", "cloud", "execution", "memory", "triage", "review"], "default": "full"},
                         "tags": {"type": "array", "items": {"type": "string"}},
                         "limit": _integer_schema("Maximum resources to return.", default=250, minimum=1, maximum=1000),
@@ -393,14 +419,14 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_read_existing_report",
-                title="Read Existing Relic Report",
+                title="Read Existing Perceptor Report",
                 description=(
                     "Find and read an existing generated report for a case by report name, purpose, tag, or text. "
                     "This is the first source of truth for report-backed MCP questions."
                 ),
                 input_schema=_object_schema(
                     {
-                        "case_id": _string_schema("Relic case ID."),
+                        "case_id": _string_schema("Perceptor case ID."),
                         "report_name": _string_schema("Optional report name or filename stem, for example usb-files or opened-from-removable-media."),
                         "purpose": {"type": "string", "enum": ["full", "usb", "cloud", "execution", "memory", "triage", "review"], "default": "full"},
                         "tags": {"type": "array", "items": {"type": "string"}},
@@ -414,7 +440,7 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_case_dashboard",
-                title="Relic Case Dashboard",
+                title="Perceptor Case Dashboard",
                 description="Return the high-level investigation dashboard for a case.",
                 input_schema=_case_limit_schema(default=25),
                 handler=self.case_dashboard,
@@ -422,7 +448,7 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_processing_progress",
-                title="Relic Processing Progress",
+                title="Perceptor Processing Progress",
                 description="Return active/failed timings and recent jobs for a case.",
                 input_schema=_case_limit_schema(default=50),
                 handler=self.processing_progress,
@@ -430,7 +456,7 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_resume_plan",
-                title="Relic Resume Plan",
+                title="Perceptor Resume Plan",
                 description="Return recommended next commands after interrupted or partial processing.",
                 input_schema=_case_limit_schema(default=50),
                 handler=self.resume_plan,
@@ -438,11 +464,11 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_workspace_health",
-                title="Relic Workspace Health",
+                title="Perceptor Workspace Health",
                 description="Check workspace disk, temp, and case health indicators.",
                 input_schema=_object_schema(
                     {
-                        "case_id": _string_schema("Optional Relic case ID."),
+                        "case_id": _string_schema("Optional Perceptor case ID."),
                         "min_free_gb": {"type": "number", "description": "Minimum free GB warning threshold.", "default": 10.0},
                     }
                 ),
@@ -451,23 +477,23 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_list_computers",
-                title="List Relic Computers",
+                title="List Perceptor Computers",
                 description="List computers attached to a case.",
-                input_schema=_object_schema({"case_id": _string_schema("Relic case ID.")}, required=["case_id"]),
+                input_schema=_object_schema({"case_id": _string_schema("Perceptor case ID.")}, required=["case_id"]),
                 handler=self.list_computers,
                 annotations=read_only,
             ),
             McpTool(
                 name="relic_list_images",
-                title="List Relic Images",
+                title="List Perceptor Images",
                 description="List images attached to a case.",
-                input_schema=_object_schema({"case_id": _string_schema("Relic case ID.")}, required=["case_id"]),
+                input_schema=_object_schema({"case_id": _string_schema("Perceptor case ID.")}, required=["case_id"]),
                 handler=self.list_images,
                 annotations=read_only,
             ),
             McpTool(
                 name="relic_list_jobs",
-                title="List Relic Jobs",
+                title="List Perceptor Jobs",
                 description="List recent jobs for a case.",
                 input_schema=_case_limit_schema(default=100),
                 handler=self.list_jobs,
@@ -475,10 +501,10 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_get_job",
-                title="Get Relic Job",
+                title="Get Perceptor Job",
                 description="Return one job record by case ID and job ID.",
                 input_schema=_object_schema(
-                    {"case_id": _string_schema("Relic case ID."), "job_id": _string_schema("Relic job ID.")},
+                    {"case_id": _string_schema("Perceptor case ID."), "job_id": _string_schema("Perceptor job ID.")},
                     required=["case_id", "job_id"],
                 ),
                 handler=self.get_job,
@@ -486,11 +512,11 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_timeline",
-                title="Relic Timeline",
+                title="Perceptor Timeline",
                 description="Query the normalized timeline for a case.",
                 input_schema=_object_schema(
                     {
-                        "case_id": _string_schema("Relic case ID."),
+                        "case_id": _string_schema("Perceptor case ID."),
                         "limit": _integer_schema("Maximum events to return.", default=50, minimum=1, maximum=1000),
                         "event_type": _string_schema("Optional event type filter."),
                         "source_tool": _string_schema("Optional source tool filter."),
@@ -503,7 +529,7 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_timeline_window",
-                title="Relic Timeline Window",
+                title="Perceptor Timeline Window",
                 description=(
                     "Return normalized master-timeline events for a case, optionally bounded by start/end. "
                     "Use this as the first source for questions about what happened during, around, or overlapping "
@@ -513,7 +539,7 @@ class RelicMcpServer:
                 ),
                 input_schema=_object_schema(
                     {
-                        "case_id": _string_schema("Relic case ID."),
+                        "case_id": _string_schema("Perceptor case ID."),
                         "limit": _integer_schema("Maximum events to return.", default=100, minimum=1, maximum=1000),
                         "start": _string_schema("Optional inclusive timestamp lower bound."),
                         "end": _string_schema("Optional inclusive timestamp upper bound."),
@@ -534,7 +560,7 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_activity_windows",
-                title="Relic Activity Windows",
+                title="Perceptor Activity Windows",
                 description=(
                     "Aggregate activity across multiple resolved time windows. Use this after tools such as "
                     "relic_query_wifi_activity return session_activity_plan.calls. This is the preferred tool for "
@@ -542,7 +568,7 @@ class RelicMcpServer:
                 ),
                 input_schema=_object_schema(
                     {
-                        "case_id": _string_schema("Relic case ID."),
+                        "case_id": _string_schema("Perceptor case ID."),
                         "windows": {
                             "type": "array",
                             "description": "Resolved windows to aggregate. Each item needs start and end.",
@@ -564,7 +590,7 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_file_dossier",
-                title="Relic File Dossier",
+                title="Perceptor File Dossier",
                 description=(
                     "Return a file-centric dossier by path or name. Use this for questions such as what can you tell me "
                     "about this file, file metadata, filesystem metadata for a file, internal metadata, and file provenance. "
@@ -572,7 +598,7 @@ class RelicMcpServer:
                 ),
                 input_schema=_object_schema(
                     {
-                        "case_id": _string_schema("Relic case ID."),
+                        "case_id": _string_schema("Perceptor case ID."),
                         "path": _string_schema("Optional full or partial path."),
                         "name": _string_schema("Optional file name."),
                         "limit": _integer_schema("Maximum rows to return.", default=100, minimum=1, maximum=1000),
@@ -591,7 +617,7 @@ class RelicMcpServer:
                 ),
                 input_schema=_object_schema(
                     {
-                        "case_id": _string_schema("Relic case ID."),
+                        "case_id": _string_schema("Perceptor case ID."),
                         "contains": _string_schema("Optional text filter for path, file name, parent path, or extension."),
                         "computer_id": _string_schema("Optional computer ID filter."),
                         "image_id": _string_schema("Optional image ID filter."),
@@ -614,7 +640,7 @@ class RelicMcpServer:
                 ),
                 input_schema=_object_schema(
                     {
-                        "case_id": _string_schema("Relic case ID."),
+                        "case_id": _string_schema("Perceptor case ID."),
                         "contains": _string_schema("Optional text filter for path, file name, parent path, or extension."),
                         "computer_id": _string_schema("Optional computer ID filter."),
                         "image_id": _string_schema("Optional image ID filter. Use this when the target evidence image is known."),
@@ -638,7 +664,7 @@ class RelicMcpServer:
                 ),
                 input_schema=_object_schema(
                     {
-                        "case_id": _string_schema("Relic case ID."),
+                        "case_id": _string_schema("Perceptor case ID."),
                         "volume_name": _string_schema("Optional USB volume label/name, for example BYEBYE."),
                         "image_id": _string_schema("Optional USB evidence image ID."),
                         "serial": _string_schema("Optional USB serial."),
@@ -652,11 +678,11 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_usb_dossier",
-                title="Relic USB Dossier",
+                title="Perceptor USB Dossier",
                 description="Return a USB/storage-device dossier by serial, volume serial, or volume GUID.",
                 input_schema=_object_schema(
                     {
-                        "case_id": _string_schema("Relic case ID."),
+                        "case_id": _string_schema("Perceptor case ID."),
                         "serial": _string_schema("Optional USB serial."),
                         "volume_serial_number": _string_schema("Optional volume serial number."),
                         "volume_guid": _string_schema("Optional volume GUID."),
@@ -669,7 +695,7 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_user_activity",
-                title="Relic User Activity",
+                title="Perceptor User Activity",
                 description=(
                     "Return user-focused execution, file, browser, logon, communication, and USB activity. "
                     "This is not the source of truth for bounded activity-window questions such as what happened "
@@ -678,7 +704,7 @@ class RelicMcpServer:
                 ),
                 input_schema=_object_schema(
                     {
-                        "case_id": _string_schema("Relic case ID."),
+                        "case_id": _string_schema("Perceptor case ID."),
                         "user": _string_schema("User/profile text to review."),
                         "limit": _integer_schema("Maximum rows to return.", default=100, minimum=1, maximum=1000),
                     },
@@ -697,7 +723,7 @@ class RelicMcpServer:
                 ),
                 input_schema=_object_schema(
                     {
-                        "case_id": _string_schema("Relic case ID."),
+                        "case_id": _string_schema("Perceptor case ID."),
                         "computer_id": _string_schema("Optional computer ID filter."),
                         "include_builtin": {"type": "boolean", "default": True},
                         "limit": _integer_schema("Maximum users to return.", default=500, minimum=1, maximum=1000),
@@ -731,7 +757,7 @@ class RelicMcpServer:
                 description="Return external/removable storage summary and timeline context.",
                 input_schema=_object_schema(
                     {
-                        "case_id": _string_schema("Relic case ID."),
+                        "case_id": _string_schema("Perceptor case ID."),
                         "limit": _integer_schema("Maximum rows to return.", default=250, minimum=1, maximum=1000),
                         "include_file_activity": {"type": "boolean", "default": True},
                     },
@@ -753,7 +779,7 @@ class RelicMcpServer:
                 ),
                 input_schema=_object_schema(
                     {
-                        "case_id": _string_schema("Relic case ID."),
+                        "case_id": _string_schema("Perceptor case ID."),
                         "start": _string_schema("Optional inclusive timestamp lower bound, for example 2025-11-17 00:00:00."),
                         "end": _string_schema("Optional exclusive timestamp upper bound, for example 2025-11-18 00:00:00."),
                         "ssid": _string_schema("Optional SSID/network name filter."),
@@ -788,7 +814,7 @@ class RelicMcpServer:
                 ),
                 input_schema=_object_schema(
                     {
-                        "case_id": _string_schema("Relic case ID."),
+                        "case_id": _string_schema("Perceptor case ID."),
                         "limit": _integer_schema("Maximum rows to return.", default=500, minimum=1, maximum=1000),
                         "grouped": {"type": "boolean", "default": False},
                         "contains": _string_schema("Optional text filter across file name, file path, source artifact, device serial, volume name, and volume serial."),
@@ -809,7 +835,7 @@ class RelicMcpServer:
                 description="Return identity and movement correlations from shortcuts, DROID, and related artifacts.",
                 input_schema=_object_schema(
                     {
-                        "case_id": _string_schema("Relic case ID."),
+                        "case_id": _string_schema("Perceptor case ID."),
                         "limit": _integer_schema("Maximum rows to return.", default=100, minimum=1, maximum=1000),
                         "contains": _string_schema("Optional text filter."),
                         "min_confidence": {"type": "string", "enum": ["review", "low", "context", "medium", "high"]},
@@ -834,7 +860,7 @@ class RelicMcpServer:
                 description="Return files or artifacts indicating user-opened content from cloud-synced storage.",
                 input_schema=_object_schema(
                     {
-                        "case_id": _string_schema("Relic case ID."),
+                        "case_id": _string_schema("Perceptor case ID."),
                         "limit": _integer_schema("Maximum rows to return.", default=100, minimum=1, maximum=1000),
                         "user": _string_schema("Optional user/profile filter."),
                         "provider": _string_schema("Optional cloud provider filter."),
@@ -871,7 +897,7 @@ class RelicMcpServer:
                 ),
                 input_schema=_object_schema(
                     {
-                        "case_id": _string_schema("Relic case ID."),
+                        "case_id": _string_schema("Perceptor case ID."),
                         "limit": _integer_schema("Maximum rows to return.", default=100, minimum=1, maximum=1000),
                         "browser": _string_schema("Optional browser filter."),
                         "user": _string_schema("Optional user/profile filter."),
@@ -888,7 +914,7 @@ class RelicMcpServer:
                 description="Return targeted registry activity such as RunMRU, RecentDocs, UserAssist, or Office MRU.",
                 input_schema=_object_schema(
                     {
-                        "case_id": _string_schema("Relic case ID."),
+                        "case_id": _string_schema("Perceptor case ID."),
                         "artifact": _string_schema("Registry artifact name, for example runmru, recentdocs, userassist, office-mru."),
                         "limit": _integer_schema("Maximum rows to return.", default=100, minimum=1, maximum=1000),
                         "user": _string_schema("Optional user/profile filter."),
@@ -904,7 +930,7 @@ class RelicMcpServer:
                 description="Return LNK or JumpList shortcut artifacts.",
                 input_schema=_object_schema(
                     {
-                        "case_id": _string_schema("Relic case ID."),
+                        "case_id": _string_schema("Perceptor case ID."),
                         "limit": _integer_schema("Maximum rows to return.", default=100, minimum=1, maximum=1000),
                         "artifact_type": {"type": "string", "enum": ["lnk", "jumplist"]},
                     },
@@ -919,7 +945,7 @@ class RelicMcpServer:
                 description="Return communication artifacts from mailbox, Windows Search, messaging, and related sources.",
                 input_schema=_object_schema(
                     {
-                        "case_id": _string_schema("Relic case ID."),
+                        "case_id": _string_schema("Perceptor case ID."),
                         "limit": _integer_schema("Maximum rows to return.", default=100, minimum=1, maximum=1000),
                         "user": _string_schema("Optional user/profile filter."),
                         "contains": _string_schema("Optional text filter."),
@@ -933,7 +959,7 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_case_review",
-                title="Relic Case Review",
+                title="Perceptor Case Review",
                 description="Return a combined investigative review across dashboard, suspicious execution, storage, cloud, movement, memory, browser, and communications.",
                 input_schema=_case_limit_schema(default=25),
                 handler=self.case_review,
@@ -941,7 +967,7 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_search_artifacts",
-                title="Relic Artifact Search",
+                title="Perceptor Artifact Search",
                 description=(
                     "Search parsed artifact tables by text, user, computer, source type, and time bounds without requiring OpenSearch. "
                     "Use relic_route_question and existing reports first for broad review questions; for filesystem questions, use "
@@ -949,7 +975,7 @@ class RelicMcpServer:
                 ),
                 input_schema=_object_schema(
                     {
-                        "case_id": _string_schema("Relic case ID."),
+                        "case_id": _string_schema("Perceptor case ID."),
                         "query": _string_schema("Optional text to find in searchable artifact fields."),
                         "user": _string_schema("Optional user/profile filter."),
                         "computer": _string_schema("Optional computer label or ID filter."),
@@ -965,22 +991,22 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_artifact_search_sources",
-                title="Relic Artifact Search Sources",
+                title="Perceptor Artifact Search Sources",
                 description="Return the artifact tables, categories, fields, and row counts covered by artifact and lead search.",
-                input_schema=_object_schema({"case_id": _string_schema("Relic case ID.")}, required=["case_id"]),
+                input_schema=_object_schema({"case_id": _string_schema("Perceptor case ID.")}, required=["case_id"]),
                 handler=self.artifact_search_sources,
                 annotations=read_only,
             ),
             McpTool(
                 name="relic_lead_search",
-                title="Relic Lead Search",
+                title="Perceptor Lead Search",
                 description=(
                     "Run preset artifact searches for execution, USB, cloud, documents, browser, or communications leads. "
                     "Use relic_route_question and existing reports first for broad review questions."
                 ),
                 input_schema=_object_schema(
                     {
-                        "case_id": _string_schema("Relic case ID."),
+                        "case_id": _string_schema("Perceptor case ID."),
                         "preset": {"type": "string", "enum": ["execution", "usb", "cloud", "documents", "browser", "communications"]},
                         "query": _string_schema("Optional text to find in preset artifact fields."),
                         "user": _string_schema("Optional user/profile filter."),
@@ -996,7 +1022,7 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_search_content",
-                title="Relic OpenSearch Content Search",
+                title="Perceptor OpenSearch Content Search",
                 description=(
                     "Search full-text content indexed in OpenSearch, including extracted document text, mailbox bodies, "
                     "attachments, Windows Search indexed content, and other large text stores. Use existing generated reports "
@@ -1006,7 +1032,7 @@ class RelicMcpServer:
                 ),
                 input_schema=_object_schema(
                     {
-                        "case_id": _string_schema("Relic case ID."),
+                        "case_id": _string_schema("Perceptor case ID."),
                         "query": _string_schema("Required full-text content query."),
                         "limit": _integer_schema("Maximum content hits to return.", default=25, minimum=1, maximum=1000),
                         "url": _string_schema("Optional OpenSearch URL. Defaults to FORENSIC_OPENSEARCH_URL or http://localhost:9200."),
@@ -1031,7 +1057,7 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_get_indexed_content",
-                title="Relic Get Indexed Content",
+                title="Perceptor Get Indexed Content",
                 description=(
                     "Return the stored full-text content for one OpenSearch content hit. Use the opensearch_document_id "
                     "returned by relic_search_content when the user wants to read more than the search snippet. "
@@ -1039,7 +1065,7 @@ class RelicMcpServer:
                 ),
                 input_schema=_object_schema(
                     {
-                        "case_id": _string_schema("Relic case ID. The OpenSearch document must belong to this case."),
+                        "case_id": _string_schema("Perceptor case ID. The OpenSearch document must belong to this case."),
                         "opensearch_document_id": _string_schema("OpenSearch document ID returned by relic_search_content."),
                         "max_chars": _integer_schema("Maximum indexed-content characters to return.", default=20000, minimum=1, maximum=1000000),
                         "url": _string_schema("Optional OpenSearch URL. Defaults to FORENSIC_OPENSEARCH_URL or http://localhost:9200."),
@@ -1063,7 +1089,7 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_case_activity_digest",
-                title="Relic Case Activity Digest",
+                title="Perceptor Case Activity Digest",
                 description="Return a compact digest of recent activity, suspicious execution, storage, cloud/removable opens, gaps, and next actions.",
                 input_schema=_case_limit_schema(default=25),
                 handler=self.case_activity_digest,
@@ -1071,7 +1097,7 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_case_next_actions",
-                title="Relic Case Next Actions",
+                title="Perceptor Case Next Actions",
                 description="Return ranked next investigative actions from readiness, gaps, unmapped imports, suspicious execution, USB, and cloud findings.",
                 input_schema=_case_limit_schema(default=25),
                 handler=self.case_next_actions,
@@ -1079,7 +1105,7 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_case_runbook",
-                title="Relic Case Runbook",
+                title="Perceptor Case Runbook",
                 description="Return safe next commands and reasons based on review status, readiness, packets, reports, and gaps.",
                 input_schema=_case_limit_schema(default=25),
                 handler=self.case_runbook,
@@ -1087,11 +1113,11 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_write_review_packet",
-                title="Write Relic Review Packet",
+                title="Write Perceptor Review Packet",
                 description="Write a small MCP review packet with selected findings, report URIs, timeline slices, and examiner notes.",
                 input_schema=_object_schema(
                     {
-                        "case_id": _string_schema("Relic case ID."),
+                        "case_id": _string_schema("Perceptor case ID."),
                         "title": _string_schema("Optional packet title."),
                         "notes": _string_schema("Optional examiner notes."),
                         "findings": {"type": "array", "items": {"type": "object"}},
@@ -1106,7 +1132,7 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_list_review_packets",
-                title="List Relic Review Packets",
+                title="List Perceptor Review Packets",
                 description="List MCP review packets previously written for a case.",
                 input_schema=_case_limit_schema(default=50),
                 handler=self.list_review_packets,
@@ -1114,7 +1140,7 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_read_review_packet",
-                title="Read Relic Review Packet",
+                title="Read Perceptor Review Packet",
                 description="Read a saved MCP review packet JSON or Markdown resource.",
                 input_schema=_object_schema({"uri": _string_schema("Review packet resource URI.")}, required=["uri"]),
                 handler=self.read_review_packet,
@@ -1122,11 +1148,11 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_write_search_packet",
-                title="Write Relic Search Packet",
+                title="Write Perceptor Search Packet",
                 description="Run and save an artifact or preset lead search packet with filters and result counts.",
                 input_schema=_object_schema(
                     {
-                        "case_id": _string_schema("Relic case ID."),
+                        "case_id": _string_schema("Perceptor case ID."),
                         "title": _string_schema("Optional packet title."),
                         "preset": {"type": "string", "enum": ["execution", "usb", "cloud", "documents", "browser", "communications"]},
                         "query": _string_schema("Optional search text."),
@@ -1145,7 +1171,7 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_list_search_packets",
-                title="List Relic Search Packets",
+                title="List Perceptor Search Packets",
                 description="List MCP search packets previously written for a case.",
                 input_schema=_case_limit_schema(default=50),
                 handler=self.list_search_packets,
@@ -1153,7 +1179,7 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_read_search_packet",
-                title="Read Relic Search Packet",
+                title="Read Perceptor Search Packet",
                 description="Read a saved MCP search packet JSON or Markdown resource.",
                 input_schema=_object_schema({"uri": _string_schema("Search packet resource URI.")}, required=["uri"]),
                 handler=self.read_search_packet,
@@ -1161,7 +1187,7 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_rerun_search_packet",
-                title="Rerun Relic Search Packet",
+                title="Rerun Perceptor Search Packet",
                 description="Rerun a saved MCP search packet and compare added, removed, changed, and unchanged result IDs.",
                 input_schema=_object_schema(
                     {
@@ -1175,7 +1201,7 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_ingest_triage_zip_preflight",
-                title="Relic Triage ZIP Preflight",
+                title="Perceptor Triage ZIP Preflight",
                 description="Validate a live-case/report ZIP without importing it.",
                 input_schema=_object_schema(
                     {
@@ -1189,7 +1215,7 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_report_bundle_coverage",
-                title="Relic Report Bundle Coverage",
+                title="Perceptor Report Bundle Coverage",
                 description="Inspect report-bundle parser coverage for a folder or ZIP.",
                 input_schema=_object_schema({"path": _string_schema("Optional report bundle folder or ZIP path.")}),
                 handler=self.report_bundle_coverage,
@@ -1197,19 +1223,19 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_profile_preview",
-                title="Relic Profile Preview",
-                description="Preview extraction and tool coverage for a Relic processing profile.",
-                input_schema=_object_schema({"profile": _string_schema("Relic profile name.")}, required=["profile"]),
+                title="Perceptor Profile Preview",
+                description="Preview extraction and tool coverage for a Perceptor processing profile.",
+                input_schema=_object_schema({"profile": _string_schema("Perceptor profile name.")}, required=["profile"]),
                 handler=self.profile_preview,
                 annotations=read_only,
             ),
             McpTool(
                 name="relic_doctor",
-                title="Relic Doctor",
-                description="Run Relic doctor checks. This MCP tool does not repair dependencies.",
+                title="Perceptor Doctor",
+                description="Run Perceptor doctor checks. This MCP tool does not repair dependencies.",
                 input_schema=_object_schema(
                     {
-                        "case_id": _string_schema("Optional Relic case ID."),
+                        "case_id": _string_schema("Optional Perceptor case ID."),
                         "profile": _string_schema("Optional profile name."),
                         "smoke": {"type": "boolean", "description": "Run a small isolated smoke test.", "default": False},
                     }
@@ -1219,7 +1245,7 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_list_report_types",
-                title="Relic Report Types",
+                title="Perceptor Report Types",
                 description="List report types supported by the generic MCP report runner.",
                 input_schema=_object_schema({}),
                 handler=self.list_report_types,
@@ -1227,7 +1253,7 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_mcp_tool_reference",
-                title="Relic MCP Tool Reference",
+                title="Perceptor MCP Tool Reference",
                 description="Return MCP tool names, permission tiers, annotations, and schemas.",
                 input_schema=_object_schema({}),
                 handler=self.mcp_tool_reference,
@@ -1235,11 +1261,11 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_generate_report",
-                title="Relic Generate Report",
-                description="Return an existing generated report when available; regenerate through the Relic CLI only when regenerate=true or no matching report exists.",
+                title="Perceptor Generate Report",
+                description="Return an existing generated report when available; regenerate through the Perceptor CLI only when regenerate=true or no matching report exists.",
                 input_schema=_object_schema(
                     {
-                        "case_id": _string_schema("Relic case ID."),
+                        "case_id": _string_schema("Perceptor case ID."),
                         "report_name": _string_schema("Supported report name."),
                         "format": {"type": "string", "enum": ["json", "table", "csv", "md"], "default": "json"},
                         "category": _string_schema("Optional report-specific category filter. Supported by event-interpretation."),
@@ -1261,11 +1287,11 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_write_report_bundle",
-                title="Relic Write Report Bundle",
+                title="Perceptor Write Report Bundle",
                 description="Write a purpose-built report bundle under the workspace root.",
                 input_schema=_object_schema(
                     {
-                        "case_id": _string_schema("Relic case ID."),
+                        "case_id": _string_schema("Perceptor case ID."),
                         "output_dir": _string_schema("Output directory under the workspace root."),
                         "purpose": {"type": "string", "enum": ["full", "usb", "cloud", "execution", "memory", "triage", "review"], "default": "full"},
                         "limit": _integer_schema(
@@ -1283,7 +1309,7 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_get_mcp_job",
-                title="Get Relic MCP Job",
+                title="Get Perceptor MCP Job",
                 description="Return persisted status for a long-running process launched by MCP.",
                 input_schema=_object_schema({"mcp_job_id": _string_schema("MCP job ID returned by a processing tool.")}, required=["mcp_job_id"]),
                 handler=self.get_mcp_job,
@@ -1291,7 +1317,7 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_list_mcp_jobs",
-                title="List Relic MCP Jobs",
+                title="List Perceptor MCP Jobs",
                 description="List persisted MCP-launched subprocess jobs.",
                 input_schema=_object_schema(
                     {
@@ -1304,7 +1330,7 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_get_mcp_job_output",
-                title="Get Relic MCP Job Output",
+                title="Get Perceptor MCP Job Output",
                 description="Return stdout/stderr tails and parsed JSON stdout when available for an MCP job.",
                 input_schema=_object_schema(
                     {
@@ -1318,7 +1344,7 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_get_mcp_job_progress",
-                title="Get Relic MCP Job Progress",
+                title="Get Perceptor MCP Job Progress",
                 description="Return structured progress signals parsed from MCP-launched job output.",
                 input_schema=_object_schema(
                     {
@@ -1332,7 +1358,7 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_list_progress_manifests",
-                title="List Relic Progress Manifests",
+                title="List Perceptor Progress Manifests",
                 description="List live report-bundle/import progress manifests under the workspace progress directory.",
                 input_schema=_object_schema(
                     {
@@ -1345,7 +1371,7 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_cancel_mcp_job",
-                title="Cancel Relic MCP Job",
+                title="Cancel Perceptor MCP Job",
                 description="Cancel a running MCP-launched subprocess. Requires --allow-processing.",
                 input_schema=_object_schema({"mcp_job_id": _string_schema("MCP job ID returned by a processing tool.")}, required=["mcp_job_id"]),
                 handler=self.cancel_mcp_job,
@@ -1354,7 +1380,7 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_import_triage_zip",
-                title="Relic Import Triage ZIP",
+                title="Perceptor Import Triage ZIP",
                 description=(
                     "Start a gated bulk live-case/report ZIP import as a background MCP job. Do not use this to answer review "
                     "questions when existing reports or parsed artifacts can answer them."
@@ -1378,7 +1404,7 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_import_report_bundle",
-                title="Relic Import Report Bundle",
+                title="Perceptor Import Report Bundle",
                 description=(
                     "Start a gated single-computer report bundle import as a background MCP job. Do not use this to answer review "
                     "questions when existing reports or parsed artifacts can answer them."
@@ -1400,7 +1426,7 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_process_image",
-                title="Relic Process Image",
+                title="Perceptor Process Image",
                 description=(
                     "Start a gated image processing run as a background MCP job only when the user explicitly asks to process or "
                     "reprocess evidence. Do not use this for read-only questions; use existing reports and parsed artifact tables first."
@@ -1429,15 +1455,15 @@ class RelicMcpServer:
             ),
             McpTool(
                 name="relic_run_profile",
-                title="Relic Run Profile",
+                title="Perceptor Run Profile",
                 description=(
                     "Start a gated profile run against an existing case image as a background MCP job only when the user explicitly "
                     "asks to run processing. Do not use this for read-only questions; use existing reports and parsed artifact tables first."
                 ),
                 input_schema=_object_schema(
                     {
-                        "case_id": _string_schema("Relic case ID."),
-                        "image_id": _string_schema("Relic image ID."),
+                        "case_id": _string_schema("Perceptor case ID."),
+                        "image_id": _string_schema("Perceptor image ID."),
                         "profile": _string_schema("Processing profile name."),
                         "accept_duplicate": {"type": "boolean", "default": False},
                         "replace_existing": {"type": "boolean", "default": False},
@@ -1457,7 +1483,7 @@ class RelicMcpServer:
                 ),
                 input_schema=_object_schema(
                     {
-                        "case_id": _string_schema("Relic case ID."),
+                        "case_id": _string_schema("Perceptor case ID."),
                         "image_id": _string_schema("Optional image ID filter."),
                         "contains": _string_schema("Optional text filter for path or file name."),
                         "name": _string_schema("Optional exact file name filter."),
@@ -3369,6 +3395,9 @@ class RelicMcpServer:
         return {"jsonrpc": "2.0", "id": request_id, "error": error}
 
 
+RelicMcpServer = PerceptorMcpServer
+
+
 def run_mcp_server(
     *,
     root: Path,
@@ -3381,7 +3410,7 @@ def run_mcp_server(
     stdin: TextIO = sys.stdin,
     stdout: TextIO = sys.stdout,
 ) -> int:
-    server = RelicMcpServer(
+    server = PerceptorMcpServer(
         root=root,
         allow_processing=allow_processing,
         allow_sensitive=allow_sensitive,
@@ -3408,7 +3437,7 @@ def run_mcp_server(
             stdout.write(json.dumps(_decode_escaped_unicode(payload), default=str, ensure_ascii=False, separators=(",", ":")) + "\n")
             stdout.flush()
         except json.JSONDecodeError as exc:
-            stdout.write(json.dumps(RelicMcpServer._error(None, -32700, "Parse error", str(exc)), separators=(",", ":")) + "\n")
+            stdout.write(json.dumps(PerceptorMcpServer._error(None, -32700, "Parse error", str(exc)), separators=(",", ":")) + "\n")
             stdout.flush()
     return 0
 
@@ -3693,7 +3722,7 @@ def _resolve_usb_content_image_ids(db: Database, case_id: str, *, volume_name: s
 
 
 def _usb_identity_summary_for_activity_windows(
-    server: RelicMcpServer,
+    server: PerceptorMcpServer,
     case_id: str,
     combined: dict[str, list[dict[str, Any]]],
     *,
@@ -3856,6 +3885,7 @@ def _tool_metadata(tool: McpTool) -> dict[str, Any]:
 
 
 def _infer_tool_category(name: str) -> str:
+    name = _legacy_mcp_tool_name(name)
     if "mcp_job" in name or name.startswith("relic_mcp_") or "progress" in name or "readiness" in name or "doctor" in name:
         return "operations"
     if "report" in name or "packet" in name or "review" in name or "dashboard" in name or "digest" in name or "runbook" in name:
@@ -3880,6 +3910,7 @@ def _infer_tool_category(name: str) -> str:
 
 
 def _infer_tool_tags(name: str, category: str, permission: str) -> tuple[str, ...]:
+    name = _legacy_mcp_tool_name(name)
     tags = {category, permission}
     for token in ("source_of_truth", "filesystem", "cloud", "usb", "memory", "timeline", "report", "processing", "recovery"):
         if token.replace("_", "-") in name or token in name:
@@ -3890,9 +3921,10 @@ def _infer_tool_tags(name: str, category: str, permission: str) -> tuple[str, ..
 
 
 def _infer_tool_dependencies(name: str, permission: str) -> tuple[str, ...]:
+    name = _legacy_mcp_tool_name(name)
     deps = ["orchestrator.sqlite3"]
     if permission == "processing":
-        deps.append("relic CLI")
+        deps.append("perceptor CLI")
     if "report" in name:
         deps.append("generated reports")
     if "filesystem" in name or "evidence_contents" in name or "usb_contents" in name:
@@ -3963,7 +3995,7 @@ def _default_tool_example(tool: McpTool) -> dict[str, Any]:
         elif key == "mcp_job_id":
             arguments[key] = "mcp-job-id"
         elif key == "uri":
-            arguments[key] = "relic://reports/case-id/full/report.json"
+            arguments[key] = "perceptor://reports/case-id/full/report.json"
         elif key == "path":
             arguments[key] = "/path/to/evidence"
         else:
@@ -4228,7 +4260,7 @@ def _object_schema(properties: dict[str, Any], *, required: list[str] | None = N
 def _case_limit_schema(*, default: int) -> dict[str, Any]:
     return _object_schema(
         {
-            "case_id": _string_schema("Relic case ID."),
+            "case_id": _string_schema("Perceptor case ID."),
             "limit": _integer_schema("Maximum rows to return.", default=default, minimum=1, maximum=1000),
         },
         required=["case_id"],
@@ -4238,7 +4270,7 @@ def _case_limit_schema(*, default: int) -> dict[str, Any]:
 def _user_contains_schema(*, default: int) -> dict[str, Any]:
     return _object_schema(
         {
-            "case_id": _string_schema("Relic case ID."),
+            "case_id": _string_schema("Perceptor case ID."),
             "limit": _integer_schema("Maximum rows to return.", default=default, minimum=1, maximum=1000),
             "user": _string_schema("Optional user/profile filter."),
             "contains": _string_schema("Optional text filter."),
@@ -4335,12 +4367,12 @@ def _input_path(root: Path, value: str) -> Path:
     allowed_roots = _allowed_input_roots(root)
     if not any(resolved == allowed or _is_relative_to(resolved, allowed) for allowed in allowed_roots):
         roots = ", ".join(_display_path(path) for path in allowed_roots)
-        raise ValueError(f"MCP input path is outside allowed evidence roots. Configure RELIC_MCP_ALLOWED_INPUT_ROOTS if needed. Allowed roots: {roots}")
+        raise ValueError(f"MCP input path is outside allowed evidence roots. Configure PERCEPTOR_MCP_ALLOWED_INPUT_ROOTS if needed. Allowed roots: {roots}")
     return resolved
 
 
 def _allowed_input_roots(root: Path) -> list[Path]:
-    configured = os.environ.get("RELIC_MCP_ALLOWED_INPUT_ROOTS", "")
+    configured = os.environ.get("PERCEPTOR_MCP_ALLOWED_INPUT_ROOTS") or os.environ.get("RELIC_MCP_ALLOWED_INPUT_ROOTS", "")
     values = [value for value in configured.split(os.pathsep) if value.strip()]
     if not values:
         values = [str(root), str(Path.cwd()), str(Path.home()), "/mnt", "/media", "/tmp"]
@@ -4535,7 +4567,7 @@ def _resource_metadata(root: Path, path: Path, *, case_id: str | None = None, ki
         tags = sorted(set(tags) | {"packet", "review" if "review-packet" in path.name else "search"})
     if not tags and report_name:
         tags = sorted(_expected_report_names("usb") & {report_name}) or []
-    description = f"Relic {inferred_kind} resource"
+    description = f"Perceptor {inferred_kind} resource"
     if inferred_case:
         description += f" for case {inferred_case}"
     description += f" ({stat.st_size} bytes)"
@@ -5417,7 +5449,7 @@ def _mcp_workflow_guide() -> dict[str, Any]:
         {"order": 18, "tool": "relic_write_report_bundle", "purpose": "Export a review bundle for handoff or UI consumption. Use purpose=review for MCP/operator review packs."},
     ]
     return {
-        "title": "Relic MCP Workflow Guide",
+        "title": "Perceptor MCP Workflow Guide",
         "summary": {"step_count": len(steps)},
         "steps": steps,
         "recommended_presets": ["execution", "usb", "cloud", "documents", "browser", "communications"],
@@ -5508,12 +5540,13 @@ def _is_text_resource(path: Path) -> bool:
 
 
 def _resource_uri(relative: Path) -> str:
-    return "relic://workspace/" + quote(str(relative).replace("\\", "/"), safe="/")
+    return "perceptor://workspace/" + quote(str(relative).replace("\\", "/"), safe="/")
 
 
 def _path_from_resource_uri(root: Path, uri: str) -> Path:
-    prefix = "relic://workspace/"
-    if not uri.startswith(prefix):
+    prefixes = ("perceptor://workspace/", "relic://workspace/")
+    prefix = next((candidate for candidate in prefixes if uri.startswith(candidate)), "")
+    if not prefix:
         raise ValueError(f"Unsupported resource URI: {uri}")
     relative = unquote(uri[len(prefix):])
     return _workspace_path(root, relative)
@@ -5572,7 +5605,9 @@ def _json_value(value: Any, default: Any) -> Any:
 
 
 def _package_version() -> str:
-    try:
-        return version("forensic-orchestrator")
-    except PackageNotFoundError:
-        return "0.1.0"
+    for package in ("perceptor", "forensic-orchestrator"):
+        try:
+            return version(package)
+        except PackageNotFoundError:
+            continue
+    return "0.1.0"

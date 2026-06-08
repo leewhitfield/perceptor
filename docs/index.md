@@ -1,6 +1,6 @@
-# Relic Documentation
+# Perceptor Documentation
 
-Relic is a CLI-first forensic processing and reporting tool. It processes disk
+Perceptor is a CLI-first forensic processing and reporting tool. It processes disk
 images, imports live-response/report bundles, normalizes artifact output into a
 case database, deduplicates derived artifacts, and generates investigator-facing
 reports.
@@ -20,7 +20,7 @@ so it can be hosted as a small internal manual.
   sources, and current coverage boundaries.
 - [Field Readiness](operations/field-readiness.md): evidence integrity,
   preflight checks, limits, resumability, and field caveats.
-- [MCP Overview](mcp/overview.md): connecting Relic to MCP-capable clients.
+- [MCP Overview](mcp/overview.md): connecting Perceptor to MCP-capable clients.
 
 ## Current Support Boundary
 

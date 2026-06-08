@@ -189,62 +189,6 @@ wheels = [
 ]
 
 [[package]]
-name = "forensic-orchestrator"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "beautifulsoup4" },
-    { name = "cerberus" },
-    { name = "dissect-cstruct" },
-    { name = "dissect-esedb" },
-    { name = "dissect-etl" },
-    { name = "dissect-thumbcache" },
-    { name = "duckdb" },
-    { name = "lxml" },
-    { name = "lz4" },
-    { name = "numpy" },
-    { name = "pandas" },
-    { name = "plyvel" },
-    { name = "pycryptodome" },
-    { name = "pypdf" },
-    { name = "python-magic" },
-    { name = "python-registry" },
-    { name = "pyyaml" },
-    { name = "quickxorhash" },
-    { name = "ruamel-yaml" },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "pytest" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "beautifulsoup4", specifier = ">=4.14.3" },
-    { name = "cerberus", specifier = ">=1.3.8" },
-    { name = "dissect-cstruct", specifier = ">=4" },
-    { name = "dissect-esedb", specifier = ">=3.18" },
-    { name = "dissect-etl", specifier = ">=3.9" },
-    { name = "dissect-thumbcache", specifier = ">=1.11" },
-    { name = "duckdb", specifier = ">=1.5.2" },
-    { name = "lxml", specifier = ">=6.1.0" },
-    { name = "lz4", specifier = ">=4.4.0" },
-    { name = "numpy", specifier = "==2.2.6" },
-    { name = "pandas", specifier = "==2.2.3" },
-    { name = "plyvel", specifier = ">=1.5.1" },
-    { name = "pycryptodome", specifier = ">=3.23.0" },
-    { name = "pypdf", specifier = ">=6.12.1" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "python-magic", specifier = ">=0.4.27" },
-    { name = "python-registry", specifier = ">=1.3.1" },
-    { name = "pyyaml", specifier = ">=6.0" },
-    { name = "quickxorhash", specifier = ">=1.0.5" },
-    { name = "ruamel-yaml", specifier = ">=0.19.1" },
-]
-provides-extras = ["dev"]
-
-[[package]]
 name = "iniconfig"
 version = "2.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -500,6 +444,62 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/cc/57/0f72a10f9db6a4628744c8e8f0df4e6e21de01212c7c981d31e50ffc8328/pandas-2.2.3-cp313-cp313t-musllinux_1_2_aarch64.whl", hash = "sha256:15c0e1e02e93116177d29ff83e8b1619c93ddc9c49083f237d4312337a61165d", size = 15711620, upload-time = "2024-09-20T19:02:20.639Z" },
     { url = "https://files.pythonhosted.org/packages/ab/5f/b38085618b950b79d2d9164a711c52b10aefc0ae6833b96f626b7021b2ed/pandas-2.2.3-cp313-cp313t-musllinux_1_2_x86_64.whl", hash = "sha256:ad5b65698ab28ed8d7f18790a0dc58005c7629f227be9ecc1072aa74c0c1d43a", size = 13098436, upload-time = "2024-09-20T13:09:48.112Z" },
 ]
+
+[[package]]
+name = "perceptor"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "beautifulsoup4" },
+    { name = "cerberus" },
+    { name = "dissect-cstruct" },
+    { name = "dissect-esedb" },
+    { name = "dissect-etl" },
+    { name = "dissect-thumbcache" },
+    { name = "duckdb" },
+    { name = "lxml" },
+    { name = "lz4" },
+    { name = "numpy" },
+    { name = "pandas" },
+    { name = "plyvel" },
+    { name = "pycryptodome" },
+    { name = "pypdf" },
+    { name = "python-magic" },
+    { name = "python-registry" },
+    { name = "pyyaml" },
+    { name = "quickxorhash" },
+    { name = "ruamel-yaml" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "beautifulsoup4", specifier = ">=4.14.3" },
+    { name = "cerberus", specifier = ">=1.3.8" },
+    { name = "dissect-cstruct", specifier = ">=4" },
+    { name = "dissect-esedb", specifier = ">=3.18" },
+    { name = "dissect-etl", specifier = ">=3.9" },
+    { name = "dissect-thumbcache", specifier = ">=1.11" },
+    { name = "duckdb", specifier = ">=1.5.2" },
+    { name = "lxml", specifier = ">=6.1.0" },
+    { name = "lz4", specifier = ">=4.4.0" },
+    { name = "numpy", specifier = "==2.2.6" },
+    { name = "pandas", specifier = "==2.2.3" },
+    { name = "plyvel", specifier = ">=1.5.1" },
+    { name = "pycryptodome", specifier = ">=3.23.0" },
+    { name = "pypdf", specifier = ">=6.12.1" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
+    { name = "python-magic", specifier = ">=0.4.27" },
+    { name = "python-registry", specifier = ">=1.3.1" },
+    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "quickxorhash", specifier = ">=1.0.5" },
+    { name = "ruamel-yaml", specifier = ">=0.19.1" },
+]
+provides-extras = ["dev"]
 
 [[package]]
 name = "pluggy"

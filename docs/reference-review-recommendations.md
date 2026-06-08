@@ -33,8 +33,8 @@ Expected behavior:
 Initial support is available through:
 
 ```bash
-forensic-orchestrator --root /case/root cloud import-logs --case CASE_ID --path /evidence/cloud-export
-forensic-orchestrator --root /case/root report cloud-server-events --case CASE_ID --format table
+perceptor --root /case/root cloud import-logs --case CASE_ID --path /evidence/cloud-export
+perceptor --root /case/root report cloud-server-events --case CASE_ID --format table
 ```
 
 The importer accepts CSV, JSON, JSONL, and directories containing those files.
@@ -49,8 +49,8 @@ on-disk memory-adjacent artifacts, the first-pass workflow is targeted string
 triage:
 
 ```bash
-forensic-orchestrator --root /case/root memory strings --case CASE_ID --path /mounted/hiberfil.sys
-forensic-orchestrator --root /case/root report memory-string-hits --case CASE_ID --format table
+perceptor --root /case/root memory strings --case CASE_ID --path /mounted/hiberfil.sys
+perceptor --root /case/root report memory-string-hits --case CASE_ID --format table
 ```
 
 If a supported hiberfil decompressor is available (`hibr2bin` or

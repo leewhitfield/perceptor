@@ -1,6 +1,6 @@
-site_name: Relic
-site_description: Relic forensic processing and reporting operator documentation
-repo_url: https://github.com/example/relic
+site_name: Perceptor
+site_description: Perceptor forensic processing and reporting operator documentation
+repo_url: https://github.com/example/perceptor
 edit_uri: ""
 docs_dir: docs
 theme:

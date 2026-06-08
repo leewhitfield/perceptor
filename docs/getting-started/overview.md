@@ -1,6 +1,6 @@
 # Overview
 
-Relic stores each investigation in a workspace root. A workspace contains cases,
+Perceptor stores each investigation in a workspace root. A workspace contains cases,
 computers, images, logs, extracted artifacts, parsed analytics data, progress
 manifests, generated reports, and MCP job state.
 
@@ -18,30 +18,31 @@ manifests, generated reports, and MCP job state.
   progress, and metadata.
 - **Report bundle**: generated Markdown, JSON, and CSV reports under a case
   output directory.
-- **MCP server**: a local stdio server that lets MCP-capable clients query Relic.
+- **MCP server**: a local stdio server that lets MCP-capable clients query Perceptor.
 
 ## Executable Names
 
-Relic installs two command names:
+Perceptor installs the preferred command name plus legacy compatibility aliases:
 
 ```bash
+perceptor
 relic
 forensic-orchestrator
 ```
 
-Examples use `uv run relic`. If Relic is installed as a console script, omit
+Examples use `uv run perceptor`. If Perceptor is installed as a console script, omit
 `uv run`.
 
 ## Global Command Shape
 
 ```bash
-uv run relic [--root ROOT] [--config CONFIG] [--plugin PLUGIN] [--dry-run] COMMAND ...
+uv run perceptor [--root ROOT] [--config CONFIG] [--plugin PLUGIN] [--dry-run] COMMAND ...
 ```
 
 Use the same `--root` for all commands that read or write a case.
 
 ```bash
-uv run relic --root ~/analysis/my-case-root ...
+uv run perceptor --root ~/analysis/my-case-root ...
 ```
 
 ## Storage Guidance

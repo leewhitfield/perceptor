@@ -1,6 +1,6 @@
 # File Listings
 
-Relic generates file listings for filesystems, including NTFS, FAT, and exFAT
+Perceptor generates file listings for filesystems, including NTFS, FAT, and exFAT
 where supported by the mounted or parser workflow. These listings are stored in
 `filesystem_entries`.
 
@@ -32,9 +32,9 @@ The MCP router will recommend these tools for contents and filesystem questions.
 Use file movement, removable media, and USB reports for interpreted context:
 
 ```bash
-uv run relic --root ~/analysis/case-root report usb-files --case CASE_ID --format md
-uv run relic --root ~/analysis/case-root report opened-from-removable-media --case CASE_ID --format md
-uv run relic --root ~/analysis/case-root report file-movement-identity --case CASE_ID --format md
+uv run perceptor --root ~/analysis/case-root report usb-files --case CASE_ID --format md
+uv run perceptor --root ~/analysis/case-root report opened-from-removable-media --case CASE_ID --format md
+uv run perceptor --root ~/analysis/case-root report file-movement-identity --case CASE_ID --format md
 ```
 
 ## Deleted Rows

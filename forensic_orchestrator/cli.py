@@ -44,7 +44,7 @@ from .mounting.vsc_recycle import run_vsc_recycle_scan
 from .mounting.vsc_search import run_vsc_windows_search_scan
 from .mounting.vsc_file_history import build_vsc_file_history_report
 from .mounting.vsc_profile import VSC_PROFILES, run_vsc_profile_scan
-from .mcp_server import RelicMcpServer, run_mcp_server
+from .mcp_server import PerceptorMcpServer, run_mcp_server
 from .paths import WorkspacePaths
 from .processing_scheduler import ProcessingTask, run_processing_tasks
 from .report_paths import sanitize_report_paths, sanitize_report_text
@@ -505,7 +505,7 @@ def write_json_output(value: object, output: str | None = None) -> None:
 
 def _standalone_install_progress(args: argparse.Namespace) -> Callable[[str], None]:
     def progress(message: str) -> None:
-        print(f"[relic install] {message}", file=sys.stderr, flush=True)
+        print(f"[perceptor install] {message}", file=sys.stderr, flush=True)
 
     return progress
 
@@ -1524,10 +1524,12 @@ def _progress(progress: Callable[[str], None] | None, message: str) -> None:
 
 
 def _package_version() -> str:
-    try:
-        return metadata.version("forensic-orchestrator")
-    except metadata.PackageNotFoundError:
-        return "0.1.0"
+    for package in ("perceptor", "forensic-orchestrator"):
+        try:
+            return metadata.version(package)
+        except metadata.PackageNotFoundError:
+            continue
+    return "0.1.0"
 
 
 def _sha256_file(path: Path) -> str:
@@ -1558,7 +1560,7 @@ def _write_bundle_manifest(output_dir: Path, *, case_id: str, purpose: str) -> d
         "case_id": case_id,
         "purpose": purpose,
         "generated_at": generated_at,
-        "relic_version": _package_version(),
+        "perceptor_version": _package_version(),
         "bundle_dir": str(output_dir),
         "summary": {
             "file_count": len(files),
@@ -1849,56 +1851,56 @@ def review_status_report(db: Database, paths: WorkspacePaths, case_id: str, *, l
             "status": "needs_action" if (readiness.get("summary") or {}).get("required_needs_action_count") else "ok",
             "count": (readiness.get("summary") or {}).get("required_needs_action_count", 0),
             "summary": "Required readiness items needing action.",
-            "command": f"relic --root {paths.root} report processing-readiness --case {case_id} --format table",
+            "command": f"perceptor --root {paths.root} report processing-readiness --case {case_id} --format table",
         },
         {
             "category": "processing",
             "status": "needs_action" if (progress.get("summary") or {}).get("failed_timing_count") else "ok",
             "count": (progress.get("summary") or {}).get("failed_timing_count", 0),
             "summary": "Failed processing timing records.",
-            "command": f"relic --root {paths.root} report progress --case {case_id} --format table",
+            "command": f"perceptor --root {paths.root} report progress --case {case_id} --format table",
         },
         {
             "category": "reports",
             "status": "stale" if (freshness.get("summary") or {}).get("stale_count") else "ok",
             "count": (freshness.get("summary") or {}).get("stale_count", 0),
             "summary": "Generated reports older than latest case activity.",
-            "command": f"relic --root {paths.root} report review-status --case {case_id} --format json",
+            "command": f"perceptor --root {paths.root} report review-status --case {case_id} --format json",
         },
         {
             "category": "packets",
             "status": "changed" if (changed_packets.get("summary") or {}).get("changed_packet_count") else "ok",
             "count": (changed_packets.get("summary") or {}).get("changed_packet_count", 0),
             "summary": "Saved search packets with added, removed, or changed results.",
-            "command": f"relic --root {paths.root} report changed-search-packets --case {case_id} --format md",
+            "command": f"perceptor --root {paths.root} report changed-search-packets --case {case_id} --format md",
         },
         {
             "category": "packet_health",
             "status": "needs_action" if (packet_health.get("summary") or {}).get("bad_packet_count") else "ok",
             "count": (packet_health.get("summary") or {}).get("bad_packet_count", 0),
             "summary": "Malformed or unusable saved search packets.",
-            "command": f"relic --root {paths.root} report review-status --case {case_id} --format json",
+            "command": f"perceptor --root {paths.root} report review-status --case {case_id} --format json",
         },
         {
             "category": "unmapped_imports",
             "status": "needs_action" if (unmapped.get("summary") or {}).get("unmapped_count") else "ok",
             "count": (unmapped.get("summary") or {}).get("unmapped_count", 0),
             "summary": "Imported files without parser mapping.",
-            "command": f"relic --root {paths.root} report unmapped-imports --case {case_id} --format table",
+            "command": f"perceptor --root {paths.root} report unmapped-imports --case {case_id} --format table",
         },
         {
             "category": "next_actions",
             "status": "review",
             "count": (next_actions.get("summary") or {}).get("action_count", 0),
             "summary": "Ranked suggested investigative actions.",
-            "command": f"relic --root {paths.root} report next-actions --case {case_id} --format table",
+            "command": f"perceptor --root {paths.root} report next-actions --case {case_id} --format table",
         },
         {
             "category": "bundle_quality",
             "status": str((bundle_quality.get("summary") or {}).get("status") or "unknown"),
             "count": (bundle_quality.get("summary") or {}).get("warning_count", 0),
             "summary": "Latest bundle-quality checks.",
-            "command": f"relic --root {paths.root} report write-bundle --case {case_id} --purpose review",
+            "command": f"perceptor --root {paths.root} report write-bundle --case {case_id} --purpose review",
         },
     ]
     return {
@@ -1941,17 +1943,17 @@ def case_runbook_report(db: Database, paths: WorkspacePaths, case_id: str, *, li
         commands.append({"order": order, "command": command, "reason": reason, "safe": safe})
 
     root = str(paths.root)
-    add(1, f"uv run relic --root {root} standalone doctor --smoke --format table", "Confirm installation and smoke path.")
-    add(2, f"uv run relic --root {root} report review-status --case {case_id} --format table", "Check the current operator status.")
-    add(3, f"uv run relic --root {root} report workspace-map --case {case_id} --format json", "Map computers, images, reports, packets, and jobs.")
-    add(4, f"uv run relic --root {root} report artifact-search-sources --case {case_id} --format table", "Confirm searchable artifact coverage.")
+    add(1, f"uv run perceptor --root {root} standalone doctor --smoke --format table", "Confirm installation and smoke path.")
+    add(2, f"uv run perceptor --root {root} report review-status --case {case_id} --format table", "Check the current operator status.")
+    add(3, f"uv run perceptor --root {root} report workspace-map --case {case_id} --format json", "Map computers, images, reports, packets, and jobs.")
+    add(4, f"uv run perceptor --root {root} report artifact-search-sources --case {case_id} --format table", "Confirm searchable artifact coverage.")
     order = 5
     for item in status.get("items") or []:
         if isinstance(item, dict) and item.get("status") not in {"ok", "current"} and item.get("command"):
             add(order, str(item["command"]), str(item.get("summary") or item.get("category") or "Review status item."))
             order += 1
-    add(order, f"uv run relic --root {root} report write-bundle --case {case_id} --purpose review", "Generate the review bundle.")
-    add(order + 1, f"uv run relic --root {root} report handoff-package --case {case_id} --bundle-dir {paths.outputs_dir(case_id) / 'reports' / 'review-bundle'} --output {paths.outputs_dir(case_id) / 'reports' / f'{case_id}-handoff.zip'}", "Package reports, packets, quality, and manifest for handoff.")
+    add(order, f"uv run perceptor --root {root} report write-bundle --case {case_id} --purpose review", "Generate the review bundle.")
+    add(order + 1, f"uv run perceptor --root {root} report handoff-package --case {case_id} --bundle-dir {paths.outputs_dir(case_id) / 'reports' / 'review-bundle'} --output {paths.outputs_dir(case_id) / 'reports' / f'{case_id}-handoff.zip'}", "Package reports, packets, quality, and manifest for handoff.")
     return {"case_id": case_id, "summary": {"command_count": len(commands)}, "commands": commands[:limit], "review_status": status}
 
 
@@ -1981,7 +1983,7 @@ def write_handoff_package(db: Database, paths: WorkspacePaths, case_id: str, bun
     manifest = {
         "case_id": case_id,
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "relic_version": _package_version(),
+        "perceptor_version": _package_version(),
         "bundle_dir": str(bundle_root),
         "files": [
             {
@@ -2555,7 +2557,7 @@ def usb_timeline_table(report: dict[str, object]) -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="forensic-orchestrator")
+    parser = argparse.ArgumentParser(prog="perceptor")
     parser.add_argument("--root", help="Workspace root directory")
     parser.add_argument("--config", help="YAML config file with root and plugins values")
     parser.add_argument("--plugin", action="append", help="Tool plugin YAML path")
@@ -2576,8 +2578,8 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_serve.add_argument("--allow-processing", action="store_true", help="Permit MCP import and processing tools")
     mcp_serve.add_argument("--allow-sensitive", action="store_true", help="Reserve permission for future sensitive MCP tools")
     mcp_serve.add_argument("--allow-external-ai", action="store_true", help="Reserve permission for future external-AI MCP tools")
-    mcp_serve.add_argument("--auth-token", help="Require this token on MCP JSON-RPC requests; RELIC_MCP_TOKEN is also honored")
-    mcp_serve.add_argument("--max-running-jobs", type=int, help="Maximum concurrent MCP-launched processing jobs; defaults to RELIC_MCP_MAX_RUNNING_JOBS or 4")
+    mcp_serve.add_argument("--auth-token", help="Require this token on MCP JSON-RPC requests; PERCEPTOR_MCP_TOKEN is also honored")
+    mcp_serve.add_argument("--max-running-jobs", type=int, help="Maximum concurrent MCP-launched processing jobs; defaults to PERCEPTOR_MCP_MAX_RUNNING_JOBS or 4")
 
     case = subparsers.add_parser("case")
     case_sub = case.add_subparsers(dest="action", required=True)
@@ -4723,7 +4725,7 @@ def _bulk_import_payload(result, *, written_reports: dict[str, object] | None = 
 
 
 def standalone_smoke_regression_report(registry: ToolRegistry, plugin_paths: list[Path]) -> dict[str, object]:
-    with tempfile.TemporaryDirectory(prefix="relic-standalone-smoke-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="perceptor-standalone-smoke-") as tmp:
         root = Path(tmp) / "workspace"
         paths = WorkspacePaths(root)
         paths.ensure_root()
@@ -4769,7 +4771,7 @@ def standalone_smoke_regression_report(registry: ToolRegistry, plugin_paths: lis
             failed_outputs = [row for row in validation.get("files", []) if row.get("status") != "ok"]
             checks.append({"name": "report_bundle_validated", "passed": not failed_outputs, "details": validation.get("summary")})
 
-            mcp_tools = RelicMcpServer(root=paths.root, plugin_paths=plugin_paths).handle_message({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+            mcp_tools = PerceptorMcpServer(root=paths.root, plugin_paths=plugin_paths).handle_message({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
             tool_count = len((((mcp_tools or {}).get("result") or {}).get("tools") or []))
             checks.append({"name": "mcp_tool_listing", "passed": tool_count > 0, "details": {"tool_count": tool_count}})
 
@@ -4905,7 +4907,7 @@ def run(args: argparse.Namespace) -> int:
                 except PermissionError as exc:
                     if args.case_id:
                         raise OrchestratorError(f"Workspace root is not writable: {paths.root}") from exc
-                    temp_dir = tempfile.TemporaryDirectory(prefix="relic-doctor-")
+                    temp_dir = tempfile.TemporaryDirectory(prefix="perceptor-doctor-")
                     doctor_db = Database(Path(temp_dir.name) / "doctor.sqlite")
                 report = doctor_report(
                     doctor_db,
@@ -7801,7 +7803,7 @@ def run(args: argparse.Namespace) -> int:
                 "limit": args.limit,
                 "returned": len(rows),
                 "extractions": rows,
-                "note": "Rows show files Relic materialized from evidence for parser use; sha256 hashes are of the extracted copies.",
+                "note": "Rows show files Perceptor materialized from evidence for parser use; sha256 hashes are of the extracted copies.",
             }
             if args.format == "json":
                 write_text_output(json.dumps(report, indent=2, default=str), args.output)

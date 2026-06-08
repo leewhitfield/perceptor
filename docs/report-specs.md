@@ -48,7 +48,7 @@ Constraints:
 Run specs with:
 
 ```bash
-uv run python -m forensic_orchestrator.cli report specs
-uv run python -m forensic_orchestrator.cli report spec --case <case-id> --name mft-recent --format table
-uv run python -m forensic_orchestrator.cli --plugin ./my-plugin.yaml report spec --case <case-id> --name <plugin-report>
+uv run perceptor report specs
+uv run perceptor report spec --case <case-id> --name mft-recent --format table
+uv run perceptor --plugin ./my-plugin.yaml report spec --case <case-id> --name <plugin-report>
 ```

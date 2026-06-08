@@ -6,7 +6,7 @@ evidence.
 ## Basic Processing
 
 ```bash
-uv run relic --root ~/analysis/case-root process \
+uv run perceptor --root ~/analysis/case-root process \
   --path ~/evidence/host.E01 \
   --computer-label HOST01 \
   --profile windows-full \
@@ -42,7 +42,7 @@ Deep recovery work should stay out of `windows-full` unless explicitly needed.
 
 ## Image Preparation
 
-Relic detects volume images and full disk images. It uses `fsstat` for direct
+Perceptor detects volume images and full disk images. It uses `fsstat` for direct
 volume detection and `mmls` for partition discovery when needed. EWF images use
 Sleuth Kit directly when possible, with `ewfmount` fallback. VHD, VHDX, and VMDK
 sources are converted with `qemu-img` into case-local raw images.
@@ -50,16 +50,16 @@ sources are converted with `qemu-img` into case-local raw images.
 ## Mounting
 
 The normal parser flow does not require a kernel mount for every artifact. When
-`--filesystem` is supplied, Relic mounts read-only and prefers mounted-volume
+`--filesystem` is supplied, Perceptor mounts read-only and prefers mounted-volume
 access for file inventory and parsers that benefit from filesystem paths.
 
 For normal full-image processing, include `--filesystem`. If `--filesystem` is
-omitted, Relic does not attempt a mounted-volume workflow and will rely on
+omitted, Perceptor does not attempt a mounted-volume workflow and will rely on
 Sleuth Kit extraction where possible. That fallback is useful for recovery and
 for systems without mount privileges, but it is slower for broad recursive
 artifact extraction.
 
-Use `--sudo` only after configuring non-interactive sudo for Relic mount and
+Use `--sudo` only after configuring non-interactive sudo for Perceptor mount and
 unmount commands. The sudoers rule is documented in
 [Mounted Image Notes](../mounted-image-notes.md).
 
@@ -72,5 +72,5 @@ user_allow_other
 Clean stale mounts:
 
 ```bash
-uv run relic --root ~/analysis/case-root image cleanup-stale-mounts --format table
+uv run perceptor --root ~/analysis/case-root image cleanup-stale-mounts --format table
 ```

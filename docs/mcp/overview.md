@@ -1,18 +1,18 @@
 # MCP Overview
 
-Relic exposes a local MCP stdio server for MCP-capable clients such as Codex or
+Perceptor exposes a local MCP stdio server for MCP-capable clients such as Codex or
 Claude Desktop style clients.
 
 ## Start the Server
 
 ```bash
-uv run relic --root ~/analysis/case-root mcp serve
+uv run perceptor --root ~/analysis/case-root mcp serve
 ```
 
 Enable processing tools only when needed:
 
 ```bash
-uv run relic --root ~/analysis/case-root mcp serve --allow-processing
+uv run perceptor --root ~/analysis/case-root mcp serve --allow-processing
 ```
 
 Additional gates:
@@ -56,7 +56,7 @@ Tool calls are audited in:
 ROOT/mcp-jobs/audit.jsonl
 ```
 
-For MCP-launched processing jobs, Relic stores the launched CLI command, stdout,
+For MCP-launched processing jobs, Perceptor stores the launched CLI command, stdout,
 stderr, status, PID, timestamps, and return code under `ROOT/mcp-jobs/`. For
 deleted-file recovery, the exact per-candidate `icat` command is also recorded
 in the recovery manifest:

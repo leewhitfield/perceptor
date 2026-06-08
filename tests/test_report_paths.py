@@ -35,6 +35,12 @@ def test_display_evidence_path_strips_case_artifact_prefixes():
     )
     assert (
         display_evidence_path(
+            "/tmp/perceptor-mounts/cases/292bcc9d-e60b-4260-9cae-3078df55889b/volumes/p2/Users/Jane/Documents/report.docx"
+        )
+        == "/Users/Jane/Documents/report.docx"
+    )
+    assert (
+        display_evidence_path(
             "/mnt/forensic-ssd/cases/case-1/artifacts/image-1/ProgramData/Microsoft/Search/Data/Applications/Windows/Windows.db"
         )
         == "/ProgramData/Microsoft/Search/Data/Applications/Windows/Windows.db"
@@ -43,12 +49,12 @@ def test_display_evidence_path_strips_case_artifact_prefixes():
 
 def test_display_evidence_path_strips_uuid_case_prefixes():
     case_path = (
-        "/mnt/forensic-ssd/relic-sample-case/cases/"
+        "/mnt/forensic-ssd/perceptor-sample-case/cases/"
         "292bcc9d-e60b-4260-9cae-3078df55889b/mounts/volumes/p2/Windows/System32/mstsc.exe"
     )
     assert display_evidence_path(case_path) == "/Windows/System32/mstsc.exe"
     output_path = (
-        "/mnt/forensic-ssd/relic-sample-case/cases/"
+        "/mnt/forensic-ssd/perceptor-sample-case/cases/"
         "292bcc9d-e60b-4260-9cae-3078df55889b/outputs/run/JLECmd.csv"
     )
     assert display_evidence_path(output_path) == "/outputs/run/JLECmd.csv"
@@ -62,7 +68,7 @@ def test_display_evidence_path_strips_uuid_case_prefixes():
 def test_sanitize_report_paths_only_touches_path_like_fields():
     report = {
         "source_csv": (
-            "/mnt/forensic-ssd/relic-sample-case/cases/"
+            "/mnt/forensic-ssd/perceptor-sample-case/cases/"
             "292bcc9d-e60b-4260-9cae-3078df55889b/outputs/run/JLECmd.csv"
         ),
         "file_location": r"C:\Windows\System32\mstsc.exe",
@@ -77,7 +83,7 @@ def test_sanitize_report_paths_only_touches_path_like_fields():
 
 def test_sanitize_report_text_strips_case_prefixes_and_drive_letters():
     text = (
-        "source `/mnt/forensic-ssd/relic-sample-case/cases/"
+        "source `/mnt/forensic-ssd/perceptor-sample-case/cases/"
         "292bcc9d-e60b-4260-9cae-3078df55889b/outputs/run/JLECmd.csv` "
         "target `C:\\Windows\\System32\\mstsc.exe` alt `D:\\Evidence\\file.txt`"
     )

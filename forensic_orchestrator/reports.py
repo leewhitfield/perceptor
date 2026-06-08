@@ -11825,7 +11825,7 @@ def event_interpretation_report(
               '4663', '4656', '4660', '4658', '4664',
               '1006', '1007', '1015', '1116', '1117', '1118', '1119', '5007',
               '106', '129', '140', '141', '200', '201',
-              '21', '22', '24', '25', '1024', '1149',
+              '21', '22', '24', '25', '1010', '1024', '1149',
               '20221', '20223', '20226'
             )
             OR LOWER(COALESCE(provider, '') || ' ' || COALESCE(channel, '') || ' ' || COALESCE(source_file, '')) LIKE '%powershell%'
@@ -14492,7 +14492,7 @@ def _normalize_usb_file_access_precision(row: dict[str, Any]) -> None:
     row["target_accessed"] = access_date
     row["target_accessed_precision"] = "date"
     row["target_accessed_note"] = (
-        "FAT stores last access as a date only; source tool supplied a synthetic time component, so Relic reports the access value as date-only."
+        "FAT stores last access as a date only; source tool supplied a synthetic time component, so Perceptor reports the access value as date-only."
     )
 
 
@@ -21529,7 +21529,13 @@ def workspace_health_report(db: Database, case_id: str | None = None, *, min_fre
     case = db.get_case(case_id) if case_id else None
     db_path = Path(db.path)
     workspace_root = db_path.parent
-    temp_root = Path(os.environ.get("RELIC_TMPDIR") or os.environ.get("DUCKDB_TMPDIR") or os.environ.get("TMPDIR") or "/tmp")
+    temp_root = Path(
+        os.environ.get("PERCEPTOR_TMPDIR")
+        or os.environ.get("RELIC_TMPDIR")
+        or os.environ.get("DUCKDB_TMPDIR")
+        or os.environ.get("TMPDIR")
+        or "/tmp"
+    )
     paths = [
         _disk_usage_row(workspace_root, label="workspace", min_free_gb=min_free_gb),
         _disk_usage_row(db_path, label="sqlite_database", min_free_gb=min_free_gb),
@@ -21578,6 +21584,7 @@ def workspace_health_report(db: Database, case_id: str | None = None, *, min_fre
         "environment": {
             "tmpdir": os.environ.get("TMPDIR") or "",
             "duckdb_tmpdir": os.environ.get("DUCKDB_TMPDIR") or "",
+            "perceptor_tmpdir": os.environ.get("PERCEPTOR_TMPDIR") or "",
             "relic_tmpdir": os.environ.get("RELIC_TMPDIR") or "",
         },
         "paths": paths,
@@ -21831,13 +21838,13 @@ def resume_plan_report(db: Database, case_id: str, *, limit: int = 50) -> dict[s
     decisions = processing_decision_report(db, case_id, limit=limit)
     failed = progress.get("failed_timings") or []
     commands = [
-        f"relic --root <workspace> report workspace-health --case {case_id}",
-        f"relic --root <workspace> case rebuild-postprocess {case_id}",
-        f"relic --root <workspace> report processing-decisions --case {case_id}",
-        f"relic --root <workspace> report regression-smoke --case {case_id}",
+        f"perceptor --root <workspace> report workspace-health --case {case_id}",
+        f"perceptor --root <workspace> case rebuild-postprocess {case_id}",
+        f"perceptor --root <workspace> report processing-decisions --case {case_id}",
+        f"perceptor --root <workspace> report regression-smoke --case {case_id}",
     ]
     if failed:
-        commands.insert(1, f"relic --root <workspace> report process-timings --case {case_id} --format table")
+        commands.insert(1, f"perceptor --root <workspace> report process-timings --case {case_id} --format table")
     return {
         "case_id": case_id,
         "summary": {
@@ -24644,9 +24651,11 @@ def _memory_tool_availability() -> list[dict[str, str]]:
 
 def _tool_root_candidates(*relative_paths: str) -> list[str]:
     roots: list[Path] = []
+    if os.environ.get("PERCEPTOR_TOOLS_ROOT"):
+        roots.append(Path(os.environ["PERCEPTOR_TOOLS_ROOT"]).expanduser())
     if os.environ.get("FORENSIC_ORCHESTRATOR_TOOLS_ROOT"):
         roots.append(Path(os.environ["FORENSIC_ORCHESTRATOR_TOOLS_ROOT"]).expanduser())
-    roots.extend([Path("/opt/relic-tools"), Path.home() / "tools"])
+    roots.extend([Path("/opt/perceptor-tools"), Path("/opt/relic-tools"), Path.home() / "tools"])
     output: list[str] = []
     seen: set[str] = set()
     for root in roots:
@@ -27789,6 +27798,7 @@ def _interpret_evtx_row(row: Any) -> dict[str, Any] | None:
         or "smb client" in text
         or "server-share" in text
         or "tree connect" in text
+        or re.search(r"\\\\+[^\\\s]+\\\\+[^\\\s]+", text)
     ):
         category = "network_share"
         tags.append("smb_client_event")
@@ -32577,7 +32587,7 @@ def file_movement_identity_export_rows(report: dict[str, Any]) -> list[dict[str,
     ]
 
 
-DERIVED_TIMELINE_TOOL = "RelicDerived"
+DERIVED_TIMELINE_TOOL = "PerceptorDerived"
 
 TIMELINE_SOURCE_TABLES = (
     "shortcut_items",
@@ -34561,7 +34571,7 @@ def search_packet_metadata(db: Database, case_id: str, search: dict[str, Any], a
     result_hashes = [_search_result_hash(row) for row in results if isinstance(row, dict)]
     case_counts = _case_packet_counts(db, case_id)
     return {
-        "tool": "relic",
+        "tool": "perceptor",
         "tool_version": tool_version,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "case_id": case_id,
@@ -34751,7 +34761,7 @@ def case_next_actions_report(db: Database, case_id: str, *, limit: int = 25) -> 
                 "readiness",
                 str(item.get("label") or item.get("name") or "Readiness item needs action"),
                 str(item.get("summary") or item.get("details") or ""),
-                f"relic --root <workspace> report processing-readiness --case {case_id}",
+                f"perceptor --root <workspace> report processing-readiness --case {case_id}",
                 item,
             )
 
@@ -34764,7 +34774,7 @@ def case_next_actions_report(db: Database, case_id: str, *, limit: int = 25) -> 
             "evidence_gap",
             str(gap.get("title") or "Evidence gap"),
             str(gap.get("summary") or gap.get("recommendation") or ""),
-            f"relic --root <workspace> report evidence-gaps --case {case_id}",
+            f"perceptor --root <workspace> report evidence-gaps --case {case_id}",
             gap,
         )
 
@@ -34775,7 +34785,7 @@ def case_next_actions_report(db: Database, case_id: str, *, limit: int = 25) -> 
             "parser_gap",
             "Unmapped live-response CSVs need parser review",
             f"{unmapped['summary']['unmapped_count']} unsupported CSV imports were recorded.",
-            f"relic --root <workspace> report unmapped-imports --case {case_id} --format table",
+            f"perceptor --root <workspace> report unmapped-imports --case {case_id} --format table",
             unmapped.get("summary"),
         )
 
@@ -34786,7 +34796,7 @@ def case_next_actions_report(db: Database, case_id: str, *, limit: int = 25) -> 
             "suspicious_execution",
             str(finding.get("application") or finding.get("display_path") or "Suspicious execution finding"),
             str(finding.get("reason") or finding.get("summary") or ""),
-            f"relic --root <workspace> report suspicious-executions --case {case_id}",
+            f"perceptor --root <workspace> report suspicious-executions --case {case_id}",
             finding,
         )
 
@@ -34798,7 +34808,7 @@ def case_next_actions_report(db: Database, case_id: str, *, limit: int = 25) -> 
                 "external_storage",
                 str(device.get("display_name") or device.get("serial") or "External storage lead"),
                 str(device.get("summary") or device.get("serial_reliability") or ""),
-                f"relic --root <workspace> report external-storage --case {case_id}",
+                f"perceptor --root <workspace> report external-storage --case {case_id}",
                 device,
             )
 
@@ -35419,7 +35429,7 @@ def _mounted_memory_artifacts(db: Database, case_id: str) -> list[dict[str, Any]
     rows: list[dict[str, Any]] = []
     mount_roots = [
         case.root / "mounts" / "volumes",
-        Path(os.environ.get("FORENSIC_MOUNT_ROOT", "/tmp/forensic-orchestrator-mounts")) / "cases" / case_id / "volumes",
+        Path(os.environ.get("PERCEPTOR_MOUNT_ROOT") or os.environ.get("FORENSIC_MOUNT_ROOT", "/tmp/perceptor-mounts")) / "cases" / case_id / "volumes",
     ]
     paths: list[Path] = []
     for mounts in mount_roots:

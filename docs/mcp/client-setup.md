@@ -1,6 +1,6 @@
 # MCP Client Setup
 
-Use stdio when the MCP client runs a command over SSH to the Ubuntu Relic host.
+Use stdio when the MCP client runs a command over SSH to the Ubuntu Perceptor host.
 
 ## Local Ubuntu Client
 
@@ -13,13 +13,13 @@ uv
 Arguments:
 
 ```text
-run relic --root /path/to/workspace mcp serve
+run perceptor --root /path/to/workspace mcp serve
 ```
 
 Working directory:
 
 ```text
-/opt/relic
+/opt/perceptor
 ```
 
 ## Mac GUI Client to Ubuntu Host
@@ -35,13 +35,13 @@ ssh
 Arguments:
 
 ```text
--i ~/.ssh/id_ed25519_relic analyst@UBUNTU_HOST cd /opt/relic && uv run relic --root /path/to/workspace mcp serve
+-i ~/.ssh/id_ed25519_relic analyst@UBUNTU_HOST cd /opt/perceptor && uv run perceptor --root /path/to/workspace mcp serve
 ```
 
 For processing:
 
 ```text
--i ~/.ssh/id_ed25519_relic analyst@UBUNTU_HOST cd /opt/relic && uv run relic --root /path/to/workspace mcp serve --allow-processing
+-i ~/.ssh/id_ed25519_relic analyst@UBUNTU_HOST cd /opt/perceptor && uv run perceptor --root /path/to/workspace mcp serve --allow-processing
 ```
 
 Use the private key path, not the `.pub` file. The public key must be installed
@@ -49,7 +49,7 @@ in `~/.ssh/authorized_keys` on the Ubuntu host.
 
 ## Workspace Scope
 
-The MCP server is rooted to one Relic workspace at startup. To use a different
+The MCP server is rooted to one Perceptor workspace at startup. To use a different
 workspace, start another MCP server configuration with a different `--root`.
 
 ## Restarting

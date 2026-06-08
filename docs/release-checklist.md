@@ -1,6 +1,6 @@
 # Release Checklist
 
-Use this checklist before tagging a Relic release.
+Use this checklist before tagging a Perceptor release.
 
 ## Platform Contract
 
@@ -17,20 +17,20 @@ Run from a clean checkout:
 uv sync --extra dev
 uv run python -m compileall forensic_orchestrator
 uv run pytest -q
-uv run relic standalone doctor --smoke --format table
-uv run relic standalone smoke-regression --format table
+uv run perceptor standalone doctor --smoke --format table
+uv run perceptor standalone smoke-regression --format table
 ```
 
 Run the documented operator loop against at least one representative dataset:
 
 ```bash
-uv run relic --root ~/analysis/release-check standalone doctor --smoke --format table
-uv run relic --root ~/analysis/release-check --dry-run process --path /evidence/example.E01 --computer-label RELEASE-CHECK --profile windows-full --filesystem --workers 4 > ~/analysis/release-check/dry-process.json
+uv run perceptor --root ~/analysis/release-check standalone doctor --smoke --format table
+uv run perceptor --root ~/analysis/release-check --dry-run process --path /evidence/example.E01 --computer-label RELEASE-CHECK --profile windows-full --filesystem --workers 4 > ~/analysis/release-check/dry-process.json
 CASE_ID="$(uv run python -c 'import json,sys; print(json.load(open(sys.argv[1]))["case_id"])' ~/analysis/release-check/dry-process.json)"
-uv run relic --root ~/analysis/release-check report review-status --case "${CASE_ID}" --format table
-uv run relic --root ~/analysis/release-check report runbook --case "${CASE_ID}" --format md
-uv run relic --root ~/analysis/release-check report write-bundle --case "${CASE_ID}" --purpose review
-uv run relic --root ~/analysis/release-check report handoff-package --case "${CASE_ID}" --bundle-dir ~/analysis/release-check/cases/"${CASE_ID}"/outputs/reports/review-bundle --output ~/analysis/release-check/cases/"${CASE_ID}"/outputs/reports/"${CASE_ID}"-handoff.zip
+uv run perceptor --root ~/analysis/release-check report review-status --case "${CASE_ID}" --format table
+uv run perceptor --root ~/analysis/release-check report runbook --case "${CASE_ID}" --format md
+uv run perceptor --root ~/analysis/release-check report write-bundle --case "${CASE_ID}" --purpose review
+uv run perceptor --root ~/analysis/release-check report handoff-package --case "${CASE_ID}" --bundle-dir ~/analysis/release-check/cases/"${CASE_ID}"/outputs/reports/review-bundle --output ~/analysis/release-check/cases/"${CASE_ID}"/outputs/reports/"${CASE_ID}"-handoff.zip
 ```
 
 ## Dependency Checks
@@ -38,8 +38,8 @@ uv run relic --root ~/analysis/release-check report handoff-package --case "${CA
 - `standalone dependencies --format table` has no missing required tools on the
   release workstation.
 - `standalone install-tool all --tools-dir ~/tools --env-file
-  ~/tools/forensic-orchestrator.env` succeeds or known exceptions are documented.
-- `source ~/tools/forensic-orchestrator.env` works in a fresh shell.
+  ~/tools/perceptor.env` succeeds or known exceptions are documented.
+- `source ~/tools/perceptor.env` works in a fresh shell.
 
 ## Documentation
 
@@ -53,7 +53,7 @@ uv run relic --root ~/analysis/release-check report handoff-package --case "${CA
 
 ```bash
 git status --short
-git tag -a vX.Y.Z -m "Relic vX.Y.Z"
+git tag -a vX.Y.Z -m "Perceptor vX.Y.Z"
 git push origin vX.Y.Z
 ```
 

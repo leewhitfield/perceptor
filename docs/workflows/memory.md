@@ -1,6 +1,6 @@
 # Memory and Support Files
 
-Relic treats memory artifacts as part of the same case model as disk artifacts.
+Perceptor treats memory artifacts as part of the same case model as disk artifacts.
 Memory-derived findings should be reported alongside disk-derived counterparts
 when possible.
 
@@ -32,18 +32,18 @@ Memory workflows aim to:
 Run the memory workflow after image mounting and artifact extraction:
 
 ```bash
-uv run relic --root /path/to/workspace memory workflow \
+uv run perceptor --root /path/to/workspace memory workflow \
   --case CASE_ID \
   --workers 4 \
   --write-reports
 ```
 
-Relic inventories memory-adjacent artifacts from mounted volumes and MFT output,
+Perceptor inventories memory-adjacent artifacts from mounted volumes and MFT output,
 including `hiberfil.sys`, `pagefile.sys`, `swapfile.sys`, `MEMORY.DMP`,
 Minidumps, WER dumps, LiveKernelReports, user CrashDumps, process dumps, and
 full memory images such as `.raw`, `.vmem`, and `.mem`.
 
-For each source, Relic:
+For each source, Perceptor:
 
 - scans targeted strings with `bstrings` when available, otherwise `strings`.
 - attempts hiberfil decompression with configured hiberfil tooling before raw
@@ -64,18 +64,18 @@ hiberfil files are reported as caveats and do not stop the processing run.
 Preferred tools can be placed on `PATH` or configured explicitly:
 
 ```bash
-export BSTRINGS_BIN=/opt/relic-tools/bstrings/bstrings.dll
-export HIBR2BIN_BIN=/opt/relic-tools/Hibr2Bin-linux/hibr2bin-linux
-export FORENSIC_ORCHESTRATOR_TOOLS_ROOT=/opt/relic-tools
+export BSTRINGS_BIN=/opt/perceptor-tools/bstrings/bstrings.dll
+export HIBR2BIN_BIN=/opt/perceptor-tools/Hibr2Bin-linux/hibr2bin-linux
+export PERCEPTOR_TOOLS_ROOT=/opt/perceptor-tools
 ```
 
-Relic also checks common tool-root layouts under
-`FORENSIC_ORCHESTRATOR_TOOLS_ROOT`, `/opt/relic-tools`, and `~/tools`.
+Perceptor also checks common tool-root layouts under
+`PERCEPTOR_TOOLS_ROOT`, `/opt/perceptor-tools`, and `~/tools`.
 
 ## Fallback Extraction
 
 When a memory support file is present in MFT data but not accessible through the
-mounted filesystem, Relic attempts a targeted NTFS `icat` extraction using the
+mounted filesystem, Perceptor attempts a targeted NTFS `icat` extraction using the
 stored image partition offset:
 
 ```bash
@@ -89,28 +89,28 @@ icat -f ntfs -o OFFSET_SECTORS /path/to/image ENTRY_NUMBER
 ## Reports
 
 ```bash
-uv run relic --root /path/to/workspace report memory-analysis --case CASE_ID --format md
-uv run relic --root /path/to/workspace report memory-artifacts --case CASE_ID --format md
-uv run relic --root /path/to/workspace report memory-support-files --case CASE_ID --format md
-uv run relic --root /path/to/workspace report structured-memory --case CASE_ID --format md
-uv run relic --root /path/to/workspace report memory-string-hits --case CASE_ID --format csv
+uv run perceptor --root /path/to/workspace report memory-analysis --case CASE_ID --format md
+uv run perceptor --root /path/to/workspace report memory-artifacts --case CASE_ID --format md
+uv run perceptor --root /path/to/workspace report memory-support-files --case CASE_ID --format md
+uv run perceptor --root /path/to/workspace report structured-memory --case CASE_ID --format md
+uv run perceptor --root /path/to/workspace report memory-string-hits --case CASE_ID --format csv
 ```
 
 Run structured tooling against a full memory image or decompressed hiberfil
 candidate with:
 
 ```bash
-uv run relic --root /path/to/workspace memory structured \
+uv run perceptor --root /path/to/workspace memory structured \
   --case CASE_ID \
   --path /path/to/memory.dmp
 ```
 
-Relic records Volatility and MemProcFS run attempts even when a tool cannot
+Perceptor records Volatility and MemProcFS run attempts even when a tool cannot
 derive structured rows from a dump. `report structured-memory` shows both
 imported rows and tool-level failures or no-row results.
 
 The managed installer downloads the official Volatility Windows symbol pack to
-`/opt/relic-tools/volatility3-symbols/windows.zip`. Symbols help future Intel
+`/opt/perceptor-tools/volatility3-symbols/windows.zip`. Symbols help future Intel
 Windows memory cases, but they do not guarantee support for Windows ARM64 dumps;
 those may still fail because the memory layer/architecture is unsupported by
 the current Volatility release.
@@ -118,7 +118,7 @@ the current Volatility release.
 Memory report bundles use purpose `memory`:
 
 ```bash
-uv run relic --root /path/to/workspace report bundle \
+uv run perceptor --root /path/to/workspace report bundle \
   --case CASE_ID \
   --purpose memory
 ```

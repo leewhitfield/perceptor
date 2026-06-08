@@ -322,7 +322,7 @@ def test_mft_selected_artifacts_are_extracted_lazily_during_profile_run():
 
 
 def test_dotnet_runtime_can_be_configured(monkeypatch):
-    monkeypatch.setenv("FORENSIC_ORCHESTRATOR_DOTNET", "/custom/dotnet")
+    monkeypatch.setenv("PERCEPTOR_DOTNET", "/custom/dotnet")
 
     assert resolve_dotnet_runtime() == "/custom/dotnet"
 

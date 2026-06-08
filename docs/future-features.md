@@ -1,7 +1,7 @@
 # Future Features
 
 This page tracks features and platform areas that have been discussed or
-partially explored but are not yet supported as complete Relic workflows.
+partially explored but are not yet supported as complete Perceptor workflows.
 
 Items here are intentionally separate from the operator workflows. Do not treat
 them as supported case-processing paths until they move into the normal
@@ -9,7 +9,7 @@ documentation and pass release verification.
 
 ## Windows Search SQL Processing
 
-Relic parses supported Windows Search outputs and records unsupported encrypted
+Perceptor parses supported Windows Search outputs and records unsupported encrypted
 Search states, but Windows 11 `AesGcm1` encrypted SQLite Search databases are not
 fully decrypted offline.
 
@@ -27,7 +27,7 @@ Potential work:
 
 ## macOS Processing
 
-Relic is currently Ubuntu-only for supported operation and Windows-focused for
+Perceptor is currently Ubuntu-only for supported operation and Windows-focused for
 most artifact coverage. Native macOS evidence processing is future work.
 
 Potential work:
@@ -52,7 +52,7 @@ Potential work:
 
 ## Web UI
 
-Relic is CLI-first today. Reports, MCP, and structured outputs are intended to
+Perceptor is CLI-first today. Reports, MCP, and structured outputs are intended to
 support a future UI.
 
 Potential work:
@@ -90,7 +90,7 @@ Potential work:
 
 ## Server-Side Cloud Logs
 
-Relic currently focuses on endpoint evidence and imported report bundles.
+Perceptor currently focuses on endpoint evidence and imported report bundles.
 
 Potential work:
 

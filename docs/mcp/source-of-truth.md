@@ -1,6 +1,6 @@
 # Source-of-Truth Routing
 
-MCP clients should not jump straight to image tools. Relic now exposes a routing
+MCP clients should not jump straight to image tools. Perceptor now exposes a routing
 tool that returns the correct source order for a question.
 
 ## First Tool
@@ -130,7 +130,7 @@ Processing tools require both:
 Deleted-file recovery should first identify the target in parsed listings, then
 run `relic_recover_deleted_files` only when requested.
 
-The MCP job log records the Relic recovery command. The recovery manifest records
+The MCP job log records the Perceptor recovery command. The recovery manifest records
 the exact `icat` command for each file candidate.
 
 ## Sensitive and External AI Gates
