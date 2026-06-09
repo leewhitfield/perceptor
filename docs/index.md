@@ -1,3 +1,5 @@
+![Perceptor Logo](../perceptor.png)
+
 # Perceptor Documentation
 
 Perceptor is a CLI-first forensic processing and reporting tool. It processes disk
