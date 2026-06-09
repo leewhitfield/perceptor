@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../img/favicon.ico" />
+    <title>Third-Party Tools - Perceptor</title>
+    <link rel="stylesheet" href="../../css/theme.css" />
+    <link rel="stylesheet" href="../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Third-Party Tools";
+        var mkdocs_page_input_path = "reference/third-party-tools.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../.." class="icon icon-home"> Perceptor
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../..">Home</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Getting Started</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../getting-started/overview/">Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../getting-started/ubuntu-install/">Ubuntu Install</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../getting-started/configuration/">Configuration</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../getting-started/dependencies/">Dependency Management</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../getting-started/first-run/">First Run Checks</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Workflows</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/disk-images/">Disk Images</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/live-case-zips/">Live-Case and Report ZIPs</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/report-bundles/">Report Bundles</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/file-listings/">File Listings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/deleted-file-recovery/">Deleted File Recovery</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/memory/">Memory and Support Files</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/deep-recovery/">Deep Recovery Profiles</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/bitlocker/">BitLocker Images</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/vsc/">Volume Shadow Copies</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../mounted-image-notes/">Mounted Image Notes</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Reports</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../reports/">Report Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../report-catalog/">Report Catalog</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../supported-artifacts/">Supported Artifacts</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">Third-Party Tools</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#system-packages">System Packages</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#sleuth-kit">Sleuth Kit</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#libewf-ewf-tools">libewf / ewf-tools</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#qemu-utils">qemu-utils</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#ntfs-3g">ntfs-3g</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#util-linux">util-linux</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#cryptsetup">cryptsetup</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#dislocker">dislocker</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#libbde-utils">libbde-utils</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#libesedb-utils">libesedb-utils</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#exiftool">ExifTool</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#poppler-utils">poppler-utils</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#tesseract-ocr">Tesseract OCR</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#libvshadow-utils">libvshadow-utils</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#libfsntfs-utils">libfsntfs-utils</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#python3-libfsntfs">python3-libfsntfs</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#managed-tools">Managed Tools</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#eric-zimmerman-tools">Eric Zimmerman Tools</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#amcacheparser">AmcacheParser</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#appcompatcacheparser">AppCompatCacheParser</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#evtxecmd">EvtxECmd</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#jlecmd">JLECmd</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#lecmd">LECmd</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#mftecmd">MFTECmd</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#mftecmdusn">MFTECmdUSN</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#mftecmdlogfile">MFTECmdLogFile</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#mftecmdi30">MFTECmdI30</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#pecmd">PECmd</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#rbcmd">RBCmd</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#recmd">RECmd</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#sbecmd">SBECmd</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#sqlecmd">SQLECmd</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#srumecmd">SrumECmd</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#bstrings">bstrings</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#sidr">SIDR</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#usnjrnl-forensic">usnjrnl-forensic</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#volatility-3">Volatility 3</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#volatility-windows-symbols">Volatility Windows Symbols</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#memprocfs">MemProcFS</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#pypykatz">pypykatz</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#ual-timeliner">ual-timeliner</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#bmc-toolspy">bmc-tools.py</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#hibr2bin">hibr2bin</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#hibernationrecon">HibernationRecon</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#python-packages">Python Packages</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#beautifulsoup4">beautifulsoup4</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#cerberus">cerberus</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#dissect-cstruct">dissect-cstruct</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#dissectesedb">dissect.esedb</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#dissect-etl">dissect-etl</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#dissectthumbcache">dissect.thumbcache</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#duckdb">DuckDB</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#lxml">lxml</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#lz4">lz4</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#numpy">numpy</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#pandas">pandas</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#plyvel">plyvel</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#pycryptodome">pycryptodome</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#python-magic">python-magic</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#python-registry">python-registry</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#pyyaml">PyYAML</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#quickxorhash">quickxorhash</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#ruamel-yaml">ruamel-yaml</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#pypdf">pypdf</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#services">Services</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#opensearch">OpenSearch</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#openai-api">OpenAI API</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#notes">Notes</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../custom-parsers/">Custom Parsers</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../report-specs/">Report Specs</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../artifact-coverage-matrix/">Artifact Coverage</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../windows-full-artifacts/">Windows Full Artifacts</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">MCP</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../mcp/overview/">MCP Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../mcp/source-of-truth/">Source-of-Truth Routing</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../mcp/client-setup/">Client Setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../mcp/tools/">MCP Tool Reference</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Future</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../future-features/">Future Features</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Operations</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../commands/">Command Reference</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/security/">Security Model</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/field-readiness/">Field Readiness</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/troubleshooting/">Troubleshooting</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../release-checklist/">Release Checklist</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../..">Perceptor</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../.." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Reports</li>
+      <li class="breadcrumb-item active">Third-Party Tools</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="third-party-tools">Third-Party Tools<a class="headerlink" href="#third-party-tools" title="Permanent link">&para;</a></h1>
+<p>Perceptor combines internal parsers with established forensic and data-processing
+tools. This page lists the third-party tools and services Perceptor expects or
+can use during normal Windows processing.</p>
+<p>Use the dependency and doctor commands to check local coverage:</p>
+<pre><code class="language-bash">uv run perceptor standalone dependencies --format table
+uv run perceptor standalone doctor --smoke --format table
+uv run perceptor standalone tool-status --tools-dir ~/tools --format table
+</code></pre>
+<h2 id="system-packages">System Packages<a class="headerlink" href="#system-packages" title="Permanent link">&para;</a></h2>
+<p>These are installed through Ubuntu package management during setup.</p>
+<h3 id="sleuth-kit">Sleuth Kit<a class="headerlink" href="#sleuth-kit" title="Permanent link">&para;</a></h3>
+<p>Commands: <code>mmls</code>, <code>fsstat</code>, <code>fls</code>, <code>icat</code></p>
+<p>Used for partition discovery, filesystem inspection, and fallback file
+extraction when a mounted read-only volume is not available or a targeted
+filesystem operation is required.</p>
+<h3 id="libewf-ewf-tools">libewf / ewf-tools<a class="headerlink" href="#libewf-ewf-tools" title="Permanent link">&para;</a></h3>
+<p>Commands: <code>ewfinfo</code>, <code>ewfmount</code></p>
+<p>Used for EWF/E01 metadata inspection and read-only EWF mounting.</p>
+<h3 id="qemu-utils">qemu-utils<a class="headerlink" href="#qemu-utils" title="Permanent link">&para;</a></h3>
+<p>Command: <code>qemu-img</code></p>
+<p>Used for virtual disk inspection and conversion support.</p>
+<h3 id="ntfs-3g">ntfs-3g<a class="headerlink" href="#ntfs-3g" title="Permanent link">&para;</a></h3>
+<p>Command: <code>ntfs-3g</code></p>
+<p>Used for read-only NTFS mounts.</p>
+<h3 id="util-linux">util-linux<a class="headerlink" href="#util-linux" title="Permanent link">&para;</a></h3>
+<p>Commands include <code>losetup</code>, <code>mount</code>, <code>umount</code>, and related system utilities.</p>
+<p>Used for loop-device and mount workflow support.</p>
+<h3 id="cryptsetup">cryptsetup<a class="headerlink" href="#cryptsetup" title="Permanent link">&para;</a></h3>
+<p>Command: <code>cryptsetup</code></p>
+<p>Primary BitLocker unlock path where supported by the local system.</p>
+<h3 id="dislocker">dislocker<a class="headerlink" href="#dislocker" title="Permanent link">&para;</a></h3>
+<p>Command: <code>dislocker</code></p>
+<p>BitLocker fallback unlock tool.</p>
+<h3 id="libbde-utils">libbde-utils<a class="headerlink" href="#libbde-utils" title="Permanent link">&para;</a></h3>
+<p>Command: <code>bdemount</code></p>
+<p>BitLocker fallback unlock tool.</p>
+<h3 id="libesedb-utils">libesedb-utils<a class="headerlink" href="#libesedb-utils" title="Permanent link">&para;</a></h3>
+<p>Command: <code>esedbexport</code></p>
+<p>Used as an ESE database export fallback for artifacts such as SRUM, BITS, and
+other Windows ESE stores.</p>
+<h3 id="exiftool">ExifTool<a class="headerlink" href="#exiftool" title="Permanent link">&para;</a></h3>
+<p>Command: <code>exiftool</code></p>
+<p>Used for embedded file metadata extraction.</p>
+<h3 id="poppler-utils">poppler-utils<a class="headerlink" href="#poppler-utils" title="Permanent link">&para;</a></h3>
+<p>Command: <code>pdftotext</code></p>
+<p>Used for fast PDF text extraction. Perceptor can fall back to Python PDF
+parsing when this is unavailable.</p>
+<h3 id="tesseract-ocr">Tesseract OCR<a class="headerlink" href="#tesseract-ocr" title="Permanent link">&para;</a></h3>
+<p>Command: <code>tesseract</code></p>
+<p>Used for OCR extraction where text is embedded in images or visual artifacts.</p>
+<h3 id="libvshadow-utils">libvshadow-utils<a class="headerlink" href="#libvshadow-utils" title="Permanent link">&para;</a></h3>
+<p>Commands: <code>vshadowinfo</code>, <code>vshadowmount</code></p>
+<p>Used for Volume Shadow Copy inventory and read-only VSC mounting.</p>
+<h3 id="libfsntfs-utils">libfsntfs-utils<a class="headerlink" href="#libfsntfs-utils" title="Permanent link">&para;</a></h3>
+<p>Used for compressed NTFS recovery support.</p>
+<h3 id="python3-libfsntfs">python3-libfsntfs<a class="headerlink" href="#python3-libfsntfs" title="Permanent link">&para;</a></h3>
+<p>Python bindings used with compressed NTFS recovery support.</p>
+<h2 id="managed-tools">Managed Tools<a class="headerlink" href="#managed-tools" title="Permanent link">&para;</a></h2>
+<p>These are installed or built by Perceptor's managed installer:</p>
+<pre><code class="language-bash">uv run perceptor standalone install-tool all \
+  --tools-dir ~/tools \
+  --env-file ~/tools/perceptor.env
+</code></pre>
+<h3 id="eric-zimmerman-tools">Eric Zimmerman Tools<a class="headerlink" href="#eric-zimmerman-tools" title="Permanent link">&para;</a></h3>
+<p>Perceptor downloads EZ Tools directly. PowerShell is not required for the
+managed installer. SHA1 hashes are checked when the tool catalog supplies a
+valid SHA1 value.</p>
+<h3 id="amcacheparser">AmcacheParser<a class="headerlink" href="#amcacheparser" title="Permanent link">&para;</a></h3>
+<p>Parses Windows Amcache artifacts for application and file presence context.</p>
+<h3 id="appcompatcacheparser">AppCompatCacheParser<a class="headerlink" href="#appcompatcacheparser" title="Permanent link">&para;</a></h3>
+<p>Parses ShimCache/AppCompatCache data for application presence context.</p>
+<h3 id="evtxecmd">EvtxECmd<a class="headerlink" href="#evtxecmd" title="Permanent link">&para;</a></h3>
+<p>Parses Windows EVTX logs into structured event rows.</p>
+<h3 id="jlecmd">JLECmd<a class="headerlink" href="#jlecmd" title="Permanent link">&para;</a></h3>
+<p>Parses Jump List artifacts.</p>
+<h3 id="lecmd">LECmd<a class="headerlink" href="#lecmd" title="Permanent link">&para;</a></h3>
+<p>Parses Windows shortcut (<code>.lnk</code>) artifacts.</p>
+<h3 id="mftecmd">MFTECmd<a class="headerlink" href="#mftecmd" title="Permanent link">&para;</a></h3>
+<p>Parses NTFS <code>$MFT</code> records and related NTFS metadata.</p>
+<h3 id="mftecmdusn">MFTECmdUSN<a class="headerlink" href="#mftecmdusn" title="Permanent link">&para;</a></h3>
+<p>Uses MFTECmd support for USN Journal parsing.</p>
+<h3 id="mftecmdlogfile">MFTECmdLogFile<a class="headerlink" href="#mftecmdlogfile" title="Permanent link">&para;</a></h3>
+<p>Uses MFTECmd support for NTFS <code>$LogFile</code> parsing.</p>
+<h3 id="mftecmdi30">MFTECmdI30<a class="headerlink" href="#mftecmdi30" title="Permanent link">&para;</a></h3>
+<p>Uses MFTECmd support for <code>$I30</code> directory index parsing.</p>
+<h3 id="pecmd">PECmd<a class="headerlink" href="#pecmd" title="Permanent link">&para;</a></h3>
+<p>Parses Prefetch artifacts.</p>
+<h3 id="rbcmd">RBCmd<a class="headerlink" href="#rbcmd" title="Permanent link">&para;</a></h3>
+<p>Parses Recycle Bin artifacts.</p>
+<h3 id="recmd">RECmd<a class="headerlink" href="#recmd" title="Permanent link">&para;</a></h3>
+<p>Parses Windows registry hives with configured batch files and targeted keys.</p>
+<h3 id="sbecmd">SBECmd<a class="headerlink" href="#sbecmd" title="Permanent link">&para;</a></h3>
+<p>Parses Shellbags artifacts.</p>
+<h3 id="sqlecmd">SQLECmd<a class="headerlink" href="#sqlecmd" title="Permanent link">&para;</a></h3>
+<p>Parses supported SQLite artifacts through EZ Tools maps where configured.</p>
+<h3 id="srumecmd">SrumECmd<a class="headerlink" href="#srumecmd" title="Permanent link">&para;</a></h3>
+<p>Parses SRUM ESE data.</p>
+<h3 id="bstrings">bstrings<a class="headerlink" href="#bstrings" title="Permanent link">&para;</a></h3>
+<p>Preferred memory and binary string scanner. Perceptor falls back to <code>strings</code>
+where appropriate, but <code>bstrings</code> should be present after the default managed
+install.</p>
+<h3 id="sidr">SIDR<a class="headerlink" href="#sidr" title="Permanent link">&para;</a></h3>
+<p>Perceptor expects a native Linux SIDR Rust build, not the upstream Windows
+<code>sidr.exe</code>. SIDR is used for supported Windows Search parsing.</p>
+<h3 id="usnjrnl-forensic">usnjrnl-forensic<a class="headerlink" href="#usnjrnl-forensic" title="Permanent link">&para;</a></h3>
+<p>Used for USN reconstruction support. Building this tool requires Rust 1.88.0 or
+newer.</p>
+<h3 id="volatility-3">Volatility 3<a class="headerlink" href="#volatility-3" title="Permanent link">&para;</a></h3>
+<p>Used for structured memory analysis where the captured memory architecture and
+available symbols are supported.</p>
+<h3 id="volatility-windows-symbols">Volatility Windows Symbols<a class="headerlink" href="#volatility-windows-symbols" title="Permanent link">&para;</a></h3>
+<p>The managed installer stores the Windows symbol pack at:</p>
+<pre><code class="language-text">/opt/perceptor-tools/volatility3-symbols/windows.zip
+</code></pre>
+<p>Structured memory analysis passes the symbol directory to Volatility when it is
+present.</p>
+<h3 id="memprocfs">MemProcFS<a class="headerlink" href="#memprocfs" title="Permanent link">&para;</a></h3>
+<p>Used for bounded structured memory inventory attempts, including process,
+module, handle, registry, and file views where supported.</p>
+<h3 id="pypykatz">pypykatz<a class="headerlink" href="#pypykatz" title="Permanent link">&para;</a></h3>
+<p>Used for controlled DPAPI/LSA validation from memory plus registry-hive cases.</p>
+<h3 id="ual-timeliner">ual-timeliner<a class="headerlink" href="#ual-timeliner" title="Permanent link">&para;</a></h3>
+<p>External User Access Logging/SUM timeline parser. Perceptor also has an
+internal fallback parser when the external tool is unavailable or fails.</p>
+<h3 id="bmc-toolspy">bmc-tools.py<a class="headerlink" href="#bmc-toolspy" title="Permanent link">&para;</a></h3>
+<p>Used for RDP bitmap cache fragment extraction.</p>
+<h3 id="hibr2bin">hibr2bin<a class="headerlink" href="#hibr2bin" title="Permanent link">&para;</a></h3>
+<p>Optional hibernation decompressor used before hiberfil scanning when available.</p>
+<h3 id="hibernationrecon">HibernationRecon<a class="headerlink" href="#hibernationrecon" title="Permanent link">&para;</a></h3>
+<p>Optional hibernation decompressor used before hiberfil scanning when available.</p>
+<h2 id="python-packages">Python Packages<a class="headerlink" href="#python-packages" title="Permanent link">&para;</a></h2>
+<p>These are installed through <code>uv sync</code>.</p>
+<h3 id="beautifulsoup4">beautifulsoup4<a class="headerlink" href="#beautifulsoup4" title="Permanent link">&para;</a></h3>
+<p>Used for HTML parsing and cleanup.</p>
+<h3 id="cerberus">cerberus<a class="headerlink" href="#cerberus" title="Permanent link">&para;</a></h3>
+<p>Used for schema validation.</p>
+<h3 id="dissect-cstruct">dissect-cstruct<a class="headerlink" href="#dissect-cstruct" title="Permanent link">&para;</a></h3>
+<p>Used by parser components that need structured binary parsing support.</p>
+<h3 id="dissectesedb">dissect.esedb<a class="headerlink" href="#dissectesedb" title="Permanent link">&para;</a></h3>
+<p>Used for ESE database parsing support.</p>
+<h3 id="dissect-etl">dissect-etl<a class="headerlink" href="#dissect-etl" title="Permanent link">&para;</a></h3>
+<p>Used for ETL/ETW parsing support.</p>
+<h3 id="dissectthumbcache">dissect.thumbcache<a class="headerlink" href="#dissectthumbcache" title="Permanent link">&para;</a></h3>
+<p>Used for Windows thumbcache parsing support.</p>
+<h3 id="duckdb">DuckDB<a class="headerlink" href="#duckdb" title="Permanent link">&para;</a></h3>
+<p>Embedded analytics database used for high-volume parsed artifact tables and
+report queries.</p>
+<h3 id="lxml">lxml<a class="headerlink" href="#lxml" title="Permanent link">&para;</a></h3>
+<p>Used for XML/HTML parsing, including artifacts with XML structures.</p>
+<h3 id="lz4">lz4<a class="headerlink" href="#lz4" title="Permanent link">&para;</a></h3>
+<p>Used for compressed data handling where required by parsed artifacts.</p>
+<h3 id="numpy">numpy<a class="headerlink" href="#numpy" title="Permanent link">&para;</a></h3>
+<p>Used by data-processing paths and supporting libraries.</p>
+<h3 id="pandas">pandas<a class="headerlink" href="#pandas" title="Permanent link">&para;</a></h3>
+<p>Used for tabular data processing where appropriate.</p>
+<h3 id="plyvel">plyvel<a class="headerlink" href="#plyvel" title="Permanent link">&para;</a></h3>
+<p>Used for LevelDB-backed artifact parsing.</p>
+<h3 id="pycryptodome">pycryptodome<a class="headerlink" href="#pycryptodome" title="Permanent link">&para;</a></h3>
+<p>Used for cryptographic parsing and validation support.</p>
+<h3 id="python-magic">python-magic<a class="headerlink" href="#python-magic" title="Permanent link">&para;</a></h3>
+<p>Used for file type identification.</p>
+<h3 id="python-registry">python-registry<a class="headerlink" href="#python-registry" title="Permanent link">&para;</a></h3>
+<p>Used for direct Windows registry hive parsing.</p>
+<h3 id="pyyaml">PyYAML<a class="headerlink" href="#pyyaml" title="Permanent link">&para;</a></h3>
+<p>Used for YAML configuration and plugin data.</p>
+<h3 id="quickxorhash">quickxorhash<a class="headerlink" href="#quickxorhash" title="Permanent link">&para;</a></h3>
+<p>Used for OneDrive/SharePoint-style hash support.</p>
+<h3 id="ruamel-yaml">ruamel-yaml<a class="headerlink" href="#ruamel-yaml" title="Permanent link">&para;</a></h3>
+<p>Used for YAML parsing and writing where round-trip behavior matters.</p>
+<h3 id="pypdf">pypdf<a class="headerlink" href="#pypdf" title="Permanent link">&para;</a></h3>
+<p>Python fallback for PDF text extraction when <code>pdftotext</code> is unavailable.</p>
+<h2 id="services">Services<a class="headerlink" href="#services" title="Permanent link">&para;</a></h2>
+<h3 id="opensearch">OpenSearch<a class="headerlink" href="#opensearch" title="Permanent link">&para;</a></h3>
+<p>OpenSearch stores readable content from files, emails, messages, and other
+text-bearing artifacts. DuckDB and SQLite keep references, hashes, and
+metadata; large content bodies belong in OpenSearch.</p>
+<h3 id="openai-api">OpenAI API<a class="headerlink" href="#openai-api" title="Permanent link">&para;</a></h3>
+<p><code>OPENAI_API_KEY</code> is optional. When configured and enabled by policy, Perceptor
+can use it for semantic RDP contact-sheet review. Without it, OCR fallback is
+used where available. Perceptor records token usage and estimated cost when the
+OpenAI path is used.</p>
+<h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">&para;</a></h2>
+<ul>
+<li>The default Ubuntu setup plus <code>install-tool all</code> should install the tools
+  needed for normal Windows processing.</li>
+<li>Missing specialized tools should be reported by doctor and fixed during
+  setup. Individual workflows should still fail gracefully when a tool is
+  unavailable.</li>
+<li>SIDR on Linux means the native Linux binary; Perceptor does not use Wine to
+  run <code>sidr.exe</code> for Windows Search parsing.</li>
+<li>MCP and report workflows should prefer parsed reports, DuckDB tables, and
+  OpenSearch content before falling back to direct evidence access.</li>
+</ul>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../supported-artifacts/" class="btn btn-neutral float-left" title="Supported Artifacts"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../custom-parsers/" class="btn btn-neutral float-right" title="Custom Parsers">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/leewhitfield/perceptor" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+      <span><a href="../supported-artifacts/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../custom-parsers/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../..";</script>
+    <script src="../../js/theme_extra.js"></script>
+    <script src="../../js/theme.js"></script>
+      <script src="../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

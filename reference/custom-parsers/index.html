@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../img/favicon.ico" />
+    <title>Custom Parsers - Perceptor</title>
+    <link rel="stylesheet" href="../../css/theme.css" />
+    <link rel="stylesheet" href="../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Custom Parsers";
+        var mkdocs_page_input_path = "reference/custom-parsers.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../.." class="icon icon-home"> Perceptor
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../..">Home</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Getting Started</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../getting-started/overview/">Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../getting-started/ubuntu-install/">Ubuntu Install</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../getting-started/configuration/">Configuration</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../getting-started/dependencies/">Dependency Management</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../getting-started/first-run/">First Run Checks</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Workflows</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/disk-images/">Disk Images</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/live-case-zips/">Live-Case and Report ZIPs</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/report-bundles/">Report Bundles</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/file-listings/">File Listings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/deleted-file-recovery/">Deleted File Recovery</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/memory/">Memory and Support Files</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/deep-recovery/">Deep Recovery Profiles</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/bitlocker/">BitLocker Images</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/vsc/">Volume Shadow Copies</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../mounted-image-notes/">Mounted Image Notes</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Reports</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../reports/">Report Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../report-catalog/">Report Catalog</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../supported-artifacts/">Supported Artifacts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../third-party-tools/">Third-Party Tools</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">Custom Parsers</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#windows-full-internal-parsers">Windows Full Internal Parsers</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#workflow-and-support-parsers">Workflow and Support Parsers</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#normalization-and-import">Normalization and Import</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#notes">Notes</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../report-specs/">Report Specs</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../artifact-coverage-matrix/">Artifact Coverage</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../windows-full-artifacts/">Windows Full Artifacts</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">MCP</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../mcp/overview/">MCP Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../mcp/source-of-truth/">Source-of-Truth Routing</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../mcp/client-setup/">Client Setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../mcp/tools/">MCP Tool Reference</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Future</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../future-features/">Future Features</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Operations</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../commands/">Command Reference</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/security/">Security Model</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/field-readiness/">Field Readiness</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/troubleshooting/">Troubleshooting</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../release-checklist/">Release Checklist</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../..">Perceptor</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../.." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Reports</li>
+      <li class="breadcrumb-item active">Custom Parsers</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="custom-parsers">Custom Parsers<a class="headerlink" href="#custom-parsers" title="Permanent link">&para;</a></h1>
+<p>Perceptor includes native parsers in addition to third-party tools. These
+parsers are implemented in the <code>forensic_orchestrator</code> package and usually emit
+normalized rows that are then imported into SQLite, DuckDB, and, where
+appropriate, OpenSearch.</p>
+<h2 id="windows-full-internal-parsers">Windows Full Internal Parsers<a class="headerlink" href="#windows-full-internal-parsers" title="Permanent link">&para;</a></h2>
+<p>These parser types are wired into the Windows processing profile.</p>
+<table>
+<thead>
+<tr>
+<th>Parser</th>
+<th>Type</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>NTFSParseLogFile</td>
+<td><code>internal_ntfs_logfile_ntfsparse</code></td>
+<td>Parses NTFS <code>$LogFile</code> data with the internal NTFS parser path where available.</td>
+</tr>
+<tr>
+<td>MFTECmdI30</td>
+<td><code>internal_ntfs_index_mftecmd</code></td>
+<td>Runs targeted <code>$I30</code> directory index parsing and normalizes directory index entries.</td>
+</tr>
+<tr>
+<td>SrumParser</td>
+<td><code>internal_srum</code></td>
+<td>Parses SRUM ESE exports into application, network, and resource usage records.</td>
+</tr>
+<tr>
+<td>UalParser</td>
+<td><code>internal_ual</code></td>
+<td>Parses User Access Logging/SUM records, using <code>ual-timeliner</code> when available and falling back internally when needed.</td>
+</tr>
+<tr>
+<td>BITSParser</td>
+<td><code>internal_bits</code></td>
+<td>Parses BITS <code>qmgr.db</code> data and related timestamp context where available.</td>
+</tr>
+<tr>
+<td>WindowsSearchESEParser</td>
+<td><code>internal_windows_search_ese</code></td>
+<td>Parses supported Windows Search ESE exports into file and indexed-content metadata rows.</td>
+</tr>
+<tr>
+<td>WindowsSearchGatherParser</td>
+<td><code>internal_windows_search_gather</code></td>
+<td>Parses Windows Search gather logs and related file activity signals.</td>
+</tr>
+<tr>
+<td>WindowsErrorReportingParser</td>
+<td><code>internal_windows_error_reporting</code></td>
+<td>Parses Windows Error Reporting files and metadata.</td>
+</tr>
+<tr>
+<td>WindowsDefenderParser</td>
+<td><code>internal_windows_defender</code></td>
+<td>Parses Windows Defender logs, histories, and detection metadata.</td>
+</tr>
+<tr>
+<td>FileMetadataOffice</td>
+<td><code>internal_file_metadata</code></td>
+<td>Extracts internal metadata from Office documents.</td>
+</tr>
+<tr>
+<td>FileMetadataPictures</td>
+<td><code>internal_file_metadata</code></td>
+<td>Extracts embedded metadata from picture files.</td>
+</tr>
+<tr>
+<td>FileMetadataPicturesUserContent</td>
+<td><code>internal_file_metadata</code></td>
+<td>Extracts embedded metadata from likely user-content picture files while excluding common system and cloud-cache paths.</td>
+</tr>
+<tr>
+<td>FileMetadataVideos</td>
+<td><code>internal_file_metadata</code></td>
+<td>Extracts embedded metadata from video files.</td>
+</tr>
+<tr>
+<td>FileMetadataExecutables</td>
+<td><code>internal_file_metadata</code></td>
+<td>Extracts embedded metadata from executable files.</td>
+</tr>
+<tr>
+<td>FileMetadataDocuments</td>
+<td><code>internal_file_metadata</code></td>
+<td>Extracts embedded metadata from document files.</td>
+</tr>
+<tr>
+<td>FileMetadataExtractor</td>
+<td><code>internal_file_metadata</code></td>
+<td>General file metadata extraction path for configured file sets.</td>
+</tr>
+<tr>
+<td>UserFileContentParser</td>
+<td><code>internal_file_content</code></td>
+<td>Extracts readable content from supported user files and sends large text bodies to OpenSearch with source provenance.</td>
+</tr>
+<tr>
+<td>PrefetchParser</td>
+<td><code>internal_prefetch</code></td>
+<td>Parses Prefetch files and normalizes execution and run-time records.</td>
+</tr>
+<tr>
+<td>SAMParser</td>
+<td><code>internal_sam</code></td>
+<td>Parses SAM hive data for local users and related account metadata.</td>
+</tr>
+<tr>
+<td>RegistryParser</td>
+<td><code>internal_registry</code></td>
+<td>Parses registry hives into general registry rows.</td>
+</tr>
+<tr>
+<td>RegistryArtifactParser</td>
+<td><code>internal_registry_artifacts</code></td>
+<td>Extracts targeted registry artifacts such as user activity, NetworkList, MountPoints2, outbound RDP history, installed programs, Bluetooth devices, clipboard settings, and other high-value keys.</td>
+</tr>
+<tr>
+<td>RecycleParser</td>
+<td><code>internal_recycle</code></td>
+<td>Parses Recycle Bin artifacts.</td>
+</tr>
+<tr>
+<td>FirefoxParser</td>
+<td><code>internal_firefox</code></td>
+<td>Parses Firefox history, downloads, cookies, cache, session, and related browser artifacts.</td>
+</tr>
+<tr>
+<td>ChromiumParser</td>
+<td><code>internal_chromium</code></td>
+<td>Parses Chromium-family browser history, downloads, cookies, site settings, notifications, sessions, and related metadata.</td>
+</tr>
+<tr>
+<td>ArchiveInventoryParser</td>
+<td><code>internal_archive_inventory</code></td>
+<td>Inventories archive contents so archives can be searched and reviewed without being treated as opaque files.</td>
+</tr>
+<tr>
+<td>OfficeBackstageParser</td>
+<td><code>internal_office_backstage</code></td>
+<td>Parses Office backstage and recent-document artifacts.</td>
+</tr>
+<tr>
+<td>UserDictionaryParser</td>
+<td><code>internal_user_dictionary</code></td>
+<td>Parses user dictionary entries such as <code>RoamingCustom.dic</code>.</td>
+</tr>
+<tr>
+<td>ZoneIdentifierParser</td>
+<td><code>internal_zone_identifier</code></td>
+<td>Parses <code>Zone.Identifier</code> alternate data streams.</td>
+</tr>
+<tr>
+<td>ThumbcacheParser</td>
+<td><code>internal_thumbcache</code></td>
+<td>Parses centralized Windows thumbcache databases.</td>
+</tr>
+<tr>
+<td>RdpCacheParser</td>
+<td><code>internal_rdp_cache</code></td>
+<td>Parses RDP bitmap cache fragments and creates contact-sheet references.</td>
+</tr>
+<tr>
+<td>RdpVisionReview</td>
+<td><code>internal_rdp_vision_review</code></td>
+<td>Adds OCR or optional semantic observations for RDP bitmap cache contact sheets.</td>
+</tr>
+<tr>
+<td>WebCacheParser</td>
+<td><code>internal_webcache</code></td>
+<td>Parses Windows WebCache artifacts.</td>
+</tr>
+<tr>
+<td>BrowserCacheParser</td>
+<td><code>internal_browser_cache</code></td>
+<td>Parses browser cache metadata and candidate cached content references.</td>
+</tr>
+<tr>
+<td>PackageCacheParser</td>
+<td><code>internal_package_cache</code></td>
+<td>Parses Windows package cache artifacts.</td>
+</tr>
+<tr>
+<td>PackageArtifactsParser</td>
+<td><code>internal_package_artifacts</code></td>
+<td>Parses app package artifacts such as Sticky Notes, notification databases, credential/vault metadata, Token Broker cache metadata, WSL indicators, and related package stores.</td>
+</tr>
+<tr>
+<td>SetupApiParser</td>
+<td><code>internal_setupapi</code></td>
+<td>Parses SetupAPI logs for device-install and USB context.</td>
+</tr>
+<tr>
+<td>TelemetryParser</td>
+<td><code>internal_telemetry</code></td>
+<td>Parses telemetry artifacts including EventTranscript-style diagnostic data where present.</td>
+</tr>
+<tr>
+<td>CloudSyncParser</td>
+<td><code>internal_cloud_sync</code></td>
+<td>Parses cloud sync metadata and virtual path/cache relationships.</td>
+</tr>
+<tr>
+<td>OneDriveExplorer</td>
+<td><code>internal_onedrive_explorer</code></td>
+<td>Parses OneDrive metadata in a format similar to OneDriveExplorer output.</td>
+</tr>
+<tr>
+<td>SpotifyParser</td>
+<td><code>internal_spotify</code></td>
+<td>Parses Spotify cache and application artifacts where present.</td>
+</tr>
+<tr>
+<td>OneDriveOdlParser</td>
+<td><code>internal_onedrive_odl</code></td>
+<td>Parses OneDrive ODL logs.</td>
+</tr>
+<tr>
+<td>WindowsActivitiesParser</td>
+<td><code>internal_windows_activities</code></td>
+<td>Parses Windows Activities/Timeline database artifacts.</td>
+</tr>
+<tr>
+<td>ClipboardParser</td>
+<td><code>internal_clipboard</code></td>
+<td>Parses Windows clipboard history stores and clipboard registry settings.</td>
+</tr>
+<tr>
+<td>EtlParser</td>
+<td><code>internal_etl</code></td>
+<td>Parses ETL/ETW-derived artifacts supported by Perceptor's internal parser path.</td>
+</tr>
+<tr>
+<td>MailboxParser</td>
+<td><code>internal_mailbox</code></td>
+<td>Parses supported mailbox formats and routes message bodies and attachments into the content pipeline where appropriate.</td>
+</tr>
+<tr>
+<td>WindowsMailParser</td>
+<td><code>internal_windows_mail</code></td>
+<td>Parses Windows Mail application artifacts.</td>
+</tr>
+<tr>
+<td>MessagingParser</td>
+<td><code>internal_messaging</code></td>
+<td>Parses messaging and communication application artifacts.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="workflow-and-support-parsers">Workflow and Support Parsers<a class="headerlink" href="#workflow-and-support-parsers" title="Permanent link">&para;</a></h2>
+<p>These parsers are not all standalone Windows profile tools, but they support
+imports, reports, and enrichment workflows.</p>
+<table>
+<thead>
+<tr>
+<th>Parser or module</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Google Takeout parser</td>
+<td>Detects and parses Google Takeout Drive and Mail exports. Drive files are inventoried and readable content is indexed; Mail exports are routed through the mailbox parser.</td>
+</tr>
+<tr>
+<td>Memory string scanner</td>
+<td>Scans memory images and memory-support files with <code>bstrings</code> when available and fallback string extraction otherwise.</td>
+</tr>
+<tr>
+<td>Structured memory parser</td>
+<td>Runs bounded Volatility and MemProcFS workflows and normalizes structured memory records.</td>
+</tr>
+<tr>
+<td>Windows Search memory parser</td>
+<td>Normalizes Windows Search memory carve results and related memory-backed content references.</td>
+</tr>
+<tr>
+<td>USB parsers</td>
+<td>Normalize USB device, partition diagnostic, connection, volume, and correlation details.</td>
+</tr>
+<tr>
+<td>USP import parser</td>
+<td>Imports and normalizes TZWorks USP USB Parser output.</td>
+</tr>
+<tr>
+<td>File carving support</td>
+<td>Provides helper logic for carving and recovered-file workflows.</td>
+</tr>
+<tr>
+<td>Cloud server import parser</td>
+<td>Normalizes imported cloud/server-side data for correlation with local artifacts.</td>
+</tr>
+<tr>
+<td>Image analysis helpers</td>
+<td>Provide image-oriented helper analysis for supported visual workflows.</td>
+</tr>
+<tr>
+<td>Shortcut support helpers</td>
+<td>Provide shortcut parsing and enrichment helpers used by LNK-related workflows.</td>
+</tr>
+<tr>
+<td>Taskband parser</td>
+<td>Parses taskbar/taskband-style registry data and feature usage context.</td>
+</tr>
+<tr>
+<td>Prefetch hash lookup</td>
+<td>Supports Prefetch path/hash enrichment and normalized Prefetch item handling.</td>
+</tr>
+<tr>
+<td>Xpress Huffman support</td>
+<td>Provides decompression support used by Windows compressed-data workflows.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="normalization-and-import">Normalization and Import<a class="headerlink" href="#normalization-and-import" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Normalized row builders</td>
+<td>Map parser output into Perceptor's common artifact schemas.</td>
+</tr>
+<tr>
+<td>Tool output ingest</td>
+<td>Imports generated parser output into the case database, DuckDB analytics tables, and content indexing pipeline.</td>
+</tr>
+<tr>
+<td>Report bundle import</td>
+<td>Detects report bundle formats, including external tool exports and live-case ZIP structures, then routes files to the relevant parser or import path.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="notes">Notes<a class="headerlink" href="#notes" title="Permanent link">&para;</a></h2>
+<ul>
+<li>The names above are Perceptor parser names or source modules, not always
+  examiner-facing report names.</li>
+<li>Some parsers call external tools for a specific extraction step but still use
+  Perceptor's internal normalization and correlation code.</li>
+<li>Large readable content is indexed in OpenSearch. DuckDB stores structured
+  metadata, hashes, source references, and report-ready fields.</li>
+</ul>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../third-party-tools/" class="btn btn-neutral float-left" title="Third-Party Tools"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../../report-specs/" class="btn btn-neutral float-right" title="Report Specs">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/leewhitfield/perceptor" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+      <span><a href="../third-party-tools/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../../report-specs/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../..";</script>
+    <script src="../../js/theme_extra.js"></script>
+    <script src="../../js/theme.js"></script>
+      <script src="../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>
