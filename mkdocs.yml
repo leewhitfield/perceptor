@@ -1,6 +1,6 @@
 site_name: Perceptor
 site_description: Perceptor forensic processing and reporting operator documentation
-repo_url: https://github.com/example/perceptor
+repo_url: https://github.com/leewhitfield/perceptor
 edit_uri: ""
 docs_dir: docs
 theme:
