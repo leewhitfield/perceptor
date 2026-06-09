@@ -1,4 +1,4 @@
-![Perceptor Logo](../perceptor.png)
+![Perceptor Logo](assets/perceptor.png)
 
 # Perceptor Documentation
 
