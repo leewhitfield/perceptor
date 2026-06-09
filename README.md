@@ -1,6 +1,53 @@
-# Forensic Orchestrator MVP
+# Perceptor
 
-CLI-first starter repo for lawful forensic processing orchestration.
+Perceptor is designed to connect disparate forensic artifacts and provide a
+more comprehensive view of an investigation. Some relationships between
+artifacts are obvious. Others are not immediately apparent, especially when
+there is too much data for an examiner to review one artifact or system at a
+time.
+
+Perceptor addresses that problem by ingesting full forensic images, report
+exports from tools such as Eric Zimmerman's tools, virtual machines, triage
+collections, and other relevant data sources. Once the data is loaded,
+Perceptor uses its own algorithms to identify, score, and report links between
+artifacts so an examiner can understand how different pieces of evidence relate
+to each other.
+
+Perceptor operates independently and does not require artificial intelligence.
+It also provides an optional MCP connector. The MCP connector lets an examiner
+attach an agent of their choice and query multiple artifact families at once,
+with source-of-truth routing and guardrails intended to keep the agent grounded
+in generated reports, indexed content, and parsed evidence. The goal is to
+speed up investigations and help reveal links that may otherwise remain buried.
+
+Perceptor leverages existing open-source software, including Eric Zimmerman's
+tools and Sleuth Kit, together with custom parsers created for this project.
+That combination is intended to streamline processing, indexing, reporting, and
+cross-artifact review.
+
+Three databases form the back end:
+
+1. SQLite stores case data, evidence images, data sources, jobs, processing
+   metadata, audit records, and other orchestration state.
+2. DuckDB stores extracted and normalized rows from parsed forensic artifacts.
+3. OpenSearch stores readable content from files, emails, messages, and other
+   text-bearing sources so it can be searched and tied back to the originating
+   evidence.
+
+This is just the start. Perceptor is not complete and still has some way to go.
+I need help. What is missing? What does not work as well as it should? Please
+take it, test it, break it, and come back with findings so I can fix them. Even
+better, fix them yourself and send a pull request.
+
+At the moment, Perceptor is for Windows analysis only. macOS support is planned,
+and Linux analysis should eventually be added.
+
+Why does this exist? Two main reasons. First, many forensic tools have become
+locked down in ways that can mean higher prices and poorer service for the
+field. Second, there is substantial opposition to AI being used in forensics.
+The MCP interface is an answer to that: it shows what an agent can do when it
+has the right guardrails, evidence routing, and direction. Give it a try. If it
+does not impress you, tell me. If it does, tell me that too.
 
 Operator documentation is organized for MkDocs under `docs/`; start with
 `docs/index.md`. The legacy single-page manual remains at `docs/user-manual.md`.
@@ -13,18 +60,8 @@ Quick Ubuntu bootstrap from a source checkout:
 scripts/bootstrap-ubuntu.sh
 ```
 
-This MVP proves the initial workflow:
-
-1. Register a Windows E01 forensic image.
-2. Detect whether the image is an NTFS volume or full disk image.
-3. Discover partitions with `mmls` when needed.
-4. Extract configured artifacts with Sleuth Kit `fls`/`icat`.
-5. Run configured forensic tools against extracted artifacts.
-6. Store auditable orchestration state and tool-output metadata in SQLite.
-7. Store normalized parsed artifact rows in per-case DuckDB analytics files.
-8. Store only searchable body/content text in OpenSearch, with SQLite/DuckDB references back to origin rows.
-
-This is not a validated forensic product yet. Validate behavior, logging, mounts, and tool output handling before using it on real evidence.
+This is not a validated forensic product yet. Validate behavior, logging,
+mounts, and tool output handling before using it on real evidence.
 
 ## Requirements
 
