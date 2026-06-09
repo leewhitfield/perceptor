@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../img/favicon.ico" />
+    <title>Dependency Management - Perceptor</title>
+    <link rel="stylesheet" href="../../css/theme.css" />
+    <link rel="stylesheet" href="../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Dependency Management";
+        var mkdocs_page_input_path = "getting-started/dependencies.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../.." class="icon icon-home"> Perceptor
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../..">Home</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Getting Started</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../overview/">Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../ubuntu-install/">Ubuntu Install</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../configuration/">Configuration</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">Dependency Management</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#python">Python</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#default-system-packages">Default System Packages</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#default-managed-tools">Default Managed Tools</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#tool-notes">Tool Notes</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#default-coverage-tools">Default Coverage Tools</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#truly-optional-services">Truly Optional Services</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#windows-search-note">Windows Search Note</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#check-dependency-state">Check Dependency State</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#quick-binary-check">Quick Binary Check</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../first-run/">First Run Checks</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Workflows</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/disk-images/">Disk Images</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/live-case-zips/">Live-Case and Report ZIPs</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/report-bundles/">Report Bundles</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/file-listings/">File Listings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/deleted-file-recovery/">Deleted File Recovery</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/memory/">Memory and Support Files</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/deep-recovery/">Deep Recovery Profiles</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/bitlocker/">BitLocker Images</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/vsc/">Volume Shadow Copies</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../mounted-image-notes/">Mounted Image Notes</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Reports</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../reference/reports/">Report Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../reference/report-catalog/">Report Catalog</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../reference/supported-artifacts/">Supported Artifacts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../report-specs/">Report Specs</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../artifact-coverage-matrix/">Artifact Coverage</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../windows-full-artifacts/">Windows Full Artifacts</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">MCP</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../mcp/overview/">MCP Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../mcp/source-of-truth/">Source-of-Truth Routing</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../mcp/client-setup/">Client Setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../mcp/tools/">MCP Tool Reference</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Future</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../future-features/">Future Features</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Operations</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../reference/commands/">Command Reference</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/security/">Security Model</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/field-readiness/">Field Readiness</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/troubleshooting/">Troubleshooting</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../release-checklist/">Release Checklist</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../..">Perceptor</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../.." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Getting Started</li>
+      <li class="breadcrumb-item active">Dependency Management</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="dependency-management">Dependency Management<a class="headerlink" href="#dependency-management" title="Permanent link">&para;</a></h1>
+<p>Perceptor separates dependencies into three groups:</p>
+<ul>
+<li>Python packages managed by <code>uv</code>.</li>
+<li>System packages installed with apt.</li>
+<li>Perceptor-managed third-party tools downloaded or built under a tools directory.</li>
+</ul>
+<p>The default setup command can install both managed tools and the BitLocker
+fallback apt packages (<code>dislocker</code> and <code>libbde-utils</code>). If sudo requires a
+password, install those packages with the apt command below before running
+doctor.</p>
+<h2 id="python">Python<a class="headerlink" href="#python" title="Permanent link">&para;</a></h2>
+<pre><code class="language-bash">uv sync
+</code></pre>
+<h2 id="default-system-packages">Default System Packages<a class="headerlink" href="#default-system-packages" title="Permanent link">&para;</a></h2>
+<p>These packages are part of the default Ubuntu setup. They cover baseline image
+processing plus recovery, VSC, BitLocker fallback, OCR, PDF text extraction, and
+compressed NTFS support.</p>
+<pre><code class="language-bash">sudo apt install -y \
+  sleuthkit ewf-tools qemu-utils ntfs-3g cryptsetup util-linux \
+  libesedb-utils exiftool poppler-utils tesseract-ocr \
+  libfsntfs-utils python3-libfsntfs libvshadow-utils dislocker libbde-utils
+</code></pre>
+<p>Important binaries include <code>mmls</code>, <code>fsstat</code>, <code>fls</code>, <code>icat</code>, <code>ewfinfo</code>,
+<code>ewfmount</code>, <code>qemu-img</code>, <code>ntfs-3g</code>, <code>cryptsetup</code>, <code>esedbexport</code>, <code>exiftool</code>,
+<code>pdftotext</code>, <code>tesseract</code>, <code>vshadowinfo</code>, <code>vshadowmount</code>, <code>dislocker</code>, and
+<code>bdemount</code>.</p>
+<h2 id="default-managed-tools">Default Managed Tools<a class="headerlink" href="#default-managed-tools" title="Permanent link">&para;</a></h2>
+<p>Install all supported managed tools as part of setup. This also attempts to
+install the BitLocker fallback apt packages <code>dislocker</code> and <code>libbde-utils</code>
+non-interactively when they are missing:</p>
+<pre><code class="language-bash">uv run perceptor standalone install-tool all \
+  --tools-dir ~/tools \
+  --env-file ~/tools/perceptor.env
+</code></pre>
+<p>Install one tool:</p>
+<pre><code class="language-bash">uv run perceptor standalone install-tool eztools --tools-dir ~/tools --env-file ~/tools/perceptor.env
+uv run perceptor standalone install-tool sidr --tools-dir ~/tools --env-file ~/tools/perceptor.env
+uv run perceptor standalone install-tool usnjrnl-forensic --tools-dir ~/tools --env-file ~/tools/perceptor.env
+</code></pre>
+<h2 id="tool-notes">Tool Notes<a class="headerlink" href="#tool-notes" title="Permanent link">&para;</a></h2>
+<ul>
+<li>EZ Tools are downloaded directly; PowerShell is not required for Perceptor's
+  managed installer.</li>
+<li>EZ Tools are SHA1 checked when the catalog supplies a valid SHA1.</li>
+<li><code>bstrings</code> is obtained from the EZ Tools catalog and should be present after
+  the default managed install.</li>
+<li>SIDR is expected to be a native Linux Rust build, not upstream <code>sidr.exe</code>.</li>
+<li><code>usnjrnl-forensic</code> requires Rust 1.88.0 or newer.</li>
+<li><code>pypykatz</code>, Volatility 3, the Volatility Windows symbol pack, MemProcFS,
+  SIDR, <code>ual-timeliner</code>, <code>usnjrnl-forensic</code>, <code>dislocker</code>, and <code>bdemount</code> are
+  treated as default coverage tools by <code>install-tool all</code>.</li>
+<li>The Volatility Windows symbol pack is stored as
+  <code>/opt/perceptor-tools/volatility3-symbols/windows.zip</code> by the managed installer.
+  Structured memory analysis passes that directory to Volatility when present.</li>
+<li>Missing coverage tools should be reported by doctor and fixed during setup.
+  Individual workflows should still fail gracefully when a specialized tool is
+  unavailable.</li>
+</ul>
+<h2 id="default-coverage-tools">Default Coverage Tools<a class="headerlink" href="#default-coverage-tools" title="Permanent link">&para;</a></h2>
+<p>These should be present after the default Ubuntu setup and managed tool install:</p>
+<ul>
+<li><code>libfsntfs-utils</code> and <code>python3-libfsntfs</code>: compressed NTFS recovery support.</li>
+<li><code>libvshadow-utils</code>: Volume Shadow Copy inventory and mount support.</li>
+<li><code>dislocker</code> and <code>libbde-utils</code>: BitLocker fallback unlock tools.</li>
+<li><code>pypykatz</code>: controlled DPAPI/LSA validation for memory plus registry-hive
+  cases.</li>
+<li><code>bstrings</code>: preferred memory/string scanner; Perceptor falls back to <code>strings</code>.</li>
+<li><code>hibr2bin</code> or <code>HibernationRecon</code>: hiberfil decompression before scanning.</li>
+<li><code>ual-timeliner</code>: external UAL/SUM timeline parser. Perceptor still has an
+  internal fallback parser when this tool is unavailable or fails.</li>
+<li><code>poppler-utils</code>: fast PDF text extraction through <code>pdftotext</code>; Perceptor falls
+  back to <code>pypdf</code>.</li>
+<li><code>bmc-tools.py</code>: RDP bitmap cache fragment extraction.</li>
+</ul>
+<p>Example default coverage paths:</p>
+<pre><code class="language-bash">export BMC_TOOLS=/opt/perceptor/.external/bmc-tools/bmc-tools.py
+export BSTRINGS_BIN=/opt/perceptor-tools/bstrings/bstrings
+export UAL_TIMELINER_BIN=$HOME/.local/bin/ual-timeliner
+</code></pre>
+<h2 id="truly-optional-services">Truly Optional Services<a class="headerlink" href="#truly-optional-services" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>OPENAI_API_KEY</code>: enables semantic RDP contact-sheet review. Without it, OCR
+  fallback is used where available. This remains optional because it depends on
+  case policy and external service approval. When OpenAI is used, Perceptor records
+  response token usage and estimated cost in the RDP visual observation details
+  and report output.</li>
+</ul>
+<h2 id="windows-search-note">Windows Search Note<a class="headerlink" href="#windows-search-note" title="Permanent link">&para;</a></h2>
+<p>SIDR supports Windows Search parsing where the database format is supported. On
+Linux, use a native SIDR binary. Current testing did not identify an offline SIDR
+option that decrypts Windows 11 <code>AesGcm1</code> encrypted SQLite Search databases. If
+that format is required, collect live memory while the user is logged in and
+SearchIndexer.exe is running, and preserve registry hives plus DPAPI/LSA
+material for controlled follow-up.</p>
+<h2 id="check-dependency-state">Check Dependency State<a class="headerlink" href="#check-dependency-state" title="Permanent link">&para;</a></h2>
+<pre><code class="language-bash">uv run perceptor standalone dependencies --format table
+uv run perceptor standalone doctor --smoke --format table
+</code></pre>
+<h2 id="quick-binary-check">Quick Binary Check<a class="headerlink" href="#quick-binary-check" title="Permanent link">&para;</a></h2>
+<pre><code class="language-bash">command -v mmls fsstat fls icat
+command -v ewfinfo ewfmount
+command -v qemu-img
+command -v ntfs-3g
+command -v dotnet
+command -v esedbexport
+command -v exiftool
+command -v pdftotext || echo &quot;pdftotext not installed; PDF parser will use pypdf fallback&quot;
+command -v tesseract
+command -v usnjrnl-forensic || test -x &quot;$HOME/.cargo/bin/usnjrnl-forensic&quot;
+command -v vshadowinfo vshadowmount
+command -v dislocker bdemount
+python3 - &lt;&lt;'PY'
+import pyfsntfs
+PY
+</code></pre>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../configuration/" class="btn btn-neutral float-left" title="Configuration"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../first-run/" class="btn btn-neutral float-right" title="First Run Checks">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/example/perceptor" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+      <span><a href="../configuration/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../first-run/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../..";</script>
+    <script src="../../js/theme_extra.js"></script>
+    <script src="../../js/theme.js"></script>
+      <script src="../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

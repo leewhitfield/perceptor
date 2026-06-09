@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../img/favicon.ico" />
+    <title>MCP Tool Reference - Perceptor</title>
+    <link rel="stylesheet" href="../../css/theme.css" />
+    <link rel="stylesheet" href="../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "MCP Tool Reference";
+        var mkdocs_page_input_path = "mcp/tools.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../.." class="icon icon-home"> Perceptor
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../..">Home</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Getting Started</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../getting-started/overview/">Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../getting-started/ubuntu-install/">Ubuntu Install</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../getting-started/configuration/">Configuration</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../getting-started/dependencies/">Dependency Management</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../getting-started/first-run/">First Run Checks</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Workflows</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/disk-images/">Disk Images</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/live-case-zips/">Live-Case and Report ZIPs</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/report-bundles/">Report Bundles</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/file-listings/">File Listings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/deleted-file-recovery/">Deleted File Recovery</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/memory/">Memory and Support Files</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/deep-recovery/">Deep Recovery Profiles</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/bitlocker/">BitLocker Images</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/vsc/">Volume Shadow Copies</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../mounted-image-notes/">Mounted Image Notes</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Reports</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../reference/reports/">Report Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../reference/report-catalog/">Report Catalog</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../reference/supported-artifacts/">Supported Artifacts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../report-specs/">Report Specs</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../artifact-coverage-matrix/">Artifact Coverage</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../windows-full-artifacts/">Windows Full Artifacts</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">MCP</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../overview/">MCP Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../source-of-truth/">Source-of-Truth Routing</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../client-setup/">Client Setup</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">MCP Tool Reference</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#result-limits">Result Limits</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#routing-and-discovery">Routing and Discovery</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#case-review">Case Review</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#artifact-queries">Artifact Queries</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#packets-and-jobs">Packets and Jobs</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#gated-processing">Gated Processing</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#reports">Reports</a>
+    </li>
+    </ul>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Future</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../future-features/">Future Features</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Operations</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../reference/commands/">Command Reference</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/security/">Security Model</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/field-readiness/">Field Readiness</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/troubleshooting/">Troubleshooting</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../release-checklist/">Release Checklist</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../..">Perceptor</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../.." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">MCP</li>
+      <li class="breadcrumb-item active">MCP Tool Reference</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="mcp-tool-reference">MCP Tool Reference<a class="headerlink" href="#mcp-tool-reference" title="Permanent link">&para;</a></h1>
+<p>Use <code>relic_mcp_tool_reference</code> for the live tool list exposed by the running
+server.</p>
+<h2 id="result-limits">Result Limits<a class="headerlink" href="#result-limits" title="Permanent link">&para;</a></h2>
+<p>MCP tools intentionally return bounded result sets. A bounded response is not
+evidence of absence.</p>
+<ul>
+<li><code>result_limit</code> means a limit was active.</li>
+<li><code>result_limit_warning</code> means the returned rows reached or appear to have hit a
+  limit.</li>
+<li>Increase the tool <code>limit</code>, read an existing generated report/export, or ask
+  for a dossier/full context before relying on absence.</li>
+</ul>
+<h2 id="routing-and-discovery">Routing and Discovery<a class="headerlink" href="#routing-and-discovery" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>relic_route_question</code></li>
+<li><code>relic_mcp_workflow_guide</code></li>
+<li><code>relic_mcp_tool_reference</code></li>
+<li><code>relic_workspace_summary</code></li>
+<li><code>relic_workspace_map</code></li>
+<li><code>relic_workspace_health</code></li>
+<li><code>relic_case_evidence_map</code></li>
+<li><code>relic_case_readiness</code></li>
+<li><code>relic_list_cases</code></li>
+<li><code>relic_list_computers</code></li>
+<li><code>relic_list_images</code></li>
+<li><code>relic_list_jobs</code></li>
+<li><code>relic_get_job</code></li>
+<li><code>relic_processing_progress</code></li>
+<li><code>relic_resume_plan</code></li>
+<li><code>relic_profile_preview</code></li>
+<li><code>relic_doctor</code></li>
+<li><code>relic_discover_reports</code></li>
+<li><code>relic_discover_report_exports</code></li>
+<li><code>relic_read_existing_report</code></li>
+</ul>
+<h2 id="case-review">Case Review<a class="headerlink" href="#case-review" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>relic_case_dashboard</code></li>
+<li><code>relic_case_review</code></li>
+<li><code>relic_case_activity_digest</code></li>
+<li><code>relic_case_next_actions</code></li>
+<li><code>relic_case_runbook</code></li>
+<li><code>relic_timeline</code></li>
+<li><code>relic_timeline_window</code></li>
+<li><code>relic_activity_windows</code></li>
+</ul>
+<h2 id="artifact-queries">Artifact Queries<a class="headerlink" href="#artifact-queries" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>relic_query_evidence_contents</code></li>
+<li><code>relic_query_filesystem_listings</code></li>
+<li><code>relic_search_artifacts</code></li>
+<li><code>relic_search_content</code></li>
+<li><code>relic_get_indexed_content</code></li>
+<li><code>relic_lead_search</code></li>
+<li><code>relic_artifact_search_sources</code></li>
+<li><code>relic_file_dossier</code></li>
+<li><code>relic_usb_dossier</code></li>
+<li><code>relic_user_activity</code></li>
+<li><code>relic_query_suspicious_executions</code></li>
+<li><code>relic_query_external_storage</code></li>
+<li><code>relic_query_usb_files</code></li>
+<li><code>relic_query_usb_contents</code></li>
+<li><code>relic_query_file_movement_identity</code></li>
+<li><code>relic_query_opened_from_removable_media</code></li>
+<li><code>relic_query_opened_from_cloud_storage</code></li>
+<li><code>relic_query_cloud_artifacts</code></li>
+<li><code>relic_query_memory_artifacts</code></li>
+<li><code>relic_query_browser_activity</code></li>
+<li><code>relic_query_registry_activity</code></li>
+<li><code>relic_query_shortcuts</code></li>
+<li><code>relic_query_communications</code></li>
+<li><code>relic_query_system_users</code></li>
+</ul>
+<h2 id="packets-and-jobs">Packets and Jobs<a class="headerlink" href="#packets-and-jobs" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>relic_write_review_packet</code></li>
+<li><code>relic_list_review_packets</code></li>
+<li><code>relic_read_review_packet</code></li>
+<li><code>relic_write_search_packet</code></li>
+<li><code>relic_list_search_packets</code></li>
+<li><code>relic_read_search_packet</code></li>
+<li><code>relic_rerun_search_packet</code></li>
+<li><code>relic_list_mcp_jobs</code></li>
+<li><code>relic_get_mcp_job</code></li>
+<li><code>relic_get_mcp_job_output</code></li>
+<li><code>relic_get_mcp_job_progress</code></li>
+<li><code>relic_list_progress_manifests</code></li>
+<li><code>relic_cancel_mcp_job</code></li>
+</ul>
+<h2 id="gated-processing">Gated Processing<a class="headerlink" href="#gated-processing" title="Permanent link">&para;</a></h2>
+<p>These require <code>--allow-processing</code>:</p>
+<ul>
+<li><code>relic_import_triage_zip</code></li>
+<li><code>relic_import_report_bundle</code></li>
+<li><code>relic_process_image</code></li>
+<li><code>relic_run_profile</code></li>
+<li><code>relic_recover_deleted_files</code></li>
+</ul>
+<p><code>relic_recover_deleted_files</code> starts a tracked MCP job. The job record stores the
+Perceptor CLI command, and the recovery output manifest stores the exact <code>icat</code>
+command used for each recovered or failed candidate.</p>
+<h2 id="reports">Reports<a class="headerlink" href="#reports" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>relic_list_report_types</code></li>
+<li><code>relic_generate_report</code></li>
+<li><code>relic_write_report_bundle</code></li>
+<li><code>relic_report_bundle_coverage</code></li>
+<li><code>relic_ingest_triage_zip_preflight</code></li>
+</ul>
+<p>Use <code>relic_generate_report</code> with <code>report_name: "bits-activity"</code> for BITS,
+qmgr, OneDrive updater, component updater, or transfer-job questions. The report
+uses timestamped BITS Client EVTX rows and shows qmgr database/carved
+correlations when exact job ID or URL matches are available.</p>
+<p>Use <code>relic_generate_report</code> with <code>report_name: "examiner-edge-artifacts"</code> for
+Sticky Notes, Windows notifications, NetworkList, outbound RDP history,
+MountPoints2, Scheduled Task XML, CryptnetUrlCache, hosts, WSL, Windows Update,
+Credential/Vault metadata, Bluetooth paired devices, installed applications, or
+SwiftKey/InputPersonalization questions.</p>
+<p>Use <code>relic_generate_report</code> with <code>report_name: "mapped-network-paths"</code> for
+mapped network drives, UNC shares, or MountPoints2 keys that look like
+<code>##host#share#path</code>. Perceptor decodes those keys into <code>\\host\share\path</code> and
+returns the user profile plus first/last observed registry timestamps.</p>
+<p>Use <code>relic_generate_report</code> with <code>report_name: "non-standard-ads"</code> for hidden
+or alternate data stream questions. This report filters common
+<code>Zone.Identifier</code> streams and classifies Cloud Files/OneDrive metadata, WOF
+compression, SmartScreen, and NTFS metadata streams separately from
+high-priority unclassified ADS rows.</p>
+<p>Use <code>relic_generate_report</code> with <code>report_name: "ntfs-security-descriptors"</code> for
+<code>$Secure</code>, <code>$SDS</code>, ACL, or NTFS permission-change questions. This report
+inventories security descriptor streams from MFT ADS rows and clearly marks that
+current output is presence/metadata-only, not decoded ACL content.</p>
+<p>Use <code>relic_generate_report</code> with <code>report_name: "remote-access-tool-logs"</code> for
+AnyDesk, TeamViewer, LogMeIn, ConnectWise Control, Splashtop, RustDesk, VNC, and
+similar remote-support application log questions. Parsed log lines are
+categorized into connection, authentication, transfer, and identity/routing
+leads when possible.</p>
+<p>Use <code>relic_generate_report</code> with <code>report_name: "structured-memory"</code> for
+Volatility and MemProcFS structured memory questions. The report returns parsed
+rows when available and also lists tool run attempts, failures, and no-row
+results so analysts can distinguish "not run" from "run but unsupported for this
+dump."</p>
+<p>Use <code>relic_generate_report</code> with <code>report_name: "event-interpretation"</code> for
+high-value EVTX questions involving account manipulation, log clearing,
+PowerShell, scheduled tasks, WMI persistence indicators, print-service history,
+service installs, or 4688 process creation.</p>
+<p>Use <code>relic_generate_report</code> with <code>report_name: "clipboard"</code> for clipboard
+history, copied/pasted content, or cloud clipboard sync questions. The report
+uses the dedicated Windows clipboard store where available; Windows Activities
+is secondary context.</p>
+<p>MCP interactive query tools keep row limits for model usability. Direct
+generated-report responses remain bounded, while saved report bundles default to
+broader exports. If an MCP response contains <code>result_limit_warning</code> or a
+generated report contains <code>limited: true</code>, read or regenerate the saved export
+with a higher limit before making a negative finding.</p>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../client-setup/" class="btn btn-neutral float-left" title="Client Setup"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../../future-features/" class="btn btn-neutral float-right" title="Future Features">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/example/perceptor" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+      <span><a href="../client-setup/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../../future-features/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../..";</script>
+    <script src="../../js/theme_extra.js"></script>
+    <script src="../../js/theme.js"></script>
+      <script src="../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

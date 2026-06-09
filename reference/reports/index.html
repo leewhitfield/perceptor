@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../img/favicon.ico" />
+    <title>Report Overview - Perceptor</title>
+    <link rel="stylesheet" href="../../css/theme.css" />
+    <link rel="stylesheet" href="../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Report Overview";
+        var mkdocs_page_input_path = "reference/reports.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../.." class="icon icon-home"> Perceptor
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../..">Home</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Getting Started</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../getting-started/overview/">Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../getting-started/ubuntu-install/">Ubuntu Install</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../getting-started/configuration/">Configuration</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../getting-started/dependencies/">Dependency Management</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../getting-started/first-run/">First Run Checks</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Workflows</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/disk-images/">Disk Images</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/live-case-zips/">Live-Case and Report ZIPs</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/report-bundles/">Report Bundles</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/file-listings/">File Listings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/deleted-file-recovery/">Deleted File Recovery</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/memory/">Memory and Support Files</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/deep-recovery/">Deep Recovery Profiles</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/bitlocker/">BitLocker Images</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/vsc/">Volume Shadow Copies</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../mounted-image-notes/">Mounted Image Notes</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Reports</span></p>
+              <ul class="current">
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">Report Overview</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#common-reports">Common Reports</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#examiner-edge-artifacts">Examiner Edge Artifacts</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#mapped-network-paths">Mapped Network Paths</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#non-standard-ads">Non-Standard ADS</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#ntfs-security-descriptors">NTFS Security Descriptors</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#remote-access-tool-logs">Remote Access Tool Logs</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#bits-activity">BITS Activity</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#event-interpretation">Event Interpretation</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#clipboard">Clipboard</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#formats">Formats</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#limits">Limits</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#output-path">Output Path</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#distinct-tables">Distinct Tables</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../report-catalog/">Report Catalog</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../supported-artifacts/">Supported Artifacts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../report-specs/">Report Specs</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../artifact-coverage-matrix/">Artifact Coverage</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../windows-full-artifacts/">Windows Full Artifacts</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">MCP</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../mcp/overview/">MCP Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../mcp/source-of-truth/">Source-of-Truth Routing</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../mcp/client-setup/">Client Setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../mcp/tools/">MCP Tool Reference</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Future</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../future-features/">Future Features</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Operations</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../commands/">Command Reference</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/security/">Security Model</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/field-readiness/">Field Readiness</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/troubleshooting/">Troubleshooting</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../release-checklist/">Release Checklist</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../..">Perceptor</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../.." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Reports</li>
+      <li class="breadcrumb-item active">Report Overview</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="reports">Reports<a class="headerlink" href="#reports" title="Permanent link">&para;</a></h1>
+<p>Reports are investigator-facing views over parsed data. Use reports before raw
+table searches when a report exists for the question.</p>
+<p>For the complete list of report subcommands, see
+<a href="../report-catalog/">Report Catalog</a>.</p>
+<h2 id="common-reports">Common Reports<a class="headerlink" href="#common-reports" title="Permanent link">&para;</a></h2>
+<pre><code class="language-bash">uv run perceptor --root ~/analysis/case-root report dashboard --case CASE_ID --format table
+uv run perceptor --root ~/analysis/case-root report progress --case CASE_ID --format table
+uv run perceptor --root ~/analysis/case-root report suspicious-executions --case CASE_ID --format md
+uv run perceptor --root ~/analysis/case-root report external-storage --case CASE_ID --format md
+uv run perceptor --root ~/analysis/case-root report usb-files --case CASE_ID --format md
+uv run perceptor --root ~/analysis/case-root report opened-from-removable-media --case CASE_ID --format md
+uv run perceptor --root ~/analysis/case-root report opened-from-cloud-storage --case CASE_ID --format md
+uv run perceptor --root ~/analysis/case-root report file-movement-identity --case CASE_ID --format md
+uv run perceptor --root ~/analysis/case-root report memory-analysis --case CASE_ID --format md
+uv run perceptor --root ~/analysis/case-root report structured-memory --case CASE_ID --format md
+uv run perceptor --root ~/analysis/case-root report bits-activity --case CASE_ID --format table
+uv run perceptor --root ~/analysis/case-root report examiner-edge-artifacts --case CASE_ID --format table
+uv run perceptor --root ~/analysis/case-root report mapped-network-paths --case CASE_ID --format table
+uv run perceptor --root ~/analysis/case-root report non-standard-ads --case CASE_ID --format table
+uv run perceptor --root ~/analysis/case-root report ntfs-security-descriptors --case CASE_ID --format table
+uv run perceptor --root ~/analysis/case-root report remote-access-tool-logs --case CASE_ID --format table
+</code></pre>
+<h2 id="examiner-edge-artifacts">Examiner Edge Artifacts<a class="headerlink" href="#examiner-edge-artifacts" title="Permanent link">&para;</a></h2>
+<p><code>examiner-edge-artifacts</code> surfaces small, high-value artifacts that commonly
+produce leads:</p>
+<ul>
+<li>Sticky Notes.</li>
+<li>Windows notifications.</li>
+<li>NetworkList, outbound RDP history, and MountPoints2 registry rows.</li>
+<li>EventTranscript.db diagnostic telemetry rows where present, with app launch,
+  file, network, and device-census rows classified where possible.</li>
+<li>Scheduled Task XML files.</li>
+<li>TokenBroker cache metadata and account leads. Token-like values are not
+  emitted as report text.</li>
+<li>CryptnetUrlCache and hosts file mappings.</li>
+<li>Legacy <code>Thumbs.db</code> presence metadata and OLE stream inventory when the
+  <code>olefile</code> parser is available.</li>
+<li>WSL presence/history, Windows Update registry/DataStore presence, Credential
+  Manager/Vault metadata, Bluetooth paired-device registry rows, installed
+  application registry rows, and SwiftKey/InputPersonalization leads.</li>
+</ul>
+<p>Credential and Vault entries are metadata-only unless separate DPAPI context is
+available. SwiftKey/InputPersonalization strings are investigative fragments,
+not standalone proof of typed content.</p>
+<h2 id="mapped-network-paths">Mapped Network Paths<a class="headerlink" href="#mapped-network-paths" title="Permanent link">&para;</a></h2>
+<p><code>mapped-network-paths</code> decodes MountPoints2 network-share keys from user
+registry hives. Keys in the form <code>##host#share#path</code> are reported as UNC-style
+paths such as <code>\\host\share\path</code>, with the associated user profile, first/last
+observed key times, and sampled registry values. Use this report for mapped
+network drives, UNC share access, and MountPoints2 network questions.</p>
+<h2 id="non-standard-ads">Non-Standard ADS<a class="headerlink" href="#non-standard-ads" title="Permanent link">&para;</a></h2>
+<p><code>non-standard-ads</code> reports MFT alternate data stream rows beyond common
+<code>Zone.Identifier</code> streams. It classifies common Cloud Files/OneDrive metadata,
+WOF compression, SmartScreen, and NTFS metadata streams as expected/low-priority
+so unclassified streams stand out. Treat high-priority rows as leads for hidden
+content or unusual file metadata and corroborate with file extraction where
+possible.</p>
+<h2 id="ntfs-security-descriptors">NTFS Security Descriptors<a class="headerlink" href="#ntfs-security-descriptors" title="Permanent link">&para;</a></h2>
+<p><code>ntfs-security-descriptors</code> inventories <code>$Secure</code> security descriptor streams
+such as <code>$SDS</code>, <code>$SII</code>, and <code>$SDH</code> when they appear in MFT ADS rows. The current
+report is presence/metadata-only; structured ACL interpretation requires
+dedicated <code>$Secure:$SDS</code> parsing or MFTECmd security descriptor output.</p>
+<h2 id="remote-access-tool-logs">Remote Access Tool Logs<a class="headerlink" href="#remote-access-tool-logs" title="Permanent link">&para;</a></h2>
+<p><code>remote-access-tool-logs</code> surfaces collected AnyDesk, TeamViewer, LogMeIn,
+ConnectWise Control, Splashtop, RustDesk, VNC-family, and similar remote-support
+application logs or candidate files. Log lines are normalized into connection,
+authentication, transfer, and identity/routing leads where possible. Correlate
+these rows with execution, remote-access sessions, and network artifacts.</p>
+<h2 id="bits-activity">BITS Activity<a class="headerlink" href="#bits-activity" title="Permanent link">&para;</a></h2>
+<p><code>bits-activity</code> correlates timestamped BITS Client EVTX events with qmgr
+database or carved BITS rows when an exact job ID or URL match exists. Use it
+for Background Intelligent Transfer Service, qmgr, OneDrive updater, component
+updater, and transfer-job questions.</p>
+<p>The JSON payload includes <code>total_returned</code>, <code>total_available</code>, <code>limit</code>, and
+<code>limited</code>. If <code>limited</code> is true, regenerate with a higher <code>--limit</code> before
+relying on absence of a specific BITS row.</p>
+<p>For an existing case processed before BITS activity support was added, rebuild
+the derived table from stored EVTX rows:</p>
+<pre><code class="language-bash">uv run perceptor --root ~/analysis/case-root report bits-activity \
+  --case CASE_ID \
+  --rebuild \
+  --format table
+</code></pre>
+<p>Carved qmgr rows without native timestamps remain investigative leads. The
+report treats BITS Client EVTX as the timestamp source and records qmgr
+correlation separately.</p>
+<h2 id="event-interpretation">Event Interpretation<a class="headerlink" href="#event-interpretation" title="Permanent link">&para;</a></h2>
+<p><code>event-interpretation</code> is the high-value EVTX analytics report. It targets:</p>
+<ul>
+<li>Account manipulation: <code>4720</code>, <code>4722</code>, <code>4724</code>, <code>4725</code>, <code>4726</code>,
+  <code>4728</code>, <code>4729</code>, <code>4732</code>, <code>4733</code>, <code>4738</code>, <code>4756</code>, <code>4757</code>.</li>
+<li>Audit log clearing: Security <code>1102</code> and System <code>104</code>.</li>
+<li>PowerShell: <code>4103</code>, <code>4104</code>, and related engine/module/script-block events.</li>
+<li>Scheduled tasks: Security <code>4698</code>, <code>4699</code>, plus TaskScheduler definition and
+  action events.</li>
+<li>WMI persistence indicators: WMI-Activity <code>5857</code> through <code>5861</code>, with
+  <code>5859</code>, <code>5860</code>, and <code>5861</code> highlighted as filter, consumer, and binding
+  evidence.</li>
+<li>Print history: PrintService <code>307</code>, <code>805</code>, and <code>842</code> events where present.</li>
+<li>Process creation: Security <code>4688</code>, including command/process context where
+  present.</li>
+<li>Service installs: <code>4697</code> and <code>7045</code>.</li>
+</ul>
+<p>Example:</p>
+<pre><code class="language-bash">uv run perceptor --root ~/analysis/case-root report event-interpretation \
+  --case CASE_ID \
+  --category powershell \
+  --format table
+</code></pre>
+<h2 id="clipboard">Clipboard<a class="headerlink" href="#clipboard" title="Permanent link">&para;</a></h2>
+<p><code>clipboard</code> reports Windows clipboard-history artifacts from
+<code>%LocalAppData%\Microsoft\Clipboard</code> when present. It includes copied text,
+file URI, HTML/image indicators, item timestamps, cloud sync state, cloud sync
+ID, source device ID, and parser status.</p>
+<p>Example:</p>
+<pre><code class="language-bash">uv run perceptor --root ~/analysis/case-root report clipboard \
+  --case CASE_ID \
+  --contains &quot;copied text&quot; \
+  --format table
+</code></pre>
+<h2 id="formats">Formats<a class="headerlink" href="#formats" title="Permanent link">&para;</a></h2>
+<p>Most reports support:</p>
+<ul>
+<li><code>json</code></li>
+<li><code>table</code></li>
+<li><code>csv</code></li>
+<li><code>md</code></li>
+</ul>
+<p>Use Markdown for examiner review, CSV for spreadsheet review, and JSON for
+automation.</p>
+<h2 id="limits">Limits<a class="headerlink" href="#limits" title="Permanent link">&para;</a></h2>
+<p>Interactive reports and MCP tools may use bounded defaults so output stays
+readable. A bounded response is a preview, not evidence that no additional
+records exist.</p>
+<p>When JSON includes <code>limited: true</code>, <code>limit</code>, <code>total_available</code>,
+<code>result_limit</code>, or <code>result_limit_warning</code>, regenerate the saved report/export
+with a higher <code>--limit</code> or request the full report context before relying on
+absence. Report bundles default to broader exports, but very large cases can
+still require an explicit higher limit.</p>
+<h2 id="output-path">Output Path<a class="headerlink" href="#output-path" title="Permanent link">&para;</a></h2>
+<pre><code class="language-bash">uv run perceptor --root ~/analysis/case-root report usb-files \
+  --case CASE_ID \
+  --format md \
+  --output ~/analysis/case-root/cases/CASE_ID/outputs/reports/usb-files.md
+</code></pre>
+<h2 id="distinct-tables">Distinct Tables<a class="headerlink" href="#distinct-tables" title="Permanent link">&para;</a></h2>
+<p>Perceptor rebuilds distinct/deduped artifact tables after imports and processing.
+Reports should prefer these deduped views when available.</p>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../../mounted-image-notes/" class="btn btn-neutral float-left" title="Mounted Image Notes"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../report-catalog/" class="btn btn-neutral float-right" title="Report Catalog">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/example/perceptor" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+      <span><a href="../../mounted-image-notes/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../report-catalog/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../..";</script>
+    <script src="../../js/theme_extra.js"></script>
+    <script src="../../js/theme.js"></script>
+      <script src="../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

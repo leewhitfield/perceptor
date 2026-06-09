@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../img/favicon.ico" />
+    <title>Deleted File Recovery - Perceptor</title>
+    <link rel="stylesheet" href="../../css/theme.css" />
+    <link rel="stylesheet" href="../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Deleted File Recovery";
+        var mkdocs_page_input_path = "workflows/deleted-file-recovery.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../.." class="icon icon-home"> Perceptor
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../..">Home</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Getting Started</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../getting-started/overview/">Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../getting-started/ubuntu-install/">Ubuntu Install</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../getting-started/configuration/">Configuration</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../getting-started/dependencies/">Dependency Management</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../getting-started/first-run/">First Run Checks</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Workflows</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../disk-images/">Disk Images</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../live-case-zips/">Live-Case and Report ZIPs</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../report-bundles/">Report Bundles</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../file-listings/">File Listings</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">Deleted File Recovery</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#supported-sources">Supported Sources</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#recover-a-file">Recover a File</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#useful-filters">Useful Filters</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#output">Output</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#mcp-behavior">MCP Behavior</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../memory/">Memory and Support Files</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../deep-recovery/">Deep Recovery Profiles</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../bitlocker/">BitLocker Images</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../vsc/">Volume Shadow Copies</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../mounted-image-notes/">Mounted Image Notes</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Reports</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../reference/reports/">Report Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../reference/report-catalog/">Report Catalog</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../reference/supported-artifacts/">Supported Artifacts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../report-specs/">Report Specs</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../artifact-coverage-matrix/">Artifact Coverage</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../windows-full-artifacts/">Windows Full Artifacts</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">MCP</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../mcp/overview/">MCP Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../mcp/source-of-truth/">Source-of-Truth Routing</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../mcp/client-setup/">Client Setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../mcp/tools/">MCP Tool Reference</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Future</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../future-features/">Future Features</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Operations</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../reference/commands/">Command Reference</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/security/">Security Model</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/field-readiness/">Field Readiness</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/troubleshooting/">Troubleshooting</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../release-checklist/">Release Checklist</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../..">Perceptor</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../.." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Workflows</li>
+      <li class="breadcrumb-item active">Deleted File Recovery</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="deleted-file-recovery">Deleted File Recovery<a class="headerlink" href="#deleted-file-recovery" title="Permanent link">&para;</a></h1>
+<p>Perceptor can recover selected deleted files from parsed filesystem listings and MFT
+rows. Recovery is intentionally explicit and separate from normal listing or
+report questions.</p>
+<h2 id="supported-sources">Supported Sources<a class="headerlink" href="#supported-sources" title="Permanent link">&para;</a></h2>
+<ul>
+<li>FAT, FAT32, and exFAT candidates from <code>filesystem_entries</code>.</li>
+<li>NTFS candidates from <code>mft_entries</code>.</li>
+</ul>
+<p>For FAT-style filesystems, Perceptor resolves the deleted address with <code>fls</code> and
+extracts with <code>icat</code>. For NTFS, Perceptor uses the MFT entry number with <code>icat</code>.</p>
+<h2 id="recover-a-file">Recover a File<a class="headerlink" href="#recover-a-file" title="Permanent link">&para;</a></h2>
+<pre><code class="language-bash">uv run perceptor --root ~/analysis/case-root recover deleted-files \
+  --case CASE_ID \
+  --image IMAGE_ID \
+  --name timeline.docx \
+  --limit 1 \
+  --output-dir ~/analysis/case-root/cases/CASE_ID/outputs/recovered-files/timeline \
+  --format table
+</code></pre>
+<h2 id="useful-filters">Useful Filters<a class="headerlink" href="#useful-filters" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>--image IMAGE_ID</code>: limit recovery to one evidence image.</li>
+<li><code>--contains TEXT</code>: match text in path or file name.</li>
+<li><code>--name NAME</code>: exact file name.</li>
+<li><code>--source all|filesystem_entries|mft_entries</code>: choose source tables.</li>
+<li><code>--limit N</code>: maximum candidates.</li>
+<li><code>--max-bytes N</code>: skip files larger than this size.</li>
+<li><code>--output-dir PATH</code>: recovery output directory.</li>
+<li><code>--format json|table|csv</code>: result format.</li>
+</ul>
+<h2 id="output">Output<a class="headerlink" href="#output" title="Permanent link">&para;</a></h2>
+<p>Perceptor writes recovered files plus:</p>
+<ul>
+<li><code>deleted-file-recovery-manifest.csv</code></li>
+<li><code>deleted-file-recovery-manifest.json</code></li>
+</ul>
+<p>The manifest records original path, source table, image, filesystem type,
+offset, inode/MFT entry, command, output path, recovered size, SHA256, status,
+and failure reason.</p>
+<p>The <code>command</code> field is the exact extraction command used for that candidate. For
+successful and failed recovery attempts, this includes the full <code>icat</code> command,
+for example:</p>
+<pre><code class="language-json">[&quot;icat&quot;, &quot;-f&quot;, &quot;fat&quot;, &quot;-o&quot;, &quot;240&quot;, &quot;/evidence/usb.img&quot;, &quot;9&quot;]
+</code></pre>
+<p>For FAT-style rows where the inode is not stored in <code>filesystem_entries</code>, Perceptor
+first resolves the deleted metadata address with <code>fls</code>. The extraction manifest
+records the final <code>icat</code> command used to recover the file.</p>
+<h2 id="mcp-behavior">MCP Behavior<a class="headerlink" href="#mcp-behavior" title="Permanent link">&para;</a></h2>
+<p>MCP clients should first use <code>relic_query_evidence_contents</code> to identify the
+target. <code>relic_recover_deleted_files</code> requires the MCP server to be started with
+<code>--allow-processing</code>.</p>
+<p>MCP also records the launched Perceptor command under <code>ROOT/mcp-jobs/&lt;job-id&gt;/</code> and
+in <code>ROOT/mcp-jobs/index.json</code>. The per-file <code>icat</code> command is stored in the
+deleted-file recovery manifests written to the recovery output directory.</p>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../file-listings/" class="btn btn-neutral float-left" title="File Listings"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../memory/" class="btn btn-neutral float-right" title="Memory and Support Files">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/example/perceptor" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+      <span><a href="../file-listings/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../memory/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../..";</script>
+    <script src="../../js/theme_extra.js"></script>
+    <script src="../../js/theme.js"></script>
+      <script src="../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>
