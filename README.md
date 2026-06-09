@@ -1,5 +1,7 @@
 # Perceptor
 
+![Perceptor Logo](perceptor.png)
+
 Perceptor connects disparate forensic artifacts to provide a more comprehensive view of an investigation. Some relationships between artifacts are obvious. Others are not immediately apparent, especially when there is too much data for an examiner to review one artifact or system at a time.
 
 Perceptor ingests full forensic images, report exports from tools such as Eric Zimmerman's tools, virtual machines, triage collections, and other relevant data sources. Once the data is loaded, Perceptor uses its own algorithms to identify, score, and report links between artifacts so an examiner can understand how different pieces of evidence relate to each other.
