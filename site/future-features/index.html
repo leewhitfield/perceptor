@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>Future Features - Perceptor</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Future Features";
+        var mkdocs_page_input_path = "future-features.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> Perceptor
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">Home</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Getting Started</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../getting-started/overview/">Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../getting-started/ubuntu-install/">Ubuntu Install</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../getting-started/configuration/">Configuration</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../getting-started/dependencies/">Dependency Management</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../getting-started/first-run/">First Run Checks</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Workflows</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../workflows/disk-images/">Disk Images</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../workflows/live-case-zips/">Live-Case and Report ZIPs</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../workflows/report-bundles/">Report Bundles</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../workflows/file-listings/">File Listings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../workflows/deleted-file-recovery/">Deleted File Recovery</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../workflows/memory/">Memory and Support Files</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../workflows/deep-recovery/">Deep Recovery Profiles</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../workflows/bitlocker/">BitLocker Images</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../workflows/vsc/">Volume Shadow Copies</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../mounted-image-notes/">Mounted Image Notes</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Reports</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../reference/reports/">Report Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../reference/report-catalog/">Report Catalog</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../reference/supported-artifacts/">Supported Artifacts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../report-specs/">Report Specs</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../artifact-coverage-matrix/">Artifact Coverage</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../windows-full-artifacts/">Windows Full Artifacts</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">MCP</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../mcp/overview/">MCP Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../mcp/source-of-truth/">Source-of-Truth Routing</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../mcp/client-setup/">Client Setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../mcp/tools/">MCP Tool Reference</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Future</span></p>
+              <ul class="current">
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">Future Features</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#windows-search-sql-processing">Windows Search SQL Processing</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#macos-processing">macOS Processing</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#linux-desktop-processing">Linux Desktop Processing</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#web-ui">Web UI</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#opensearch-hardening">OpenSearch Hardening</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#external-ai-review">External AI Review</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#server-side-cloud-logs">Server-Side Cloud Logs</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#report-and-documentation-automation">Report and Documentation Automation</a>
+    </li>
+    </ul>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Operations</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../reference/commands/">Command Reference</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../operations/security/">Security Model</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../operations/field-readiness/">Field Readiness</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../operations/troubleshooting/">Troubleshooting</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../release-checklist/">Release Checklist</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">Perceptor</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Future</li>
+      <li class="breadcrumb-item active">Future Features</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="future-features">Future Features<a class="headerlink" href="#future-features" title="Permanent link">&para;</a></h1>
+<p>This page tracks features and platform areas that have been discussed or
+partially explored but are not yet supported as complete Perceptor workflows.</p>
+<p>Items here are intentionally separate from the operator workflows. Do not treat
+them as supported case-processing paths until they move into the normal
+documentation and pass release verification.</p>
+<h2 id="windows-search-sql-processing">Windows Search SQL Processing<a class="headerlink" href="#windows-search-sql-processing" title="Permanent link">&para;</a></h2>
+<p>Perceptor parses supported Windows Search outputs and records unsupported encrypted
+Search states, but Windows 11 <code>AesGcm1</code> encrypted SQLite Search databases are not
+fully decrypted offline.</p>
+<p>Potential work:</p>
+<ul>
+<li>Add a dedicated Windows Search SQLite processing workflow for unencrypted or
+  decrypted SQL databases.</li>
+<li>Store SQL table inventory, schema, parser status, and extracted rows in
+  normalized tables.</li>
+<li>Add controlled DPAPI/LSA-assisted decryption only when collected artifacts
+  actually unlock the target database.</li>
+<li>Keep failure states reportable without crashing the processing run.</li>
+<li>Add report guidance that distinguishes supported parsing, encrypted databases,
+  memory-carved fragments, and live-collection requirements.</li>
+</ul>
+<h2 id="macos-processing">macOS Processing<a class="headerlink" href="#macos-processing" title="Permanent link">&para;</a></h2>
+<p>Perceptor is currently Ubuntu-only for supported operation and Windows-focused for
+most artifact coverage. Native macOS evidence processing is future work.</p>
+<p>Potential work:</p>
+<ul>
+<li>Add macOS artifact profiles.</li>
+<li>Parse APFS metadata where supported by Linux tooling.</li>
+<li>Add macOS user activity, browser, cloud, application, and timeline reports.</li>
+<li>Define image mounting expectations for APFS, FileVault, DMG, sparsebundle, and
+  Time Machine sources.</li>
+<li>Add platform-specific dependency checks.</li>
+</ul>
+<h2 id="linux-desktop-processing">Linux Desktop Processing<a class="headerlink" href="#linux-desktop-processing" title="Permanent link">&para;</a></h2>
+<p>Linux endpoint processing is not a supported profile today.</p>
+<p>Potential work:</p>
+<ul>
+<li>Add Linux user activity profiles.</li>
+<li>Parse shell history, desktop files, browser profiles, systemd journals, audit
+  logs, package logs, mounts, removable media history, and cloud-sync artifacts.</li>
+<li>Add Linux-specific reports and timeline categories.</li>
+</ul>
+<h2 id="web-ui">Web UI<a class="headerlink" href="#web-ui" title="Permanent link">&para;</a></h2>
+<p>Perceptor is CLI-first today. Reports, MCP, and structured outputs are intended to
+support a future UI.</p>
+<p>Potential work:</p>
+<ul>
+<li>Case dashboard.</li>
+<li>Processing progress view.</li>
+<li>Evidence and report browser.</li>
+<li>Timeline review.</li>
+<li>USB/storage review.</li>
+<li>File recovery review with manifest display.</li>
+<li>MCP packet and report bundle viewer.</li>
+</ul>
+<h2 id="opensearch-hardening">OpenSearch Hardening<a class="headerlink" href="#opensearch-hardening" title="Permanent link">&para;</a></h2>
+<p>OpenSearch is assumed local in the current deployment model.</p>
+<p>Potential work:</p>
+<ul>
+<li>TLS and authentication guidance.</li>
+<li>Index lifecycle management.</li>
+<li>Backup and restore workflow.</li>
+<li>Reindex or migration workflow for content-heavy artifacts.</li>
+<li>Clear deployment model for single-user local use versus shared infrastructure.</li>
+</ul>
+<h2 id="external-ai-review">External AI Review<a class="headerlink" href="#external-ai-review" title="Permanent link">&para;</a></h2>
+<p>External AI usage is gated and should remain policy-driven.</p>
+<p>Potential work:</p>
+<ul>
+<li>Add explicit per-case approval state.</li>
+<li>Redaction and minimization before outbound requests.</li>
+<li>Audit prompts, model, request metadata, and result provenance.</li>
+<li>Keep local OCR and non-AI parsing as fallback paths.</li>
+</ul>
+<h2 id="server-side-cloud-logs">Server-Side Cloud Logs<a class="headerlink" href="#server-side-cloud-logs" title="Permanent link">&para;</a></h2>
+<p>Perceptor currently focuses on endpoint evidence and imported report bundles.</p>
+<p>Potential work:</p>
+<ul>
+<li>Import server-side logs from Microsoft 365, Google Workspace, Dropbox, Slack,
+  and similar providers.</li>
+<li>Label these as non-image evidence sources.</li>
+<li>Correlate server-side cloud events with endpoint cloud-sync artifacts.</li>
+<li>Add source-specific trust and timestamp caveats.</li>
+</ul>
+<h2 id="report-and-documentation-automation">Report and Documentation Automation<a class="headerlink" href="#report-and-documentation-automation" title="Permanent link">&para;</a></h2>
+<p>The report catalog is currently generated manually from <code>report --help</code>.</p>
+<p>Potential work:</p>
+<ul>
+<li>Generate the report catalog during release checks.</li>
+<li>Add command metadata descriptions for every report.</li>
+<li>Link report catalog entries to examples and output schemas.</li>
+<li>Add stale-doc detection to CI.</li>
+</ul>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../mcp/tools/" class="btn btn-neutral float-left" title="MCP Tool Reference"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../reference/commands/" class="btn btn-neutral float-right" title="Command Reference">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/leewhitfield/perceptor" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+      <span><a href="../mcp/tools/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../reference/commands/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

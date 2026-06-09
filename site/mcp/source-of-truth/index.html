@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../img/favicon.ico" />
+    <title>Source-of-Truth Routing - Perceptor</title>
+    <link rel="stylesheet" href="../../css/theme.css" />
+    <link rel="stylesheet" href="../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Source-of-Truth Routing";
+        var mkdocs_page_input_path = "mcp/source-of-truth.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../.." class="icon icon-home"> Perceptor
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../..">Home</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Getting Started</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../getting-started/overview/">Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../getting-started/ubuntu-install/">Ubuntu Install</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../getting-started/configuration/">Configuration</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../getting-started/dependencies/">Dependency Management</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../getting-started/first-run/">First Run Checks</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Workflows</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/disk-images/">Disk Images</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/live-case-zips/">Live-Case and Report ZIPs</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/report-bundles/">Report Bundles</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/file-listings/">File Listings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/deleted-file-recovery/">Deleted File Recovery</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/memory/">Memory and Support Files</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/deep-recovery/">Deep Recovery Profiles</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/bitlocker/">BitLocker Images</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/vsc/">Volume Shadow Copies</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../mounted-image-notes/">Mounted Image Notes</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Reports</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../reference/reports/">Report Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../reference/report-catalog/">Report Catalog</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../reference/supported-artifacts/">Supported Artifacts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../report-specs/">Report Specs</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../artifact-coverage-matrix/">Artifact Coverage</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../windows-full-artifacts/">Windows Full Artifacts</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">MCP</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../overview/">MCP Overview</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">Source-of-Truth Routing</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#first-tool">First Tool</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#default-source-order">Default Source Order</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#result-limits">Result Limits</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#filesystem-questions">Filesystem Questions</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#report-questions">Report Questions</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#indexed-file-content">Indexed File Content</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#bits-and-qmgr-questions">BITS and qmgr Questions</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#high-value-event-log-questions">High-Value Event Log Questions</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#clipboard-questions">Clipboard Questions</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#processing-and-recovery">Processing and Recovery</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#sensitive-and-external-ai-gates">Sensitive and External AI Gates</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../client-setup/">Client Setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../tools/">MCP Tool Reference</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Future</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../future-features/">Future Features</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Operations</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../reference/commands/">Command Reference</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/security/">Security Model</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/field-readiness/">Field Readiness</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/troubleshooting/">Troubleshooting</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../release-checklist/">Release Checklist</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../..">Perceptor</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../.." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">MCP</li>
+      <li class="breadcrumb-item active">Source-of-Truth Routing</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="source-of-truth-routing">Source-of-Truth Routing<a class="headerlink" href="#source-of-truth-routing" title="Permanent link">&para;</a></h1>
+<p>MCP clients should not jump straight to image tools. Perceptor now exposes a routing
+tool that returns the correct source order for a question.</p>
+<h2 id="first-tool">First Tool<a class="headerlink" href="#first-tool" title="Permanent link">&para;</a></h2>
+<p>Use:</p>
+<pre><code class="language-text">relic_route_question
+</code></pre>
+<p>Inputs:</p>
+<ul>
+<li><code>question</code>: examiner question.</li>
+<li><code>case_id</code>: optional case ID.</li>
+<li><code>evidence_hint</code>: optional device, image, volume, or computer hint.</li>
+<li><code>allow_processing</code>: whether this specific route may recommend processing.</li>
+</ul>
+<h2 id="default-source-order">Default Source Order<a class="headerlink" href="#default-source-order" title="Permanent link">&para;</a></h2>
+<ol>
+<li>Existing generated reports.</li>
+<li>Parsed artifact tables.</li>
+<li>Generated resources, packets, and job output.</li>
+<li>Direct image access, mounts, FLS, recovery, or processing.</li>
+</ol>
+<h2 id="result-limits">Result Limits<a class="headerlink" href="#result-limits" title="Permanent link">&para;</a></h2>
+<p>MCP answers are bounded for usability. Treat <code>result_limit</code> and
+<code>result_limit_warning</code> as analyst-facing caveats. A bounded response is not
+evidence that no additional records exist; increase the limit, read the saved
+report/export, or request a dossier/full context for material findings.</p>
+<h2 id="filesystem-questions">Filesystem Questions<a class="headerlink" href="#filesystem-questions" title="Permanent link">&para;</a></h2>
+<p>For questions like "pull a list of contents for the USB drive", use:</p>
+<pre><code class="language-text">relic_query_evidence_contents
+relic_query_filesystem_listings
+</code></pre>
+<p>These read <code>filesystem_entries</code> and avoid slow FLS/mount behavior.</p>
+<h2 id="report-questions">Report Questions<a class="headerlink" href="#report-questions" title="Permanent link">&para;</a></h2>
+<p>For report-backed questions, use:</p>
+<pre><code class="language-text">relic_read_existing_report
+relic_discover_report_exports
+</code></pre>
+<p>Generate or regenerate reports only when existing reports are absent, stale, or
+the user explicitly asks.</p>
+<h2 id="indexed-file-content">Indexed File Content<a class="headerlink" href="#indexed-file-content" title="Permanent link">&para;</a></h2>
+<p>For questions about file content, search the OpenSearch-backed content index
+before attempting direct file extraction:</p>
+<pre><code class="language-text">relic_search_content
+relic_get_indexed_content
+</code></pre>
+<p><code>relic_search_content</code> returns snippets and reports when full indexed content is
+available. Snippets are not the whole body. Use <code>relic_get_indexed_content</code> with
+the returned document ID when the user asks to read the full indexed content.</p>
+<h2 id="bits-and-qmgr-questions">BITS and qmgr Questions<a class="headerlink" href="#bits-and-qmgr-questions" title="Permanent link">&para;</a></h2>
+<p>For Background Intelligent Transfer Service, qmgr, OneDrive updater, component
+updater, or transfer-job questions, use:</p>
+<pre><code class="language-text">relic_generate_report
+</code></pre>
+<p>with <code>report_name: "bits-activity"</code>.</p>
+<p><code>bits-activity</code> is the source of truth because it correlates timestamped BITS
+Client EVTX rows with qmgr database/carved rows by exact job ID or URL where
+available. qmgr carved rows without native timestamps are leads only; the
+timestamp source is the EVTX event.</p>
+<h2 id="high-value-event-log-questions">High-Value Event Log Questions<a class="headerlink" href="#high-value-event-log-questions" title="Permanent link">&para;</a></h2>
+<p>For account changes, audit-log clearing, PowerShell script blocks, scheduled
+task creation/deletion, WMI event subscription indicators, print-service
+history, service installs, or process creation with command-line context, use
+existing/generated reports first:</p>
+<pre><code class="language-text">relic_read_existing_report
+relic_generate_report
+</code></pre>
+<p>with <code>report_name: "event-interpretation"</code>.</p>
+<p>Use category-specific filtering when the user asks a narrow question, such as
+<code>powershell</code>, <code>account_manipulation</code>, <code>audit_log_clearing</code>, <code>scheduled_task</code>,
+<code>wmi_persistence</code>, <code>print</code>, <code>service_install</code>, or <code>process_creation</code>.</p>
+<h2 id="clipboard-questions">Clipboard Questions<a class="headerlink" href="#clipboard-questions" title="Permanent link">&para;</a></h2>
+<p>For clipboard, copied, pasted, cloud clipboard, or sync-across-devices
+questions, use existing/generated reports first:</p>
+<pre><code class="language-text">relic_read_existing_report
+relic_generate_report
+</code></pre>
+<p>with <code>report_name: "clipboard"</code>.</p>
+<p>Use <code>relic_timeline_window</code> for time-window context after the clipboard report.
+Treat Windows Activities clipboard payloads as secondary clipboard-adjacent
+evidence, not the primary dedicated clipboard store.</p>
+<h2 id="processing-and-recovery">Processing and Recovery<a class="headerlink" href="#processing-and-recovery" title="Permanent link">&para;</a></h2>
+<p>Processing tools require both:</p>
+<ul>
+<li>MCP server started with <code>--allow-processing</code>.</li>
+<li>an explicit user request for processing, import, profile execution, or
+  recovery.</li>
+</ul>
+<p>Deleted-file recovery should first identify the target in parsed listings, then
+run <code>relic_recover_deleted_files</code> only when requested.</p>
+<p>The MCP job log records the Perceptor recovery command. The recovery manifest records
+the exact <code>icat</code> command for each file candidate.</p>
+<h2 id="sensitive-and-external-ai-gates">Sensitive and External AI Gates<a class="headerlink" href="#sensitive-and-external-ai-gates" title="Permanent link">&para;</a></h2>
+<p>Credential reveal requires <code>--allow-sensitive</code>.</p>
+<p>External AI upload or analysis requires <code>--allow-external-ai</code>.</p>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../overview/" class="btn btn-neutral float-left" title="MCP Overview"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../client-setup/" class="btn btn-neutral float-right" title="Client Setup">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/leewhitfield/perceptor" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+      <span><a href="../overview/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../client-setup/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../..";</script>
+    <script src="../../js/theme_extra.js"></script>
+    <script src="../../js/theme.js"></script>
+      <script src="../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

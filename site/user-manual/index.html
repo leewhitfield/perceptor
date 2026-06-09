@@ -1,0 +1,1222 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>Perceptor User Manual - Perceptor</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Perceptor User Manual";
+        var mkdocs_page_input_path = "user-manual.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> Perceptor
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">Home</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Getting Started</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../getting-started/overview/">Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../getting-started/ubuntu-install/">Ubuntu Install</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../getting-started/configuration/">Configuration</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../getting-started/dependencies/">Dependency Management</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../getting-started/first-run/">First Run Checks</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Workflows</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../workflows/disk-images/">Disk Images</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../workflows/live-case-zips/">Live-Case and Report ZIPs</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../workflows/report-bundles/">Report Bundles</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../workflows/file-listings/">File Listings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../workflows/deleted-file-recovery/">Deleted File Recovery</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../workflows/memory/">Memory and Support Files</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../workflows/deep-recovery/">Deep Recovery Profiles</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../workflows/bitlocker/">BitLocker Images</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../workflows/vsc/">Volume Shadow Copies</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../mounted-image-notes/">Mounted Image Notes</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Reports</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../reference/reports/">Report Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../reference/report-catalog/">Report Catalog</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../reference/supported-artifacts/">Supported Artifacts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../report-specs/">Report Specs</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../artifact-coverage-matrix/">Artifact Coverage</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../windows-full-artifacts/">Windows Full Artifacts</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">MCP</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../mcp/overview/">MCP Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../mcp/source-of-truth/">Source-of-Truth Routing</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../mcp/client-setup/">Client Setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../mcp/tools/">MCP Tool Reference</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Future</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../future-features/">Future Features</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Operations</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../reference/commands/">Command Reference</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../operations/security/">Security Model</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../operations/field-readiness/">Field Readiness</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../operations/troubleshooting/">Troubleshooting</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../release-checklist/">Release Checklist</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">Perceptor</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Perceptor User Manual</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="perceptor-user-manual">Perceptor User Manual<a class="headerlink" href="#perceptor-user-manual" title="Permanent link">&para;</a></h1>
+<p>Perceptor is a CLI-first forensic processing and reporting tool. It can process
+Windows disk images, import pre-generated triage/report bundles, normalize many
+artifact outputs into a case database, dedupe derived artifacts, and generate
+investigator-facing reports.</p>
+<p>This page is the legacy single-page operator manual. The MkDocs-ready topic
+manual starts at <a href="../">Documentation Home</a>.</p>
+<p>Useful topic pages:</p>
+<ul>
+<li><a href="../reference/supported-artifacts/">Supported Artifacts</a>: artifact families,
+  tables, reports, and search coverage.</li>
+<li><a href="../operations/field-readiness/">Field Readiness</a>: evidence integrity,
+  preflight estimates, resume behavior, reporting limits, and known operational
+  caveats.</li>
+</ul>
+<p>The executable names are:</p>
+<ul>
+<li><code>perceptor</code></li>
+<li><code>relic</code> (legacy alias)</li>
+<li><code>forensic-orchestrator</code></li>
+</ul>
+<p>Examples below use <code>uv run perceptor</code>. If Perceptor is installed as a console script,
+drop <code>uv run</code>.</p>
+<h2 id="core-concepts">Core Concepts<a class="headerlink" href="#core-concepts" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Workspace root</strong>: the directory that stores cases, outputs, logs, staging
+  data, and SQLite/DuckDB databases.</li>
+<li><strong>Case/project</strong>: a single investigation container. Most commands use
+  <code>--case CASE_ID</code>.</li>
+<li><strong>Computer</strong>: a device inside a case. Bulk live-case zips create one computer
+  per top-level folder.</li>
+<li><strong>Image/evidence</strong>: a disk image, mounted volume, triage folder, or imported
+  report bundle.</li>
+<li><strong>Profile</strong>: a configured group of artifact parsers. Examples include
+  <code>windows-full</code>, <code>windows-basic</code>, <code>windows-deep</code>, <code>windows-search</code>, and
+  <code>windows-rdp-cache</code>.</li>
+<li><strong>Report bundle</strong>: generated markdown/JSON/CSV reports under a case output
+  directory.</li>
+</ul>
+<h2 id="global-command-shape">Global Command Shape<a class="headerlink" href="#global-command-shape" title="Permanent link">&para;</a></h2>
+<pre><code class="language-bash">uv run perceptor [--root ROOT] [--config CONFIG] [--plugin PLUGIN] [--dry-run] COMMAND ...
+</code></pre>
+<p>Global switches:</p>
+<ul>
+<li><code>--root ROOT</code>: workspace root. Use a large disk for real evidence.</li>
+<li><code>--config CONFIG</code>: YAML config containing root, tool paths, and plugin paths.</li>
+<li><code>--plugin PLUGIN</code>: additional tool plugin YAML path.</li>
+<li><code>--dry-run</code>: record and print commands without executing where supported.</li>
+<li><code>--timezone AREA/LOCATION</code>: optional display-only timezone. UTC remains
+  unchanged and authoritative; Perceptor adds companion fields such as
+  <code>timestamp_utc_local</code> only when this switch is supplied.</li>
+</ul>
+<p>If a command creates or writes case data, always pass the same <code>--root</code> each
+time. A common layout is:</p>
+<pre><code class="language-bash">uv run perceptor --root ~/analysis/my-case-root ...
+</code></pre>
+<h2 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h2>
+<p>Perceptor can be run entirely with command-line switches, but a config file is
+cleaner for repeated use.</p>
+<p>Example <code>config.yaml</code>:</p>
+<pre><code class="language-yaml">root: /analysis/perceptor
+tools_root: /opt/perceptor-tools
+eztools_root: /opt/perceptor-tools/eztools
+plugins:
+  - /opt/perceptor/forensic_orchestrator/plugins/eztools.yaml
+</code></pre>
+<p>Run with:</p>
+<pre><code class="language-bash">uv run perceptor --config config.yaml standalone doctor
+</code></pre>
+<p>Command-line <code>--root</code> and <code>--plugin</code> override config values.</p>
+<h2 id="first-run-setup">First-Run Setup<a class="headerlink" href="#first-run-setup" title="Permanent link">&para;</a></h2>
+<p>Check the install:</p>
+<pre><code class="language-bash">uv sync
+uv run perceptor standalone version
+uv run perceptor standalone dependencies --format table
+uv run perceptor standalone doctor --smoke --format table
+uv run perceptor standalone smoke-regression --format table
+</code></pre>
+<p>Repair or install managed third-party tools:</p>
+<pre><code class="language-bash">uv run perceptor standalone repair-dependencies --tools-dir ~/tools --env-file ~/tools/perceptor.env
+uv run perceptor standalone install-tool eztools --tools-dir ~/tools --env-file ~/tools/perceptor.env
+uv run perceptor standalone install-tool sidr --tools-dir ~/tools --env-file ~/tools/perceptor.env
+uv run perceptor standalone install-tool all --tools-dir ~/tools --env-file ~/tools/perceptor.env
+source ~/tools/perceptor.env
+</code></pre>
+<p>Important dependency nuance:</p>
+<ul>
+<li>System packages such as Sleuth Kit, libewf, <code>ntfs-3g</code>, <code>qemu-img</code>, poppler,
+  and tesseract are reported with install commands because they normally require
+  privileged package management.</li>
+<li><code>install-tool all</code> attempts the BitLocker fallback apt packages
+  <code>dislocker</code> and <code>libbde-utils</code> with non-interactive sudo. If sudo requires a
+  password, run <code>sudo apt-get install -y dislocker libbde-utils</code> yourself and
+  rerun doctor.</li>
+<li>Python tools such as <code>pypykatz</code> and Volatility can be installed by the app.</li>
+<li>EZ tools are downloaded into the managed tools folder.</li>
+<li>Managed tool archives are extracted with explicit path checks. Perceptor rejects
+  absolute paths, drive-letter paths, parent-directory traversal, and archive
+  link/device entries during extraction.</li>
+<li>EZ tools are SHA1 checked when the download catalog provides a valid SHA1
+  value. The managed <code>!!!RemoteFileDetails.csv</code> records whether a SHA1 was
+  verified for each downloaded item.</li>
+<li>SIDR is built as the native Linux Rust binary from source. Perceptor does not use
+  the upstream Windows <code>sidr.exe</code> for Linux parsing.</li>
+<li>Optional tools reduce coverage but should not stop workflows unless the
+  selected artifact requires them.</li>
+</ul>
+<h2 id="quick-start-live-case-zip">Quick Start: Live-Case Zip<a class="headerlink" href="#quick-start-live-case-zip" title="Permanent link">&para;</a></h2>
+<p>Use this for a zip containing one top-level folder per computer/device.</p>
+<ol>
+<li>Generate a tiny sample zip if you want to test the workflow:</li>
+</ol>
+<pre><code class="language-bash">uv run perceptor standalone sample-fixture --output sample-live-case.zip --format table
+</code></pre>
+<ol>
+<li>Preflight the real zip:</li>
+</ol>
+<pre><code class="language-bash">uv run perceptor --root ~/analysis/case-root ingest triage-zip \
+  --path ~/evidence/live-case.zip \
+  --preflight \
+  --format table \
+  --max-uncompressed-gb 75
+</code></pre>
+<p>Preflight does not import data. It reports:</p>
+<ul>
+<li>detected computer folders,</li>
+<li>CSV counts,</li>
+<li>mapped/unmapped parser counts,</li>
+<li>zip member counts,</li>
+<li>compressed and uncompressed size metadata.</li>
+</ul>
+<p>Mounting a ZIP evidence file also performs a safety preflight before extraction.
+This applies when the ZIP is being treated as evidence that contains a disk
+image or virtual disk. Perceptor rejects:</p>
+<ul>
+<li>unsafe member paths, including absolute paths, drive-letter paths, empty paths,
+  and parent-directory traversal,</li>
+<li>ZIP link entries,</li>
+<li>archives with more than 1,000,000 file members,</li>
+<li>archives whose uncompressed file size would not fit in the workspace
+  filesystem while leaving a 10 GB reserve.</li>
+</ul>
+<p>There is no fixed evidence-size cap for disk-image ZIPs. The effective limit is
+available workspace disk space minus the reserve.</p>
+<ol>
+<li>Import:</li>
+</ol>
+<pre><code class="language-bash">uv run perceptor --root ~/analysis/case-root ingest triage-zip \
+  --path ~/evidence/live-case.zip \
+  --accept-duplicate \
+  --report-purpose triage
+</code></pre>
+<p>By default, this creates/reuses a case, creates one computer per top-level
+folder, imports mapped CSVs, logs unsupported CSVs, rebuilds post-processing
+tables, writes a triage report bundle, and writes a live progress JSON file
+under <code>ROOT/progress/</code>. Use <code>--progress-manifest PATH</code> to choose the progress
+file path explicitly.</p>
+<ol>
+<li>Check progress/status:</li>
+</ol>
+<pre><code class="language-bash">uv run perceptor --root ~/analysis/case-root report dashboard --case CASE_ID --format table
+uv run perceptor --root ~/analysis/case-root report progress --case CASE_ID --format table
+uv run perceptor --root ~/analysis/case-root report unmapped-imports --case CASE_ID --format table
+</code></pre>
+<ol>
+<li>Validate generated reports:</li>
+</ol>
+<pre><code class="language-bash">uv run perceptor --root ~/analysis/case-root report validate-outputs \
+  --path ~/analysis/case-root/cases/CASE_ID/outputs/reports/triage-bundle \
+  --format table
+</code></pre>
+<h2 id="quick-start-disk-image">Quick Start: Disk Image<a class="headerlink" href="#quick-start-disk-image" title="Permanent link">&para;</a></h2>
+<p>For E01/raw/virtual disk evidence:</p>
+<pre><code class="language-bash">uv run perceptor --root ~/analysis/case-root process \
+  --path ~/evidence/host.E01 \
+  --computer-label HOST01 \
+  --profile windows-full \
+  --filesystem \
+  --workers 4
+</code></pre>
+<p>Common processing switches:</p>
+<ul>
+<li><code>--case CASE_ID</code>: add the evidence to an existing case; omitted creates one.</li>
+<li><code>--path PATH</code>: source E01/raw/zip/virtual disk path.</li>
+<li><code>--computer COMPUTER_ID</code>: existing computer.</li>
+<li><code>--computer-label LABEL</code>: label for a newly created computer.</li>
+<li><code>--hostname HOSTNAME</code>: hostname metadata.</li>
+<li><code>--profile PROFILE</code>: parser profile to run.</li>
+<li><code>--filesystem</code>: mount the selected NTFS volume read-only before parsing.</li>
+<li><code>--sudo</code>: use non-interactive sudo for mount/unmount commands.</li>
+<li><code>--keep-mounted</code>: leave read-only mount active for manual review.</li>
+<li><code>--unlock-bitlocker</code>: when BitLocker is detected, try a read-only unlock
+  before mounting NTFS. The default tool chain is <code>cryptsetup</code>, <code>dislocker</code>,
+  then <code>bdemount</code>.</li>
+<li><code>--bitlocker-tool auto|cryptsetup|dislocker|bdemount</code>: choose the unlock tool
+  or fallback chain.</li>
+<li><code>--bitlocker-method recovery-key|password|bek|fvek</code>: choose the protector
+  type for tools that support it.</li>
+<li><code>--bitlocker-key-file PATH</code>: read unlock material from a file. Perceptor supplies
+  the value through stdin where supported and does not log the secret. If no
+  file is supplied, Perceptor prompts after BitLocker detection.</li>
+<li><code>--workers N</code>: parallel external tool/output generation slots. Database ingest
+  and internal parser writes remain serialized.</li>
+<li><code>--include-memory-profile</code>: run memory support-file processing after the
+  selected profile.</li>
+<li><code>--no-memory-profile</code>: skip automatic memory support processing.</li>
+<li><code>--replace-existing</code>: delete existing output rows for this image/profile
+  before importing fresh output.</li>
+<li><code>--accept-duplicate</code>: import even if content hash already exists.</li>
+<li><code>--include-start-menu-lnk</code>: include Start Menu shortcuts.</li>
+<li><code>--include-deleted-mft</code>: include deleted/orphaned MFT entries in MFT-driven
+  extraction.</li>
+<li><code>--include-live-orphans</code>: include allocated MFT records missing from active
+  INDX entries.</li>
+<li><code>--include-windows-old</code>: process Windows.old artifacts into a Windows.old
+  namespace.</li>
+</ul>
+<p>When <code>--filesystem</code> mounts a non-NTFS volume such as FAT32 or exFAT, Perceptor
+automatically writes a mounted filesystem inventory to
+<code>filesystem_entries</code>. This gives removable volumes a file listing even when
+there is no <code>$MFT</code>.</p>
+<p>Disk images added through <code>process --path</code> are hashed on import with MD5, SHA1,
+and SHA256. Use <code>image verify</code> later to prove the current image bytes still
+match the stored hashes.</p>
+<p>Use <code>--dry-run</code> before a first profile run:</p>
+<pre><code class="language-bash">uv run perceptor --root ~/analysis/case-root --dry-run process \
+  --path ~/evidence/host.E01 \
+  --profile windows-full \
+  --filesystem
+</code></pre>
+<h2 id="workspace-and-case-commands">Workspace and Case Commands<a class="headerlink" href="#workspace-and-case-commands" title="Permanent link">&para;</a></h2>
+<p><code>case</code> and <code>project</code> are aliases for the same case workspace operations. Use
+whichever reads more clearly for your workflow.</p>
+<pre><code class="language-bash">uv run perceptor --root ROOT case create
+uv run perceptor --root ROOT case status CASE_ID
+uv run perceptor --root ROOT case describe CASE_ID
+uv run perceptor --root ROOT case describe CASE_ID --description &quot;Brief matter context&quot;
+uv run perceptor --root ROOT case describe CASE_ID --description-file ./case-description.md --write-notes
+uv run perceptor --root ROOT case activity CASE_ID
+uv run perceptor --root ROOT case activity CASE_ID --level warning
+uv run perceptor --root ROOT case activity CASE_ID --level error
+</code></pre>
+<p><code>case describe</code> stores short matter context in SQLite so reports and MCP case
+summary tools can surface it. <code>--write-notes</code> also writes the supplied text to
+<code>case-description.md</code> in the case directory and records that file as the longer
+notes reference.</p>
+<p>Post-processing rebuilds:</p>
+<pre><code class="language-bash">uv run perceptor --root ROOT case rebuild-postprocess CASE_ID
+uv run perceptor --root ROOT case rebuild-timeline-dedupe CASE_ID
+uv run perceptor --root ROOT case rebuild-artifact-dedupe CASE_ID
+uv run perceptor --root ROOT case rebuild-correlations CASE_ID
+uv run perceptor --root ROOT case rebuild-sessions CASE_ID
+uv run perceptor --root ROOT case rebuild-derived-timeline CASE_ID
+uv run perceptor --root ROOT project rebuild-distinct-artifacts CASE_ID
+</code></pre>
+<p><code>rebuild-derived-timeline</code> adds normalized correlation/session events such as
+Wi-Fi sessions, SRUM observations, USB connection events, removable/cloud file
+references, and file-identity correlations to the master timeline.</p>
+<p>Destructive cleanup:</p>
+<pre><code class="language-bash">uv run perceptor --root ROOT case purge-output CASE_ID --yes
+</code></pre>
+<p>Nuance: do not purge output unless you intend to remove parsed output rows for
+that case. Prefer <code>--replace-existing</code> on a rerun of one image/profile when
+possible.</p>
+<h2 id="computer-and-image-commands">Computer and Image Commands<a class="headerlink" href="#computer-and-image-commands" title="Permanent link">&para;</a></h2>
+<pre><code class="language-bash">uv run perceptor --root ROOT computer add --case CASE_ID --label HOST01
+uv run perceptor --root ROOT computer list --case CASE_ID
+uv run perceptor --root ROOT image add --case CASE_ID --path /evidence/host.E01 --computer COMPUTER_ID
+uv run perceptor --root ROOT image integrity --case CASE_ID --image IMAGE_ID --format table
+uv run perceptor --root ROOT image verify --case CASE_ID --image IMAGE_ID --format table
+uv run perceptor --root ROOT image mount --case CASE_ID --image IMAGE_ID --filesystem
+uv run perceptor --root ROOT image mount --case CASE_ID --image IMAGE_ID --filesystem --sudo
+uv run perceptor --root ROOT image mount --case CASE_ID --image IMAGE_ID --filesystem --unlock-bitlocker --bitlocker-key-file /secure/recovery-key.txt
+uv run perceptor --root ROOT image unmount --case CASE_ID --image IMAGE_ID
+uv run perceptor --root ROOT image cleanup-stale-mounts --case CASE_ID
+uv run perceptor --root ROOT image cleanup-stale-mounts --case CASE_ID --apply --sudo
+</code></pre>
+<p>Mounting nuances:</p>
+<ul>
+<li>Mounts are read-only.</li>
+<li><code>image add</code> stores MD5, SHA1, and SHA256 evidence hashes. <code>image verify</code>
+  records a verification attempt and returns non-zero if the current image bytes
+  do not match.</li>
+<li>Use <code>--sudo</code> only when non-interactive sudo is configured.</li>
+<li>BitLocker unlock is opt-in and only applies to <code>--filesystem</code> mounts. <code>auto</code>
+  tries <code>cryptsetup</code>, then <code>dislocker</code>, then <code>bdemount</code>. Use a recovery key,
+  BEK/startup key, password protector, or FVEK material as appropriate for the
+  evidence; a normal Windows login password only works when the volume has a
+  BitLocker password protector.</li>
+<li><code>--keep-mounted</code> on <code>process</code> is useful for manual review.</li>
+<li>If a session crashes while mounted, use <code>image cleanup-stale-mounts</code> first as
+  a dry-run, then add <code>--apply</code>.</li>
+</ul>
+<h2 id="report-bundle-import-commands">Report Bundle Import Commands<a class="headerlink" href="#report-bundle-import-commands" title="Permanent link">&para;</a></h2>
+<p>Single folder import:</p>
+<pre><code class="language-bash">uv run perceptor --root ROOT report-bundle import \
+  --path /evidence/HOST01-reports \
+  --computer-label HOST01 \
+  --accept-duplicate
+</code></pre>
+<p>Bulk folder/zip import:</p>
+<pre><code class="language-bash">uv run perceptor --root ROOT report-bundle import-many \
+  --path /evidence/live-case.zip \
+  --accept-duplicate \
+  --write-reports \
+  --report-purpose triage
+</code></pre>
+<p>Coverage scan:</p>
+<pre><code class="language-bash">uv run perceptor report-bundle coverage --path /evidence/live-case.zip --format table
+</code></pre>
+<p>Important switches:</p>
+<ul>
+<li><code>--case CASE_ID</code>: use an existing case.</li>
+<li><code>--path PATH</code>: folder or zip to import.</li>
+<li><code>--computer COMPUTER_ID</code>: attach a single import to an existing computer.</li>
+<li><code>--computer-label LABEL</code>: label for a new single-import computer.</li>
+<li><code>--resume-from-manifest PATH</code>: skip completed computers from a previous bulk
+  manifest.</li>
+<li><code>--accept-duplicate</code>: import duplicate content.</li>
+<li><code>--no-progress</code>: suppress progress lines on stderr.</li>
+<li><code>--write-reports</code>: write purpose bundle after import.</li>
+<li><code>--report-purpose full|usb|cloud|execution|memory|triage</code>: report bundle
+  focus.</li>
+<li><code>--report-output-dir DIR</code>: custom report bundle output directory.</li>
+</ul>
+<p>Nuance: <code>report-bundle coverage</code> can run without a workspace root when only
+checking parser routes or input coverage.</p>
+<h2 id="ingest-commands">Ingest Commands<a class="headerlink" href="#ingest-commands" title="Permanent link">&para;</a></h2>
+<p>Currently the main high-level ingest command is:</p>
+<pre><code class="language-bash">uv run perceptor --root ROOT ingest triage-zip --path evidence.zip
+</code></pre>
+<p>Switches:</p>
+<ul>
+<li><code>--case CASE_ID</code>: use existing case.</li>
+<li><code>--path PATH</code>: zip with one top-level folder per computer.</li>
+<li><code>--preflight</code>: validate without import.</li>
+<li><code>--format json|table|csv</code>: output format for preflight.</li>
+<li><code>--output PATH</code>: write preflight output.</li>
+<li><code>--max-uncompressed-gb N</code>: abort if zip uncompressed size exceeds N GB; <code>0</code>
+  disables the check.</li>
+<li><code>--resume-from-manifest PATH</code>: resume interrupted import.</li>
+<li><code>--accept-duplicate</code>: import duplicate content.</li>
+<li><code>--no-progress</code>: hide progress lines.</li>
+<li><code>--write-reports</code> / <code>--no-write-reports</code>: enable/disable report bundle.</li>
+<li><code>--report-purpose full|usb|cloud|execution|memory|triage</code>.</li>
+<li><code>--report-output-dir DIR</code>.</li>
+</ul>
+<p>Nuance: use <code>--preflight --max-uncompressed-gb</code> before importing large live-case
+zips. This option belongs to bulk report/triage ZIP import, where the operator
+can choose a case-specific expansion ceiling. Disk-image ZIP mounting uses a
+different guard: it rejects unsafe paths and requires the uncompressed contents
+to fit in the workspace filesystem with a 10 GB free-space reserve.</p>
+<h2 id="memory-commands">Memory Commands<a class="headerlink" href="#memory-commands" title="Permanent link">&para;</a></h2>
+<p>Run the combined memory workflow:</p>
+<pre><code class="language-bash">uv run perceptor --root ROOT memory workflow --case CASE_ID --workers 4
+</code></pre>
+<p>Switches:</p>
+<ul>
+<li><code>--case CASE_ID</code></li>
+<li><code>--computer COMPUTER_ID</code></li>
+<li><code>--image IMAGE_ID</code></li>
+<li><code>--min-length N</code>: minimum string length, default 6.</li>
+<li><code>--workers N</code></li>
+<li><code>--no-crash-dumps</code></li>
+<li><code>--no-extract-fallback</code>: do not extract MFT-discovered support files with
+  <code>icat</code> when mounts are unavailable.</li>
+<li><code>--write-reports</code> / <code>--no-write-reports</code></li>
+<li><code>--report-output-dir DIR</code></li>
+</ul>
+<p>Scan a specific memory-like file:</p>
+<pre><code class="language-bash">uv run perceptor --root ROOT memory strings \
+  --case CASE_ID \
+  --path /evidence/pagefile.sys \
+  --min-length 6
+</code></pre>
+<p>Crash dumps:</p>
+<pre><code class="language-bash">uv run perceptor --root ROOT memory crash-dumps --case CASE_ID --workers 4 --copy
+</code></pre>
+<p>Windows Search SQLite memory carves:</p>
+<pre><code class="language-bash">uv run perceptor --root ROOT memory windows-search-carves \
+  --case CASE_ID \
+  --path /evidence/search-carves \
+  --max-rows-per-table 100
+</code></pre>
+<p>Nuances:</p>
+<ul>
+<li>Credential-looking strings are reported as candidates unless separately
+  validated.</li>
+<li>Credential reports redact values by default. Use <code>report memory-credentials
+  --reveal</code> only for controlled examiner output.</li>
+<li>Hiberfil/pagefile/swapfile parsing is best-effort. If a hiberfil is compressed
+  and cannot be decompressed, the workflow should record the limitation and keep
+  processing other artifacts.</li>
+</ul>
+<h2 id="vsc-commands">VSC Commands<a class="headerlink" href="#vsc-commands" title="Permanent link">&para;</a></h2>
+<p>Volume Shadow Copy support is separate from normal processing.</p>
+<p>Common commands:</p>
+<pre><code class="language-bash">uv run perceptor --root ROOT vsc list --case CASE_ID --image IMAGE_ID
+uv run perceptor --root ROOT vsc mount --case CASE_ID --image IMAGE_ID --snapshot 1 --sudo
+uv run perceptor --root ROOT vsc unmount --case CASE_ID --image IMAGE_ID --snapshot 1 --sudo
+</code></pre>
+<p>VSC profile scans are used for targeted follow-up rather than default
+<code>windows-full</code> processing. Use VSC recovery when you need historical copies of
+registry hives, browser databases, prefetch, SRUM, event logs, recycle bin,
+Windows Search, or NTFS namespace deltas.</p>
+<h2 id="tool-commands">Tool Commands<a class="headerlink" href="#tool-commands" title="Permanent link">&para;</a></h2>
+<p>List configured tools:</p>
+<pre><code class="language-bash">uv run perceptor --root ROOT tools list
+</code></pre>
+<p>Preview a profile:</p>
+<pre><code class="language-bash">uv run perceptor --root ROOT tools profile-preview --profile windows-full
+</code></pre>
+<p>Use <code>standalone profile-catalog</code> and <code>standalone artifact-capability</code> for a more
+operator-friendly view.</p>
+<h2 id="run-command">Run Command<a class="headerlink" href="#run-command" title="Permanent link">&para;</a></h2>
+<p><code>run</code> executes a profile against an already registered image. It is lower-level
+than <code>process</code>, which can create/register evidence and optionally mount the
+filesystem in one command.</p>
+<pre><code class="language-bash">uv run perceptor --root ROOT run \
+  --case CASE_ID \
+  --image IMAGE_ID \
+  --profile windows-full \
+  --workers 4
+</code></pre>
+<p>Switches:</p>
+<ul>
+<li><code>--case CASE_ID</code></li>
+<li><code>--image IMAGE_ID</code></li>
+<li><code>--profile PROFILE</code></li>
+<li><code>--include-start-menu-lnk</code></li>
+<li><code>--replace-existing</code></li>
+<li><code>--accept-duplicate</code></li>
+<li><code>--include-deleted-mft</code></li>
+<li><code>--include-live-orphans</code></li>
+<li><code>--include-windows-old</code></li>
+<li><code>--include-memory-profile</code></li>
+<li><code>--no-memory-profile</code></li>
+<li><code>--workers N</code></li>
+</ul>
+<p>Nuance: prefer <code>process</code> for normal operator use. Use <code>run</code> when evidence has
+already been added/mounted and you want to rerun one profile by image ID.</p>
+<h2 id="carve-commands">Carve Commands<a class="headerlink" href="#carve-commands" title="Permanent link">&para;</a></h2>
+<p>SQLite carving:</p>
+<pre><code class="language-bash">uv run perceptor --root ROOT carve sqlite \
+  --case CASE_ID \
+  --path /evidence/pagefile.sys \
+  --profile windows-database-carve \
+  --max-carves 100 \
+  --max-bytes 1073741824 \
+  --import-artifacts
+</code></pre>
+<p>ESE carving:</p>
+<pre><code class="language-bash">uv run perceptor --root ROOT carve ese \
+  --case CASE_ID \
+  --path /evidence/pagefile.sys \
+  --profile windows-database-carve \
+  --max-carves 100
+</code></pre>
+<p>Shared carving switches:</p>
+<ul>
+<li><code>--case CASE_ID</code></li>
+<li><code>--path PATH</code>: raw source file, staged carve directory, or candidate database.</li>
+<li><code>--computer COMPUTER_ID</code></li>
+<li><code>--image IMAGE_ID</code></li>
+<li><code>--profile PROFILE</code></li>
+<li><code>--max-carves N</code></li>
+<li><code>--max-bytes N</code></li>
+<li><code>--max-carve-size N</code></li>
+<li><code>--start-offset N</code></li>
+<li><code>--chunk-size N</code></li>
+</ul>
+<p>SQLite-specific switches:</p>
+<ul>
+<li><code>--max-rows-per-table N</code></li>
+<li><code>--import-artifacts</code>: route recognized SQLite files through Firefox,
+  Chromium, or Activities parsers.</li>
+<li><code>--import-windows-search-memory</code>: also parse staged SQLite carves into
+  Windows Search memory carve tables.</li>
+</ul>
+<p>Nuance: carving is intentionally separate from default full processing. Use it
+for unallocated/pagefile/hiberfil/swapfile/deep recovery work where runtime and
+false positives are acceptable.</p>
+<h2 id="cloud-import-commands">Cloud Import Commands<a class="headerlink" href="#cloud-import-commands" title="Permanent link">&para;</a></h2>
+<p>Import server-side cloud logs:</p>
+<pre><code class="language-bash">uv run perceptor --root ROOT cloud import-logs \
+  --case CASE_ID \
+  --path /evidence/cloud-logs \
+  --provider Google \
+  --service Drive
+</code></pre>
+<p>Switches:</p>
+<ul>
+<li><code>--case CASE_ID</code></li>
+<li><code>--path PATH</code></li>
+<li><code>--computer COMPUTER_ID</code></li>
+<li><code>--provider PROVIDER</code></li>
+<li><code>--service SERVICE</code></li>
+</ul>
+<p>Nuance: cloud imports are supplemental evidence. They create or use the case
+context but are not disk image mounts.</p>
+<h2 id="standalone-commands">Standalone Commands<a class="headerlink" href="#standalone-commands" title="Permanent link">&para;</a></h2>
+<p>Perceptor's supported install target is Ubuntu 24.04 LTS on x86_64, either bare
+metal or VM. Native macOS, native Windows, Docker full-image mounting, WSL full
+mounting, ARM64, and non-Ubuntu Linux are not primary support targets. See
+<code>docs/ubuntu-install.md</code> for the current install contract and
+<code>docs/release-checklist.md</code> for release verification.</p>
+<pre><code class="language-bash">uv run perceptor standalone version --format table
+uv run perceptor standalone dependencies --format table
+uv run perceptor standalone repair-dependencies --tools-dir ~/tools --env-file ~/tools/perceptor.env
+uv run perceptor standalone tool-status --tools-dir ~/tools --format table
+uv run perceptor standalone install-tool all --tools-dir ~/tools --env-file ~/tools/perceptor.env
+uv run perceptor standalone profile-catalog --format table
+uv run perceptor standalone artifact-capability --profile windows-full --format table
+uv run perceptor standalone schema-status --format table
+uv run perceptor standalone doctor --smoke --format table
+uv run perceptor standalone backup --case CASE_ID --output-dir /safe/backups
+uv run perceptor standalone jobs --case CASE_ID --format table
+uv run perceptor standalone benchmark --case CASE_ID --write-baseline benchmark.json
+uv run perceptor standalone benchmark --case CASE_ID --baseline benchmark.json --format table
+uv run perceptor standalone sample-fixture --output sample-live-case.zip --format table
+uv run perceptor standalone verify-install --format table
+uv run perceptor standalone backlog --format table
+</code></pre>
+<p>Key standalone switches:</p>
+<ul>
+<li><code>doctor --case CASE_ID --profile PROFILE</code>: include case/profile readiness.</li>
+<li><code>doctor --repair</code>: attempt safe dependency repairs before checking.</li>
+<li><code>doctor --smoke</code>: run a tiny isolated DB/report smoke test.</li>
+<li><code>smoke-regression</code>: run the standalone proof path: doctor smoke, sample
+  live-case fixture import, report bundle generation, output validation, and
+  MCP tool listing.</li>
+<li><code>verify-install</code>: friendly alias for <code>smoke-regression</code>.</li>
+<li><code>dependencies --env-file PATH</code>: load tool env vars before checking.</li>
+<li><code>repair-dependencies --required-only</code>: repair only core required tools and skip
+  default coverage tools.</li>
+<li><code>install-tool TOOL --force</code>: force reinstall/rebuild.</li>
+<li><code>install-tool TOOL --dry-run</code>: preview tool install actions.</li>
+<li><code>benchmark --write-baseline PATH</code>: save current timing report.</li>
+<li><code>benchmark --baseline PATH</code>: compare current timing report to a saved
+  baseline.</li>
+</ul>
+<h2 id="mcp-server">MCP Server<a class="headerlink" href="#mcp-server" title="Permanent link">&para;</a></h2>
+<p>Perceptor can run as a local MCP stdio server so an MCP-capable client can inspect a
+workspace and call approved Perceptor tools.</p>
+<p>Start the server against one workspace root:</p>
+<pre><code class="language-bash">uv run perceptor --root ROOT mcp serve
+</code></pre>
+<p>For clients that use a JSON command configuration, use the same command and args:</p>
+<pre><code class="language-json">{
+  &quot;command&quot;: &quot;uv&quot;,
+  &quot;args&quot;: [&quot;run&quot;, &quot;perceptor&quot;, &quot;--root&quot;, &quot;ROOT&quot;, &quot;mcp&quot;, &quot;serve&quot;]
+}
+</code></pre>
+<p>The base MCP surface includes read-only inspection and safe report-generation
+tools. Processing tools are visible to clients but reject calls unless the
+server was started with <code>--allow-processing</code>. Sensitive credential reveal,
+external AI, and destructive actions are intentionally not implemented in the
+default MCP surface.</p>
+<p>Opt-in switches:</p>
+<ul>
+<li><code>--allow-processing</code>: permits import and image/profile processing tools.</li>
+<li><code>--allow-sensitive</code>: reserved for future sensitive tools.</li>
+<li><code>--allow-external-ai</code>: reserved for future external-AI tools.</li>
+</ul>
+<p>Read-only MCP tools:</p>
+<ul>
+<li><code>relic_workspace_summary</code></li>
+<li><code>relic_route_question</code></li>
+<li><code>relic_mcp_workflow_guide</code></li>
+<li><code>relic_list_cases</code></li>
+<li><code>relic_case_summary</code></li>
+<li><code>relic_case_evidence_map</code></li>
+<li><code>relic_case_readiness</code></li>
+<li><code>relic_discover_reports</code></li>
+<li><code>relic_discover_report_exports</code></li>
+<li><code>relic_read_existing_report</code></li>
+<li><code>relic_case_dashboard</code></li>
+<li><code>relic_processing_progress</code></li>
+<li><code>relic_resume_plan</code></li>
+<li><code>relic_workspace_health</code></li>
+<li><code>relic_list_computers</code></li>
+<li><code>relic_list_images</code></li>
+<li><code>relic_list_jobs</code></li>
+<li><code>relic_get_job</code></li>
+<li><code>relic_timeline</code></li>
+<li><code>relic_timeline_window</code></li>
+<li><code>relic_activity_windows</code></li>
+<li><code>relic_file_dossier</code></li>
+<li><code>relic_usb_dossier</code></li>
+<li><code>relic_user_activity</code></li>
+<li><code>relic_ingest_triage_zip_preflight</code></li>
+<li><code>relic_report_bundle_coverage</code></li>
+<li><code>relic_profile_preview</code></li>
+<li><code>relic_doctor</code></li>
+<li><code>relic_list_report_types</code></li>
+<li><code>relic_query_evidence_contents</code></li>
+<li><code>relic_query_filesystem_listings</code></li>
+<li><code>relic_query_suspicious_executions</code></li>
+<li><code>relic_query_external_storage</code></li>
+<li><code>relic_query_usb_files</code></li>
+<li><code>relic_query_usb_contents</code></li>
+<li><code>relic_query_file_movement_identity</code></li>
+<li><code>relic_query_opened_from_removable_media</code></li>
+<li><code>relic_query_opened_from_cloud_storage</code></li>
+<li><code>relic_query_cloud_artifacts</code></li>
+<li><code>relic_query_memory_artifacts</code></li>
+<li><code>relic_query_browser_activity</code></li>
+<li><code>relic_query_registry_activity</code></li>
+<li><code>relic_query_shortcuts</code></li>
+<li><code>relic_query_communications</code></li>
+<li><code>relic_query_system_users</code></li>
+<li><code>relic_case_review</code></li>
+<li><code>relic_workspace_map</code></li>
+<li><code>relic_artifact_search_sources</code></li>
+<li><code>relic_search_artifacts</code></li>
+<li><code>relic_search_content</code></li>
+<li><code>relic_get_indexed_content</code></li>
+<li><code>relic_lead_search</code></li>
+<li><code>relic_case_activity_digest</code></li>
+<li><code>relic_case_next_actions</code></li>
+<li><code>relic_case_runbook</code></li>
+<li><code>relic_list_search_packets</code></li>
+<li><code>relic_read_search_packet</code></li>
+<li><code>relic_rerun_search_packet</code></li>
+<li><code>relic_list_review_packets</code></li>
+<li><code>relic_read_review_packet</code></li>
+<li><code>relic_get_mcp_job</code></li>
+<li><code>relic_list_mcp_jobs</code></li>
+<li><code>relic_get_mcp_job_output</code></li>
+<li><code>relic_get_mcp_job_progress</code></li>
+<li><code>relic_list_progress_manifests</code></li>
+<li><code>relic_mcp_tool_reference</code></li>
+</ul>
+<p>Safe-write MCP tools:</p>
+<ul>
+<li><code>relic_generate_report</code></li>
+<li><code>relic_write_report_bundle</code></li>
+<li><code>relic_write_search_packet</code></li>
+<li><code>relic_write_review_packet</code></li>
+</ul>
+<p>Processing-gated MCP tools:</p>
+<ul>
+<li><code>relic_import_triage_zip</code></li>
+<li><code>relic_import_report_bundle</code></li>
+<li><code>relic_process_image</code></li>
+<li><code>relic_run_profile</code></li>
+<li><code>relic_cancel_mcp_job</code></li>
+</ul>
+<p>Processing tools start background subprocesses and return an <code>mcp_job_id</code>, PID,
+command, and stdout/stderr paths under <code>ROOT/mcp-jobs/</code>. MCP job metadata is
+persisted in <code>ROOT/mcp-jobs/index.json</code>, so a new MCP server process can still
+inspect jobs launched earlier.
+Add <code>dry_run: true</code> to <code>relic_process_image</code> arguments to launch the normal
+Perceptor process command in CLI dry-run mode before real processing.</p>
+<p>Operational MCP tools:</p>
+<ul>
+<li><code>relic_get_mcp_job</code>: poll persisted MCP subprocess state.</li>
+<li><code>relic_list_mcp_jobs</code>: list persisted MCP subprocess jobs, optionally filtered
+  by status.</li>
+<li><code>relic_get_mcp_job_output</code>: read stdout/stderr tails and parsed JSON stdout
+  when available.</li>
+<li><code>relic_get_mcp_job_progress</code>: parse structured progress from MCP-launched
+  job output, including bulk report ZIP computer counts where available.</li>
+<li><code>relic_cancel_mcp_job</code>: terminate a running MCP-launched subprocess; requires
+  <code>--allow-processing</code>.</li>
+<li><code>relic_mcp_tool_reference</code>: export MCP tool names, permissions, schemas, and
+  annotations.</li>
+</ul>
+<p>Case-navigation MCP tools:</p>
+<ul>
+<li><code>relic_case_evidence_map</code>: returns computers, images, image metadata, report
+  resources, memory-source activity, job status, and processing progress in one
+  response.</li>
+<li><code>relic_case_readiness</code>: combines doctor, workspace health, processing
+  readiness, processing progress, and resume-plan signals.</li>
+<li><code>relic_discover_reports</code>: returns report bundle files as
+  <code>perceptor://workspace/...</code> resource URIs, optionally filtered by bundle purpose.</li>
+<li><code>relic_workspace_map</code>: returns cases, computers, images, generated reports,
+  saved packets, progress manifests, and MCP jobs in one structure.</li>
+<li><code>relic_artifact_search_sources</code>: returns the artifact tables, categories,
+  searchable fields, and row counts available to artifact and lead search.</li>
+<li><code>relic_search_artifacts</code> and <code>relic_lead_search</code>: run general or preset lead
+  searches. Results include score, score reasons, matched fields, and drilldown
+  hints.</li>
+<li><code>relic_file_dossier</code>, <code>relic_usb_dossier</code>, <code>relic_user_activity</code>, and
+  <code>relic_timeline_window</code>: focused drilldowns for following leads without
+  knowing the matching CLI report names.</li>
+<li><code>relic_timeline_window</code> is the first source for “what happened during this
+  time/window/session?” questions. It accepts <code>start</code> and <code>end</code> and matches
+  interval events by overlap where the source has an end time. Use domain tools
+  such as <code>relic_query_wifi_activity</code> or USB reports to resolve session/window
+  bounds, then query the master timeline with those bounds.</li>
+<li><code>relic_case_next_actions</code>: ranks likely next investigative steps from
+  readiness, evidence gaps, unmapped imports, suspicious execution, and storage
+  findings.</li>
+<li><code>relic_write_review_packet</code>: writes selected findings, report URIs, timeline
+  rows, and notes to JSON/Markdown under the case reports folder.</li>
+<li><code>relic_write_search_packet</code>: saves repeatable search arguments, result sets,
+  result hash sets, case/image/tool-output counts, and JSON/Markdown work
+  product under <code>reports/mcp-search-packets</code>.</li>
+<li><code>relic_rerun_search_packet</code>: reruns a saved search packet and reports added,
+  removed, changed, and unchanged results. Use <code>report changed-search-packets</code>
+  to rerun all saved search packets for a case from the CLI.</li>
+</ul>
+<p>Recommended MCP review sequence:</p>
+<ol>
+<li><code>relic_workspace_map</code></li>
+<li><code>relic_case_runbook</code></li>
+<li><code>relic_artifact_search_sources</code></li>
+<li><code>relic_lead_search</code> or <code>relic_search_artifacts</code></li>
+<li>Follow each result's drilldown hint.</li>
+<li><code>relic_write_search_packet</code></li>
+<li><code>relic_rerun_search_packet</code></li>
+<li><code>relic_write_report_bundle</code> with <code>purpose: "review"</code></li>
+</ol>
+<p>MCP audit entries are written to <code>ROOT/mcp-jobs/audit.jsonl</code>. Each entry records
+the tool name, permission tier, status, timestamp, argument keys, and bounded
+case/path context.</p>
+<p>Use <code>relic_list_jobs</code> or <code>relic_processing_progress</code> for Perceptor's internal
+parser/tool job records created by the subprocess itself.</p>
+<p>MCP resources:</p>
+<ul>
+<li><code>resources/list</code> exposes text report, manifest, log, and MCP job files under
+  the workspace root.</li>
+<li><code>resources/list</code> accepts optional <code>case_id</code>, <code>kind</code>, and <code>limit</code> parameters.
+  Supported kinds are <code>report</code>, <code>manifest</code>, <code>log</code>, <code>mcp-job</code>, and <code>progress</code>.</li>
+<li><code>resources/read</code> reads those files through <code>perceptor://workspace/...</code> URIs.</li>
+<li>Individual resource reads are limited to 1 MB to avoid accidentally returning
+  large evidence or bulk artifact files.</li>
+</ul>
+<h2 id="report-commands">Report Commands<a class="headerlink" href="#report-commands" title="Permanent link">&para;</a></h2>
+<p>Reports usually share these switches:</p>
+<ul>
+<li><code>--case CASE_ID</code></li>
+<li><code>--limit N</code></li>
+<li><code>--format json|table|csv|md</code></li>
+<li><code>--output PATH</code></li>
+</ul>
+<p>Not every report supports every format or filter. Use:</p>
+<pre><code class="language-bash">uv run perceptor report REPORT_NAME --help
+</code></pre>
+<p>Interactive report commands may use preview-sized default limits so terminal
+output remains usable. Saved report bundles default to broader exports
+(<code>--limit 50000</code>) so MCP and later review have the full available picture for
+most artifacts. If a JSON report includes <code>limited: true</code>, do not treat missing
+rows as evidence of absence; regenerate that report or bundle with a higher
+<code>--limit</code>.</p>
+<p>MCP tools are also bounded for usability. If a response includes <code>result_limit</code>
+or <code>result_limit_warning</code>, treat the answer as a preview. Increase the tool
+limit, read an existing generated report/export, or request a dossier/full
+context before relying on absence.</p>
+<p><code>report-bundle coverage --path PATH</code> reports parser coverage for live-response
+CSV folders/zips with computer attribution, mapped parser, row count, and a
+recommendation for unmapped files. It also groups unmapped files by header
+signature so repeated parser gaps across many computers are visible as one
+implementation target.</p>
+<p>Operational reports:</p>
+<pre><code class="language-bash">uv run perceptor --root ROOT report dashboard --case CASE_ID --format table
+uv run perceptor --root ROOT report progress --case CASE_ID --format table
+uv run perceptor --root ROOT report resume-plan --case CASE_ID --format table
+uv run perceptor --root ROOT report workspace-health --case CASE_ID --format md
+uv run perceptor --root ROOT report processing-estimate --case CASE_ID --profile windows-full --format table
+uv run perceptor --root ROOT report workspace-map --case CASE_ID --format json
+uv run perceptor --root ROOT report unmapped-imports --case CASE_ID --format table
+uv run perceptor --root ROOT report validate-outputs --path REPORT_DIR --format table
+uv run perceptor --root ROOT report regression-smoke --case CASE_ID --format table
+uv run perceptor --root ROOT report artifact-search-sources --case CASE_ID --format table
+uv run perceptor --root ROOT report changed-search-packets --case CASE_ID --format md
+uv run perceptor --root ROOT report review-status --case CASE_ID --format table
+uv run perceptor --root ROOT report runbook --case CASE_ID --format md
+uv run perceptor --root ROOT report write-bundle --case CASE_ID --purpose review
+uv run perceptor --root ROOT report handoff-package --case CASE_ID --bundle-dir REPORT_DIR --output CASE_ID-handoff.zip
+</code></pre>
+<p>Purpose bundles:</p>
+<ul>
+<li><code>review</code>: MCP/operator review pack with activity digest, next actions,
+  workspace map, search-source inventory, lead summaries, saved packet index,
+  changed search-packet summary, and USB/storage context.</li>
+<li><code>triage</code>: broad high-signal starting point.</li>
+<li><code>write-bundle</code> writes to <code>cases/CASE_ID/outputs/reports/PURPOSE-bundle</code>
+  by default. Use <code>--output-dir</code> only when you intentionally need a different
+  location.</li>
+<li><code>write-bundle</code> defaults to <code>--limit 50000</code> per bounded report export. Raise
+  this if a report indicates <code>limited: true</code>.</li>
+<li><code>usb</code>: removable media, shellbags, shortcuts, object IDs, USN lifecycle.</li>
+<li><code>cloud</code>: cloud artifacts, opened-from-cloud, virtual mounts.</li>
+<li><code>execution</code>: execution, suspicious execution, provenance, remote access.</li>
+<li><code>memory</code>: memory artifacts, credentials, memory/disk correlations, crash
+  dumps.</li>
+<li><code>full</code>: all bundle reports.</li>
+</ul>
+<p>Each bundle writes <code>index.md</code> for human navigation, <code>report-index.json</code> for
+programmatic/UI/MCP navigation, <code>bundle-quality.json</code> with report, CSV export,
+lead-search, and saved-packet checks, and <code>bundle-manifest.json</code> with file
+sizes and SHA256 hashes. Bundle generation prints timestamped progress to
+stderr by default; add <code>--no-progress</code> to suppress it. <code>report handoff-package</code>
+zips the selected bundle plus MCP packets and a handoff manifest without
+including evidence files or case databases.</p>
+<p>High-value report families:</p>
+<ul>
+<li>Case health: <code>summary</code>, <code>dashboard</code>, <code>case-overview</code>, <code>executive-summary</code>,
+  <code>case-review</code>, <code>issues</code>, <code>evidence-gaps</code>, <code>evidence-quality</code>,
+  <code>artifact-completeness</code>.</li>
+<li>Execution and event logs: <code>execution</code>, <code>execution-correlation</code>,
+  <code>suspicious-executions</code>, <code>event-interpretation</code>,
+  <code>suspicious-timeline-windows</code>, <code>program-provenance</code>, <code>prefetch</code>, <code>amcache</code>,
+  <code>shimcache</code>, <code>autostarts</code>, <code>persistence</code>, <code>malware-hiding-places</code>,
+  <code>bits-activity</code>, <code>examiner-edge-artifacts</code>, <code>mapped-network-paths</code>,
+  <code>remote-access-tool-logs</code>.</li>
+<li>Filesystem and file movement: <code>mft</code>, <code>ntfs-index</code>, <code>ntfs-logfile</code>,
+  <code>ntfs-namespace</code>, <code>filesystem-review</code>, <code>files</code>, <code>file-names</code>,
+  <code>file-name-drilldown</code>, <code>file-history</code>, <code>file-dossier</code>, <code>file-intelligence</code>,
+  <code>copied-files</code>, <code>copied-file-indicators</code>, <code>copied-file-groups</code>,
+  <code>copied-usb-files</code>, <code>file-movement-identity</code>, <code>non-standard-ads</code>,
+  <code>ntfs-security-descriptors</code>.</li>
+<li>USB/storage: <code>usb</code>, <code>external-storage</code>, <code>device-inventory</code>, <code>usb-files</code>,
+  <code>usb-timeline</code>, <code>usb-verbose</code>, <code>usb-dossier</code>, <code>shellbag-external-storage</code>,
+  <code>opened-from-removable-media</code>, <code>shortcut-droid-changes</code>,
+  <code>shortcut-object-tracking</code>.</li>
+<li>Browser/web/cloud: <code>firefox</code>, <code>browser</code>, <code>browser-artifacts</code>,
+  <code>browser-downloads</code>, <code>browser-cache</code>, <code>browser-hosts</code>, <code>browser-activity</code>,
+  <code>browser-profile-activity</code>, <code>browser-deep-storage</code>,
+  <code>browser-cache-correlations</code>, <code>webcache</code>, <code>webcache-files</code>,
+  <code>cloud-artifacts</code>, <code>cloud-files</code>, <code>cloud-configuration</code>, <code>cloud-mounts</code>,
+  <code>cloud-removable-overlap</code>, <code>opened-from-cloud-storage</code>,
+  <code>web-cloud-correlations</code>.</li>
+<li>Communications/email: <code>email-artifacts</code>, <code>mailbox-messages</code>,
+  <code>mailbox-attachments</code>, <code>mailbox-attachment-coverage</code>,
+  <code>mailbox-attachment-copies</code>, <code>mailbox-copies</code>, <code>communications</code>,
+  <code>communication-groups</code>, <code>communication-review</code>, <code>messaging-artifacts</code>,
+  <code>messaging-messages</code>.</li>
+<li>Remote access: <code>remote-access</code>, <code>remote-access-attribution</code>,
+  <code>mapped-network-paths</code>, <code>rdp</code>,
+  <code>rdp-cache</code>, <code>rdp-visual-observations</code>, <code>vpn-activity</code>,
+  <code>vpn-local-activity</code>, <code>vpn-connections</code>, <code>vpn-config</code>, <code>vpn-execution</code>,
+  <code>vpn-sessions</code>, <code>sessions</code>, <code>session</code>.</li>
+<li>Registry/user activity: <code>registry</code>, <code>registry-artifacts</code>,
+  <code>registry-activity</code>, <code>office-trust</code>, <code>office-backstage</code>,
+  <code>taskbar-feature-usage</code>, <code>taskbar-pins</code>, <code>common-dialog-items</code>,
+  <code>activity-summary</code>, <code>user-activity</code>, <code>users</code>, <code>accounts</code>, <code>shellbags</code>,
+  <code>windows-activities</code>, <code>clipboard</code>, <code>ual</code>, <code>bits-activity</code>, <code>srum</code>, <code>srum-context</code>, <code>srum-networks</code>,
+  <code>srum-app-usage</code>, <code>examiner-edge-artifacts</code>, <code>mapped-network-paths</code>.</li>
+<li>Windows Search and memory: <code>windows-search</code>, <code>windows-search-combined</code>,
+  <code>search-index-runs</code>, <code>memory-artifacts</code>, <code>memory-support-files</code>,
+  <code>memory-analysis</code>, <code>memory-credentials</code>, <code>memory-credential-review</code>,
+  <code>memory-disk-correlations</code>, <code>memory-string-hits</code>, <code>structured-memory</code>,
+  <code>crash-dump-analysis</code>.</li>
+<li>Recovery/deep parsing: <code>recovery-coverage</code>, <code>carve-coverage</code>,
+  <code>sqlite-inventory</code>, <code>evtx-recovery</code>, <code>deep-recovery-status</code>,
+  <code>artifact-processing-status</code>, <code>processing-decisions</code>,
+  <code>processing-readiness</code>, <code>readiness-gate</code>, <code>db-storage</code>, <code>cleanup-candidates</code>.</li>
+<li>Timeline/correlation: <code>timeline</code>, <code>timeline-sources</code>, <code>timeline-review</code>,
+  <code>user-timeline</code>, <code>derived-timeline-events</code>, <code>artifact-sources</code>,
+  <code>artifact-correlations</code>, <code>correlation-groups</code>, <code>correlation-group</code>,
+  <code>correlations</code>, <code>artifact-summary</code>.
+  <code>timeline</code> accepts <code>--start</code> and <code>--end</code>; interval events are matched by
+  overlap when an end timestamp is available.</li>
+<li>Special topics: <code>downloaded-files</code>, <code>uninstalled-app-artifacts</code>, <code>tor-usage</code>,
+  <code>encrypted-volumes</code>, <code>phone-link</code>, <code>virtualization</code>, <code>thumbcache</code>,
+  <code>cd-burning</code>, <code>brute-force</code>, <code>data-exfiltration</code>, <code>account-compromise</code>,
+  <code>sdelete</code>, <code>usn-*</code>.</li>
+</ul>
+<p>High-value event-log analytics:</p>
+<pre><code class="language-bash">uv run perceptor --root ROOT report event-interpretation --case CASE_ID --format json
+uv run perceptor --root ROOT report event-interpretation --case CASE_ID --category powershell --format table
+uv run perceptor --root ROOT report event-interpretation --case CASE_ID --category account_manipulation --format table
+uv run perceptor --root ROOT report event-interpretation --case CASE_ID --category audit_log_clearing --format table
+uv run perceptor --root ROOT report event-interpretation --case CASE_ID --category process_creation --format table
+uv run perceptor --root ROOT report event-interpretation --case CASE_ID --category wmi_persistence --format table
+uv run perceptor --root ROOT report event-interpretation --case CASE_ID --category print --format table
+</code></pre>
+<p>The event interpretation report targets account manipulation, audit log
+clearing, PowerShell script-block/module logging, scheduled task creation or
+deletion, WMI event subscription indicators, print-service history, service
+installs, and process creation with command-line context when present.</p>
+<p>Windows clipboard history:</p>
+<pre><code class="language-bash">uv run perceptor --root ROOT report clipboard --case CASE_ID --format table
+uv run perceptor --root ROOT report clipboard --case CASE_ID --contains &quot;copied text&quot; --format json
+</code></pre>
+<p><code>clipboard</code> parses <code>%LocalAppData%\Microsoft\Clipboard</code> stores when present.
+It records text, file URI, HTML payload indicators, item timestamps, image
+presence, and cloud sync identifiers/state. Windows Activities clipboard rows
+remain secondary clipboard-adjacent evidence.</p>
+<p>Examiner-edge and filesystem edge reports:</p>
+<pre><code class="language-bash">uv run perceptor --root ROOT report examiner-edge-artifacts --case CASE_ID --format table
+uv run perceptor --root ROOT report mapped-network-paths --case CASE_ID --format table
+uv run perceptor --root ROOT report non-standard-ads --case CASE_ID --format table
+uv run perceptor --root ROOT report ntfs-security-descriptors --case CASE_ID --format table
+uv run perceptor --root ROOT report remote-access-tool-logs --case CASE_ID --format table
+</code></pre>
+<p><code>examiner-edge-artifacts</code> includes Sticky Notes, notification database rows,
+NetworkList, outbound RDP, MountPoints2, Task Scheduler XML, EventTranscript.db,
+TokenBroker metadata, CryptnetUrlCache, hosts, WSL, Windows Update,
+Credential/Vault metadata, Bluetooth, installed applications, SwiftKey fragments,
+and legacy <code>Thumbs.db</code> leads where present. <code>ntfs-security-descriptors</code> is
+presence/metadata-only for <code>$Secure</code> streams; use dedicated SDS output when ACL
+decoding is required.</p>
+<h2 id="search-commands">Search Commands<a class="headerlink" href="#search-commands" title="Permanent link">&para;</a></h2>
+<p>Perceptor has an OpenSearch-backed search surface for indexed content where
+configured:</p>
+<pre><code class="language-bash">uv run perceptor --root ROOT search query --case CASE_ID --query &quot;report.docx&quot; --limit 25
+uv run perceptor --root ROOT search show --case CASE_ID --source-table TABLE --source-id ID
+</code></pre>
+<p>Search options include:</p>
+<ul>
+<li><code>--host</code></li>
+<li><code>--index</code></li>
+<li><code>--username</code></li>
+<li><code>--password</code></li>
+<li><code>--insecure</code></li>
+<li><code>--limit</code></li>
+<li><code>--no-synonyms</code></li>
+<li><code>--synonyms PATH</code></li>
+<li><code>--format json|table</code></li>
+<li><code>--output PATH</code></li>
+</ul>
+<h2 id="output-locations">Output Locations<a class="headerlink" href="#output-locations" title="Permanent link">&para;</a></h2>
+<p>Within the workspace root, expect:</p>
+<ul>
+<li><code>cases/CASE_ID/</code>: case tree.</li>
+<li><code>cases/CASE_ID/outputs/</code>: tool outputs and generated reports.</li>
+<li><code>cases/CASE_ID/outputs/reports/</code>: markdown/JSON/CSV reports and manifests.</li>
+<li><code>cases/CASE_ID/outputs/IMAGE_ID/MountedFilesystemInventory/</code>: mounted
+  FAT/exFAT filesystem listings.</li>
+<li><code>cases/CASE_ID/artifacts/</code>: extracted artifacts.</li>
+<li><code>staging/</code>: temporary staged imports or zip members.</li>
+<li>SQLite database at the workspace root.</li>
+<li>DuckDB analytics database under the case analytics path.</li>
+</ul>
+<p>Exact paths are returned in command JSON output and report manifests.</p>
+<h2 id="resuming-failed-or-interrupted-runs">Resuming Failed or Interrupted Runs<a class="headerlink" href="#resuming-failed-or-interrupted-runs" title="Permanent link">&para;</a></h2>
+<p>Check state:</p>
+<pre><code class="language-bash">uv run perceptor --root ROOT report dashboard --case CASE_ID --format table
+uv run perceptor --root ROOT report progress --case CASE_ID --format table
+uv run perceptor --root ROOT report resume-plan --case CASE_ID --format table
+uv run perceptor --root ROOT report workspace-health --case CASE_ID --format md
+uv run perceptor --root ROOT report processing-estimate --case CASE_ID --profile windows-full --format table
+</code></pre>
+<p>Resume a bulk live-case zip:</p>
+<pre><code class="language-bash">uv run perceptor --root ROOT ingest triage-zip \
+  --path /evidence/live-case.zip \
+  --resume-from-manifest /analysis/root/cases/CASE_ID/outputs/reports/report-bundle-bulk-import-CASE_ID.manifest.json
+</code></pre>
+<p>Run post-processing rebuilds:</p>
+<pre><code class="language-bash">uv run perceptor --root ROOT case rebuild-postprocess CASE_ID
+</code></pre>
+<p>Nuance: if DuckDB temp storage failed during distinct-table rebuilds, the import
+can still complete with a warning. Free disk space or move temp storage, then
+rerun post-processing.</p>
+<h2 id="performance-and-parallel-processing">Performance and Parallel Processing<a class="headerlink" href="#performance-and-parallel-processing" title="Permanent link">&para;</a></h2>
+<p>Use <code>--workers N</code> on <code>process</code>, <code>memory workflow</code>, and crash dump scanning where
+available.</p>
+<p>Parallelism currently applies to extraction/external tool work. Database ingest,
+post-processing rebuilds, and many internal writes are intentionally serialized
+to avoid corruption and lock contention.</p>
+<p>Record a baseline:</p>
+<pre><code class="language-bash">uv run perceptor --root ROOT standalone benchmark --case CASE_ID --write-baseline benchmark.json
+</code></pre>
+<p>Compare later:</p>
+<pre><code class="language-bash">uv run perceptor --root ROOT standalone benchmark --case CASE_ID --baseline benchmark.json --format table
+</code></pre>
+<h2 id="safety-and-evidence-handling">Safety and Evidence Handling<a class="headerlink" href="#safety-and-evidence-handling" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Keep original evidence read-only.</li>
+<li>UTC is the default and primary timestamp basis for storage, correlation,
+  reports, exports, and MCP context. Use <code>--timezone America/New_York</code> only when
+  you need local display companion fields; do not replace UTC fields.</li>
+<li>Perceptor hashes disk images on import and stores verification history. Run
+  <code>image integrity</code> to review stored hashes and <code>image verify</code> before producing
+  final reports or testimony material.</li>
+<li>Perceptor records TSK <code>icat</code> materializations in <code>report evidence-extractions</code>
+  with source path, inode, extracted path, size, and SHA256.</li>
+<li>Prefer <code>--filesystem</code> read-only mounts for speed when processing disk images.</li>
+<li>Use <code>--keep-mounted</code> only when you need manual review.</li>
+<li>Run <code>image cleanup-stale-mounts</code> after crashes or interrupted sessions.</li>
+<li>Use <code>--preflight</code> for large zips before import.</li>
+<li>Use <code>--max-uncompressed-gb</code> on bulk live-case/report zip imports to avoid
+  exhausting workspace disk. Disk-image ZIP mounting has no fixed GB cap, but it
+  requires enough free space for the uncompressed files plus a 10 GB reserve.</li>
+<li>External AI review is off by default. Set <code>FORENSIC_ALLOW_EXTERNAL_AI=1</code> only
+  when uploading RDP contact sheets to the configured model provider is approved.
+  OpenAI-backed review records token usage and estimated cost in RDP visual
+  observation report output.</li>
+<li>Use credential reveal options only under controlled conditions.</li>
+<li>Treat memory credential strings as leads unless validated.</li>
+<li>Treat UserAssist, Amcache, and ShimCache as activity/presence indicators, not
+  standalone proof of execution.</li>
+</ul>
+<h2 id="common-end-to-end-live-case-workflow">Common End-to-End Live-Case Workflow<a class="headerlink" href="#common-end-to-end-live-case-workflow" title="Permanent link">&para;</a></h2>
+<pre><code class="language-bash">uv run perceptor standalone doctor --smoke --format table
+
+uv run perceptor --root ~/analysis/live-case ingest triage-zip \
+  --path ~/evidence/live-case.zip \
+  --preflight \
+  --format table \
+  --max-uncompressed-gb 75
+
+uv run perceptor --root ~/analysis/live-case ingest triage-zip \
+  --path ~/evidence/live-case.zip \
+  --accept-duplicate \
+  --report-purpose triage
+
+uv run perceptor --root ~/analysis/live-case report dashboard --case CASE_ID --format table
+uv run perceptor --root ~/analysis/live-case report unmapped-imports --case CASE_ID --format table
+uv run perceptor --root ~/analysis/live-case report write-bundle \
+  --case CASE_ID \
+  --purpose usb
+</code></pre>
+<h2 id="common-end-to-end-disk-image-workflow">Common End-to-End Disk Image Workflow<a class="headerlink" href="#common-end-to-end-disk-image-workflow" title="Permanent link">&para;</a></h2>
+<pre><code class="language-bash">uv run perceptor standalone doctor --smoke --format table
+
+uv run perceptor --root ~/analysis/disk-case --dry-run process \
+  --path ~/evidence/host.E01 \
+  --computer-label HOST01 \
+  --profile windows-full \
+  --filesystem \
+  --workers 4
+
+uv run perceptor --root ~/analysis/disk-case process \
+  --path ~/evidence/host.E01 \
+  --computer-label HOST01 \
+  --profile windows-full \
+  --filesystem \
+  --workers 4
+
+uv run perceptor --root ~/analysis/disk-case report dashboard --case CASE_ID --format table
+uv run perceptor --root ~/analysis/disk-case report write-bundle \
+  --case CASE_ID \
+  --purpose full
+</code></pre>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/leewhitfield/perceptor" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

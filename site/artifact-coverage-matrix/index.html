@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>Artifact Coverage - Perceptor</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Artifact Coverage";
+        var mkdocs_page_input_path = "artifact-coverage-matrix.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> Perceptor
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">Home</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Getting Started</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../getting-started/overview/">Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../getting-started/ubuntu-install/">Ubuntu Install</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../getting-started/configuration/">Configuration</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../getting-started/dependencies/">Dependency Management</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../getting-started/first-run/">First Run Checks</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Workflows</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../workflows/disk-images/">Disk Images</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../workflows/live-case-zips/">Live-Case and Report ZIPs</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../workflows/report-bundles/">Report Bundles</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../workflows/file-listings/">File Listings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../workflows/deleted-file-recovery/">Deleted File Recovery</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../workflows/memory/">Memory and Support Files</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../workflows/deep-recovery/">Deep Recovery Profiles</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../workflows/bitlocker/">BitLocker Images</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../workflows/vsc/">Volume Shadow Copies</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../mounted-image-notes/">Mounted Image Notes</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Reports</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../reference/reports/">Report Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../reference/report-catalog/">Report Catalog</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../reference/supported-artifacts/">Supported Artifacts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../report-specs/">Report Specs</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">Artifact Coverage</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#open-work-items">Open Work Items</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../windows-full-artifacts/">Windows Full Artifacts</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">MCP</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../mcp/overview/">MCP Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../mcp/source-of-truth/">Source-of-Truth Routing</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../mcp/client-setup/">Client Setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../mcp/tools/">MCP Tool Reference</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Future</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../future-features/">Future Features</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Operations</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../reference/commands/">Command Reference</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../operations/security/">Security Model</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../operations/field-readiness/">Field Readiness</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../operations/troubleshooting/">Troubleshooting</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../release-checklist/">Release Checklist</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">Perceptor</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Reports</li>
+      <li class="breadcrumb-item active">Artifact Coverage</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="artifact-coverage-matrix">Artifact Coverage Matrix<a class="headerlink" href="#artifact-coverage-matrix" title="Permanent link">&para;</a></h1>
+<p>This matrix is the working map for <code>windows-full</code>: what question each artefact answers, where it lands, and which reports use it. DuckDB stores parsed fields only. Large bodies and extracted content belong in OpenSearch with references back to the parsed origin.</p>
+<table>
+<thead>
+<tr>
+<th>Question</th>
+<th>Sources</th>
+<th>Parser / Tool</th>
+<th>Primary Tables</th>
+<th>Reports</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>What files existed and when?</td>
+<td><code>$MFT</code>, mounted FAT/exFAT directory listings, USN Journal, <code>$LogFile</code>, <code>$I30</code></td>
+<td>MFTECmd, MountedFilesystemInventory, custom NTFS parsers</td>
+<td><code>mft_entries</code>, <code>filesystem_entries</code>, <code>usn_journal_entries</code>, <code>ntfs_*</code></td>
+<td><code>file-history</code>, <code>file-dossier</code>, <code>files</code>, <code>filesystem-review</code>, <code>usn-*</code>, <code>ntfs-*</code></td>
+<td>NTFS uses MFT/USN where available. FAT/exFAT mounted volumes get a case-owned listing even when there is no <code>$MFT</code>.</td>
+</tr>
+<tr>
+<td>What files were opened or referenced?</td>
+<td>LNK, Jump Lists, RecentDocs, Office MRU, Common Dialog, Shellbags, Windows Search</td>
+<td>LECmd, JLECmd, Registry parser, Shellbags parser, SIDR / Windows Search parsers</td>
+<td><code>shortcut_items</code>, <code>registry_artifacts</code>, <code>common_dialog_items</code>, <code>shellbag_entries</code>, <code>windows_search_files</code>, <code>windows_search_indexed_content</code></td>
+<td><code>file-history</code>, <code>shortcuts</code>, <code>shellbags</code>, <code>common-dialog-items</code>, <code>office-backstage</code>, <code>communications</code></td>
+<td>Shortcut rows retain source table, row number, app id, arguments, working directory, machine and network details where emitted by the tool. Indexed body/content remains in OpenSearch.</td>
+</tr>
+<tr>
+<td>What applications likely executed?</td>
+<td>Prefetch, UserAssist, BAM/DAM, RunMRU, LastVisitedPidlMRU, SRUM, Capability Access Manager, selected event logs</td>
+<td>PECmd, Registry parser, SrumParser, EVTX parser</td>
+<td><code>prefetch_items</code>, <code>prefetch_run_times</code>, <code>registry_artifacts</code>, <code>srum_records</code>, <code>evtx_events</code></td>
+<td><code>execution</code>, <code>execution-correlation</code>, <code>prefetch</code>, <code>srum-context</code>, <code>taskbar-feature-usage</code></td>
+<td>Amcache and ShimCache are treated as presence indicators, not execution proof.</td>
+</tr>
+<tr>
+<td>What applications existed?</td>
+<td>Amcache, ShimCache, installers, uninstall keys, MFT</td>
+<td>Amcache parser, ShimCache parser, Registry parser</td>
+<td><code>amcache_entries</code>, <code>shimcache_entries</code>, <code>registry_artifacts</code>, <code>mft_entries</code></td>
+<td><code>amcache</code>, <code>shimcache</code>, <code>uninstalled-applications</code>, <code>interesting-executables</code></td>
+<td>Useful for triage and correlation, but not stand-alone execution evidence.</td>
+</tr>
+<tr>
+<td>What remote access happened?</td>
+<td>RDP event logs, RDP cache, Terminal Server Client keys, SRUM, VPN/RAS phonebooks and registry</td>
+<td>EVTX parser, RDP cache parser, Registry parser, SrumParser</td>
+<td><code>evtx_events</code>, <code>rdp_cache_items</code>, <code>rdp_visual_observations</code>, <code>registry_artifacts</code>, <code>srum_records</code></td>
+<td><code>rdp</code>, <code>remote-access</code>, <code>remote-access-attribution</code>, <code>vpn-*</code>, <code>srum-context</code></td>
+<td>RDP visual observations come from interpreted cache contact sheets. <code>remote-access-attribution</code> ties incoming RDP/logon windows to USB, local activity, and cloud/account context.</td>
+</tr>
+<tr>
+<td>What removable devices were present?</td>
+<td>USBSTOR, UASP/SCSI, HID, SWD/WPDBUSENUM, MountedDevices, Windows Portable Devices, MountPoints2, DeviceMigration, partition diagnostics, SetupAPI logs</td>
+<td>Registry parser, USB summary builder, EVTX parser, SetupApiParser</td>
+<td><code>usb_devices</code>, <code>usb_storage_devices</code>, <code>usb_connection_events</code>, <code>setupapi_device_events</code>, <code>registry_artifacts</code>, <code>evtx_events</code></td>
+<td><code>external-storage</code>, <code>usb-dossier</code>, <code>usb-verbose</code>, <code>device-inventory</code></td>
+<td><code>device-inventory</code> covers non-storage device categories; storage-focused movement analysis remains in USB reports. Event-log-only and SetupAPI-only devices are included when registry summaries are not available.</td>
+</tr>
+<tr>
+<td>Was data copied to removable media?</td>
+<td>USN, MFT, LNK, Jump Lists, Shellbags, USB volume data</td>
+<td>Correlation builders</td>
+<td><code>copied_file_indicators</code>, <code>usb_file_correlations</code></td>
+<td><code>copied-usb-files</code>, <code>usb-files</code>, <code>copied-file-drilldown</code></td>
+<td>Uses normalized paths and volume serials where available.</td>
+</tr>
+<tr>
+<td>What browser activity exists?</td>
+<td>History, downloads, cache, cookies, sessions, site settings, notifications, sync and LevelDB/IndexedDB/OPFS candidates</td>
+<td>Browser parsers</td>
+<td><code>browser_*</code>, <code>messaging_records</code></td>
+<td><code>browser-*</code>, <code>browser-deep-storage</code>, <code>web-cloud-correlations</code></td>
+<td>Deep-storage report inventories parsed artefacts and candidates. Raw IndexedDB/OPFS content is not bulk copied into DuckDB. Selective content parsers should route bodies/content to OpenSearch.</td>
+</tr>
+<tr>
+<td>What communications, notes, and local AI/app content exist?</td>
+<td>PST, OST, MSG, EML, mailbox attachments, chat stores, Electron LevelDB candidates, AI assistant app stores, Obsidian/Notion/OneNote note stores, application recent-file/config artifacts</td>
+<td>Mailbox parser, messaging/application parsers, file-content parser for selected loose documents</td>
+<td><code>mailbox_messages</code>, <code>mailbox_attachments</code>, <code>messaging_messages</code>, <code>messaging_records</code>, <code>windows_search_indexed_content</code></td>
+<td><code>email-artifacts</code>, <code>mailbox-*</code>, <code>messaging-*</code>, <code>communications</code>, <code>communication-review</code></td>
+<td>Message bodies, note bodies, AI assistant conversation text, and file/message content are indexed in OpenSearch, not duplicated as large DuckDB text.</td>
+</tr>
+<tr>
+<td>Did files originate from email?</td>
+<td>Mailbox attachment metadata, file history, Outlook Secure Temp, Windows Search, MFT</td>
+<td>Mailbox parser, PackageArtifactsParser, Registry parser, correlation reports</td>
+<td><code>mailbox_attachments</code>, <code>mailbox_messages</code>, <code>package_artifacts</code>, <code>registry_artifacts</code>, <code>mft_entries</code>, <code>shortcut_items</code></td>
+<td><code>file-history</code>, <code>mailbox-attachment-coverage</code>, <code>mailbox-attachment-copies</code></td>
+<td>Conversation index/topic, headers, attachment names, and Outlook Secure Temp locations are retained as bounded metadata.</td>
+</tr>
+<tr>
+<td>What cloud storage was configured or used?</td>
+<td>OneDrive, Dropbox, Google Drive, iCloud registry/config, browser/cloud references, SRUM, package/app artifacts</td>
+<td>Registry parser, browser parsers, SrumParser, package/application parsers</td>
+<td><code>registry_artifacts</code>, <code>cloud_sync_artifacts</code>, <code>browser_*</code>, <code>srum_records</code>, <code>package_artifacts</code>, <code>onedrive_items</code>, <code>onedrive_log_entries</code></td>
+<td><code>cloud-configuration</code>, <code>cloud-artifacts</code>, <code>cloud-files</code>, <code>web-cloud-correlations</code>, <code>srum-context</code></td>
+<td>Registry rows include source key and value. Browser/WebCache rows distinguish web portal access from local sync-client activity.</td>
+</tr>
+<tr>
+<td>What persistence/autostarts exist?</td>
+<td>Run keys, services, scheduled tasks, startup folders, WMI-style registry data, browser/native messaging candidates</td>
+<td>Registry, EVTX, task parsers</td>
+<td><code>registry_artifacts</code>, <code>evtx_events</code>, task/service tables where available</td>
+<td><code>autostarts</code>, <code>persistence</code>, <code>malware-hiding-places</code></td>
+<td>Malware hiding report cross-references parsed autostart and task sources.</td>
+</tr>
+<tr>
+<td>What privacy/capability access exists?</td>
+<td>Capability Access Manager, SRUM, event logs</td>
+<td>Registry parser, SrumECmd</td>
+<td><code>registry_artifacts</code>, <code>srum_records</code>, <code>event_logs</code></td>
+<td><code>execution</code>, <code>user-activity</code>, <code>srum-context</code></td>
+<td>Contextual support for app usage and capability access.</td>
+</tr>
+<tr>
+<td>What server access logs exist?</td>
+<td>SUM / UAL logs</td>
+<td>SUM/UAL parser</td>
+<td><code>ual_records</code></td>
+<td><code>ual</code></td>
+<td>Expected to be absent on many workstation images but part of <code>windows-full</code>.</td>
+</tr>
+<tr>
+<td>What CD/DVD burning evidence exists?</td>
+<td>Burn folders, staging paths, event/log artefacts</td>
+<td>File and registry artefact parsing</td>
+<td><code>mft_entries</code>, <code>registry_artifacts</code>, related file tables</td>
+<td><code>cd-burning</code></td>
+<td>Focused triage report for burning/staging evidence.</td>
+</tr>
+<tr>
+<td>What application crash/error context exists?</td>
+<td>Windows Error Reporting files, Defender logs</td>
+<td>WindowsErrorReportingParser, WindowsDefenderParser</td>
+<td><code>windows_error_reports</code>, Defender report rows</td>
+<td><code>windows-error-reporting</code>, Defender-related reports where available</td>
+<td>Useful context around crashes, blocked actions, and suspicious application behavior.</td>
+</tr>
+<tr>
+<td>What nested evidence exists inside images or triage sets?</td>
+<td>VHD/VHDX/VMDK, archives, nested E01/RAW-style evidence, KAPE/EZ reports</td>
+<td>Evidence source discovery, nested evidence inventory, report-bundle import</td>
+<td><code>nested_evidence_items</code>, normalized artifact tables after import</td>
+<td><code>nested-evidence</code>, normal artifact reports after import</td>
+<td>Nested disks are inventoried for analyst decision; compressed content is listed by metadata and extracted selectively without bulk raw content storage.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="open-work-items">Open Work Items<a class="headerlink" href="#open-work-items" title="Permanent link">&para;</a></h2>
+<p>These are the remaining actionable items from the reference review:</p>
+<ol>
+<li>Add optional server-side cloud log importers as source-labeled non-image evidence.</li>
+</ol>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../report-specs/" class="btn btn-neutral float-left" title="Report Specs"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../windows-full-artifacts/" class="btn btn-neutral float-right" title="Windows Full Artifacts">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/leewhitfield/perceptor" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+      <span><a href="../report-specs/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../windows-full-artifacts/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

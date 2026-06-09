@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../img/favicon.ico" />
+    <title>Command Reference - Perceptor</title>
+    <link rel="stylesheet" href="../../css/theme.css" />
+    <link rel="stylesheet" href="../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Command Reference";
+        var mkdocs_page_input_path = "reference/commands.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../.." class="icon icon-home"> Perceptor
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../..">Home</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Getting Started</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../getting-started/overview/">Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../getting-started/ubuntu-install/">Ubuntu Install</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../getting-started/configuration/">Configuration</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../getting-started/dependencies/">Dependency Management</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../getting-started/first-run/">First Run Checks</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Workflows</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/disk-images/">Disk Images</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/live-case-zips/">Live-Case and Report ZIPs</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/report-bundles/">Report Bundles</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/file-listings/">File Listings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/deleted-file-recovery/">Deleted File Recovery</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/memory/">Memory and Support Files</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/deep-recovery/">Deep Recovery Profiles</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/bitlocker/">BitLocker Images</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/vsc/">Volume Shadow Copies</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../mounted-image-notes/">Mounted Image Notes</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Reports</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../reports/">Report Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../report-catalog/">Report Catalog</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../supported-artifacts/">Supported Artifacts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../report-specs/">Report Specs</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../artifact-coverage-matrix/">Artifact Coverage</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../windows-full-artifacts/">Windows Full Artifacts</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">MCP</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../mcp/overview/">MCP Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../mcp/source-of-truth/">Source-of-Truth Routing</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../mcp/client-setup/">Client Setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../mcp/tools/">MCP Tool Reference</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Future</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../future-features/">Future Features</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Operations</span></p>
+              <ul class="current">
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">Command Reference</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#global">Global</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#standalone">Standalone</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#processing">Processing</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#ingest">Ingest</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#reports">Reports</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#recovery">Recovery</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#image-maintenance">Image Maintenance</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#extraction-audit">Extraction Audit</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#mcp">MCP</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/security/">Security Model</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/field-readiness/">Field Readiness</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/troubleshooting/">Troubleshooting</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../release-checklist/">Release Checklist</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../..">Perceptor</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../.." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Operations</li>
+      <li class="breadcrumb-item active">Command Reference</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="command-reference">Command Reference<a class="headerlink" href="#command-reference" title="Permanent link">&para;</a></h1>
+<p>This is a compact operator reference for common Perceptor commands.</p>
+<h2 id="global">Global<a class="headerlink" href="#global" title="Permanent link">&para;</a></h2>
+<pre><code class="language-bash">uv run perceptor [--root ROOT] [--config CONFIG] [--plugin PLUGIN] [--dry-run] COMMAND ...
+</code></pre>
+<p>UTC is the default timestamp display. Add <code>--timezone AREA/LOCATION</code> only when
+you want display-only local companion fields while keeping UTC fields unchanged:</p>
+<pre><code class="language-bash">uv run perceptor --root ROOT --timezone America/New_York report timeline --case CASE_ID --format csv --output timeline.csv
+</code></pre>
+<h2 id="standalone">Standalone<a class="headerlink" href="#standalone" title="Permanent link">&para;</a></h2>
+<pre><code class="language-bash">uv run perceptor standalone version
+uv run perceptor standalone dependencies --format table
+uv run perceptor standalone doctor --smoke --format table
+uv run perceptor standalone smoke-regression --format table
+uv run perceptor standalone install-tool all --tools-dir ~/tools --env-file ~/tools/perceptor.env
+uv run perceptor standalone repair-dependencies --tools-dir ~/tools --env-file ~/tools/perceptor.env
+uv run perceptor standalone sample-fixture --output sample-live-case.zip --format table
+</code></pre>
+<p><code>install-tool all</code> includes <code>dislocker</code> and <code>bdemount</code> for BitLocker fallback
+coverage. Those are apt packages (<code>dislocker</code> and <code>libbde-utils</code>), so Perceptor
+uses non-interactive sudo. If sudo prompts for a password, install them manually
+with <code>sudo apt-get install -y dislocker libbde-utils</code> and rerun doctor.</p>
+<h2 id="processing">Processing<a class="headerlink" href="#processing" title="Permanent link">&para;</a></h2>
+<pre><code class="language-bash">uv run perceptor --root ROOT process --path IMAGE --computer-label HOST --profile windows-full --filesystem --sudo --workers 4
+uv run perceptor --root ROOT --dry-run process --path IMAGE --computer-label HOST --profile windows-full --filesystem --sudo
+uv run perceptor --root ROOT run --case CASE_ID --image IMAGE_ID --profile windows-rdp-cache --replace-existing
+</code></pre>
+<p>Use <code>--filesystem</code> for mounted-volume processing. If it is omitted, Perceptor will
+not mount the image and will use Sleuth Kit extraction where possible.</p>
+<h2 id="ingest">Ingest<a class="headerlink" href="#ingest" title="Permanent link">&para;</a></h2>
+<pre><code class="language-bash">uv run perceptor --root ROOT ingest triage-zip --path live-case.zip --preflight --format table
+uv run perceptor --root ROOT ingest triage-zip --path live-case.zip --accept-duplicate --report-purpose triage
+uv run perceptor --root ROOT report-bundle coverage --path live-case.zip --format table
+uv run perceptor --root ROOT report-bundle import --path HOST01 --case CASE_ID --computer-label HOST01
+uv run perceptor --root ROOT report-bundle import-many --path live-case.zip --accept-duplicate
+</code></pre>
+<h2 id="reports">Reports<a class="headerlink" href="#reports" title="Permanent link">&para;</a></h2>
+<pre><code class="language-bash">uv run perceptor --root ROOT report dashboard --case CASE_ID --format table
+uv run perceptor --root ROOT report progress --case CASE_ID --format table
+uv run perceptor --root ROOT report processing-estimate --case CASE_ID --profile windows-full --format table
+uv run perceptor --root ROOT report examiner-edge-artifacts --case CASE_ID --format table
+uv run perceptor --root ROOT report mapped-network-paths --case CASE_ID --format table
+uv run perceptor --root ROOT report non-standard-ads --case CASE_ID --format table
+uv run perceptor --root ROOT report ntfs-security-descriptors --case CASE_ID --format table
+uv run perceptor --root ROOT report remote-access-tool-logs --case CASE_ID --format table
+uv run perceptor --root ROOT report runbook --case CASE_ID --format md
+uv run perceptor --root ROOT report review-status --case CASE_ID --format table
+uv run perceptor --root ROOT report bundle --case CASE_ID --purpose review
+uv run perceptor --root ROOT report validate-outputs --path reports/triage-bundle --format table
+</code></pre>
+<h2 id="recovery">Recovery<a class="headerlink" href="#recovery" title="Permanent link">&para;</a></h2>
+<pre><code class="language-bash">uv run perceptor --root ROOT recover deleted-files --case CASE_ID --image IMAGE_ID --name file.docx --limit 1 --format table
+</code></pre>
+<h2 id="image-maintenance">Image Maintenance<a class="headerlink" href="#image-maintenance" title="Permanent link">&para;</a></h2>
+<pre><code class="language-bash">uv run perceptor --root ROOT image add --case CASE_ID --path /evidence/host.E01 --computer COMPUTER_ID
+uv run perceptor --root ROOT image integrity --case CASE_ID --image IMAGE_ID --format table
+uv run perceptor --root ROOT image verify --case CASE_ID --image IMAGE_ID --format table
+uv run perceptor --root ROOT image cleanup-stale-mounts --format table
+uv run perceptor --root ROOT image mount --case CASE_ID --image IMAGE_ID --filesystem --sudo
+uv run perceptor --root ROOT image unmount --case CASE_ID --image IMAGE_ID --sudo
+</code></pre>
+<p><code>image add</code> hashes the evidence with MD5, SHA1, and SHA256. <code>image verify</code>
+recomputes the stored algorithms and records the verification result.</p>
+<h2 id="extraction-audit">Extraction Audit<a class="headerlink" href="#extraction-audit" title="Permanent link">&para;</a></h2>
+<pre><code class="language-bash">uv run perceptor --root ROOT report evidence-extractions --case CASE_ID --format table
+uv run perceptor --root ROOT report evidence-extractions --case CASE_ID --image IMAGE_ID --artifact lnk_files --format csv --output extracted-lnk.csv
+</code></pre>
+<h2 id="mcp">MCP<a class="headerlink" href="#mcp" title="Permanent link">&para;</a></h2>
+<pre><code class="language-bash">uv run perceptor --root ROOT mcp serve
+uv run perceptor --root ROOT mcp serve --allow-processing
+uv run perceptor --root ROOT mcp serve --allow-processing --allow-sensitive --allow-external-ai
+</code></pre>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../../future-features/" class="btn btn-neutral float-left" title="Future Features"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../../operations/security/" class="btn btn-neutral float-right" title="Security Model">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/leewhitfield/perceptor" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+      <span><a href="../../future-features/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../../operations/security/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../..";</script>
+    <script src="../../js/theme_extra.js"></script>
+    <script src="../../js/theme.js"></script>
+      <script src="../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

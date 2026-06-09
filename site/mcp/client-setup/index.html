@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../img/favicon.ico" />
+    <title>Client Setup - Perceptor</title>
+    <link rel="stylesheet" href="../../css/theme.css" />
+    <link rel="stylesheet" href="../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Client Setup";
+        var mkdocs_page_input_path = "mcp/client-setup.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../.." class="icon icon-home"> Perceptor
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../..">Home</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Getting Started</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../getting-started/overview/">Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../getting-started/ubuntu-install/">Ubuntu Install</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../getting-started/configuration/">Configuration</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../getting-started/dependencies/">Dependency Management</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../getting-started/first-run/">First Run Checks</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Workflows</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/disk-images/">Disk Images</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/live-case-zips/">Live-Case and Report ZIPs</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/report-bundles/">Report Bundles</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/file-listings/">File Listings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/deleted-file-recovery/">Deleted File Recovery</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/memory/">Memory and Support Files</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/deep-recovery/">Deep Recovery Profiles</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/bitlocker/">BitLocker Images</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../workflows/vsc/">Volume Shadow Copies</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../mounted-image-notes/">Mounted Image Notes</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Reports</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../reference/reports/">Report Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../reference/report-catalog/">Report Catalog</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../reference/supported-artifacts/">Supported Artifacts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../report-specs/">Report Specs</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../artifact-coverage-matrix/">Artifact Coverage</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../windows-full-artifacts/">Windows Full Artifacts</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">MCP</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../overview/">MCP Overview</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../source-of-truth/">Source-of-Truth Routing</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="#">Client Setup</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#local-ubuntu-client">Local Ubuntu Client</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#mac-gui-client-to-ubuntu-host">Mac GUI Client to Ubuntu Host</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#workspace-scope">Workspace Scope</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#restarting">Restarting</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../tools/">MCP Tool Reference</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Future</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../future-features/">Future Features</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Operations</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../reference/commands/">Command Reference</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/security/">Security Model</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/field-readiness/">Field Readiness</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../operations/troubleshooting/">Troubleshooting</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../release-checklist/">Release Checklist</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../..">Perceptor</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../.." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">MCP</li>
+      <li class="breadcrumb-item active">Client Setup</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="mcp-client-setup">MCP Client Setup<a class="headerlink" href="#mcp-client-setup" title="Permanent link">&para;</a></h1>
+<p>Use stdio when the MCP client runs a command over SSH to the Ubuntu Perceptor host.</p>
+<h2 id="local-ubuntu-client">Local Ubuntu Client<a class="headerlink" href="#local-ubuntu-client" title="Permanent link">&para;</a></h2>
+<p>Command:</p>
+<pre><code class="language-bash">uv
+</code></pre>
+<p>Arguments:</p>
+<pre><code class="language-text">run perceptor --root /path/to/workspace mcp serve
+</code></pre>
+<p>Working directory:</p>
+<pre><code class="language-text">/opt/perceptor
+</code></pre>
+<h2 id="mac-gui-client-to-ubuntu-host">Mac GUI Client to Ubuntu Host<a class="headerlink" href="#mac-gui-client-to-ubuntu-host" title="Permanent link">&para;</a></h2>
+<p>Use an SSH command as the stdio launcher.</p>
+<p>Command:</p>
+<pre><code class="language-bash">ssh
+</code></pre>
+<p>Arguments:</p>
+<pre><code class="language-text">-i ~/.ssh/id_ed25519_relic analyst@UBUNTU_HOST cd /opt/perceptor &amp;&amp; uv run perceptor --root /path/to/workspace mcp serve
+</code></pre>
+<p>For processing:</p>
+<pre><code class="language-text">-i ~/.ssh/id_ed25519_relic analyst@UBUNTU_HOST cd /opt/perceptor &amp;&amp; uv run perceptor --root /path/to/workspace mcp serve --allow-processing
+</code></pre>
+<p>Use the private key path, not the <code>.pub</code> file. The public key must be installed
+in <code>~/.ssh/authorized_keys</code> on the Ubuntu host.</p>
+<h2 id="workspace-scope">Workspace Scope<a class="headerlink" href="#workspace-scope" title="Permanent link">&para;</a></h2>
+<p>The MCP server is rooted to one Perceptor workspace at startup. To use a different
+workspace, start another MCP server configuration with a different <code>--root</code>.</p>
+<h2 id="restarting">Restarting<a class="headerlink" href="#restarting" title="Permanent link">&para;</a></h2>
+<p>Restart the MCP server after code changes or after adding new tools. MCP clients
+usually cache tool definitions for a running server.</p>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../source-of-truth/" class="btn btn-neutral float-left" title="Source-of-Truth Routing"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../tools/" class="btn btn-neutral float-right" title="MCP Tool Reference">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+        <span>
+          <a href="https://github.com/leewhitfield/perceptor" class="fa fa-github" style="color: #fcfcfc"> GitHub</a>
+        </span>
+    
+    
+      <span><a href="../source-of-truth/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../tools/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../..";</script>
+    <script src="../../js/theme_extra.js"></script>
+    <script src="../../js/theme.js"></script>
+      <script src="../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>
