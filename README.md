@@ -8,6 +8,8 @@ Perceptor ingests full forensic images, report exports from tools such as Eric Z
 
 Perceptor operates independently and does not require artificial intelligence. It also provides an optional MCP connector. The MCP connector lets an examiner attach an agent of their choice and query multiple artifact families at once, with source-of-truth routing and guardrails intended to keep the agent grounded in generated reports, indexed content, and parsed evidence. The goal is to speed up investigations and help reveal links that may otherwise remain buried.
 
+The full manual can be found here: ![Perceptor Manual](https://leewhitfield.github.io/perceptor/)
+
 ## Why It Exists
 
 Perceptor exists for two main reasons.
