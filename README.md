@@ -1,6 +1,6 @@
 # Perceptor
 
-![Perceptor Logo](perceptor.png)
+![Perceptor Logo](docs/perceptor.png)
 
 Perceptor connects disparate forensic artifacts to provide a more comprehensive view of an investigation. Some relationships between artifacts are obvious. Others are not immediately apparent, especially when there is too much data for an examiner to review one artifact or system at a time.
 
