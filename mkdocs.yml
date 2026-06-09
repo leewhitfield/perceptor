@@ -32,6 +32,8 @@ nav:
       - Report Overview: reference/reports.md
       - Report Catalog: reference/report-catalog.md
       - Supported Artifacts: reference/supported-artifacts.md
+      - Third-Party Tools: reference/third-party-tools.md
+      - Custom Parsers: reference/custom-parsers.md
       - Report Specs: report-specs.md
       - Artifact Coverage: artifact-coverage-matrix.md
       - Windows Full Artifacts: windows-full-artifacts.md

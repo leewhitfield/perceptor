@@ -4,6 +4,9 @@ Perceptor normalizes artifact output into SQLite/DuckDB tables and indexes large
 searchable content in OpenSearch. UTC is the default and authoritative timestamp
 basis. Local timezone display is optional and display-only.
 
+For implementation details, see [Custom Parsers](custom-parsers.md) and
+[Third-Party Tools](third-party-tools.md).
+
 ## Filesystem and NTFS
 
 - NTFS `$MFT`, USN Journal, `$LogFile`, `$I30`, namespace reconciliation.

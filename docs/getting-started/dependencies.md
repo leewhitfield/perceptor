@@ -6,6 +6,9 @@ Perceptor separates dependencies into three groups:
 - System packages installed with apt.
 - Perceptor-managed third-party tools downloaded or built under a tools directory.
 
+For the full tool-by-tool catalog, see
+[Third-Party Tools](../reference/third-party-tools.md).
+
 The default setup command can install both managed tools and the BitLocker
 fallback apt packages (`dislocker` and `libbde-utils`). If sudo requires a
 password, install those packages with the apt command below before running
