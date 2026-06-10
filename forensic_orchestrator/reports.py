@@ -7877,6 +7877,16 @@ SOFTWARE_FOOTPRINT_COMMON_TOKENS = {
     "x86",
 }
 
+SOFTWARE_FOOTPRINT_SECTION_ORDER = [
+    ("currently_installed_with_activity", "Currently Installed With Activity"),
+    ("currently_installed_inventory_only", "Currently Installed Inventory Only"),
+    ("not_installed_with_activity", "Activity Without Installed-Program Match"),
+    ("suspicious_persistence_residue", "Persistence Residue Leads"),
+    ("historical_presence_only", "Historical Presence Only"),
+    ("filesystem_remnant_only", "Filesystem Remnants Only"),
+    ("unclassified", "Unclassified"),
+]
+
 
 def software_footprint_review_report(
     db: Database,
@@ -7947,6 +7957,7 @@ def software_footprint_review_report(
         )
     )
     visible = footprints[:limit]
+    sections = _software_footprint_sections(footprints, per_section_limit=limit)
     return {
         "case_id": case_id,
         "filters": {"target": target, "limit": limit, "include_filesystem": include_filesystem},
@@ -7968,6 +7979,7 @@ def software_footprint_review_report(
                 "limit or a target filter for a fuller review."
             ),
         },
+        "sections": sections,
         "software_footprints": visible,
         "total_returned": len(visible),
         "total_matching": len(footprints),
@@ -7976,6 +7988,7 @@ def software_footprint_review_report(
 
 def software_footprint_review_markdown(report: dict[str, Any]) -> str:
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    sections = report.get("sections") if isinstance(report.get("sections"), list) else []
     rows = report.get("software_footprints") if isinstance(report.get("software_footprints"), list) else []
     lines = [
         "# Software Footprint Review",
@@ -7998,39 +8011,102 @@ def software_footprint_review_markdown(report: dict[str, Any]) -> str:
         if isinstance(row, dict):
             lines.append(f"- `{row.get('status') or ''}`: `{row.get('count') or 0}`")
     lines.extend(["", "## Footprints", ""])
-    if not rows:
+    if not rows and not sections:
         lines.append("- No software footprints were identified by the current sources.")
-    for row in rows:
-        lines.append(
-            f"- `{row.get('status') or ''}` score `{row.get('score') or 0}` "
-            f"`{row.get('display_name') or ''}`"
+    section_items = sections or [{"title": "All Footprints", "rows": rows, "total_matching": len(rows), "returned": len(rows)}]
+    for section in section_items:
+        if not isinstance(section, dict):
+            continue
+        section_rows = section.get("rows") if isinstance(section.get("rows"), list) else []
+        lines.extend(
+            [
+                "",
+                f"### {section.get('title') or section.get('status') or 'Footprints'}",
+                "",
+                f"Returned `{section.get('returned') or len(section_rows)}` of `{section.get('total_matching') or len(section_rows)}`.",
+                "",
+            ]
         )
-        lines.append(
-            f"  - installed `{row.get('installed_application_count') or 0}`, execution "
-            f"`{row.get('execution_evidence_count') or 0}`, persistence "
-            f"`{row.get('persistence_evidence_count') or 0}`, user activity "
-            f"`{row.get('user_activity_evidence_count') or 0}`, presence "
-            f"`{row.get('presence_evidence_count') or 0}`, filesystem "
-            f"`{row.get('filesystem_evidence_count') or 0}`"
-        )
-        if row.get("first_seen_utc") or row.get("last_seen_utc"):
-            lines.append(f"  - first/last: `{row.get('first_seen_utc') or ''}` / `{row.get('last_seen_utc') or ''}`")
-        sources = ", ".join(str(source) for source in row.get("sources") or [])
-        if sources:
-            lines.append(f"  - sources: `{sources}`")
-        for sample in (row.get("evidence_samples") or [])[:5]:
-            if not isinstance(sample, dict):
-                continue
-            lines.append(
-                f"  - `{sample.get('evidence_type') or ''}` `{sample.get('timestamp_utc') or ''}` "
-                f"`{sample.get('source_table') or ''}` path `{sample.get('path') or ''}`"
-            )
+        if not section_rows:
+            lines.append("- No entries in this section.")
+            continue
+        for row in section_rows:
+            _append_software_footprint_markdown(lines, row)
     lines.extend(["", "## Caveats", ""])
     lines.append("- This report is inventory-first: current installed-program rows are the baseline.")
     lines.append("- Absence from installed inventory means no matching installed-program artifact was parsed, not proof of uninstall by itself.")
     lines.append("- Amcache and ShimCache are presence indicators and should not be treated as standalone execution proof.")
     lines.append("- UserAssist can be inconsistent; corroborate it with stronger execution or file-use artifacts.")
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _append_software_footprint_markdown(lines: list[str], row: dict[str, Any]) -> None:
+    lines.append(
+        f"- score `{row.get('score') or 0}` `{row.get('display_name') or ''}` "
+        f"(`{row.get('status') or ''}`)"
+    )
+    lines.append(
+        f"  - installed `{row.get('installed_application_count') or 0}`, execution "
+        f"`{row.get('execution_evidence_count') or 0}`, persistence "
+        f"`{row.get('persistence_evidence_count') or 0}`, user activity "
+        f"`{row.get('user_activity_evidence_count') or 0}`, presence "
+        f"`{row.get('presence_evidence_count') or 0}`, filesystem "
+        f"`{row.get('filesystem_evidence_count') or 0}`"
+    )
+    if row.get("first_seen_utc") or row.get("last_seen_utc"):
+        lines.append(f"  - first/last: `{row.get('first_seen_utc') or ''}` / `{row.get('last_seen_utc') or ''}`")
+    sources = ", ".join(str(source) for source in row.get("sources") or [])
+    if sources:
+        lines.append(f"  - sources: `{sources}`")
+    for sample in (row.get("evidence_samples") or [])[:5]:
+        if not isinstance(sample, dict):
+            continue
+        lines.append(
+            f"  - `{sample.get('evidence_type') or ''}` `{sample.get('timestamp_utc') or ''}` "
+            f"`{sample.get('source_table') or ''}` path `{sample.get('path') or ''}`"
+        )
+
+
+def _software_footprint_sections(footprints: list[dict[str, Any]], *, per_section_limit: int) -> list[dict[str, Any]]:
+    sections: list[dict[str, Any]] = []
+    known_statuses = {status for status, _title in SOFTWARE_FOOTPRINT_SECTION_ORDER}
+    for status, title in SOFTWARE_FOOTPRINT_SECTION_ORDER:
+        rows = [row for row in footprints if row.get("status") == status]
+        visible = rows[:per_section_limit]
+        sections.append(
+            {
+                "status": status,
+                "title": title,
+                "total_matching": len(rows),
+                "returned": len(visible),
+                "rows": visible,
+                "result_limit_note": (
+                    "Section rows are limited by the requested report limit. Use a higher limit or target filter "
+                    "for the full section."
+                    if len(rows) > per_section_limit
+                    else None
+                ),
+            }
+        )
+    other_rows = [row for row in footprints if row.get("status") not in known_statuses]
+    if other_rows:
+        visible = other_rows[:per_section_limit]
+        sections.append(
+            {
+                "status": "other",
+                "title": "Other",
+                "total_matching": len(other_rows),
+                "returned": len(visible),
+                "rows": visible,
+                "result_limit_note": (
+                    "Section rows are limited by the requested report limit. Use a higher limit or target filter "
+                    "for the full section."
+                    if len(other_rows) > per_section_limit
+                    else None
+                ),
+            }
+        )
+    return sections
 
 
 def _software_installed_inventory(db: Database, case_id: str) -> list[dict[str, Any]]:
@@ -8066,14 +8142,16 @@ def _software_installed_inventory(db: Database, case_id: str) -> list[dict[str, 
         value_name = str(row.get("value_name") or "").casefold()
         if value_name:
             item["values"][value_name] = row.get("value_data")
-        if row.get("display_name"):
-            item["values"].setdefault("displayname", row.get("display_name"))
         if row.get("normalized_path"):
             item["values"].setdefault("installlocation", row.get("normalized_path"))
     for item in by_key.values():
         values = item["values"]
+        key_leaf = _software_registry_key_leaf(item.get("key_path"))
+        raw_display_name = values.get("displayname") or values.get("quietdisplayname")
+        if not raw_display_name and key_leaf and not _software_registry_key_leaf_is_guid(key_leaf):
+            raw_display_name = key_leaf
         display_name = _software_display_name(
-            values.get("displayname") or values.get("quietdisplayname"),
+            raw_display_name,
             values.get("installlocation") or values.get("displayicon") or values.get("uninstallstring"),
         )
         if not display_name:
@@ -8527,8 +8605,9 @@ def _software_finalize_group(group: dict[str, Any]) -> dict[str, Any]:
     filesystem_count = counts.get("filesystem", 0)
     download_count = counts.get("download", 0)
     activity_count = execution_count + process_count + user_activity_count + download_count
+    trace_count = sum(counts.values())
     is_installed = installed_count > 0
-    if is_installed and activity_count:
+    if is_installed and trace_count:
         status = "currently_installed_with_activity"
     elif is_installed:
         status = "currently_installed_inventory_only"
@@ -8612,6 +8691,20 @@ def _software_status_interpretation(status: str) -> str:
 def _software_match_installed(row: dict[str, Any], installed: list[dict[str, Any]]) -> dict[str, Any] | None:
     row_text = _software_group_text(row)
     row_tokens = _software_match_tokens(row.get("software_name"), row.get("path"), row.get("executable_name"))
+    row_families = _software_family_aliases(row.get("software_name"), row.get("path"), row.get("executable_name"))
+    if row_families:
+        family_matches = [
+            item
+            for item in installed
+            if row_families & _software_family_aliases(
+                item.get("display_name"),
+                item.get("path"),
+                item.get("publisher"),
+                item.get("key_path"),
+            )
+        ]
+        if family_matches:
+            return sorted(family_matches, key=_software_installed_family_priority)[0]
     best: tuple[int, dict[str, Any] | None] = (0, None)
     for item in installed:
         display = str(item.get("display_name") or "").casefold()
@@ -8643,12 +8736,71 @@ def _software_match_tokens(*values: Any) -> set[str]:
     return tokens
 
 
+def _software_family_aliases(*values: Any) -> set[str]:
+    text = " ".join(_software_clean_name(value) for value in values if value is not None)
+    compact = re.sub(r"[^a-z0-9]+", "", text)
+    families: set[str] = set()
+    if any(token in compact for token in ("msedge", "microsoftedge", "edgeupdate", "edgewebview", "webview2")):
+        families.add("microsoft_edge")
+    if any(
+        token in compact
+        for token in (
+            "microsoft365",
+            "office365",
+            "o365",
+            "officeclicktorun",
+            "clicktorun",
+            "winword",
+            "powerpnt",
+            "excel",
+            "onenote",
+            "onenotem",
+            "outlook",
+            "officec2rclient",
+            "olicenseheartbeat",
+            "sdxhelper",
+        )
+    ):
+        families.add("microsoft_office")
+    if "googledrive" in compact or "drivefilestream" in compact or "googledrivefs" in compact:
+        families.add("google_drive")
+    if "onedrive" in compact or "filesynchelper" in compact:
+        families.add("microsoft_onedrive")
+    return families
+
+
+def _software_installed_family_priority(item: dict[str, Any]) -> tuple[int, str]:
+    name = str(item.get("display_name") or "")
+    cleaned = _software_clean_name(name)
+    if "microsoft 365" in cleaned or cleaned.startswith("microsoft 365"):
+        return (0, cleaned)
+    if cleaned == "microsoft edge":
+        return (0, cleaned)
+    if cleaned in {"google drive", "microsoft onedrive"}:
+        return (0, cleaned)
+    if "runtime" in cleaned or "component" in cleaned or "update" in cleaned:
+        return (2, cleaned)
+    return (1, cleaned)
+
+
 def _software_identity_key(name: Any, path: Any) -> str:
     display = _software_display_name(name, path)
     cleaned = _software_clean_name(display)
     if cleaned:
         return re.sub(r"[^a-z0-9]+", "_", cleaned).strip("_")[:120]
     return ""
+
+
+def _software_registry_key_leaf(value: Any) -> str:
+    text = str(value or "").strip().strip("\\/")
+    if not text:
+        return ""
+    return re.split(r"[\\/]", text)[-1].strip()
+
+
+def _software_registry_key_leaf_is_guid(value: Any) -> bool:
+    text = str(value or "").strip().strip("{}")
+    return bool(re.fullmatch(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", text))
 
 
 def _software_display_name(name: Any, path: Any) -> str:

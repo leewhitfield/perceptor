@@ -9162,12 +9162,52 @@ def test_software_footprint_review_compares_installed_inventory_to_traces(tmp_pa
             },
             {
                 **base,
+                "id": "reg-edge-name",
+                "row_number": 4,
+                "artifact": "installed_applications",
+                "display_name": "Microsoft Edge",
+                "value_name": "DisplayName",
+                "value_data": "Microsoft Edge",
+                "key_path": "Microsoft/Windows/CurrentVersion/Uninstall/Microsoft Edge",
+            },
+            {
+                **base,
+                "id": "reg-office-name",
+                "row_number": 5,
+                "artifact": "installed_applications",
+                "display_name": "Microsoft 365 - en-us",
+                "value_name": "DisplayName",
+                "value_data": "Microsoft 365 - en-us",
+                "key_path": "Microsoft/Windows/CurrentVersion/Uninstall/O365HomePremRetail - en-us",
+            },
+            {
+                **base,
+                "id": "reg-office-path",
+                "row_number": 6,
+                "artifact": "installed_applications",
+                "value_name": "InstallLocation",
+                "value_data": r"C:\Program Files\Microsoft Office",
+                "key_path": "Microsoft/Windows/CurrentVersion/Uninstall/O365HomePremRetail - en-us",
+            },
+            {
+                **base,
                 "id": "reg-anydesk-run",
-                "row_number": 3,
+                "row_number": 7,
                 "artifact": "autostart",
                 "display_name": "AnyDesk",
                 "value_name": "AnyDesk",
                 "value_data": r"C:\Users\Jane\AppData\Roaming\AnyDesk\AnyDesk.exe",
+                "key_path": r"Software\Microsoft\Windows\CurrentVersion\Run",
+                "key_last_write_utc": "2020-01-05T12:00:00Z",
+            },
+            {
+                **base,
+                "id": "reg-edge-run",
+                "row_number": 8,
+                "artifact": "autostart",
+                "display_name": "msedge",
+                "value_name": "MicrosoftEdgeAutoLaunch",
+                "value_data": r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
                 "key_path": r"Software\Microsoft\Windows\CurrentVersion\Run",
                 "key_last_write_utc": "2020-01-05T12:00:00Z",
             },
@@ -9203,6 +9243,20 @@ def test_software_footprint_review_compares_installed_inventory_to_traces(tmp_pa
                 "original_path": r"C:\Program Files\VeraCrypt\VeraCrypt.exe",
                 "last_run_time_utc": "2020-01-07T03:04:05Z",
             },
+            {
+                "id": "pf-winword",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "output-1",
+                "tool_name": "PrefetchParser",
+                "source_csv": tmp_path / "prefetch.csv",
+                "row_number": 3,
+                "prefetch_name": "WINWORD.EXE-ABCDEF03.pf",
+                "executable_name": "WINWORD.EXE",
+                "original_path": r"C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE",
+                "last_run_time_utc": "2020-01-08T03:04:05Z",
+            },
         ]
     )
 
@@ -9212,8 +9266,13 @@ def test_software_footprint_review_compares_installed_inventory_to_traces(tmp_pa
 
     assert by_name["google chrome"]["status"] == "currently_installed_with_activity"
     assert by_name["google chrome"]["is_currently_installed"] is True
+    assert by_name["microsoft edge"]["status"] == "currently_installed_with_activity"
+    assert by_name["microsoft 365 - en-us"]["status"] == "currently_installed_with_activity"
+    assert "msedge" not in by_name
+    assert "winword" not in by_name
     assert by_name["veracrypt"]["status"] == "not_installed_with_activity"
     assert by_name["anydesk"]["status"] == "suspicious_persistence_residue"
+    assert any(section["status"] == "not_installed_with_activity" for section in report["sections"])
     assert report["summary"]["not_installed_with_activity_count"] >= 1
     assert "Software Footprint Review" in markdown
     assert "Absence from installed inventory" in markdown
