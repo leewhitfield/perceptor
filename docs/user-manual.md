@@ -951,8 +951,9 @@ High-value report families:
   `artifact-completeness`.
 - Execution and event logs: `execution`, `execution-correlation`,
   `suspicious-executions`, `event-interpretation`,
-  `suspicious-timeline-windows`, `program-provenance`, `prefetch`, `amcache`,
-  `shimcache`, `autostarts`, `persistence`, `malware-hiding-places`,
+  `suspicious-timeline-windows`, `program-provenance`,
+  `software-footprint-review`, `prefetch`, `amcache`, `shimcache`,
+  `autostarts`, `persistence`, `malware-hiding-places`,
   `bits-activity`, `examiner-edge-artifacts`, `mapped-network-paths`,
   `remote-access-tool-logs`.
 - Filesystem and file movement: `mft`, `ntfs-index`, `ntfs-logfile`,

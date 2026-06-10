@@ -12,6 +12,7 @@ For the complete list of report subcommands, see
 uv run perceptor --root ~/analysis/case-root report dashboard --case CASE_ID --format table
 uv run perceptor --root ~/analysis/case-root report progress --case CASE_ID --format table
 uv run perceptor --root ~/analysis/case-root report suspicious-executions --case CASE_ID --format md
+uv run perceptor --root ~/analysis/case-root report software-footprint-review --case CASE_ID --format md
 uv run perceptor --root ~/analysis/case-root report external-storage --case CASE_ID --format md
 uv run perceptor --root ~/analysis/case-root report usb-files --case CASE_ID --format md
 uv run perceptor --root ~/analysis/case-root report opened-from-removable-media --case CASE_ID --format md
@@ -26,6 +27,22 @@ uv run perceptor --root ~/analysis/case-root report non-standard-ads --case CASE
 uv run perceptor --root ~/analysis/case-root report ntfs-security-descriptors --case CASE_ID --format table
 uv run perceptor --root ~/analysis/case-root report remote-access-tool-logs --case CASE_ID --format table
 ```
+
+## Software Footprint Review
+
+`software-footprint-review` compares current installed-program inventory with
+execution, persistence, user-activity, presence, download, and filesystem
+remnants. Use it to identify applications that are currently installed, likely
+uninstalled, portable, or represented only by historical residue.
+
+```bash
+uv run perceptor --root ~/analysis/case-root report software-footprint-review --case CASE_ID --format md
+uv run perceptor --root ~/analysis/case-root report software-footprint-review --case CASE_ID --target anydesk --format json
+```
+
+The report is inventory-first. Absence from installed inventory means no
+matching installed-program artifact was parsed; corroborate with source rows
+before treating a footprint as a confirmed uninstall.
 
 ## Examiner Edge Artifacts
 

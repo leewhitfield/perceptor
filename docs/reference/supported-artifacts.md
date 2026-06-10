@@ -35,7 +35,8 @@ Primary reports include `files`, `filesystem-entries`, `filesystem-review`,
 
 Primary reports include `execution`, `execution-correlation`, `prefetch`,
 `amcache`, `shimcache`, `program-provenance`, `suspicious-executions`,
-`interesting-executables`, `srum-context`, and `event-interpretation`.
+`software-footprint-review`, `interesting-executables`, `srum-context`, and
+`event-interpretation`.
 
 ## User Activity and File References
 

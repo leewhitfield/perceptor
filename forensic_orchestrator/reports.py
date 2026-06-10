@@ -7836,6 +7836,848 @@ def uninstalled_application_artifacts_report(
     }
 
 
+SOFTWARE_FOOTPRINT_PERSISTENCE_ARTIFACTS = {
+    "appinit_dlls",
+    "autostart",
+    "image_file_execution_options",
+    "lsa_packages",
+    "run",
+    "runonce",
+    "scheduled_task_cache",
+    "services",
+    "startup_approved",
+    "winlogon_persistence",
+    "wmi_persistence",
+}
+
+SOFTWARE_FOOTPRINT_COMMON_TOKENS = {
+    "application",
+    "app",
+    "bin",
+    "common",
+    "desktop",
+    "file",
+    "files",
+    "helper",
+    "install",
+    "installer",
+    "local",
+    "microsoft",
+    "program",
+    "programdata",
+    "setup",
+    "software",
+    "system",
+    "update",
+    "updater",
+    "user",
+    "users",
+    "windows",
+    "x64",
+    "x86",
+}
+
+
+def software_footprint_review_report(
+    db: Database,
+    case_id: str,
+    *,
+    target: str | None = None,
+    limit: int = 100,
+    include_filesystem: bool = True,
+) -> dict[str, Any]:
+    """Compare current installed software with observed historical footprints."""
+    db.get_case(case_id)
+    limit = max(1, min(int(limit), 50_000))
+    installed = _software_installed_inventory(db, case_id)
+    evidence = _software_footprint_evidence_rows(
+        db,
+        case_id,
+        limit=max(limit * 80, 2000),
+        include_filesystem=include_filesystem,
+    )
+    target_lc = str(target or "").casefold().strip()
+    groups: dict[str, dict[str, Any]] = {}
+    source_counts: dict[str, int] = {}
+    status_counts: dict[str, int] = {}
+    evidence_type_counts: dict[str, int] = {}
+
+    for item in installed:
+        if target_lc and target_lc not in _software_group_text(item):
+            continue
+        key = str(item["identity_key"])
+        group = groups.setdefault(key, _software_empty_group(item["display_name"], key))
+        _software_add_installed(group, item)
+
+    for row in evidence:
+        if target_lc and target_lc not in _software_group_text(row):
+            continue
+        matched = _software_match_installed(row, installed)
+        if matched:
+            key = str(matched["identity_key"])
+            display_name = str(matched["display_name"])
+        else:
+            key = _software_identity_key(row.get("software_name"), row.get("path"))
+            display_name = _software_display_name(row.get("software_name"), row.get("path"))
+        if not key:
+            continue
+        group = groups.setdefault(key, _software_empty_group(display_name, key))
+        if matched:
+            _software_add_installed(group, matched)
+        _software_add_evidence(group, row)
+
+    footprints: list[dict[str, Any]] = []
+    for group in groups.values():
+        row = _software_finalize_group(group)
+        if target_lc and target_lc not in _software_group_text(row):
+            continue
+        footprints.append(row)
+        status = str(row.get("status") or "unknown")
+        status_counts[status] = status_counts.get(status, 0) + 1
+        for source in row.get("sources") or []:
+            source_counts[str(source)] = source_counts.get(str(source), 0) + 1
+        for evidence_type, count in (row.get("evidence_type_counts") or {}).items():
+            evidence_type_counts[str(evidence_type)] = evidence_type_counts.get(str(evidence_type), 0) + int(count or 0)
+
+    footprints.sort(
+        key=lambda row: (
+            -int(row.get("score") or 0),
+            0 if row.get("is_currently_installed") else 1,
+            str(row.get("display_name") or "").casefold(),
+        )
+    )
+    visible = footprints[:limit]
+    return {
+        "case_id": case_id,
+        "filters": {"target": target, "limit": limit, "include_filesystem": include_filesystem},
+        "summary": {
+            "software_identity_count": len(footprints),
+            "current_installed_count": sum(1 for row in footprints if row.get("is_currently_installed")),
+            "not_installed_with_activity_count": sum(
+                1 for row in footprints if not row.get("is_currently_installed") and row.get("activity_evidence_count")
+            ),
+            "persistence_residue_count": sum(1 for row in footprints if row.get("status") == "suspicious_persistence_residue"),
+            "filesystem_remnant_only_count": sum(1 for row in footprints if row.get("status") == "filesystem_remnant_only"),
+            "status_counts": [{"status": key, "count": value} for key, value in sorted(status_counts.items())],
+            "source_counts": [{"source_table": key, "count": value} for key, value in sorted(source_counts.items())],
+            "evidence_type_counts": [
+                {"evidence_type": key, "count": value} for key, value in sorted(evidence_type_counts.items())
+            ],
+            "result_limit_note": (
+                "software_footprints is limited by the requested limit. Use JSON/CSV output with a higher "
+                "limit or a target filter for a fuller review."
+            ),
+        },
+        "software_footprints": visible,
+        "total_returned": len(visible),
+        "total_matching": len(footprints),
+    }
+
+
+def software_footprint_review_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    rows = report.get("software_footprints") if isinstance(report.get("software_footprints"), list) else []
+    lines = [
+        "# Software Footprint Review",
+        "",
+        f"Case: `{report.get('case_id') or ''}`",
+        "",
+        "## Summary",
+        "",
+        f"- Software identities: `{summary.get('software_identity_count', 0)}`",
+        f"- Currently installed: `{summary.get('current_installed_count', 0)}`",
+        f"- Not installed with activity evidence: `{summary.get('not_installed_with_activity_count', 0)}`",
+        f"- Persistence residue leads: `{summary.get('persistence_residue_count', 0)}`",
+        f"- Filesystem-only remnants: `{summary.get('filesystem_remnant_only_count', 0)}`",
+        f"- Returned: `{report.get('total_returned', 0)}` of `{report.get('total_matching', 0)}` matching identities",
+        "",
+        "## Status Counts",
+        "",
+    ]
+    for row in summary.get("status_counts") or []:
+        if isinstance(row, dict):
+            lines.append(f"- `{row.get('status') or ''}`: `{row.get('count') or 0}`")
+    lines.extend(["", "## Footprints", ""])
+    if not rows:
+        lines.append("- No software footprints were identified by the current sources.")
+    for row in rows:
+        lines.append(
+            f"- `{row.get('status') or ''}` score `{row.get('score') or 0}` "
+            f"`{row.get('display_name') or ''}`"
+        )
+        lines.append(
+            f"  - installed `{row.get('installed_application_count') or 0}`, execution "
+            f"`{row.get('execution_evidence_count') or 0}`, persistence "
+            f"`{row.get('persistence_evidence_count') or 0}`, user activity "
+            f"`{row.get('user_activity_evidence_count') or 0}`, presence "
+            f"`{row.get('presence_evidence_count') or 0}`, filesystem "
+            f"`{row.get('filesystem_evidence_count') or 0}`"
+        )
+        if row.get("first_seen_utc") or row.get("last_seen_utc"):
+            lines.append(f"  - first/last: `{row.get('first_seen_utc') or ''}` / `{row.get('last_seen_utc') or ''}`")
+        sources = ", ".join(str(source) for source in row.get("sources") or [])
+        if sources:
+            lines.append(f"  - sources: `{sources}`")
+        for sample in (row.get("evidence_samples") or [])[:5]:
+            if not isinstance(sample, dict):
+                continue
+            lines.append(
+                f"  - `{sample.get('evidence_type') or ''}` `{sample.get('timestamp_utc') or ''}` "
+                f"`{sample.get('source_table') or ''}` path `{sample.get('path') or ''}`"
+            )
+    lines.extend(["", "## Caveats", ""])
+    lines.append("- This report is inventory-first: current installed-program rows are the baseline.")
+    lines.append("- Absence from installed inventory means no matching installed-program artifact was parsed, not proof of uninstall by itself.")
+    lines.append("- Amcache and ShimCache are presence indicators and should not be treated as standalone execution proof.")
+    lines.append("- UserAssist can be inconsistent; corroborate it with stronger execution or file-use artifacts.")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _software_installed_inventory(db: Database, case_id: str) -> list[dict[str, Any]]:
+    installed: dict[str, dict[str, Any]] = {}
+    rows = _query_report_rows(
+        db,
+        case_id,
+        "registry_artifacts",
+        """
+        SELECT id, key_path, key_last_write_utc, source_path, value_name, value_data,
+               display_name, normalized_path, user_profile
+        FROM registry_artifacts
+        WHERE case_id = ?
+          AND artifact IN ('installed_applications', 'installed_app', 'uninstall')
+        ORDER BY key_path, row_number
+        """,
+        (case_id,),
+    )
+    by_key: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        key = str(row.get("key_path") or row.get("id") or "")
+        item = by_key.setdefault(
+            key,
+            {
+                "source_table": "registry_artifacts",
+                "source_row_id": row.get("id"),
+                "key_path": key,
+                "timestamp_utc": row.get("key_last_write_utc"),
+                "source_path": row.get("source_path"),
+                "values": {},
+            },
+        )
+        value_name = str(row.get("value_name") or "").casefold()
+        if value_name:
+            item["values"][value_name] = row.get("value_data")
+        if row.get("display_name"):
+            item["values"].setdefault("displayname", row.get("display_name"))
+        if row.get("normalized_path"):
+            item["values"].setdefault("installlocation", row.get("normalized_path"))
+    for item in by_key.values():
+        values = item["values"]
+        display_name = _software_display_name(
+            values.get("displayname") or values.get("quietdisplayname"),
+            values.get("installlocation") or values.get("displayicon") or values.get("uninstallstring"),
+        )
+        if not display_name:
+            continue
+        path = values.get("installlocation") or values.get("displayicon") or values.get("uninstallstring")
+        identity_key = _software_identity_key(display_name, path)
+        installed[identity_key] = {
+            "identity_key": identity_key,
+            "display_name": display_name,
+            "path": display_evidence_path(path),
+            "publisher": values.get("publisher"),
+            "display_version": values.get("displayversion"),
+            "timestamp_utc": item.get("timestamp_utc"),
+            "source_table": item.get("source_table"),
+            "source_row_id": item.get("source_row_id"),
+            "source_path": display_evidence_path(item.get("source_path")),
+            "key_path": item.get("key_path"),
+            "match_tokens": _software_match_tokens(display_name, path, values.get("publisher")),
+        }
+
+    for row in _query_report_rows(
+        db,
+        case_id,
+        "telemetry_artifacts",
+        """
+        SELECT id, application, title, path, artifact_text, event_time_utc, source_path
+        FROM telemetry_artifacts
+        WHERE case_id = ?
+          AND record_type IN ('installed_app', 'application_inventory')
+        """,
+        (case_id,),
+    ):
+        display_name = _software_display_name(row.get("application") or row.get("title"), row.get("path"))
+        if not display_name:
+            continue
+        identity_key = _software_identity_key(display_name, row.get("path"))
+        installed.setdefault(
+            identity_key,
+            {
+                "identity_key": identity_key,
+                "display_name": display_name,
+                "path": display_evidence_path(row.get("path")),
+                "publisher": None,
+                "display_version": None,
+                "timestamp_utc": row.get("event_time_utc"),
+                "source_table": "telemetry_artifacts",
+                "source_row_id": row.get("id"),
+                "source_path": display_evidence_path(row.get("source_path")),
+                "key_path": None,
+                "match_tokens": _software_match_tokens(display_name, row.get("path"), row.get("artifact_text")),
+            },
+        )
+    return list(installed.values())
+
+
+def _software_footprint_evidence_rows(
+    db: Database,
+    case_id: str,
+    *,
+    limit: int,
+    include_filesystem: bool,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+
+    def add(source_table: str, sql: str, params: tuple[Any, ...] | list[Any], mapper: Any) -> None:
+        if not _report_table_columns(db, case_id, source_table):
+            return
+        for raw in _query_report_rows(db, case_id, source_table, sql, params):
+            item = mapper(raw)
+            if not item:
+                continue
+            rows.append(item)
+
+    add(
+        "prefetch_items",
+        """
+        SELECT id, executable_name, original_path, artifact_path, referenced_strings,
+               last_run_time_utc, run_count, source_csv, row_number
+        FROM prefetch_items
+        WHERE case_id = ?
+        ORDER BY COALESCE(last_run_time_utc, '') DESC
+        LIMIT ?
+        """,
+        (case_id, limit),
+        lambda row: _software_evidence_row(
+            row,
+            "prefetch_items",
+            "execution",
+            "execution_proof",
+            row.get("executable_name"),
+            row.get("original_path") or row.get("artifact_path") or row.get("referenced_strings"),
+            row.get("last_run_time_utc"),
+            details={"run_count": row.get("run_count"), "source_file": row.get("source_csv"), "row_number": row.get("row_number")},
+        ),
+    )
+    add(
+        "registry_artifacts",
+        """
+        SELECT id, artifact, category, display_name, value_name, value_data, normalized_path,
+               key_path, key_last_write_utc, event_time_utc, user_profile, user_sid, notes,
+               source_path, row_number
+        FROM registry_artifacts
+        WHERE case_id = ?
+          AND artifact NOT IN ('installed_applications', 'installed_app', 'uninstall')
+        ORDER BY COALESCE(event_time_utc, key_last_write_utc, '') DESC
+        LIMIT ?
+        """,
+        (case_id, limit),
+        lambda row: _software_registry_evidence_row(row),
+    )
+    add(
+        "registry_userassist",
+        """
+        SELECT id, program_name, key_path, last_executed, user_profile, run_count
+        FROM registry_userassist
+        WHERE case_id = ?
+        ORDER BY COALESCE(last_executed, '') DESC
+        LIMIT ?
+        """,
+        (case_id, limit),
+        lambda row: _software_evidence_row(
+            row,
+            "registry_userassist",
+            "user_activity",
+            "activity_context",
+            row.get("program_name"),
+            row.get("program_name") or row.get("key_path"),
+            row.get("last_executed"),
+            user_profile=row.get("user_profile"),
+            details={"run_count": row.get("run_count"), "evidence_caveat": USERASSIST_CAVEAT},
+        ),
+    )
+    add(
+        "amcache_entries",
+        """
+        SELECT id, path, name, publisher, product_name, product_version, file_version,
+               created_utc, modified_utc, install_date, source_file, row_number
+        FROM amcache_entries
+        WHERE case_id = ?
+        ORDER BY COALESCE(modified_utc, created_utc, install_date, '') DESC
+        LIMIT ?
+        """,
+        (case_id, limit),
+        lambda row: _software_evidence_row(
+            row,
+            "amcache_entries",
+            "presence",
+            "presence_metadata",
+            row.get("product_name") or row.get("name"),
+            row.get("path") or row.get("name"),
+            row.get("modified_utc") or row.get("created_utc") or row.get("install_date"),
+            details={
+                "publisher": row.get("publisher"),
+                "product_version": row.get("product_version"),
+                "file_version": row.get("file_version"),
+                "source_file": row.get("source_file"),
+                "row_number": row.get("row_number"),
+                "evidence_caveat": "Amcache records presence/inventory metadata, not standalone execution proof.",
+            },
+        ),
+    )
+    add(
+        "shimcache_entries",
+        """
+        SELECT id, path, executed, last_modified_utc, source_file, row_number
+        FROM shimcache_entries
+        WHERE case_id = ?
+        ORDER BY COALESCE(last_modified_utc, '') DESC
+        LIMIT ?
+        """,
+        (case_id, limit),
+        lambda row: _software_evidence_row(
+            row,
+            "shimcache_entries",
+            "presence",
+            "presence_metadata",
+            _basename_from_path(row.get("path")),
+            row.get("path"),
+            row.get("last_modified_utc"),
+            details={
+                "executed_flag": row.get("executed"),
+                "source_file": row.get("source_file"),
+                "row_number": row.get("row_number"),
+                "evidence_caveat": "ShimCache records presence/cache metadata; execution flags require corroboration.",
+            },
+        ),
+    )
+    add(
+        "srum_records",
+        """
+        SELECT id, app_name, app_id, app_path, app_description, timestamp, user_name, record_type
+        FROM srum_records
+        WHERE case_id = ?
+          AND (COALESCE(app_name, '') != '' OR COALESCE(app_path, '') != '' OR COALESCE(app_id, '') != '')
+        ORDER BY COALESCE(timestamp, '') DESC
+        LIMIT ?
+        """,
+        (case_id, limit),
+        lambda row: _software_evidence_row(
+            row,
+            "srum_records",
+            "process_activity",
+            "activity_context",
+            row.get("app_name") or row.get("app_id"),
+            row.get("app_path") or row.get("app_id"),
+            row.get("timestamp"),
+            user_profile=row.get("user_name"),
+            details={"record_type": row.get("record_type"), "app_description": row.get("app_description")},
+        ),
+    )
+    add(
+        "shortcut_items",
+        """
+        SELECT id, artifact_type, artifact_name, artifact_path, file_name, target_path,
+               local_path, command_line_arguments, working_directory, app_id,
+               target_created, target_modified, target_accessed
+        FROM shortcut_items
+        WHERE case_id = ?
+        ORDER BY COALESCE(target_modified, target_created, target_accessed, '') DESC
+        LIMIT ?
+        """,
+        (case_id, limit),
+        lambda row: _software_evidence_row(
+            row,
+            "shortcut_items",
+            "user_activity",
+            "activity_context",
+            row.get("app_id") or row.get("file_name") or row.get("artifact_name"),
+            row.get("target_path") or row.get("local_path") or row.get("command_line_arguments") or row.get("artifact_path"),
+            row.get("target_modified") or row.get("target_created") or row.get("target_accessed"),
+            details={
+                "artifact_type": row.get("artifact_type"),
+                "artifact_name": row.get("artifact_name"),
+                "working_directory": row.get("working_directory"),
+            },
+        ),
+    )
+    add(
+        "browser_downloads",
+        """
+        SELECT id, browser, target_path, tab_url, site_url, referrer, start_time_utc, end_time_utc
+        FROM browser_downloads
+        WHERE case_id = ?
+          AND (
+            lower(COALESCE(target_path, '')) LIKE '%.exe%'
+            OR lower(COALESCE(target_path, '')) LIKE '%.msi%'
+            OR lower(COALESCE(target_path, '')) LIKE '%.dll%'
+            OR lower(COALESCE(target_path, '')) LIKE '%.ps1%'
+            OR lower(COALESCE(target_path, '')) LIKE '%.bat%'
+            OR lower(COALESCE(target_path, '')) LIKE '%.cmd%'
+          )
+        ORDER BY COALESCE(end_time_utc, start_time_utc, '') DESC
+        LIMIT ?
+        """,
+        (case_id, limit),
+        lambda row: _software_evidence_row(
+            row,
+            "browser_downloads",
+            "download",
+            "download_context",
+            _basename_from_path(row.get("target_path")),
+            row.get("target_path"),
+            row.get("end_time_utc") or row.get("start_time_utc"),
+            details={"browser": row.get("browser"), "tab_url": row.get("tab_url"), "site_url": row.get("site_url"), "referrer": row.get("referrer")},
+        ),
+    )
+    if include_filesystem:
+        add(
+            "mft_entries",
+            """
+            SELECT id, parent_path, file_name, extension, in_use, is_directory,
+                   created_si, modified_si, record_changed_si, accessed_si
+            FROM mft_entries
+            WHERE case_id = ?
+              AND COALESCE(is_directory, '') NOT IN ('True', 'true', '1')
+              AND lower(COALESCE(extension, '')) IN ('exe', 'dll', 'msi', 'ps1', 'bat', 'cmd')
+              AND (
+                lower(COALESCE(parent_path, '')) LIKE '%program files%'
+                OR lower(COALESCE(parent_path, '')) LIKE '%programdata%'
+                OR lower(COALESCE(parent_path, '')) LIKE '%appdata%'
+                OR lower(COALESCE(parent_path, '')) LIKE '%downloads%'
+                OR lower(COALESCE(parent_path, '')) LIKE '%desktop%'
+              )
+            ORDER BY COALESCE(modified_si, created_si, record_changed_si, '') DESC
+            LIMIT ?
+            """,
+            (case_id, min(limit, 10_000)),
+            lambda row: _software_evidence_row(
+                row,
+                "mft_entries",
+                "filesystem",
+                "filesystem_presence",
+                row.get("file_name"),
+                _join_windows_path(row.get("parent_path"), row.get("file_name")),
+                row.get("modified_si") or row.get("created_si") or row.get("record_changed_si") or row.get("accessed_si"),
+                details={"in_use": row.get("in_use"), "extension": row.get("extension")},
+            ),
+        )
+    return rows
+
+
+def _software_registry_evidence_row(row: dict[str, Any]) -> dict[str, Any] | None:
+    artifact = str(row.get("artifact") or "")
+    evidence_type = "registry_context"
+    confidence = "context"
+    if artifact.casefold() in SOFTWARE_FOOTPRINT_PERSISTENCE_ARTIFACTS:
+        evidence_type = "persistence"
+        confidence = "persistence_context"
+    elif artifact.casefold() in {"bam", "dam"}:
+        evidence_type = "execution"
+        confidence = "activity_context"
+    elif artifact.casefold() in {"userassist", "recentdocs", "runmru", "typedpaths", "office_mru", "common_dialog"}:
+        evidence_type = "user_activity"
+        confidence = "activity_context"
+    name = row.get("display_name") or row.get("value_name") or row.get("artifact")
+    path = row.get("normalized_path") or row.get("value_data") or row.get("key_path")
+    if not _software_display_name(name, path):
+        return None
+    return _software_evidence_row(
+        row,
+        "registry_artifacts",
+        evidence_type,
+        confidence,
+        name,
+        path,
+        row.get("event_time_utc") or row.get("key_last_write_utc"),
+        user_profile=row.get("user_profile") or row.get("user_sid"),
+        details={
+            "artifact": artifact,
+            "category": row.get("category"),
+            "key_path": row.get("key_path"),
+            "value_name": row.get("value_name"),
+            "notes": row.get("notes"),
+            "source_file": row.get("source_path"),
+            "row_number": row.get("row_number"),
+        },
+    )
+
+
+def _software_evidence_row(
+    row: dict[str, Any],
+    source_table: str,
+    evidence_type: str,
+    confidence: str,
+    software_name: Any,
+    path: Any,
+    timestamp: Any,
+    *,
+    user_profile: Any = None,
+    details: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    display_name = _software_display_name(software_name, path)
+    display_path = display_evidence_path(path)
+    if not display_name and not display_path:
+        return None
+    return {
+        "source_table": source_table,
+        "source_row_id": row.get("id"),
+        "evidence_type": evidence_type,
+        "confidence": confidence,
+        "timestamp_utc": timestamp,
+        "software_name": display_name,
+        "executable_name": _basename_from_path(str(path or software_name or "")),
+        "path": display_path,
+        "user_profile": user_profile,
+        "details": details or {},
+        "match_tokens": _software_match_tokens(display_name, display_path, json.dumps(details or {}, sort_keys=True)),
+    }
+
+
+def _software_empty_group(display_name: str, identity_key: str) -> dict[str, Any]:
+    return {
+        "identity_key": identity_key,
+        "display_name": display_name,
+        "installed_applications": {},
+        "evidence": [],
+        "sources": set(),
+        "users": set(),
+        "paths": set(),
+        "first_seen_utc": None,
+        "last_seen_utc": None,
+        "evidence_type_counts": {},
+    }
+
+
+def _software_add_installed(group: dict[str, Any], item: dict[str, Any]) -> None:
+    key = str(item.get("identity_key") or item.get("source_row_id") or item.get("display_name") or "")
+    if key:
+        group["installed_applications"][key] = item
+    group["sources"].add(item.get("source_table"))
+    if item.get("path"):
+        group["paths"].add(item.get("path"))
+    timestamp = item.get("timestamp_utc")
+    if timestamp:
+        _software_update_group_time(group, timestamp)
+
+
+def _software_add_evidence(group: dict[str, Any], row: dict[str, Any]) -> None:
+    group["evidence"].append(row)
+    if row.get("source_table"):
+        group["sources"].add(row.get("source_table"))
+    if row.get("user_profile"):
+        group["users"].add(row.get("user_profile"))
+    if row.get("path"):
+        group["paths"].add(row.get("path"))
+    evidence_type = str(row.get("evidence_type") or "unknown")
+    group["evidence_type_counts"][evidence_type] = int(group["evidence_type_counts"].get(evidence_type, 0)) + 1
+    timestamp = row.get("timestamp_utc")
+    if timestamp:
+        _software_update_group_time(group, timestamp)
+
+
+def _software_update_group_time(group: dict[str, Any], timestamp: Any) -> None:
+    text = str(timestamp or "")
+    if not text:
+        return
+    if group["first_seen_utc"] is None or text < group["first_seen_utc"]:
+        group["first_seen_utc"] = text
+    if group["last_seen_utc"] is None or text > group["last_seen_utc"]:
+        group["last_seen_utc"] = text
+
+
+def _software_finalize_group(group: dict[str, Any]) -> dict[str, Any]:
+    counts = {str(key): int(value) for key, value in (group.get("evidence_type_counts") or {}).items()}
+    installed_count = len(group.get("installed_applications") or {})
+    execution_count = counts.get("execution", 0)
+    process_count = counts.get("process_activity", 0)
+    persistence_count = counts.get("persistence", 0)
+    user_activity_count = counts.get("user_activity", 0)
+    presence_count = counts.get("presence", 0) + counts.get("registry_context", 0)
+    filesystem_count = counts.get("filesystem", 0)
+    download_count = counts.get("download", 0)
+    activity_count = execution_count + process_count + user_activity_count + download_count
+    is_installed = installed_count > 0
+    if is_installed and activity_count:
+        status = "currently_installed_with_activity"
+    elif is_installed:
+        status = "currently_installed_inventory_only"
+    elif persistence_count:
+        status = "suspicious_persistence_residue"
+    elif activity_count:
+        status = "not_installed_with_activity"
+    elif presence_count:
+        status = "historical_presence_only"
+    elif filesystem_count:
+        status = "filesystem_remnant_only"
+    else:
+        status = "unclassified"
+    score = (
+        execution_count * 6
+        + process_count * 4
+        + persistence_count * 7
+        + user_activity_count * 3
+        + download_count * 3
+        + presence_count * 2
+        + filesystem_count
+        + (2 if is_installed else 0)
+        + (5 if status == "suspicious_persistence_residue" else 0)
+    )
+    samples = sorted(
+        list(group.get("evidence") or []),
+        key=lambda row: (_software_evidence_rank(row.get("evidence_type")), _timestamp_sort_key(row.get("timestamp_utc"))),
+    )[:20]
+    return {
+        "identity_key": group.get("identity_key"),
+        "display_name": group.get("display_name"),
+        "status": status,
+        "score": score,
+        "is_currently_installed": is_installed,
+        "installed_application_count": installed_count,
+        "evidence_count": len(group.get("evidence") or []),
+        "activity_evidence_count": activity_count,
+        "execution_evidence_count": execution_count,
+        "process_activity_count": process_count,
+        "persistence_evidence_count": persistence_count,
+        "user_activity_evidence_count": user_activity_count,
+        "presence_evidence_count": presence_count,
+        "download_evidence_count": download_count,
+        "filesystem_evidence_count": filesystem_count,
+        "evidence_type_counts": counts,
+        "sources": sorted(str(source) for source in group.get("sources") or [] if source),
+        "users": sorted(str(user) for user in group.get("users") or [] if user),
+        "paths": sorted(str(path) for path in group.get("paths") or [] if path)[:25],
+        "first_seen_utc": group.get("first_seen_utc"),
+        "last_seen_utc": group.get("last_seen_utc"),
+        "installed_samples": list((group.get("installed_applications") or {}).values())[:10],
+        "evidence_samples": samples,
+        "interpretation": _software_status_interpretation(status),
+    }
+
+
+def _software_evidence_rank(value: Any) -> int:
+    return {
+        "persistence": 0,
+        "execution": 1,
+        "process_activity": 2,
+        "user_activity": 3,
+        "download": 4,
+        "presence": 5,
+        "registry_context": 6,
+        "filesystem": 7,
+    }.get(str(value or ""), 99)
+
+
+def _software_status_interpretation(status: str) -> str:
+    return {
+        "currently_installed_with_activity": "Current installed-program evidence plus activity or trace artifacts were found.",
+        "currently_installed_inventory_only": "Current installed-program inventory was found, but no sampled activity trace was grouped with it.",
+        "suspicious_persistence_residue": "Persistence-style artifact exists, but no matching current installed-program inventory row was found.",
+        "not_installed_with_activity": "Activity evidence exists, but no matching current installed-program inventory row was found. Treat as uninstalled or portable software lead.",
+        "historical_presence_only": "Presence/cache metadata exists without matching installed-program inventory or sampled activity evidence.",
+        "filesystem_remnant_only": "Only filesystem remnants were grouped with this software identity.",
+    }.get(status, "Software footprint could not be classified by the current rules.")
+
+
+def _software_match_installed(row: dict[str, Any], installed: list[dict[str, Any]]) -> dict[str, Any] | None:
+    row_text = _software_group_text(row)
+    row_tokens = _software_match_tokens(row.get("software_name"), row.get("path"), row.get("executable_name"))
+    best: tuple[int, dict[str, Any] | None] = (0, None)
+    for item in installed:
+        display = str(item.get("display_name") or "").casefold()
+        if display and display in row_text:
+            return item
+        item_tokens = set(item.get("match_tokens") or [])
+        if not item_tokens:
+            continue
+        overlap = row_tokens & item_tokens
+        score = len(overlap)
+        basename = _basename_from_path(str(row.get("path") or "")) or str(row.get("executable_name") or "")
+        basename_stem = _software_clean_name(Path(str(basename).replace("\\", "/")).stem)
+        if basename_stem and basename_stem in item_tokens:
+            score += 4
+        if score > best[0]:
+            best = (score, item)
+    return best[1] if best[0] >= 2 else None
+
+
+def _software_match_tokens(*values: Any) -> set[str]:
+    tokens: set[str] = set()
+    for value in values:
+        text = _software_clean_name(value)
+        for token in re.findall(r"[a-z0-9][a-z0-9.+_-]{2,}", text):
+            token = token.strip("._-+")
+            if len(token) < 3 or token in SOFTWARE_FOOTPRINT_COMMON_TOKENS:
+                continue
+            tokens.add(token)
+    return tokens
+
+
+def _software_identity_key(name: Any, path: Any) -> str:
+    display = _software_display_name(name, path)
+    cleaned = _software_clean_name(display)
+    if cleaned:
+        return re.sub(r"[^a-z0-9]+", "_", cleaned).strip("_")[:120]
+    return ""
+
+
+def _software_display_name(name: Any, path: Any) -> str:
+    text = str(name or "").strip().strip("\"'")
+    if text and not _software_is_generic_name(text):
+        return _software_pretty_name(text)
+    basename = _basename_from_path(str(path or ""))
+    if basename:
+        stem = Path(str(basename).replace("\\", "/")).stem
+        if stem:
+            return _software_pretty_name(stem)
+    return _software_pretty_name(text)
+
+
+def _software_pretty_name(value: Any) -> str:
+    text = str(value or "").strip().strip("\"'")
+    text = re.sub(r"\.(exe|dll|msi|ps1|bat|cmd|pf)$", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"[-_]{2,}", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    return text[:200]
+
+
+def _software_clean_name(value: Any) -> str:
+    text = str(value or "").casefold()
+    text = text.replace("\\", " ").replace("/", " ")
+    text = re.sub(r"\.(exe|dll|msi|ps1|bat|cmd|pf)\b", " ", text)
+    text = re.sub(r"[^a-z0-9.+_-]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _software_is_generic_name(value: str) -> bool:
+    cleaned = _software_clean_name(value)
+    return cleaned in SOFTWARE_FOOTPRINT_COMMON_TOKENS or cleaned in {"setup", "install", "uninstall", "update", "launcher"}
+
+
+def _software_group_text(row: dict[str, Any]) -> str:
+    parts: list[str] = []
+    for key in ("display_name", "software_name", "identity_key", "path", "executable_name", "source_table", "status"):
+        parts.append(str(row.get(key) or ""))
+    for key in ("paths", "sources", "users", "match_tokens"):
+        value = row.get(key)
+        if isinstance(value, (list, tuple, set)):
+            parts.extend(str(item) for item in value)
+    details = row.get("details")
+    if isinstance(details, dict):
+        parts.extend(str(value) for value in details.values())
+    return " ".join(parts).casefold()
+
+
 def tor_usage_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str, Any]:
     db.get_case(case_id)
     rows = _token_indicator_rows(

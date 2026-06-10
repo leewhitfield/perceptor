@@ -268,6 +268,8 @@ from .reports import (
     sqlite_inventory_markdown,
     sqlite_inventory_report,
     sdelete_report,
+    software_footprint_review_markdown,
+    software_footprint_review_report,
     srum_app_network_usage_report,
     srum_context_report,
     srum_networks_report,
@@ -1203,11 +1205,11 @@ def _bundle_report_names_for_purpose(purpose: str) -> set[str] | None:
         "usn-lifecycle",
     }
     groups = {
-        "triage": common | {"suspicious-executions", "event-interpretation", "examiner-edge-artifacts", "mapped-network-paths", "non-standard-ads", "ntfs-security-descriptors", "remote-access-tool-logs", "user-intent", "file-movement-identity", "opened-from-removable-media", "opened-from-cloud-storage", "cloud-mounts", "cloud-removable-overlap", "artifact-processing-status", "lead-search-usb", "lead-search-execution", "lead-search-cloud", "lead-search-browser", "lead-search-documents", "lead-search-communications", "lead-search-usb-summary", "lead-search-execution-summary", "lead-search-cloud-summary", "lead-search-browser-summary", "lead-search-documents-summary", "lead-search-communications-summary"},
-        "review": common | usb_reports | {"activity-digest", "next-actions", "workspace-map", "artifact-search-sources", "suspicious-executions", "event-interpretation", "examiner-edge-artifacts", "mapped-network-paths", "non-standard-ads", "ntfs-security-descriptors", "remote-access-tool-logs", "opened-from-cloud-storage", "cloud-mounts", "bits-activity", "artifact-processing-status", "lead-search-usb", "lead-search-execution", "lead-search-cloud", "lead-search-browser", "lead-search-documents", "lead-search-communications", "lead-search-usb-summary", "lead-search-execution-summary", "lead-search-cloud-summary", "lead-search-browser-summary", "lead-search-documents-summary", "lead-search-communications-summary", "changed-search-packets"},
+        "triage": common | {"suspicious-executions", "event-interpretation", "software-footprint-review", "examiner-edge-artifacts", "mapped-network-paths", "non-standard-ads", "ntfs-security-descriptors", "remote-access-tool-logs", "user-intent", "file-movement-identity", "opened-from-removable-media", "opened-from-cloud-storage", "cloud-mounts", "cloud-removable-overlap", "artifact-processing-status", "lead-search-usb", "lead-search-execution", "lead-search-cloud", "lead-search-browser", "lead-search-documents", "lead-search-communications", "lead-search-usb-summary", "lead-search-execution-summary", "lead-search-cloud-summary", "lead-search-browser-summary", "lead-search-documents-summary", "lead-search-communications-summary"},
+        "review": common | usb_reports | {"activity-digest", "next-actions", "workspace-map", "artifact-search-sources", "suspicious-executions", "event-interpretation", "software-footprint-review", "examiner-edge-artifacts", "mapped-network-paths", "non-standard-ads", "ntfs-security-descriptors", "remote-access-tool-logs", "opened-from-cloud-storage", "cloud-mounts", "bits-activity", "artifact-processing-status", "lead-search-usb", "lead-search-execution", "lead-search-cloud", "lead-search-browser", "lead-search-documents", "lead-search-communications", "lead-search-usb-summary", "lead-search-execution-summary", "lead-search-cloud-summary", "lead-search-browser-summary", "lead-search-documents-summary", "lead-search-communications-summary", "changed-search-packets"},
         "usb": common | usb_reports,
         "cloud": common | {"cloud-artifacts", "opened-from-cloud-storage", "cloud-mounts", "cloud-removable-overlap", "user-intent"},
-        "execution": common | {"execution", "execution-correlation", "suspicious-executions", "event-interpretation", "program-provenance", "remote-access", "bits-activity", "user-intent"},
+        "execution": common | {"execution", "execution-correlation", "suspicious-executions", "event-interpretation", "program-provenance", "software-footprint-review", "remote-access", "bits-activity", "user-intent"},
         "memory": common | {"memory-analysis", "memory-credentials", "memory-disk-correlations", "memory-support-files", "structured-memory", "combined-artifacts", "crash-dump-analysis", "memory-artifacts"},
     }
     return groups.get(purpose, groups["triage"])
@@ -1320,6 +1322,7 @@ def write_case_report_bundle(
         ("suspicious-executions", "md", "Suspicious executions", lambda: suspicious_executions_markdown(suspicious())),
         ("event-interpretation", "json", "High-value event log interpretation", lambda: event_interpretation_report(db, case_id, limit=limit)),
         ("program-provenance", "md", "Program provenance", lambda: program_provenance_markdown(program_provenance_report(db, case_id, limit=limit))),
+        ("software-footprint-review", "md", "Software footprint review", lambda: software_footprint_review_markdown(software_footprint_review_report(db, case_id, limit=limit))),
         ("bits-activity", "json", "BITS activity", lambda: bits_activity_report(db, case_id, limit=limit)),
         ("clipboard", "json", "Windows clipboard history", lambda: clipboard_report(db, case_id, limit=limit)),
         ("memory-artifacts", "md", "Memory artifact inventory", lambda: memory_artifacts_markdown(memory_artifacts_report(db, case_id, limit=limit))),
@@ -3334,6 +3337,13 @@ def build_parser() -> argparse.ArgumentParser:
     report_program_provenance.add_argument("--limit", type=int, default=100)
     report_program_provenance.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
     report_program_provenance.add_argument("--output")
+    report_software_footprint = report_sub.add_parser("software-footprint-review")
+    report_software_footprint.add_argument("--case", required=True, dest="case_id")
+    report_software_footprint.add_argument("--target", help="Optional software name/path token to focus the review")
+    report_software_footprint.add_argument("--limit", type=int, default=100)
+    report_software_footprint.add_argument("--no-filesystem", action="store_true", help="Skip filesystem executable remnants")
+    report_software_footprint.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
+    report_software_footprint.add_argument("--output")
     report_cd_burning = report_sub.add_parser("cd-burning")
     report_cd_burning.add_argument("--case", required=True, dest="case_id")
     report_cd_burning.add_argument("--limit", type=int, default=250)
@@ -7404,6 +7414,42 @@ def run(args: argparse.Namespace) -> int:
                 args.output,
                 title=f"Program provenance report for case {args.case_id}",
                 columns=["severity", "category", "source", "description"],
+            )
+            return 0
+
+        if args.resource == "report" and args.action == "software-footprint-review":
+            report = software_footprint_review_report(
+                db,
+                args.case_id,
+                target=args.target,
+                limit=args.limit,
+                include_filesystem=not args.no_filesystem,
+            )
+            if args.format == "md":
+                write_text_output(software_footprint_review_markdown(report), args.output)
+                return 0
+            write_report_output(
+                report,
+                report["software_footprints"],
+                args.format,
+                args.output,
+                title=f"Software footprint review for case {args.case_id}",
+                columns=[
+                    "display_name",
+                    "status",
+                    "score",
+                    "is_currently_installed",
+                    "installed_application_count",
+                    "execution_evidence_count",
+                    "persistence_evidence_count",
+                    "user_activity_evidence_count",
+                    "presence_evidence_count",
+                    "filesystem_evidence_count",
+                    "first_seen_utc",
+                    "last_seen_utc",
+                    "sources",
+                    "interpretation",
+                ],
             )
             return 0
 

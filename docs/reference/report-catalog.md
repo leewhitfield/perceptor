@@ -78,6 +78,7 @@ groups all 228 report subcommands by topic.
 - `bits-activity`
 - `examiner-edge-artifacts`
 - `program-provenance`
+- `software-footprint-review`
 - `cd-burning`
 - `prefetch`
 - `amcache`

@@ -109,6 +109,8 @@ from forensic_orchestrator.reports import (
     opened_from_removable_media_report,
     phone_link_report,
     sdelete_report,
+    software_footprint_review_markdown,
+    software_footprint_review_report,
     srum_app_network_usage_report,
     srum_context_report,
     srum_networks_report,
@@ -9105,6 +9107,116 @@ def test_application_security_and_virtualization_reports_use_general_indicators(
     assert tor["tor_usage"][0]["source_table"] == "prefetch_items"
     assert encrypted["encrypted_volume_indicators"][0]["indicator_type"] == "VeraCrypt"
     assert virtualization["virtualization_indicators"][0]["platform"] == "VMware"
+
+
+def test_software_footprint_review_compares_installed_inventory_to_traces(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    db.insert_tool_output(
+        {
+            "id": "output-1",
+            "case_id": case.id,
+            "computer_id": "computer-1",
+            "image_id": "image-1",
+            "job_id": "job-1",
+            "tool_name": "RegistryArtifactParser",
+            "output_type": "csv",
+            "path": tmp_path / "registry.csv",
+            "row_count": 1,
+        }
+    )
+    base = {
+        "case_id": case.id,
+        "computer_id": "computer-1",
+        "image_id": "image-1",
+        "tool_output_id": "output-1",
+        "tool_name": "RegistryArtifactParser",
+        "source_csv": tmp_path / "registry.csv",
+        "source_path": "/registry/SOFTWARE",
+        "hive_type": "software",
+        "category": "software",
+        "key_path": "Microsoft/Windows/CurrentVersion/Uninstall",
+    }
+    db.insert_registry_artifacts(
+        [
+            {
+                **base,
+                "id": "reg-chrome-name",
+                "row_number": 1,
+                "artifact": "installed_applications",
+                "display_name": "Google Chrome",
+                "value_name": "DisplayName",
+                "value_data": "Google Chrome",
+                "key_path": "Microsoft/Windows/CurrentVersion/Uninstall/Chrome",
+            },
+            {
+                **base,
+                "id": "reg-chrome-icon",
+                "row_number": 2,
+                "artifact": "installed_applications",
+                "value_name": "DisplayIcon",
+                "value_data": r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                "key_path": "Microsoft/Windows/CurrentVersion/Uninstall/Chrome",
+            },
+            {
+                **base,
+                "id": "reg-anydesk-run",
+                "row_number": 3,
+                "artifact": "autostart",
+                "display_name": "AnyDesk",
+                "value_name": "AnyDesk",
+                "value_data": r"C:\Users\Jane\AppData\Roaming\AnyDesk\AnyDesk.exe",
+                "key_path": r"Software\Microsoft\Windows\CurrentVersion\Run",
+                "key_last_write_utc": "2020-01-05T12:00:00Z",
+            },
+        ]
+    )
+    db.insert_prefetch_items(
+        [
+            {
+                "id": "pf-chrome",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "output-1",
+                "tool_name": "PrefetchParser",
+                "source_csv": tmp_path / "prefetch.csv",
+                "row_number": 1,
+                "prefetch_name": "CHROME.EXE-ABCDEF01.pf",
+                "executable_name": "chrome.exe",
+                "original_path": r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                "last_run_time_utc": "2020-01-06T03:04:05Z",
+            },
+            {
+                "id": "pf-veracrypt",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "output-1",
+                "tool_name": "PrefetchParser",
+                "source_csv": tmp_path / "prefetch.csv",
+                "row_number": 2,
+                "prefetch_name": "VERACRYPT.EXE-ABCDEF02.pf",
+                "executable_name": "veracrypt.exe",
+                "original_path": r"C:\Program Files\VeraCrypt\VeraCrypt.exe",
+                "last_run_time_utc": "2020-01-07T03:04:05Z",
+            },
+        ]
+    )
+
+    report = software_footprint_review_report(db, case.id, include_filesystem=False)
+    markdown = software_footprint_review_markdown(report)
+    by_name = {row["display_name"].casefold(): row for row in report["software_footprints"]}
+
+    assert by_name["google chrome"]["status"] == "currently_installed_with_activity"
+    assert by_name["google chrome"]["is_currently_installed"] is True
+    assert by_name["veracrypt"]["status"] == "not_installed_with_activity"
+    assert by_name["anydesk"]["status"] == "suspicious_persistence_residue"
+    assert report["summary"]["not_installed_with_activity_count"] >= 1
+    assert "Software Footprint Review" in markdown
+    assert "Absence from installed inventory" in markdown
 
 
 def test_phone_link_report_reads_package_artifacts(tmp_path):

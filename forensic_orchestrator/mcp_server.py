@@ -76,6 +76,7 @@ SUPPORTED_MCP_REPORTS = {
     "external-storage",
     "suspicious-executions",
     "interesting-executables",
+    "software-footprint-review",
     "event-interpretation",
     "file-movement-identity",
     "opened-from-removable-media",
@@ -4648,10 +4649,10 @@ def _expected_report_names(purpose: str) -> set[str]:
         "report-index",
     }
     groups = {
-        "triage": common | {"suspicious-executions", "user-intent", "file-movement-identity", "opened-from-removable-media", "opened-from-cloud-storage", "cloud-mounts", "cloud-removable-overlap", "artifact-processing-status"},
+        "triage": common | {"suspicious-executions", "software-footprint-review", "user-intent", "file-movement-identity", "opened-from-removable-media", "opened-from-cloud-storage", "cloud-mounts", "cloud-removable-overlap", "artifact-processing-status"},
         "usb": common | {"shellbag-external-storage", "file-movement-identity", "opened-from-removable-media", "cloud-removable-overlap", "shortcut-droid-changes", "shortcut-object-tracking", "usn-lifecycle"},
         "cloud": common | {"cloud-artifacts", "opened-from-cloud-storage", "cloud-mounts", "cloud-removable-overlap", "user-intent"},
-        "execution": common | {"execution", "execution-correlation", "suspicious-executions", "program-provenance", "remote-access", "user-intent"},
+        "execution": common | {"execution", "execution-correlation", "suspicious-executions", "program-provenance", "software-footprint-review", "remote-access", "user-intent"},
         "memory": common | {"memory-analysis", "memory-credentials", "memory-disk-correlations", "memory-support-files", "structured-memory", "combined-artifacts", "crash-dump-analysis", "memory-artifacts"},
     }
     if purpose == "full":
@@ -5022,6 +5023,37 @@ def _route_mcp_question(
     elif _contains_any(
         text,
         {
+            "software footprint",
+            "application residue",
+            "app residue",
+            "uninstalled",
+            "uninstall residue",
+            "left behind",
+            "leftover",
+            "remnant",
+            "remnants",
+            "portable app",
+            "portable application",
+        },
+    ):
+        intent = "software_footprint"
+        report_purpose = "execution"
+        report_names = ["software-footprint-review", "program-provenance", "execution", "suspicious-executions"]
+        recommended_tool = "relic_read_existing_report"
+        fallback_tools = ["relic_generate_report", "relic_search_artifacts", "relic_timeline_window"]
+        reason = (
+            "Software residue and post-uninstall questions should start with the software-footprint-review report, "
+            "which compares current installed-program inventory against execution, persistence, user-activity, "
+            "presence, download, and filesystem remnants."
+        )
+        source_order = [
+            {"order": 1, "source": "generated_reports", "tools": ["relic_read_existing_report", "relic_generate_report"], "report_names": report_names},
+            {"order": 2, "source": "software_footprint_review", "tools": ["relic_generate_report"], "report_names": ["software-footprint-review"]},
+            {"order": 3, "source": "parsed_artifact_tables", "tools": ["relic_search_artifacts"], "tables": ["registry_artifacts", "prefetch_items", "amcache_entries", "shimcache_entries", "srum_records", "shortcut_items"]},
+        ]
+    elif _contains_any(
+        text,
+        {
             "suspicious",
             "execution",
             "executed",
@@ -5063,7 +5095,7 @@ def _route_mcp_question(
     ):
         intent = "execution"
         report_purpose = "execution"
-        report_names = ["event-interpretation", "suspicious-executions", "execution", "execution-correlation", "program-provenance"]
+        report_names = ["event-interpretation", "suspicious-executions", "execution", "execution-correlation", "program-provenance", "software-footprint-review"]
         recommended_tool = "relic_read_existing_report"
         fallback_tools = ["relic_generate_report", "relic_query_suspicious_executions", "relic_lead_search", "relic_query_registry_activity"]
         reason = "Execution and high-value event-log questions should start with generated event-interpretation, execution, and suspicious-execution reports."
