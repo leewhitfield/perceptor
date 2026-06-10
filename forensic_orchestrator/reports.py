@@ -8184,10 +8184,12 @@ def _software_footprint_evidence_rows(
         (case_id, limit),
         lambda row: _software_registry_evidence_row(row),
     )
+    userassist_columns = _report_table_columns(db, case_id, "registry_userassist")
+    userassist_run_count_expr = "run_count" if "run_count" in userassist_columns else "run_counter" if "run_counter" in userassist_columns else "NULL"
     add(
         "registry_userassist",
-        """
-        SELECT id, program_name, key_path, last_executed, user_profile, run_count
+        f"""
+        SELECT id, program_name, key_path, last_executed, user_profile, {userassist_run_count_expr} AS run_count
         FROM registry_userassist
         WHERE case_id = ?
         ORDER BY COALESCE(last_executed, '') DESC
@@ -8377,6 +8379,18 @@ def _software_footprint_evidence_rows(
 
 def _software_registry_evidence_row(row: dict[str, Any]) -> dict[str, Any] | None:
     artifact = str(row.get("artifact") or "")
+    key_path = str(row.get("key_path") or "")
+    value_name = str(row.get("value_name") or "")
+    value_data = str(row.get("value_data") or "")
+    key_path_lc = key_path.casefold()
+    if artifact.casefold() == "services" and (
+        "firewallpolicy" in key_path_lc
+        or "\\services\\mpssvc\\parameters\\appcs\\" in key_path_lc
+        or "/services/mpssvc/parameters/appcs/" in key_path_lc
+    ):
+        return None
+    if artifact.casefold() == "scheduled_task_cache" and value_name.casefold() in {"version", "index", "hash"}:
+        return None
     evidence_type = "registry_context"
     confidence = "context"
     if artifact.casefold() in SOFTWARE_FOOTPRINT_PERSISTENCE_ARTIFACTS:
@@ -8390,6 +8404,10 @@ def _software_registry_evidence_row(row: dict[str, Any]) -> dict[str, Any] | Non
         confidence = "activity_context"
     name = row.get("display_name") or row.get("value_name") or row.get("artifact")
     path = row.get("normalized_path") or row.get("value_data") or row.get("key_path")
+    if artifact.casefold() == "scheduled_task_cache" and value_data and value_data != value_name:
+        name = row.get("display_name") or value_data
+    if evidence_type == "registry_context" and not _software_text_has_program_signal(name, path, row.get("key_path"), row.get("notes")):
+        return None
     if not _software_display_name(name, path):
         return None
     return _software_evidence_row(
@@ -8428,6 +8446,8 @@ def _software_evidence_row(
     display_name = _software_display_name(software_name, path)
     display_path = display_evidence_path(path)
     if not display_name and not display_path:
+        return None
+    if _software_noise_footprint(display_name, display_path, source_table=source_table, evidence_type=evidence_type):
         return None
     return {
         "source_table": source_table,
@@ -8633,6 +8653,12 @@ def _software_identity_key(name: Any, path: Any) -> str:
 
 def _software_display_name(name: Any, path: Any) -> str:
     text = str(name or "").strip().strip("\"'")
+    if text and ("\\" in text or "/" in text):
+        basename = _basename_from_path(text)
+        if basename:
+            stem = Path(str(basename).replace("\\", "/")).stem
+            if stem:
+                return _software_pretty_name(stem)
     if text and not _software_is_generic_name(text):
         return _software_pretty_name(text)
     basename = _basename_from_path(str(path or ""))
@@ -8662,6 +8688,87 @@ def _software_clean_name(value: Any) -> str:
 def _software_is_generic_name(value: str) -> bool:
     cleaned = _software_clean_name(value)
     return cleaned in SOFTWARE_FOOTPRINT_COMMON_TOKENS or cleaned in {"setup", "install", "uninstall", "update", "launcher"}
+
+
+def _software_noise_footprint(display_name: Any, path: Any, *, source_table: str, evidence_type: str) -> bool:
+    name = str(display_name or "").strip()
+    cleaned = _software_clean_name(name)
+    path_text = str(path or "").casefold()
+    if not cleaned:
+        return True
+    if re.fullmatch(r"(0x)?[0-9a-f]{1,8}", cleaned):
+        return True
+    if re.fullmatch(r"\d+\s+0x[0-9a-f]+\s*", cleaned):
+        return True
+    if cleaned in {
+        "audiodg",
+        "backgroundtaskhost",
+        "conhost",
+        "dllhost",
+        "driverpackagestrongname",
+        "explorer",
+        "inf",
+        "lockapp",
+        "lsass",
+        "mmc",
+        "mousocoreworker",
+        "mpdefendercoreservice",
+        "msmpeng",
+        "nissrv",
+        "rundll32",
+        "runtimebroker",
+        "searchapp",
+        "searchhost",
+        "sihost",
+        "smartscreen",
+        "startmenuexperiencehost",
+        "wdfversion",
+        "svchost",
+        "system",
+        "taskhostw",
+        "taskmgr",
+        "werfault",
+        "widgetservice",
+        "widgets",
+        "windowsinputexperience",
+        "microsoft corporation",
+        "microsoft windows operating system",
+        "microsoft® windows® operating system",
+    }:
+        return True
+    if cleaned.startswith("v2.33 action ") or "firewallpolicy" in path_text:
+        return True
+    if evidence_type in {"process_activity", "execution", "presence"} and _software_path_is_core_windows_component(path_text):
+        return True
+    if source_table == "srum_records" and not _software_text_has_program_signal(name, path):
+        return True
+    return False
+
+
+def _software_text_has_program_signal(*values: Any) -> bool:
+    text = " ".join(str(value or "") for value in values).casefold()
+    if not text.strip():
+        return False
+    if re.search(r"\.(exe|dll|msi|ps1|bat|cmd)\b", text):
+        return True
+    return any(token in text for token in ("program files", "programdata", "appdata", "windowsapps", "startup", "run\\", "\\run", "services", "scheduled"))
+
+
+def _software_path_is_core_windows_component(path_text: str) -> bool:
+    normalized = path_text.replace("/", "\\")
+    return any(
+        token in normalized
+        for token in (
+            "\\windows\\",
+            "\\windows\\system32\\",
+            "\\windows\\syswow64\\",
+            "\\windows\\winsxs\\",
+            "\\windows\\servicing\\",
+            "\\programdata\\microsoft\\windows defender\\",
+            "\\program files\\windowsapps\\microsoft.",
+            "\\program files\\windowsapps\\windows",
+        )
+    )
 
 
 def _software_group_text(row: dict[str, Any]) -> str:
