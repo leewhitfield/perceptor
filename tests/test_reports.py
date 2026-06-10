@@ -9259,6 +9259,43 @@ def test_software_footprint_review_compares_installed_inventory_to_traces(tmp_pa
             },
         ]
     )
+    db.insert_shortcut_items(
+        [
+            {
+                "id": "jl-chrome-doc",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "output-1",
+                "tool_name": "JLECmd",
+                "source_csv": tmp_path / "jumplist.csv",
+                "row_number": 1,
+                "artifact_type": "jumplist",
+                "artifact_name": "5d696d521de238c3.automaticDestinations-ms",
+                "file_name": "Documents",
+                "target_path": r"C:\Users\Jane\Documents",
+                "app_id": "5d696d521de238c3",
+                "app_id_description": "Google Chrome 48.0.2564.116",
+                "target_modified": "2020-01-09T03:04:05Z",
+            },
+            {
+                "id": "jl-unresolved-doc",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "output-1",
+                "tool_name": "JLECmd",
+                "source_csv": tmp_path / "jumplist.csv",
+                "row_number": 2,
+                "artifact_type": "jumplist",
+                "artifact_name": "abcdef1234567890.automaticDestinations-ms",
+                "file_name": "Documents",
+                "target_path": r"C:\Users\Jane\Documents",
+                "app_id": "abcdef1234567890",
+                "target_modified": "2020-01-10T03:04:05Z",
+            },
+        ]
+    )
 
     report = software_footprint_review_report(db, case.id, include_filesystem=False)
     markdown = software_footprint_review_markdown(report)
@@ -9270,6 +9307,8 @@ def test_software_footprint_review_compares_installed_inventory_to_traces(tmp_pa
     assert by_name["microsoft 365 - en-us"]["status"] == "currently_installed_with_activity"
     assert "msedge" not in by_name
     assert "winword" not in by_name
+    assert "documents" not in by_name
+    assert by_name["unresolved jump list appid: abcdef1234567890"]["status"] == "unresolved_application_id"
     assert by_name["veracrypt"]["status"] == "not_installed_with_activity"
     assert by_name["anydesk"]["status"] == "suspicious_persistence_residue"
     assert any(section["status"] == "not_installed_with_activity" for section in report["sections"])

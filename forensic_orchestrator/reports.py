@@ -7880,6 +7880,7 @@ SOFTWARE_FOOTPRINT_COMMON_TOKENS = {
 SOFTWARE_FOOTPRINT_SECTION_ORDER = [
     ("currently_installed_with_activity", "Currently Installed With Activity"),
     ("currently_installed_inventory_only", "Currently Installed Inventory Only"),
+    ("unresolved_application_id", "Unresolved Application IDs"),
     ("not_installed_with_activity", "Activity Without Installed-Program Match"),
     ("suspicious_persistence_residue", "Persistence Residue Leads"),
     ("historical_presence_only", "Historical Presence Only"),
@@ -8368,7 +8369,7 @@ def _software_footprint_evidence_rows(
         "shortcut_items",
         """
         SELECT id, artifact_type, artifact_name, artifact_path, file_name, target_path,
-               local_path, command_line_arguments, working_directory, app_id,
+               local_path, command_line_arguments, working_directory, app_id, app_id_description,
                target_created, target_modified, target_accessed
         FROM shortcut_items
         WHERE case_id = ?
@@ -8376,20 +8377,7 @@ def _software_footprint_evidence_rows(
         LIMIT ?
         """,
         (case_id, limit),
-        lambda row: _software_evidence_row(
-            row,
-            "shortcut_items",
-            "user_activity",
-            "activity_context",
-            row.get("app_id") or row.get("file_name") or row.get("artifact_name"),
-            row.get("target_path") or row.get("local_path") or row.get("command_line_arguments") or row.get("artifact_path"),
-            row.get("target_modified") or row.get("target_created") or row.get("target_accessed"),
-            details={
-                "artifact_type": row.get("artifact_type"),
-                "artifact_name": row.get("artifact_name"),
-                "working_directory": row.get("working_directory"),
-            },
-        ),
+        lambda row: _software_shortcut_evidence_row(row),
     )
     add(
         "browser_downloads",
@@ -8509,6 +8497,59 @@ def _software_registry_evidence_row(row: dict[str, Any]) -> dict[str, Any] | Non
     )
 
 
+def _software_shortcut_evidence_row(row: dict[str, Any]) -> dict[str, Any] | None:
+    artifact_type = str(row.get("artifact_type") or "").casefold()
+    target_path = row.get("target_path") or row.get("local_path") or row.get("command_line_arguments") or row.get("artifact_path")
+    timestamp = row.get("target_modified") or row.get("target_created") or row.get("target_accessed")
+    details = {
+        "artifact_type": row.get("artifact_type"),
+        "artifact_name": row.get("artifact_name"),
+        "working_directory": row.get("working_directory"),
+        "target_path": display_evidence_path(target_path),
+        "app_id": row.get("app_id"),
+        "app_id_description": row.get("app_id_description"),
+    }
+    if artifact_type == "jumplist":
+        app_description = _software_clean_jumplist_app_description(row.get("app_id_description"))
+        app_id = str(row.get("app_id") or "").strip()
+        if app_description:
+            return _software_evidence_row(
+                row,
+                "shortcut_items",
+                "user_activity",
+                "activity_context",
+                app_description,
+                app_description,
+                timestamp,
+                details=details,
+            )
+        if app_id:
+            return _software_evidence_row(
+                row,
+                "shortcut_items",
+                "unresolved_application_id",
+                "unresolved_context",
+                f"Unresolved Jump List AppID: {app_id}",
+                app_id,
+                timestamp,
+                details={**details, "evidence_caveat": "Jump List AppID could not be resolved to an application name."},
+            )
+        return None
+
+    if not _software_path_looks_like_application(target_path):
+        return None
+    return _software_evidence_row(
+        row,
+        "shortcut_items",
+        "user_activity",
+        "activity_context",
+        row.get("file_name") or _basename_from_path(target_path),
+        target_path,
+        timestamp,
+        details=details,
+    )
+
+
 def _software_evidence_row(
     row: dict[str, Any],
     source_table: str,
@@ -8604,6 +8645,7 @@ def _software_finalize_group(group: dict[str, Any]) -> dict[str, Any]:
     presence_count = counts.get("presence", 0) + counts.get("registry_context", 0)
     filesystem_count = counts.get("filesystem", 0)
     download_count = counts.get("download", 0)
+    unresolved_count = counts.get("unresolved_application_id", 0)
     activity_count = execution_count + process_count + user_activity_count + download_count
     trace_count = sum(counts.values())
     is_installed = installed_count > 0
@@ -8611,6 +8653,8 @@ def _software_finalize_group(group: dict[str, Any]) -> dict[str, Any]:
         status = "currently_installed_with_activity"
     elif is_installed:
         status = "currently_installed_inventory_only"
+    elif unresolved_count:
+        status = "unresolved_application_id"
     elif persistence_count:
         status = "suspicious_persistence_residue"
     elif activity_count:
@@ -8629,6 +8673,7 @@ def _software_finalize_group(group: dict[str, Any]) -> dict[str, Any]:
         + download_count * 3
         + presence_count * 2
         + filesystem_count
+        + unresolved_count
         + (2 if is_installed else 0)
         + (5 if status == "suspicious_persistence_residue" else 0)
     )
@@ -8651,6 +8696,7 @@ def _software_finalize_group(group: dict[str, Any]) -> dict[str, Any]:
         "user_activity_evidence_count": user_activity_count,
         "presence_evidence_count": presence_count,
         "download_evidence_count": download_count,
+        "unresolved_application_id_count": unresolved_count,
         "filesystem_evidence_count": filesystem_count,
         "evidence_type_counts": counts,
         "sources": sorted(str(source) for source in group.get("sources") or [] if source),
@@ -8674,6 +8720,7 @@ def _software_evidence_rank(value: Any) -> int:
         "presence": 5,
         "registry_context": 6,
         "filesystem": 7,
+        "unresolved_application_id": 8,
     }.get(str(value or ""), 99)
 
 
@@ -8681,6 +8728,7 @@ def _software_status_interpretation(status: str) -> str:
     return {
         "currently_installed_with_activity": "Current installed-program evidence plus activity or trace artifacts were found.",
         "currently_installed_inventory_only": "Current installed-program inventory was found, but no sampled activity trace was grouped with it.",
+        "unresolved_application_id": "Jump List or shortcut activity references an application ID that could not be resolved to an application name.",
         "suspicious_persistence_residue": "Persistence-style artifact exists, but no matching current installed-program inventory row was found.",
         "not_installed_with_activity": "Activity evidence exists, but no matching current installed-program inventory row was found. Treat as uninstalled or portable software lead.",
         "historical_presence_only": "Presence/cache metadata exists without matching installed-program inventory or sampled activity evidence.",
@@ -8750,6 +8798,10 @@ def _software_family_aliases(*values: Any) -> set[str]:
             "o365",
             "officeclicktorun",
             "clicktorun",
+            "microsoftpowerpoint",
+            "microsoftword",
+            "microsoftexcel",
+            "microsoftonenote",
             "winword",
             "powerpnt",
             "excel",
@@ -8762,6 +8814,26 @@ def _software_family_aliases(*values: Any) -> set[str]:
         )
     ):
         families.add("microsoft_office")
+    if any(token in compact for token in ("javaautoupdater", "jusched", "jucheck", "jp2launcher", "java8update")):
+        families.add("java")
+    if any(token in compact for token in ("7zip", "7zg", "7zfm", "7zfilemanager")):
+        families.add("7zip")
+    if any(token in compact for token in ("hxdhexeditor", "hxdsetup", "hxd")):
+        families.add("hxd")
+    if any(token in compact for token in ("codemeterruntime", "codemetercc", "cmwebadmin", "codemeter")):
+        families.add("codemeter")
+    if any(token in compact for token in ("windowsdesktopruntime", "windowsdesktopruntime6036winx64")):
+        families.add("windows_desktop_runtime")
+    if any(token in compact for token in ("python368", "python36", "python368utilityscripts", "python368coreinterpreter")):
+        families.add("python_36")
+    if any(token in compact for token in ("exterroftkimager", "ftkimager", "exterro_ftk_imager")):
+        families.add("ftk_imager")
+    if any(token in compact for token in ("filecoauth", "microsoftofficefilecoauthoring")):
+        families.add("microsoft_office")
+    if any(token in compact for token in ("applemobiledevicesupport", "applemobiledeviceservice")):
+        families.add("apple_mobile_device_support")
+    if any(token in compact for token in ("bonjour", "mdnsresponder")):
+        families.add("bonjour")
     if "googledrive" in compact or "drivefilestream" in compact or "googledrivefs" in compact:
         families.add("google_drive")
     if "onedrive" in compact or "filesynchelper" in compact:
@@ -8777,6 +8849,22 @@ def _software_installed_family_priority(item: dict[str, Any]) -> tuple[int, str]
     if cleaned == "microsoft edge":
         return (0, cleaned)
     if cleaned in {"google drive", "microsoft onedrive"}:
+        return (0, cleaned)
+    if cleaned == "java auto updater" or cleaned.startswith("java 8 update"):
+        return (0, cleaned)
+    if cleaned.startswith("7-zip"):
+        return (0, cleaned)
+    if cleaned.startswith("hxd hex editor"):
+        return (0, cleaned)
+    if cleaned.startswith("codemeter runtime"):
+        return (0, cleaned)
+    if cleaned.startswith("microsoft windows desktop runtime"):
+        return (0, cleaned)
+    if cleaned.startswith("python 3.6.8 utility") or cleaned.startswith("python 3.6.8 core"):
+        return (0, cleaned)
+    if "ftk imager" in cleaned:
+        return (0, cleaned)
+    if cleaned in {"apple mobile device support", "bonjour"}:
         return (0, cleaned)
     if "runtime" in cleaned or "component" in cleaned or "update" in cleaned:
         return (2, cleaned)
@@ -8853,27 +8941,75 @@ def _software_noise_footprint(display_name: Any, path: Any, *, source_table: str
     if re.fullmatch(r"\d+\s+0x[0-9a-f]+\s*", cleaned):
         return True
     if cleaned in {
+        "aggregatorhost",
+        "applicationframehost",
         "audiodg",
         "backgroundtaskhost",
+        "bioiso",
+        "cmd",
         "conhost",
+        "crashpad_handler",
+        "csrss",
+        "ctfmon",
+        "dax3api",
+        "dashost",
         "dllhost",
+        "documents",
         "driverpackagestrongname",
+        "dwm",
         "explorer",
+        "fontdrvhost",
+        "fsiso",
         "inf",
+        "integrator",
+        "ism",
         "lockapp",
+        "logonui",
         "lsass",
+        "lsaiso",
+        "microsoft notepad",
         "mmc",
         "mousocoreworker",
         "mpdefendercoreservice",
+        "mscorsvw",
         "msmpeng",
+        "ngen",
+        "ngentask",
         "nissrv",
+        "ngciso",
+        "qcs-kext8380",
+        "qcskext8380",
+        "qcsnext8380",
+        "qcskeext8380",
+        "quick access",
         "rundll32",
         "runtimebroker",
         "searchapp",
         "searchhost",
+        "searchfilterhost",
+        "searchindexer",
+        "searchprotocolhost",
+        "securityhealthhost",
+        "securityhealthservice",
+        "securityhealthsystray",
+        "services",
+        "setup",
+        "shellhost",
         "sihost",
         "smartscreen",
+        "smss",
+        "spoolsv",
+        "sppsvc",
+        "sdbinst",
         "startmenuexperiencehost",
+        "surfacemlservice",
+        "surfaceservice",
+        "systemsettingsbroker",
+        "tabtip",
+        "tiworker",
+        "useroobebroker",
+        "vssvc",
+        "dismhost",
         "wdfversion",
         "svchost",
         "system",
@@ -8882,13 +9018,27 @@ def _software_noise_footprint(display_name: Any, path: Any, *, source_table: str
         "werfault",
         "widgetservice",
         "widgets",
+        "windows explorer",
+        "windows explorer windows",
         "windowsinputexperience",
+        "wininit",
+        "winlogon",
+        "wmiprvse",
+        "workloadssessionhost",
+        "workloadssessionmanager",
+        "wudfcompanionhost",
+        "wudfhost",
+        "wixstdba",
+        "xtacache",
+        "xtac64",
         "microsoft corporation",
         "microsoft windows operating system",
         "microsoft® windows® operating system",
     }:
         return True
     if cleaned.startswith("v2.33 action ") or "firewallpolicy" in path_text:
+        return True
+    if cleaned.startswith("am_delta") or cleaned.startswith("updatersetup"):
         return True
     if evidence_type in {"process_activity", "execution", "presence"} and _software_path_is_core_windows_component(path_text):
         return True
@@ -8904,6 +9054,36 @@ def _software_text_has_program_signal(*values: Any) -> bool:
     if re.search(r"\.(exe|dll|msi|ps1|bat|cmd)\b", text):
         return True
     return any(token in text for token in ("program files", "programdata", "appdata", "windowsapps", "startup", "run\\", "\\run", "services", "scheduled"))
+
+
+def _software_path_looks_like_application(value: Any) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    lowered = text.casefold()
+    if re.search(r"\.(exe|dll|msi|ps1|bat|cmd)(?:[\"'\s,]|$)", lowered):
+        return True
+    if lowered.startswith(("ms-", "msteams:", "spotify:", "shell:appsFolder".casefold())):
+        return True
+    return False
+
+
+def _software_clean_jumplist_app_description(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"\s+", " ", text)
+    known = {
+        "Windows Explorer Pinned and Recent.": "Windows Explorer",
+        "Microsoft.WindowsNotepad": "Microsoft Notepad",
+    }
+    if text in known:
+        return known[text]
+    text = re.sub(r"\s+\d+(?:\.\d+)+(?:\s*/\s*\d+(?:\.\d+)+)*.*$", "", text).strip()
+    text = re.sub(r"\s*\(Windows\s+\d+\)\s*$", "", text).strip()
+    if _software_clean_name(text) in {"quick access", "windows explorer", "windows explorer windows"}:
+        return ""
+    return text[:200]
 
 
 def _software_path_is_core_windows_component(path_text: str) -> bool:
