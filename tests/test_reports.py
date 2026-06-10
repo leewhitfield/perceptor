@@ -9294,6 +9294,23 @@ def test_software_footprint_review_compares_installed_inventory_to_traces(tmp_pa
                 "app_id": "abcdef1234567890",
                 "target_modified": "2020-01-10T03:04:05Z",
             },
+            {
+                "id": "jl-notepad-doc",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "output-1",
+                "tool_name": "JLECmd",
+                "source_csv": tmp_path / "jumplist.csv",
+                "row_number": 3,
+                "artifact_type": "jumplist",
+                "artifact_name": "a61657a5e5dfbdc.automaticDestinations-ms",
+                "file_name": "note.txt",
+                "target_path": r"C:\Users\Jane\Documents\note.txt",
+                "app_id": "a61657a5e5dfbdc",
+                "app_id_description": "Microsoft.WindowsNotepad",
+                "target_modified": "2020-01-11T03:04:05Z",
+            },
         ]
     )
 
@@ -9309,6 +9326,7 @@ def test_software_footprint_review_compares_installed_inventory_to_traces(tmp_pa
     assert "winword" not in by_name
     assert "documents" not in by_name
     assert by_name["unresolved jump list appid: abcdef1234567890"]["status"] == "unresolved_application_id"
+    assert by_name["notepad"]["status"] == "windows_packaged_app_activity"
     assert by_name["veracrypt"]["status"] == "not_installed_with_activity"
     assert by_name["anydesk"]["status"] == "suspicious_persistence_residue"
     assert any(section["status"] == "not_installed_with_activity" for section in report["sections"])

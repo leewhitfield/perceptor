@@ -7880,6 +7880,7 @@ SOFTWARE_FOOTPRINT_COMMON_TOKENS = {
 SOFTWARE_FOOTPRINT_SECTION_ORDER = [
     ("currently_installed_with_activity", "Currently Installed With Activity"),
     ("currently_installed_inventory_only", "Currently Installed Inventory Only"),
+    ("windows_packaged_app_activity", "Windows Packaged App Activity"),
     ("unresolved_application_id", "Unresolved Application IDs"),
     ("not_installed_with_activity", "Activity Without Installed-Program Match"),
     ("suspicious_persistence_residue", "Persistence Residue Leads"),
@@ -8566,6 +8567,20 @@ def _software_evidence_row(
     display_path = display_evidence_path(path)
     if not display_name and not display_path:
         return None
+    row_details = details or {}
+    if (
+        evidence_type not in {"unresolved_application_id"}
+        and _software_is_windows_packaged_app_signal(display_name, display_path, row_details)
+    ):
+        evidence_type = "packaged_app_activity"
+        confidence = "packaged_app_context"
+        row_details = {
+            **row_details,
+            "evidence_caveat": (
+                "Windows packaged/built-in application activity; lack of a traditional uninstall row "
+                "does not imply the app was uninstalled."
+            ),
+        }
     if _software_noise_footprint(display_name, display_path, source_table=source_table, evidence_type=evidence_type):
         return None
     return {
@@ -8578,8 +8593,8 @@ def _software_evidence_row(
         "executable_name": _basename_from_path(str(path or software_name or "")),
         "path": display_path,
         "user_profile": user_profile,
-        "details": details or {},
-        "match_tokens": _software_match_tokens(display_name, display_path, json.dumps(details or {}, sort_keys=True)),
+        "details": row_details,
+        "match_tokens": _software_match_tokens(display_name, display_path, json.dumps(row_details, sort_keys=True)),
     }
 
 
@@ -8645,6 +8660,7 @@ def _software_finalize_group(group: dict[str, Any]) -> dict[str, Any]:
     presence_count = counts.get("presence", 0) + counts.get("registry_context", 0)
     filesystem_count = counts.get("filesystem", 0)
     download_count = counts.get("download", 0)
+    packaged_count = counts.get("packaged_app_activity", 0)
     unresolved_count = counts.get("unresolved_application_id", 0)
     activity_count = execution_count + process_count + user_activity_count + download_count
     trace_count = sum(counts.values())
@@ -8653,6 +8669,8 @@ def _software_finalize_group(group: dict[str, Any]) -> dict[str, Any]:
         status = "currently_installed_with_activity"
     elif is_installed:
         status = "currently_installed_inventory_only"
+    elif packaged_count:
+        status = "windows_packaged_app_activity"
     elif unresolved_count:
         status = "unresolved_application_id"
     elif persistence_count:
@@ -8671,6 +8689,7 @@ def _software_finalize_group(group: dict[str, Any]) -> dict[str, Any]:
         + persistence_count * 7
         + user_activity_count * 3
         + download_count * 3
+        + packaged_count * 3
         + presence_count * 2
         + filesystem_count
         + unresolved_count
@@ -8696,6 +8715,7 @@ def _software_finalize_group(group: dict[str, Any]) -> dict[str, Any]:
         "user_activity_evidence_count": user_activity_count,
         "presence_evidence_count": presence_count,
         "download_evidence_count": download_count,
+        "packaged_app_activity_count": packaged_count,
         "unresolved_application_id_count": unresolved_count,
         "filesystem_evidence_count": filesystem_count,
         "evidence_type_counts": counts,
@@ -8717,10 +8737,11 @@ def _software_evidence_rank(value: Any) -> int:
         "process_activity": 2,
         "user_activity": 3,
         "download": 4,
-        "presence": 5,
-        "registry_context": 6,
-        "filesystem": 7,
-        "unresolved_application_id": 8,
+        "packaged_app_activity": 5,
+        "presence": 6,
+        "registry_context": 7,
+        "filesystem": 8,
+        "unresolved_application_id": 9,
     }.get(str(value or ""), 99)
 
 
@@ -8728,6 +8749,7 @@ def _software_status_interpretation(status: str) -> str:
     return {
         "currently_installed_with_activity": "Current installed-program evidence plus activity or trace artifacts were found.",
         "currently_installed_inventory_only": "Current installed-program inventory was found, but no sampled activity trace was grouped with it.",
+        "windows_packaged_app_activity": "Windows Store, packaged, or built-in application activity was found but no traditional uninstall inventory row was expected or parsed.",
         "unresolved_application_id": "Jump List or shortcut activity references an application ID that could not be resolved to an application name.",
         "suspicious_persistence_residue": "Persistence-style artifact exists, but no matching current installed-program inventory row was found.",
         "not_installed_with_activity": "Activity evidence exists, but no matching current installed-program inventory row was found. Treat as uninstalled or portable software lead.",
@@ -8893,6 +8915,9 @@ def _software_registry_key_leaf_is_guid(value: Any) -> bool:
 
 def _software_display_name(name: Any, path: Any) -> str:
     text = str(name or "").strip().strip("\"'")
+    packaged = _software_packaged_display_name_from_text(text, path)
+    if packaged:
+        return packaged
     if text and ("\\" in text or "/" in text):
         basename = _basename_from_path(text)
         if basename:
@@ -8917,6 +8942,71 @@ def _software_pretty_name(value: Any) -> str:
     return text[:200]
 
 
+def _software_packaged_display_name_from_text(*values: Any) -> str:
+    text = " ".join(str(value or "") for value in values if value is not None)
+    if not text:
+        return ""
+    if "unresolved jump list appid" in text.casefold():
+        return ""
+    direct_known = {
+        "microsoft.microsoftstickynotes": "Microsoft Sticky Notes",
+        "microsoft.screensketch": "Microsoft Snip & Sketch",
+        "microsoft.windows.photos": "Microsoft Photos",
+        "microsoft.windowscalculator": "Windows Calculator",
+        "microsoft.windowscommunicationsapps": "Windows Mail and Calendar",
+        "microsoft.windowsnotepad": "Microsoft Notepad",
+        "microsoft.windowsstore": "Microsoft Store",
+        "microsoft.yourphone": "Microsoft Your Phone",
+        "openai.chatgpt-desktop": "ChatGPT",
+    }
+    cleaned_text = text.strip().strip("\"'").casefold()
+    if cleaned_text in direct_known:
+        return direct_known[cleaned_text]
+    package = ""
+    for pattern in (
+        r"[\\/](?:windowsapps|packages)[\\/]([A-Za-z0-9][A-Za-z0-9._-]+_[A-Za-z0-9]+)",
+        r"\b([A-Za-z0-9][A-Za-z0-9._-]+_[A-Za-z0-9]+)![A-Za-z0-9._!-]+\b",
+        r"\b([A-Za-z0-9][A-Za-z0-9._-]+)\s+[A-Za-z0-9]{8,}\b",
+    ):
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            package = match.group(1)
+            break
+    if not package:
+        return ""
+    base = package.split("_", 1)[0].strip()
+    compact = base.casefold()
+    known = {
+        "7ee7776c.linkedinforwindows": "LinkedIn",
+        "clipchamp.clipchamp": "Clipchamp",
+        "facebook.facebook": "Facebook",
+        "msteams": "Microsoft Teams",
+        "microsoft.copilot": "Microsoft Copilot",
+        "microsoft.microsoftofficelens": "Microsoft Office Lens",
+        "microsoft.microsoftofficehub": "Microsoft Office Hub",
+        "microsoft.microsoftstickynotes": "Microsoft Sticky Notes",
+        "microsoft.paint": "Microsoft Paint",
+        "microsoft.screenSketch".casefold(): "Microsoft Snip & Sketch",
+        "microsoft.windows.photos": "Microsoft Photos",
+        "microsoft.windowscalculator": "Windows Calculator",
+        "microsoft.windowscommunicationsapps": "Windows Mail and Calendar",
+        "microsoft.windowsnotepad": "Microsoft Notepad",
+        "microsoft.windowsstore": "Microsoft Store",
+        "microsoft.windowsworkloadmanager": "Windows Workload Manager",
+        "microsoft.yourphone": "Microsoft Your Phone",
+        "mozilla.firefox": "Firefox",
+        "openai.chatgpt-desktop": "ChatGPT",
+        "reddittv.reddit": "Reddit",
+        "spotifyab.spotifymusic": "Spotify",
+    }
+    if compact in known:
+        return known[compact]
+    parts = [part for part in re.split(r"[._-]+", base) if part]
+    if len(parts) >= 2 and parts[0].casefold() in {"microsoft", "windows"}:
+        return " ".join(parts[:4])[:200]
+    return re.sub(r"\s+", " ", base.replace(".", " ")).strip()[:200]
+
+
 def _software_clean_name(value: Any) -> str:
     text = str(value or "").casefold()
     text = text.replace("\\", " ").replace("/", " ")
@@ -8936,12 +9026,28 @@ def _software_noise_footprint(display_name: Any, path: Any, *, source_table: str
     path_text = str(path or "").casefold()
     if not cleaned:
         return True
+    if evidence_type == "unresolved_application_id":
+        return False
     if re.fullmatch(r"(0x)?[0-9a-f]{1,8}", cleaned):
+        return True
+    if re.fullmatch(r"\d{6,}", cleaned):
+        return True
+    if re.fullmatch(r"[0-9a-f]{16,}", cleaned):
+        return True
+    if re.search(r"\.{2,}", cleaned):
         return True
     if re.fullmatch(r"\d+\s+0x[0-9a-f]+\s*", cleaned):
         return True
+    if re.fullmatch(r"(?:[0-9a-f]{8,}\s+){2,}.*", cleaned):
+        return True
+    if source_table == "srum_records" and evidence_type == "process_activity":
+        if _software_is_bare_executable_reference(name, path) and not _software_is_windows_packaged_app_signal(name, path):
+            return True
+    if evidence_type in {"process_activity", "user_activity"} and _software_is_generic_name(name):
+        return True
     if cleaned in {
         "aggregatorhost",
+        "application",
         "applicationframehost",
         "audiodg",
         "backgroundtaskhost",
@@ -8953,10 +9059,17 @@ def _software_noise_footprint(display_name: Any, path: Any, *, source_table: str
         "ctfmon",
         "dax3api",
         "dashost",
+        "common",
+        "command prompt",
+        "consent",
+        "defrag",
         "dllhost",
         "documents",
         "driverpackagestrongname",
         "dwm",
+        "easeofaccessdialog",
+        "exe",
+        "file",
         "explorer",
         "fontdrvhost",
         "fsiso",
@@ -8967,7 +9080,7 @@ def _software_noise_footprint(display_name: Any, path: Any, *, source_table: str
         "logonui",
         "lsass",
         "lsaiso",
-        "microsoft notepad",
+        "live",
         "mmc",
         "mousocoreworker",
         "mpdefendercoreservice",
@@ -8977,6 +9090,8 @@ def _software_noise_footprint(display_name: Any, path: Any, *, source_table: str
         "ngentask",
         "nissrv",
         "ngciso",
+        "pickerhost",
+        "privatebrowsingaumid",
         "qcs-kext8380",
         "qcskext8380",
         "qcsnext8380",
@@ -8984,6 +9099,7 @@ def _software_noise_footprint(display_name: Any, path: Any, *, source_table: str
         "quick access",
         "rundll32",
         "runtimebroker",
+        "sc",
         "searchapp",
         "searchhost",
         "searchfilterhost",
@@ -9001,12 +9117,14 @@ def _software_noise_footprint(display_name: Any, path: Any, *, source_table: str
         "spoolsv",
         "sppsvc",
         "sdbinst",
+        "srtasks",
         "startmenuexperiencehost",
         "surfacemlservice",
         "surfaceservice",
         "systemsettingsbroker",
         "tabtip",
         "tiworker",
+        "updater",
         "useroobebroker",
         "vssvc",
         "dismhost",
@@ -9018,9 +9136,11 @@ def _software_noise_footprint(display_name: Any, path: Any, *, source_table: str
         "werfault",
         "widgetservice",
         "widgets",
+        "windows",
         "windows explorer",
         "windows explorer windows",
         "windowsinputexperience",
+        "windows workload manager",
         "wininit",
         "winlogon",
         "wmiprvse",
@@ -9028,9 +9148,11 @@ def _software_noise_footprint(display_name: Any, path: Any, *, source_table: str
         "workloadssessionmanager",
         "wudfcompanionhost",
         "wudfhost",
+        "wermgr",
         "wixstdba",
         "xtacache",
         "xtac64",
+        "xtac",
         "microsoft corporation",
         "microsoft windows operating system",
         "microsoft® windows® operating system",
@@ -9054,6 +9176,72 @@ def _software_text_has_program_signal(*values: Any) -> bool:
     if re.search(r"\.(exe|dll|msi|ps1|bat|cmd)\b", text):
         return True
     return any(token in text for token in ("program files", "programdata", "appdata", "windowsapps", "startup", "run\\", "\\run", "services", "scheduled"))
+
+
+def _software_is_bare_executable_reference(display_name: Any, path: Any) -> bool:
+    name = str(display_name or "").strip()
+    path_text = str(path or "").strip()
+    combined = " ".join(value for value in (name, path_text) if value).casefold()
+    if not combined:
+        return False
+    if any(separator in combined for separator in ("\\", "/")):
+        return False
+    if any(token in combined for token in ("program files", "programdata", "appdata", "windowsapps", "shell:appsfolder")):
+        return False
+    if re.fullmatch(r"[a-z0-9_.-]+\.exe", path_text.casefold()):
+        return True
+    cleaned = _software_clean_name(name)
+    return bool(re.fullmatch(r"[a-z0-9_.-]+\s+exe", cleaned))
+
+
+def _software_is_windows_packaged_app_signal(display_name: Any, path: Any, details: dict[str, Any] | None = None) -> bool:
+    cleaned = _software_clean_name(display_name)
+    text = " ".join(
+        str(value or "")
+        for value in (
+            display_name,
+            path,
+            *((details or {}).values()),
+        )
+    ).casefold()
+    compact = re.sub(r"[^a-z0-9]+", "", text)
+    if "\\windowsapps\\" in text or "/windowsapps/" in text or "shell:appsfolder" in text:
+        return True
+    if re.search(r"\b[a-z0-9][a-z0-9._-]+_[a-z0-9]+![a-z0-9._!-]+\b", text, flags=re.IGNORECASE):
+        return True
+    if re.search(r"\b(?:microsoft|windows)\.[a-z0-9_.-]{6,}\b", text, flags=re.IGNORECASE):
+        return True
+    if any(prefix in text for prefix in ("ms-photos:", "ms-windows-store:", "ms-windowsbackup:", "ms-gamebar:", "msteams:", "msteamscanary:")):
+        return True
+    if cleaned in {
+        "chatgpt",
+        "copilotnative",
+        "microsoft game bar",
+        "microsoft notepad",
+        "microsoft snip sketch",
+        "microsoft sticky notes",
+        "microsoft store",
+        "microsoft your phone",
+        "notepad",
+        "photos microsoft",
+        "snippingtool",
+        "windows calculator",
+    }:
+        return True
+    return any(
+        token in compact
+        for token in (
+            "microsoftmicrosoftstickynotes",
+            "microsoftscreenSketch".casefold(),
+            "microsoftwindowscalculator",
+            "microsoftwindowscommunicationsapps",
+            "microsoftwindowsnotepad",
+            "microsoftwindowsphotos",
+            "microsoftwindowsstore",
+            "microsoftyourphone",
+            "openaichatgpt",
+        )
+    )
 
 
 def _software_path_looks_like_application(value: Any) -> bool:
