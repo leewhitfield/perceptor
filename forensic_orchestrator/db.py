@@ -3802,6 +3802,94 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_derived_session_members_source
               ON derived_session_members(source_table, source_row_id);
 
+            CREATE TABLE IF NOT EXISTS investigation_entities (
+              id TEXT PRIMARY KEY,
+              case_id TEXT NOT NULL REFERENCES cases(id),
+              computer_id TEXT,
+              image_id TEXT,
+              entity_type TEXT NOT NULL,
+              entity_key TEXT NOT NULL,
+              display_name TEXT NOT NULL,
+              normalized_value TEXT,
+              source_table TEXT,
+              source_row_id TEXT,
+              confidence TEXT NOT NULL DEFAULT 'derived',
+              first_seen_utc TEXT,
+              last_seen_utc TEXT,
+              details_json TEXT NOT NULL DEFAULT '{}',
+              created_at TEXT NOT NULL,
+              UNIQUE(case_id, entity_type, entity_key)
+            );
+            CREATE INDEX IF NOT EXISTS idx_investigation_entities_case_type
+              ON investigation_entities(case_id, entity_type);
+            CREATE INDEX IF NOT EXISTS idx_investigation_entities_case_key
+              ON investigation_entities(case_id, entity_key);
+
+            CREATE TABLE IF NOT EXISTS investigation_relationships (
+              id TEXT PRIMARY KEY,
+              case_id TEXT NOT NULL REFERENCES cases(id),
+              computer_id TEXT,
+              image_id TEXT,
+              relationship_type TEXT NOT NULL,
+              subject_entity_id TEXT NOT NULL REFERENCES investigation_entities(id),
+              object_entity_id TEXT NOT NULL REFERENCES investigation_entities(id),
+              source_table TEXT NOT NULL,
+              source_row_id TEXT,
+              event_time_utc TEXT,
+              confidence TEXT NOT NULL DEFAULT 'derived',
+              summary TEXT,
+              details_json TEXT NOT NULL DEFAULT '{}',
+              created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_investigation_relationships_case_type
+              ON investigation_relationships(case_id, relationship_type, event_time_utc);
+            CREATE INDEX IF NOT EXISTS idx_investigation_relationships_subject
+              ON investigation_relationships(subject_entity_id);
+            CREATE INDEX IF NOT EXISTS idx_investigation_relationships_object
+              ON investigation_relationships(object_entity_id);
+
+            CREATE TABLE IF NOT EXISTS investigation_findings (
+              id TEXT PRIMARY KEY,
+              case_id TEXT NOT NULL REFERENCES cases(id),
+              computer_id TEXT,
+              image_id TEXT,
+              finding_type TEXT NOT NULL,
+              title TEXT NOT NULL,
+              summary TEXT NOT NULL,
+              severity TEXT NOT NULL DEFAULT 'low',
+              confidence TEXT NOT NULL DEFAULT 'low',
+              confidence_score INTEGER NOT NULL DEFAULT 0,
+              rule_id TEXT NOT NULL,
+              rule_name TEXT NOT NULL,
+              start_time_utc TEXT,
+              end_time_utc TEXT,
+              primary_entity_id TEXT REFERENCES investigation_entities(id),
+              details_json TEXT NOT NULL DEFAULT '{}',
+              created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_investigation_findings_case_type
+              ON investigation_findings(case_id, finding_type, severity);
+            CREATE INDEX IF NOT EXISTS idx_investigation_findings_case_time
+              ON investigation_findings(case_id, start_time_utc);
+
+            CREATE TABLE IF NOT EXISTS investigation_finding_evidence (
+              id TEXT PRIMARY KEY,
+              finding_id TEXT NOT NULL REFERENCES investigation_findings(id),
+              case_id TEXT NOT NULL REFERENCES cases(id),
+              source_table TEXT NOT NULL,
+              source_row_id TEXT,
+              relationship_id TEXT REFERENCES investigation_relationships(id),
+              role TEXT NOT NULL,
+              event_time_utc TEXT,
+              summary TEXT,
+              details_json TEXT NOT NULL DEFAULT '{}',
+              created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_investigation_finding_evidence_finding
+              ON investigation_finding_evidence(finding_id);
+            CREATE INDEX IF NOT EXISTS idx_investigation_finding_evidence_source
+              ON investigation_finding_evidence(source_table, source_row_id);
+
             CREATE TABLE IF NOT EXISTS computer_inventory (
               id TEXT PRIMARY KEY,
               case_id TEXT NOT NULL REFERENCES cases(id),

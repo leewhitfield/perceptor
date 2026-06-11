@@ -37,6 +37,7 @@ from .reports import (
     external_storage_report,
     evidence_gaps_report,
     file_movement_identity_report,
+    investigation_findings_report,
     file_dossier_report,
     filesystem_listing_report,
     memory_analysis_report,
@@ -74,6 +75,7 @@ SUPPORTED_MCP_REPORTS = {
     "progress",
     "resume-plan",
     "external-storage",
+    "investigation-findings",
     "suspicious-executions",
     "interesting-executables",
     "software-footprint-review",
@@ -751,6 +753,36 @@ class PerceptorMcpServer:
                 input_schema=_case_limit_schema(default=100),
                 handler=self.query_suspicious_executions,
                 annotations=read_only,
+            ),
+            McpTool(
+                name="relic_investigation_findings",
+                title="Query Investigation Findings",
+                description=(
+                    "Return Perceptor's deterministic evidence-backed findings, entities, and relationship counts. "
+                    "Use this before broad artifact searches when the user asks what happened, why something matters, "
+                    "or how a conclusion is supported. Results are limited by count; increase limit or ask for source "
+                    "evidence rows for the full picture."
+                ),
+                input_schema=_object_schema(
+                    {
+                        "case_id": _string_schema("Perceptor case ID."),
+                        "limit": _integer_schema("Maximum findings to return.", default=100, minimum=1, maximum=1000),
+                        "rebuild": {"type": "boolean", "default": False, "description": "Rebuild derived entities, relationships, and findings before querying."},
+                    },
+                    required=["case_id"],
+                ),
+                handler=self.query_investigation_findings,
+                annotations=read_only,
+                category="analysis",
+                tags=("findings", "entities", "relationships", "evidence", "narrative", "read"),
+                dependencies=("parsed_artifact_tables", "timeline_events"),
+                source_priority=("investigation_findings", "investigation_relationships", "investigation_entities", "parsed_artifact_tables"),
+                examples=(
+                    {
+                        "description": "Ask for evidence-backed conclusions for a case.",
+                        "arguments": {"case_id": "case-id", "limit": 25},
+                    },
+                ),
             ),
             McpTool(
                 name="relic_query_external_storage",
@@ -2290,6 +2322,25 @@ class PerceptorMcpServer:
         db = self._db()
         try:
             return suspicious_executions_report(db, _required(arguments, "case_id"), limit=_limit(arguments, default=100))
+        finally:
+            db.close()
+
+    def query_investigation_findings(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        db = self._db()
+        try:
+            result = investigation_findings_report(
+                db,
+                _required(arguments, "case_id"),
+                limit=_limit(arguments, default=100),
+                rebuild=bool(arguments.get("rebuild", False)),
+            )
+            result["source_of_truth"] = "investigation_findings"
+            result["usage_guidance"] = (
+                "Use findings first for evidence-backed conclusions. Each finding includes rule metadata and "
+                "supporting source_table/source_row_id evidence. The returned findings are count-limited; increase "
+                "limit or query the referenced source artifacts for the complete evidence set."
+            )
+            return result
         finally:
             db.close()
 

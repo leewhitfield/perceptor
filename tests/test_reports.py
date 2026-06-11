@@ -61,6 +61,8 @@ from forensic_orchestrator.reports import (
     external_storage_report,
     interesting_executables_markdown,
     interesting_executables_report,
+    investigation_findings_markdown,
+    investigation_findings_report,
     investigation_triage_dashboard_markdown,
     investigation_triage_dashboard_report,
     execution_markdown,
@@ -9333,6 +9335,86 @@ def test_software_footprint_review_compares_installed_inventory_to_traces(tmp_pa
     assert report["summary"]["not_installed_with_activity_count"] >= 1
     assert "Software Footprint Review" in markdown
     assert "Absence from installed inventory" in markdown
+
+
+def test_investigation_findings_rebuilds_entities_relationships_and_evidence(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORENSIC_ANALYTICS_MODE", "sqlite")
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    db.insert_tool_output(
+        {
+            "id": "tool-1",
+            "case_id": case.id,
+            "computer_id": "computer-1",
+            "image_id": "image-1",
+            "job_id": None,
+            "tool_name": "fixture",
+            "output_type": "csv",
+            "path": tmp_path / "fixture.csv",
+            "row_count": 2,
+        }
+    )
+    db.conn.execute(
+        """
+        INSERT INTO browser_downloads (
+          id, case_id, computer_id, image_id, tool_output_id, tool_name, source_csv, row_number,
+          browser, target_path, tab_url, start_time_utc, end_time_utc, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "download-1",
+            case.id,
+            "computer-1",
+            "image-1",
+            "tool-1",
+            "Chrome",
+            "downloads.csv",
+            1,
+            "Chrome",
+            r"C:\Users\Jane\Downloads\archive.zip",
+            "https://example.test/archive.zip",
+            "2025-01-01T08:16:00Z",
+            "2025-01-01T08:16:05Z",
+            "2025-01-01T08:16:05Z",
+        ),
+    )
+    db.conn.execute(
+        """
+        INSERT INTO usb_file_correlations (
+          id, case_id, computer_id, image_id, usb_serial, usb_volume_serial_number,
+          source_artifact_type, file_name, file_location, target_modified,
+          volume_serial_match, confidence, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "usb-file-1",
+            case.id,
+            "computer-1",
+            "image-1",
+            "USB123",
+            "ABCD-1234",
+            "lnk",
+            "archive.zip",
+            r"E:\archive.zip",
+            "2025-01-01T08:20:00Z",
+            "yes",
+            "high",
+            "2025-01-01T08:20:00Z",
+        ),
+    )
+    db.conn.commit()
+
+    report = investigation_findings_report(db, case.id, rebuild=True, limit=10)
+    markdown = investigation_findings_markdown(report)
+
+    assert report["summary"]["entity_count"] >= 3
+    assert report["summary"]["relationship_count"] >= 3
+    assert any(row["finding_type"] == "download_removable_media_sequence" for row in report["findings"])
+    sequence = next(row for row in report["findings"] if row["finding_type"] == "download_removable_media_sequence")
+    assert {row["role"] for row in sequence["evidence"]} == {"download", "removable_media_file_activity"}
+    assert "Evidence:" in markdown
 
 
 def test_phone_link_report_reads_package_artifacts(tmp_path):

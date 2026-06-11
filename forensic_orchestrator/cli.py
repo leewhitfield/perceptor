@@ -183,6 +183,8 @@ from .reports import (
     image_analysis_report,
     investigation_triage_dashboard_markdown,
     investigation_triage_dashboard_report,
+    investigation_findings_markdown,
+    investigation_findings_report,
     interesting_executables_markdown,
     interesting_executables_report,
     activity_summary_report,
@@ -1205,8 +1207,8 @@ def _bundle_report_names_for_purpose(purpose: str) -> set[str] | None:
         "usn-lifecycle",
     }
     groups = {
-        "triage": common | {"suspicious-executions", "event-interpretation", "software-footprint-review", "examiner-edge-artifacts", "mapped-network-paths", "non-standard-ads", "ntfs-security-descriptors", "remote-access-tool-logs", "user-intent", "file-movement-identity", "opened-from-removable-media", "opened-from-cloud-storage", "cloud-mounts", "cloud-removable-overlap", "artifact-processing-status", "lead-search-usb", "lead-search-execution", "lead-search-cloud", "lead-search-browser", "lead-search-documents", "lead-search-communications", "lead-search-usb-summary", "lead-search-execution-summary", "lead-search-cloud-summary", "lead-search-browser-summary", "lead-search-documents-summary", "lead-search-communications-summary"},
-        "review": common | usb_reports | {"activity-digest", "next-actions", "workspace-map", "artifact-search-sources", "suspicious-executions", "event-interpretation", "software-footprint-review", "examiner-edge-artifacts", "mapped-network-paths", "non-standard-ads", "ntfs-security-descriptors", "remote-access-tool-logs", "opened-from-cloud-storage", "cloud-mounts", "bits-activity", "artifact-processing-status", "lead-search-usb", "lead-search-execution", "lead-search-cloud", "lead-search-browser", "lead-search-documents", "lead-search-communications", "lead-search-usb-summary", "lead-search-execution-summary", "lead-search-cloud-summary", "lead-search-browser-summary", "lead-search-documents-summary", "lead-search-communications-summary", "changed-search-packets"},
+        "triage": common | {"investigation-findings", "suspicious-executions", "event-interpretation", "software-footprint-review", "examiner-edge-artifacts", "mapped-network-paths", "non-standard-ads", "ntfs-security-descriptors", "remote-access-tool-logs", "user-intent", "file-movement-identity", "opened-from-removable-media", "opened-from-cloud-storage", "cloud-mounts", "cloud-removable-overlap", "artifact-processing-status", "lead-search-usb", "lead-search-execution", "lead-search-cloud", "lead-search-browser", "lead-search-documents", "lead-search-communications", "lead-search-usb-summary", "lead-search-execution-summary", "lead-search-cloud-summary", "lead-search-browser-summary", "lead-search-documents-summary", "lead-search-communications-summary"},
+        "review": common | usb_reports | {"investigation-findings", "activity-digest", "next-actions", "workspace-map", "artifact-search-sources", "suspicious-executions", "event-interpretation", "software-footprint-review", "examiner-edge-artifacts", "mapped-network-paths", "non-standard-ads", "ntfs-security-descriptors", "remote-access-tool-logs", "opened-from-cloud-storage", "cloud-mounts", "bits-activity", "artifact-processing-status", "lead-search-usb", "lead-search-execution", "lead-search-cloud", "lead-search-browser", "lead-search-documents", "lead-search-communications", "lead-search-usb-summary", "lead-search-execution-summary", "lead-search-cloud-summary", "lead-search-browser-summary", "lead-search-documents-summary", "lead-search-communications-summary", "changed-search-packets"},
         "usb": common | usb_reports,
         "cloud": common | {"cloud-artifacts", "opened-from-cloud-storage", "cloud-mounts", "cloud-removable-overlap", "user-intent"},
         "execution": common | {"execution", "execution-correlation", "suspicious-executions", "event-interpretation", "program-provenance", "software-footprint-review", "remote-access", "bits-activity", "user-intent"},
@@ -1320,6 +1322,7 @@ def write_case_report_bundle(
         ("execution", "md", "Execution", lambda: execution_markdown(execution_report(db, case_id, limit=limit))),
         ("execution-correlation", "json", "Execution correlation", lambda: execution_correlation_report(db, case_id, limit=limit)),
         ("suspicious-executions", "md", "Suspicious executions", lambda: suspicious_executions_markdown(suspicious())),
+        ("investigation-findings", "md", "Investigation findings", lambda: investigation_findings_markdown(investigation_findings_report(db, case_id, limit=limit, rebuild=False))),
         ("event-interpretation", "json", "High-value event log interpretation", lambda: event_interpretation_report(db, case_id, limit=limit)),
         ("program-provenance", "md", "Program provenance", lambda: program_provenance_markdown(program_provenance_report(db, case_id, limit=limit))),
         ("software-footprint-review", "md", "Software footprint review", lambda: software_footprint_review_markdown(software_footprint_review_report(db, case_id, limit=limit))),
@@ -3322,6 +3325,12 @@ def build_parser() -> argparse.ArgumentParser:
     report_triage_dashboard.add_argument("--limit", type=int, default=25)
     report_triage_dashboard.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
     report_triage_dashboard.add_argument("--output")
+    report_investigation_findings = report_sub.add_parser("investigation-findings")
+    report_investigation_findings.add_argument("--case", required=True, dest="case_id")
+    report_investigation_findings.add_argument("--limit", type=int, default=100)
+    report_investigation_findings.add_argument("--rebuild", action="store_true", help="Rebuild derived entities, relationships, and findings before reporting")
+    report_investigation_findings.add_argument("--format", choices=["md", "json", "table", "csv"], default="md")
+    report_investigation_findings.add_argument("--output")
     report_data_exfiltration = report_sub.add_parser("data-exfiltration")
     report_data_exfiltration.add_argument("--case", required=True, dest="case_id")
     report_data_exfiltration.add_argument("--limit", type=int, default=100)
@@ -7369,6 +7378,31 @@ def run(args: argparse.Namespace) -> int:
                 args.output,
                 title=f"Investigation triage dashboard for case {args.case_id}",
                 columns=["id", "title", "severity", "score", "summary_text"],
+            )
+            return 0
+
+        if args.resource == "report" and args.action == "investigation-findings":
+            report = investigation_findings_report(db, args.case_id, limit=args.limit, rebuild=args.rebuild)
+            if args.format == "md":
+                write_text_output(investigation_findings_markdown(report), args.output)
+                return 0
+            write_report_output(
+                report,
+                report["findings"],
+                args.format,
+                args.output,
+                title=f"Investigation findings for case {args.case_id}",
+                columns=[
+                    "finding_type",
+                    "title",
+                    "severity",
+                    "confidence",
+                    "confidence_score",
+                    "rule_id",
+                    "start_time_utc",
+                    "end_time_utc",
+                    "summary",
+                ],
             )
             return 0
 

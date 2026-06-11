@@ -19,6 +19,7 @@ from forensic_orchestrator.correlation import rebuild_file_correlations
 from forensic_orchestrator.db import Database
 from forensic_orchestrator.evidence import create_case, create_computer
 from forensic_orchestrator.image_metadata import collect_image_metadata
+from forensic_orchestrator.investigation_graph import rebuild_investigation_graph
 from forensic_orchestrator.nested_evidence import rebuild_nested_evidence_inventory
 from forensic_orchestrator.paths import WorkspacePaths
 from forensic_orchestrator.sessions import rebuild_sessions
@@ -1222,6 +1223,7 @@ def _run_post_import_rebuilds(db: Database, *, case_id: str, image_id: str) -> l
     rebuild_sessions(db, case_id=case_id, image_id=image_id)
     rebuild_usb_storage_devices(db, case_id=case_id, image_id=image_id)
     rebuild_usb_connection_events(db, case_id=case_id, image_id=image_id)
+    rebuild_investigation_graph(db, case_id=case_id)
     _, distinct_warning = _try_rebuild_distinct_artifact_tables(db, case_id=case_id, image_id=image_id)
     if distinct_warning:
         warnings.append(distinct_warning)
