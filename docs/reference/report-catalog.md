@@ -271,6 +271,12 @@ groups all 228 report subcommands by topic.
 - `usb-dossier`
 - `opened-from-removable-media`
 
+`external-storage` distinguishes the USB adapter/bridge identity from media
+identities observed behind it. This matters for drive caddies and adapters:
+the same adapter serial can be reused with different disks, so the report
+also lists distinct media instances based on StorageId values, partition-table
+identity, VBR volume serials, volume serials, capacity, and filesystem context.
+
 ## Memory
 
 - `memory-artifacts`

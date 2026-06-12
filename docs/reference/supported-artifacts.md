@@ -108,6 +108,7 @@ Primary reports include `cloud-configuration`, `cloud-artifacts`,
 
 - USBSTOR, UASP/SCSI, WPDBUSENUM, HID/SWD, MountedDevices, MountPoints2.
 - SetupAPI device install events, DeviceMigration, partition diagnostics.
+- USB adapter/caddy summaries and distinct media instances behind the adapter.
 - USB file/folder correlations from LNK, Jump Lists, Shellbags, MFT, and USN.
 - Device inventory for storage and non-storage device classes.
 

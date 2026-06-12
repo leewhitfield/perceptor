@@ -16664,6 +16664,9 @@ def external_storage_report(
     if rebuild_correlations:
         rebuild_usb_file_correlations(db, case_id)
     devices = _external_storage_devices(db, case_id, limit=limit)
+    media_instances = _external_storage_media_instances(db, case_id, limit=max(limit * 5, 500))
+    _annotate_external_storage_row_attribution(db, case_id, media_instances)
+    _annotate_external_storage_device_media_instances(devices, media_instances)
     _merge_external_storage_partition_events(db, case_id, devices)
     file_activity = []
     if include_file_activity:
@@ -16732,6 +16735,14 @@ def external_storage_report(
         "case_id": case_id,
         "summary": {
             "device_count": len(devices),
+            "media_instance_count": len(media_instances),
+            "adapter_reuse_count": len(
+                {
+                    str(row.get("adapter_serial") or "")
+                    for row in media_instances
+                    if row.get("reuse_warning") and row.get("adapter_serial")
+                }
+            ),
             "timeline_event_count": len(timeline),
             "file_activity_count": len(file_activity),
             "unattributed_removable_volume_count": len(unattributed_volume_activity),
@@ -16756,6 +16767,7 @@ def external_storage_report(
             ),
         },
         "devices": devices,
+        "media_instances": media_instances,
         "timeline": timeline,
         "file_activity": file_activity,
         "unattributed_removable_volume_activity": unattributed_volume_activity,
@@ -16764,6 +16776,7 @@ def external_storage_report(
         "registry_evidence_counts": registry_counts,
         "total_returned": {
             "devices": len(devices),
+            "media_instances": len(media_instances),
             "timeline": len(timeline),
             "file_activity": len(file_activity),
             "unattributed_removable_volume_activity": len(unattributed_volume_activity),
@@ -16797,6 +16810,12 @@ EXTERNAL_STORAGE_EXPORT_COLUMNS = [
     "physical_device_identity",
     "volume_identity",
     "mount_identity",
+    "media_key",
+    "media_identity_basis",
+    "media_confidence",
+    "media_label",
+    "media_instance_count",
+    "media_reuse_warning",
     "volume_serial_format_time_assessment",
     "partition_log_metadata",
     "partition_bus_type",
@@ -16910,6 +16929,10 @@ def external_storage_export_rows(report: dict[str, Any]) -> list[dict[str, Any]]
                 physical_device_identity=device.get("physical_device_identity"),
                 volume_identity=device.get("volume_identity"),
                 mount_identity=device.get("mount_identity"),
+                media_instance_count=device.get("media_instance_count"),
+                media_identity_basis=device.get("media_identity_bases"),
+                media_label=device.get("media_labels"),
+                media_reuse_warning=device.get("media_reuse_warning"),
                 volume_serial_format_time_assessment=device.get("volume_serial_format_time_assessment"),
                 partition_log_metadata=_external_storage_partition_log_summary(device),
                 partition_bus_type=device.get("partition_bus_type"),
@@ -16956,6 +16979,35 @@ def external_storage_export_rows(report: dict[str, Any]) -> list[dict[str, Any]]
                 file_activity_count=device.get("file_activity_count"),
                 evidence_row_count=device.get("evidence_row_count"),
                 notes="; ".join(part for part in (device.get("last_arrival_note"), device.get("last_removal_note")) if part),
+            )
+        )
+    for media in report.get("media_instances") or []:
+        rows.append(
+            _external_storage_export_row(
+                case_id,
+                "media_instance",
+                media,
+                id=media.get("id"),
+                device_identity=media.get("adapter_friendly_name") or media.get("adapter_product"),
+                serial=media.get("adapter_serial"),
+                media_key=media.get("media_key"),
+                media_identity_basis=media.get("media_identity_basis"),
+                media_confidence=media.get("media_confidence"),
+                media_label=media.get("media_label"),
+                media_reuse_warning=media.get("reuse_warning"),
+                volume_serial_number=media.get("volume_serial_number"),
+                volume_name=media.get("volume_name"),
+                capacity_bytes=media.get("capacity_bytes"),
+                file_system=media.get("file_system"),
+                vendor=media.get("adapter_vendor"),
+                product=media.get("adapter_product"),
+                timestamp=media.get("last_observed_utc") or media.get("first_observed_utc"),
+                event_type="media_instance_summary",
+                first_observed_utc=media.get("first_observed_utc"),
+                last_observed_utc=media.get("last_observed_utc"),
+                source_artifact=media.get("source_artifacts"),
+                evidence_row_count=media.get("evidence_row_count"),
+                notes=media.get("reuse_warning"),
             )
         )
     for row in report.get("file_activity") or []:
@@ -17119,6 +17171,8 @@ def external_storage_markdown(report: dict[str, Any]) -> str:
         "## Summary",
         "",
         f"- Potential external storage devices: `{summary.get('device_count', 0)}`",
+        f"- Distinct media instances behind USB adapters: `{summary.get('media_instance_count', 0)}`",
+        f"- Adapters with multiple observed media identities: `{summary.get('adapter_reuse_count', 0)}`",
         f"- Timeline events: `{summary.get('timeline_event_count', 0)}`",
         f"- Devices with attributable file/folder activity: `{sum(1 for device in report.get('devices') or [] if device.get('file_activity_detected'))}`",
         f"- Grouped file/folder activity rows: `{summary.get('file_activity_count', 0)}`",
@@ -17165,6 +17219,10 @@ def external_storage_markdown(report: dict[str, Any]) -> str:
                     f"- Physical identity: `{device.get('physical_device_identity') or ''}`",
                     f"- Volume identity: `{device.get('volume_identity') or ''}`",
                     f"- Mount identity: `{device.get('mount_identity') or ''}`",
+                    f"- Media instances behind adapter: `{device.get('media_instance_count') or 0}`",
+                    f"- Media identity basis: `{device.get('media_identity_bases') or ''}`",
+                    f"- Media labels: `{device.get('media_labels') or ''}`",
+                    f"- Media reuse warning: `{device.get('media_reuse_warning') or ''}`",
                     f"- SCSI/event serial: `{device.get('alternate_scsi_serial') or ''}`",
                     f"- Parent/device serial: `{device.get('parent_device_serial') or ''}`",
                     f"- VID/PID: `{device.get('normalized_vendor_id') or device.get('vendor_id') or ''}` / `{device.get('normalized_product_id') or device.get('product_id') or ''}`",
@@ -17195,6 +17253,34 @@ def external_storage_markdown(report: dict[str, Any]) -> str:
             )
     else:
         lines.extend(["No external storage devices were found in the summarized USB storage table.", ""])
+    media_instances = report.get("media_instances") or []
+    if media_instances:
+        lines.extend(["## Media Instances", ""])
+        lines.append(
+            "These rows separate the USB adapter/caddy identity from the disk or volume identity observed behind it."
+        )
+        lines.append("")
+        for index, media in enumerate(media_instances[:25], start=1):
+            lines.extend(
+                [
+                    f"### {index}. {media.get('media_label') or media.get('media_key') or 'Unknown media'}",
+                    "",
+                    f"- Computer: `{media.get('computer_label') or media.get('computer_id') or ''}`",
+                    f"- Adapter serial: `{media.get('adapter_serial') or ''}`",
+                    f"- Adapter: `{media.get('adapter_friendly_name') or media.get('adapter_product') or ''}`",
+                    f"- Media key: `{media.get('media_key') or ''}`",
+                    f"- Identity basis/confidence: `{media.get('media_identity_basis') or ''}` / `{media.get('media_confidence') or ''}`",
+                    f"- Volume serial/name: `{media.get('volume_serial_number') or ''}` / `{media.get('volume_name') or ''}`",
+                    f"- Capacity/filesystem: `{_format_capacity(media.get('capacity_bytes'))}` / `{media.get('file_system') or ''}`",
+                    f"- First/last observed: `{media.get('first_observed_utc') or ''}` / `{media.get('last_observed_utc') or ''}`",
+                    f"- Reuse warning: `{media.get('reuse_warning') or ''}`",
+                    f"- Source artifacts: `{media.get('source_artifacts') or ''}`",
+                    "",
+                ]
+            )
+        if len(media_instances) > 25:
+            lines.append(f"Only the first `25` media instances are shown in Markdown; CSV export contains `{len(media_instances)}` rows.")
+            lines.append("")
     lines.extend(["## File And Folder Activity", ""])
     if summary.get("file_activity_count", 0):
         lines.extend(
@@ -17393,6 +17479,57 @@ def _external_storage_devices(db: Database, case_id: str, *, limit: int) -> list
     devices = _external_storage_devices_from_events(db, case_id, limit=limit)
     _annotate_external_storage_devices(db, case_id, devices)
     return devices
+
+
+def _external_storage_media_instances(db: Database, case_id: str, *, limit: int) -> list[dict[str, Any]]:
+    rows = _query_report_rows(
+        db,
+        case_id,
+        "usb_media_instances",
+        """
+        SELECT *
+        FROM usb_media_instances
+        WHERE usb_media_instances.case_id = ?
+        ORDER BY
+          COALESCE(last_observed_utc, first_observed_utc, '') DESC,
+          adapter_serial,
+          media_label
+        LIMIT ?
+        """,
+        (case_id, limit),
+    )
+    return rows
+
+
+def _annotate_external_storage_device_media_instances(
+    devices: list[dict[str, Any]],
+    media_instances: list[dict[str, Any]],
+) -> None:
+    media_by_adapter: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for media in media_instances:
+        key = (
+            str(media.get("image_id") or ""),
+            _external_storage_serial_key(media.get("adapter_serial")).upper(),
+        )
+        if not key[1]:
+            continue
+        media_by_adapter.setdefault(key, []).append(media)
+    for device in devices:
+        key = (
+            str(device.get("image_id") or ""),
+            _external_storage_serial_key(device.get("serial"), device=device).upper(),
+        )
+        matches = media_by_adapter.get(key, [])
+        if not matches:
+            continue
+        device["media_instance_count"] = len(matches)
+        device["media_identity_bases"] = _join_external_storage_values(
+            sorted({str(item.get("media_identity_basis") or "") for item in matches if item.get("media_identity_basis")})
+        )
+        device["media_labels"] = _join_external_storage_values(
+            item.get("media_label") or item.get("media_key") for item in matches
+        )
+        device["media_reuse_warning"] = next((str(item.get("reuse_warning") or "") for item in matches if item.get("reuse_warning")), "")
 
 
 def _annotate_external_storage_row_attribution(db: Database, case_id: str, rows: list[dict[str, Any]]) -> None:

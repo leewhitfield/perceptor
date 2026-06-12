@@ -17,7 +17,7 @@ from forensic_orchestrator.reports import (
 )
 import forensic_orchestrator.tools.ingest as ingest_module
 from forensic_orchestrator.tools.ingest import ingest_csv_output
-from forensic_orchestrator.tools.usb_summary import rebuild_usb_storage_devices
+from forensic_orchestrator.tools.usb_summary import rebuild_usb_media_instances, rebuild_usb_storage_devices
 
 
 @pytest.fixture(autouse=True)
@@ -1988,6 +1988,85 @@ def test_usb_storage_summary_enriches_missing_volume_serial_from_shortcut_label(
         "volume_serial_number": "A1B2C3D4",
         "source_artifacts": "usb_device_history, usb_volume_history, shortcut_volume_label_enrichment",
     }
+
+
+def test_usb_media_instances_separate_drives_behind_same_adapter(tmp_path):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+    db.insert_usb_devices(
+        [
+            {
+                "id": "usb-media-1",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "usb-output",
+                "tool_name": "RegistryArtifactParser",
+                "source_csv": tmp_path / "usb.csv",
+                "row_number": 1,
+                "source_path": "SYSTEM",
+                "artifact": "partition_diagnostic",
+                "device_type": "usb_partition_diagnostic",
+                "vendor": "Generic",
+                "product": "USB Bridge",
+                "friendly_name": "Generic USB Bridge",
+                "serial": "CADDY123",
+                "volume_name": "DRIVE_A",
+                "volume_serial_number": "1111AAAA",
+                "capacity_bytes": "64000000000",
+                "file_system": "NTFS",
+                "partition_table_sha256": "a" * 64,
+                "vbr_volume_serial_number": "1111-AAAA",
+                "key_last_write_utc": "2025-11-17T12:00:00Z",
+            },
+            {
+                "id": "usb-media-2",
+                "case_id": case.id,
+                "computer_id": "computer-1",
+                "image_id": "image-1",
+                "tool_output_id": "usb-output",
+                "tool_name": "RegistryArtifactParser",
+                "source_csv": tmp_path / "usb.csv",
+                "row_number": 2,
+                "source_path": "SYSTEM",
+                "artifact": "partition_diagnostic",
+                "device_type": "usb_partition_diagnostic",
+                "vendor": "Generic",
+                "product": "USB Bridge",
+                "friendly_name": "Generic USB Bridge",
+                "serial": "CADDY123",
+                "volume_name": "DRIVE_B",
+                "volume_serial_number": "2222BBBB",
+                "capacity_bytes": "128000000000",
+                "file_system": "NTFS",
+                "partition_table_sha256": "b" * 64,
+                "vbr_volume_serial_number": "2222-BBBB",
+                "key_last_write_utc": "2025-11-18T12:00:00Z",
+            },
+        ]
+    )
+
+    assert rebuild_usb_storage_devices(db, case_id=case.id) == 1
+    assert rebuild_usb_media_instances(db, case_id=case.id) == 2
+
+    storage = db.conn.execute("SELECT serial, volume_name FROM usb_storage_devices").fetchone()
+    assert dict(storage) == {"serial": "CADDY123", "volume_name": "DRIVE_A, DRIVE_B"}
+    media_rows = [
+        dict(row)
+        for row in db.conn.execute(
+            """
+            SELECT adapter_serial, media_identity_basis, media_label, reuse_warning
+            FROM usb_media_instances
+            ORDER BY media_label
+            """
+        ).fetchall()
+    ]
+    assert [row["media_label"] for row in media_rows] == ["DRIVE_A", "DRIVE_B"]
+    assert {row["media_identity_basis"] for row in media_rows} == {"partition_table_sha256"}
+    assert all(row["adapter_serial"] == "CADDY123" for row in media_rows)
+    assert all("Multiple distinct media identities" in row["reuse_warning"] for row in media_rows)
 
 
 def test_usb_report_bundle_rows_unpack_mounted_devices_and_volume_cache(tmp_path):

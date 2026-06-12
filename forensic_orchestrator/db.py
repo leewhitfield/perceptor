@@ -231,6 +231,7 @@ ANALYTICS_TABLES = (set(DEFAULT_PURGE_TABLES) - SQLITE_ONLY_PURGE_TABLES) | {
     "timeline_events",
     "usb_connection_events",
     "usb_file_correlations",
+    "usb_media_instances",
     "usb_storage_devices",
 }
 
@@ -1305,12 +1306,56 @@ class Database:
               last_arrival_utc TEXT, last_removal_utc TEXT, first_volume_serial_event_utc TEXT,
               last_partition_event_utc TEXT, last_migration_present_utc TEXT,
               evidence_row_count INTEGER NOT NULL DEFAULT 0,
-              source_artifacts TEXT, created_at TEXT NOT NULL
+              source_artifacts TEXT, source_device_types TEXT, created_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_usb_storage_devices_case
               ON usb_storage_devices(case_id, image_id);
             CREATE UNIQUE INDEX IF NOT EXISTS idx_usb_storage_devices_unique
               ON usb_storage_devices(case_id, image_id, serial);
+
+            CREATE TABLE IF NOT EXISTS usb_media_instances (
+              id TEXT PRIMARY KEY,
+              case_id TEXT NOT NULL,
+              computer_id TEXT NOT NULL,
+              image_id TEXT NOT NULL,
+              adapter_serial TEXT NOT NULL,
+              adapter_friendly_name TEXT,
+              adapter_vendor TEXT,
+              adapter_product TEXT,
+              media_key TEXT NOT NULL,
+              media_identity_basis TEXT NOT NULL,
+              media_confidence TEXT NOT NULL,
+              media_label TEXT,
+              volume_serial_number TEXT,
+              volume_name TEXT,
+              capacity_bytes TEXT,
+              file_system TEXT,
+              vbr_volume_serial_number TEXT,
+              vbr_volume_serial_number_full TEXT,
+              vbr_volume_name TEXT,
+              storage_id_sha256 TEXT,
+              storage_id_hex TEXT,
+              storage_id_ascii TEXT,
+              partition_table_sha256 TEXT,
+              partition_table_disk_guid TEXT,
+              partition_start_lba TEXT,
+              partition_sector_count TEXT,
+              first_observed_utc TEXT,
+              last_observed_utc TEXT,
+              evidence_row_count INTEGER NOT NULL DEFAULT 0,
+              source_artifacts TEXT,
+              source_device_types TEXT,
+              reuse_warning TEXT,
+              created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_usb_media_instances_case
+              ON usb_media_instances(case_id, image_id);
+            CREATE INDEX IF NOT EXISTS idx_usb_media_instances_adapter
+              ON usb_media_instances(case_id, adapter_serial);
+            CREATE INDEX IF NOT EXISTS idx_usb_media_instances_media
+              ON usb_media_instances(case_id, media_key);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_usb_media_instances_unique
+              ON usb_media_instances(case_id, image_id, adapter_serial, media_key);
 
             CREATE TABLE IF NOT EXISTS usb_connection_events (
               id TEXT PRIMARY KEY,
@@ -4705,7 +4750,24 @@ class Database:
                 "first_install_date_utc": "TEXT", "last_arrival_utc": "TEXT", "last_removal_utc": "TEXT",
                 "first_volume_serial_event_utc": "TEXT", "last_partition_event_utc": "TEXT",
                 "last_migration_present_utc": "TEXT", "evidence_row_count": "INTEGER NOT NULL DEFAULT 0",
-                "source_artifacts": "TEXT",
+                "source_artifacts": "TEXT", "source_device_types": "TEXT",
+            },
+            "usb_media_instances": {
+                "adapter_serial": "TEXT", "adapter_friendly_name": "TEXT",
+                "adapter_vendor": "TEXT", "adapter_product": "TEXT",
+                "media_key": "TEXT", "media_identity_basis": "TEXT",
+                "media_confidence": "TEXT", "media_label": "TEXT",
+                "volume_serial_number": "TEXT", "volume_name": "TEXT",
+                "capacity_bytes": "TEXT", "file_system": "TEXT",
+                "vbr_volume_serial_number": "TEXT", "vbr_volume_serial_number_full": "TEXT",
+                "vbr_volume_name": "TEXT", "storage_id_sha256": "TEXT",
+                "storage_id_hex": "TEXT", "storage_id_ascii": "TEXT",
+                "partition_table_sha256": "TEXT", "partition_table_disk_guid": "TEXT",
+                "partition_start_lba": "TEXT", "partition_sector_count": "TEXT",
+                "first_observed_utc": "TEXT", "last_observed_utc": "TEXT",
+                "evidence_row_count": "INTEGER NOT NULL DEFAULT 0",
+                "source_artifacts": "TEXT", "source_device_types": "TEXT",
+                "reuse_warning": "TEXT",
             },
             "usb_connection_events": {
                 "usb_device_id": "TEXT", "serial": "TEXT", "volume_serial_number": "TEXT",
@@ -7408,7 +7470,39 @@ class Database:
                 "partition_start_lba", "partition_sector_count", "user_profiles", "first_install_date_utc",
                 "last_arrival_utc", "last_removal_utc",
                 "first_volume_serial_event_utc", "last_partition_event_utc",
-                "last_migration_present_utc", "evidence_row_count", "source_artifacts", "created_at",
+                "last_migration_present_utc", "evidence_row_count", "source_artifacts",
+                "source_device_types", "created_at",
+            ],
+            rows,
+        )
+
+    def delete_usb_media_instances(self, *, case_id: str, image_id: str | None = None) -> None:
+        params: list[Any] = [case_id]
+        where = "case_id = ?"
+        if image_id is not None:
+            where += " AND image_id = ?"
+            params.append(image_id)
+        self._delete_sqlite_if_exists("usb_media_instances", where, params)
+        if "usb_media_instances" in ANALYTICS_TABLES and self.analytics is not None:
+            self.analytics.delete_case_image("usb_media_instances", case_id=case_id, image_id=image_id)
+        self._commit()
+
+    def insert_usb_media_instances(self, rows: list[dict[str, Any]]) -> None:
+        self._insert_rows(
+            "usb_media_instances",
+            [
+                "id", "case_id", "computer_id", "image_id", "adapter_serial",
+                "adapter_friendly_name", "adapter_vendor", "adapter_product",
+                "media_key", "media_identity_basis", "media_confidence",
+                "media_label", "volume_serial_number", "volume_name",
+                "capacity_bytes", "file_system", "vbr_volume_serial_number",
+                "vbr_volume_serial_number_full", "vbr_volume_name",
+                "storage_id_sha256", "storage_id_hex", "storage_id_ascii",
+                "partition_table_sha256", "partition_table_disk_guid",
+                "partition_start_lba", "partition_sector_count",
+                "first_observed_utc", "last_observed_utc", "evidence_row_count",
+                "source_artifacts", "source_device_types", "reuse_warning",
+                "created_at",
             ],
             rows,
         )
@@ -8862,6 +8956,9 @@ class Database:
             self._delete_sqlite_if_exists("usb_storage_devices", " AND ".join(usb_where), usb_params)
             if self.analytics is not None:
                 self.analytics.delete_case_image("usb_storage_devices", case_id=case_id, image_id=image_id)
+            self._delete_sqlite_if_exists("usb_media_instances", " AND ".join(usb_where), usb_params)
+            if self.analytics is not None:
+                self.analytics.delete_case_image("usb_media_instances", case_id=case_id, image_id=image_id)
         if not tool_names or any(
             name in {"LECmd", "JLECmd", "SBECmd", "RegistryArtifactParser", "EvtxECmd", "EvtxECmdTriage"}
             for name in tool_names

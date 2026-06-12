@@ -20,6 +20,15 @@ STORAGE_TYPES = {
     "usb_cdrom",
 }
 SUPPORTING_TYPES = {"usb_device"}
+MEDIA_IDENTITY_FIELDS = (
+    ("storage_id_sha256", "storage_id_sha256", "high"),
+    ("storage_id_ascii", "storage_id_ascii", "high"),
+    ("storage_id_hex", "storage_id_hex", "high"),
+    ("partition_table_disk_guid", "partition_table_disk_guid", "high"),
+    ("partition_table_sha256", "partition_table_sha256", "high"),
+    ("vbr_volume_serial_number_full", "vbr_volume_serial_number_full", "medium"),
+    ("vbr_volume_serial_number", "vbr_volume_serial_number", "medium"),
+)
 
 
 def rebuild_usb_storage_devices(db: Database, *, case_id: str, image_id: str | None = None) -> int:
@@ -58,6 +67,66 @@ def rebuild_usb_storage_devices(db: Database, *, case_id: str, image_id: str | N
     with db.bulk_transaction():
         db.delete_usb_storage_devices(case_id=case_id, image_id=image_id)
         db.insert_usb_storage_devices(summaries)
+    return len(summaries)
+
+
+def rebuild_usb_media_instances(db: Database, *, case_id: str, image_id: str | None = None) -> int:
+    params: list[Any] = [case_id]
+    image_filter = ""
+    if image_id is not None:
+        image_filter = "AND usb_devices.image_id = ?"
+        params.append(image_id)
+    rows = query_rows(
+        db,
+        "usb_devices",
+        f"""
+        SELECT *
+        FROM usb_devices
+        WHERE case_id = ? {image_filter}
+          AND device_type IN ({", ".join("?" for _ in STORAGE_TYPES)})
+          AND COALESCE(serial, instance_id, parent_id_prefix) IS NOT NULL
+        """,
+        params + sorted(STORAGE_TYPES),
+    )
+    items = [dict(row) for row in rows]
+    serial_aliases = _serial_aliases(items)
+    groups: dict[tuple[str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    identity_by_group: dict[tuple[str, str, str, str], tuple[str, str, str]] = {}
+    for item in items:
+        adapter_serial = _summary_serial(item, serial_aliases)
+        if not adapter_serial:
+            continue
+        identity = _media_identity_for_item(item)
+        if not identity:
+            continue
+        basis, identity_value, confidence = identity
+        media_key = f"{basis}:{identity_value}"
+        key = (item["case_id"], item["image_id"], adapter_serial, media_key)
+        groups[key].append(item)
+        identity_by_group.setdefault(key, identity)
+
+    summaries: list[dict[str, Any]] = []
+    media_keys_by_adapter: dict[tuple[str, str, str], set[str]] = defaultdict(set)
+    for (group_case_id, group_image_id, adapter_serial, media_key), items_for_media in sorted(groups.items()):
+        basis, _identity_value, confidence = identity_by_group[(group_case_id, group_image_id, adapter_serial, media_key)]
+        media_keys_by_adapter[(group_case_id, group_image_id, adapter_serial)].add(media_key)
+        summaries.append(_media_summary_for_group(items_for_media, adapter_serial, media_key, basis, confidence))
+
+    reused_adapters = {
+        key for key, media_keys in media_keys_by_adapter.items()
+        if len(media_keys) > 1
+    }
+    for summary in summaries:
+        adapter_key = (summary["case_id"], summary["image_id"], summary["adapter_serial"])
+        if adapter_key in reused_adapters:
+            summary["reuse_warning"] = (
+                "Multiple distinct media identities were observed behind this USB adapter serial; "
+                "separate the adapter/caddy identity from the inserted disk or volume identity."
+            )
+
+    with db.bulk_transaction():
+        db.delete_usb_media_instances(case_id=case_id, image_id=image_id)
+        db.insert_usb_media_instances(summaries)
     return len(summaries)
 
 
@@ -245,6 +314,94 @@ def _summary_for_group(items: list[dict[str, Any]], serial: str) -> dict[str, An
         "source_artifacts": _join_unique(items, "artifact"),
         "source_device_types": _join_unique(items, "device_type"),
     }
+
+
+def _media_summary_for_group(
+    items: list[dict[str, Any]],
+    adapter_serial: str,
+    media_key: str,
+    basis: str,
+    confidence: str,
+) -> dict[str, Any]:
+    first = items[0]
+    return {
+        "id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"usb-media:{first['case_id']}:{first['image_id']}:{adapter_serial}:{media_key}")),
+        "case_id": first["case_id"],
+        "computer_id": first["computer_id"],
+        "image_id": first["image_id"],
+        "adapter_serial": adapter_serial,
+        "adapter_friendly_name": _join_unique(items, "friendly_name"),
+        "adapter_vendor": _join_unique(items, "vendor"),
+        "adapter_product": _join_unique(items, "product"),
+        "media_key": media_key,
+        "media_identity_basis": basis,
+        "media_confidence": confidence,
+        "media_label": _media_label_for_group(items, media_key),
+        "volume_serial_number": _join_unique(items, "volume_serial_number"),
+        "volume_name": _join_volume_names(items),
+        "capacity_bytes": _join_unique(items, "capacity_bytes", exclude={"0"}),
+        "file_system": _join_unique(items, "file_system"),
+        "vbr_volume_serial_number": _join_unique(items, "vbr_volume_serial_number"),
+        "vbr_volume_serial_number_full": _join_unique(items, "vbr_volume_serial_number_full"),
+        "vbr_volume_name": _join_unique(items, "vbr_volume_name"),
+        "storage_id_sha256": _join_unique(items, "storage_id_sha256"),
+        "storage_id_hex": _join_unique(items, "storage_id_hex"),
+        "storage_id_ascii": _join_unique(items, "storage_id_ascii"),
+        "partition_table_sha256": _join_unique(items, "partition_table_sha256"),
+        "partition_table_disk_guid": _join_unique(items, "partition_table_disk_guid"),
+        "partition_start_lba": _join_unique(items, "partition_start_lba"),
+        "partition_sector_count": _join_unique(items, "partition_sector_count"),
+        "first_observed_utc": _media_observed_time(items),
+        "last_observed_utc": _media_observed_time(items, latest=True),
+        "evidence_row_count": len(items),
+        "source_artifacts": _join_unique(items, "artifact"),
+        "source_device_types": _join_unique(items, "device_type"),
+        "reuse_warning": None,
+    }
+
+
+def _media_identity_for_item(item: dict[str, Any]) -> tuple[str, str, str] | None:
+    for field, basis, confidence in MEDIA_IDENTITY_FIELDS:
+        value = _clean(item.get(field))
+        if _usable_media_identity_value(value):
+            return basis, value, confidence
+    volume_serial = _clean(item.get("volume_serial_number"))
+    if not _usable_media_identity_value(volume_serial):
+        return None
+    capacity = _clean(item.get("capacity_bytes"))
+    file_system = _clean(item.get("file_system"))
+    volume_name = _clean(item.get("volume_name") or item.get("vbr_volume_name"))
+    if capacity or file_system or volume_name:
+        parts = [volume_serial, capacity or "", file_system or "", volume_name or ""]
+        return "volume_serial_context", "|".join(parts), "low"
+    return "volume_serial_number", volume_serial, "low"
+
+
+def _usable_media_identity_value(value: str | None) -> bool:
+    if not value:
+        return False
+    normalized = value.strip().strip("{}").replace("-", "").upper()
+    return normalized not in {"", "0", "00", "0000", "00000000", "00000000000000000000000000000000"}
+
+
+def _media_label_for_group(items: list[dict[str, Any]], media_key: str) -> str:
+    for field in ("volume_name", "vbr_volume_name", "storage_id_ascii", "partition_table_disk_guid", "volume_serial_number"):
+        value = _join_unique(items, field)
+        if value:
+            return value
+    return media_key
+
+
+def _media_observed_time(items: list[dict[str, Any]], *, latest: bool = False) -> str | None:
+    values: list[str] = []
+    for item in items:
+        for field in ("key_last_write_utc", "last_present_date_utc"):
+            value = _normalize_utc_timestamp(item.get(field))
+            if value:
+                values.append(value)
+    if not values:
+        return None
+    return max(values) if latest else min(values)
 
 
 def _enrich_summaries_from_shortcut_volume_labels(
