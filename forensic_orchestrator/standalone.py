@@ -7,6 +7,7 @@ import hashlib
 import json
 import re
 import shutil
+import time
 import subprocess
 import sys
 import tarfile
@@ -22,6 +23,7 @@ from typing import Any, Callable
 from .db import Database
 from .paths import WorkspacePaths
 from .reports import case_summary_report, processing_readiness_report
+from .tenants import TenantManager
 from .tools.registry import ToolRegistry, resolve_dotnet_runtime
 
 
@@ -335,6 +337,32 @@ def schema_status_report(db: Database) -> dict[str, Any]:
         "sqlite_path": str(db.path),
         "summary": {"object_count": len(tables), "table_count": sum(1 for row in tables if row["type"] == "table")},
         "objects": tables,
+        }
+
+
+def health_report(root: Path) -> dict[str, Any]:
+    db = Database(root)
+    tenant_manager = TenantManager(root)
+    opensearch_reachable = True
+    try:
+        from .search.opensearch import OpenSearchRestClient, OpenSearchConfig
+        OpenSearchRestClient(OpenSearchConfig.from_env()).health()
+    except Exception:
+        opensearch_reachable = False
+
+    try:
+        tenant_count = len(tenant_manager.list_tenants())
+    except Exception:
+        tenant_count = 0
+
+    return {
+        "status": "healthy",
+        "version": metadata.version("perceptor"),
+        "platform": f"{platform.system()} {platform.release()} {platform.machine()}",
+        "workspace_accessible": root.exists() and os.access(str(root), os.W_OK),
+        "database_accessible": True,
+        "opensearch_reachable": opensearch_reachable,
+        "tenant_count": tenant_count,
     }
 
 

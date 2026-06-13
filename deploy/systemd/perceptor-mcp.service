@@ -1,0 +1,17 @@
+[Unit]
+Description=Perceptor MCP HTTP Server
+After=network.target opensearch.service
+Wants=opensearch.service
+
+[Service]
+Type=simple
+User=perceptor
+Group=perceptor
+EnvironmentFile=/etc/perceptor/perceptor.env
+WorkingDirectory=/opt/perceptor
+ExecStart=/root/.local/bin/uv run perceptor mcp serve-http --port 8080 --host 0.0.0.0 --allow-processing
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

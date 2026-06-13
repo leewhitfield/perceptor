@@ -1,0 +1,103 @@
+services:
+  perceptor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ghcr.io/leewhitfield/perceptor:latest
+    restart: unless-stopped
+    volumes:
+      - perceptor-workspace:/var/lib/perceptor
+      - perceptor-tools:/opt/perceptor-tools
+      - evidence:/evidence:ro
+    environment:
+      - PERCEPTOR_ROOT=/var/lib/perceptor
+      - PERCEPTOR_TOOLS_ROOT=/opt/perceptor-tools
+      - FORENSIC_OPENSEARCH_URL=http://opensearch:9200
+      - FORENSIC_OPENSEARCH_USERNAME=${FORENSIC_OPENSEARCH_USERNAME:-admin}
+      - FORENSIC_OPENSEARCH_PASSWORD=${FORENSIC_OPENSEARCH_PASSWORD}
+    networks:
+      - internal
+
+  perceptor-mcp:
+    image: ghcr.io/leewhitfield/perceptor:latest
+    restart: unless-stopped
+    command: ["mcp", "serve-http", "--port", "8080", "--host", "0.0.0.0", "--allow-processing"]
+    volumes:
+      - perceptor-workspace:/var/lib/perceptor
+      - perceptor-tools:/opt/perceptor-tools
+      - evidence:/evidence:ro
+    environment:
+      - PERCEPTOR_ROOT=/var/lib/perceptor
+      - PERCEPTOR_TOOLS_ROOT=/opt/perceptor-tools
+      - FORENSIC_OPENSEARCH_URL=http://opensearch:9200
+      - FORENSIC_OPENSEARCH_USERNAME=${FORENSIC_OPENSEARCH_USERNAME:-admin}
+      - FORENSIC_OPENSEARCH_PASSWORD=${FORENSIC_OPENSEARCH_PASSWORD}
+      - PERCEPTOR_ADMIN_TOKEN=${PERCEPTOR_ADMIN_TOKEN}
+      - PERCEPTOR_TENANT_MODE=${PERCEPTOR_TENANT_MODE:-single}
+    networks:
+      - internal
+
+  perceptor-upload:
+    image: ghcr.io/leewhitfield/perceptor:latest
+    restart: unless-stopped
+    command: ["upload", "serve", "--port", "8081", "--host", "0.0.0.0"]
+    volumes:
+      - perceptor-workspace:/var/lib/perceptor
+      - evidence:/evidence
+      - upload-staging:/tmp/perceptor-uploads
+    environment:
+      - PERCEPTOR_ROOT=/var/lib/perceptor
+      - PERCEPTOR_UPLOAD_STAGING=/tmp/perceptor-uploads
+      - PERCEPTOR_ADMIN_TOKEN=${PERCEPTOR_ADMIN_TOKEN}
+      - PERCEPTOR_TENANT_MODE=${PERCEPTOR_TENANT_MODE:-single}
+    networks:
+      - internal
+
+  opensearch:
+    image: opensearchproject/opensearch:2.18.0
+    restart: unless-stopped
+    environment:
+      - cluster.name=perceptor-cluster
+      - node.name=perceptor-node
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - "OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g"
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=${FORENSIC_OPENSEARCH_PASSWORD}
+      - DISABLE_SECURITY_PLUGIN=false
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+    networks:
+      - internal
+
+  nginx:
+    image: nginx:alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/nginx/perceptor.conf:/etc/nginx/conf.d/default.conf:ro
+      - certs:/etc/letsencrypt:ro
+    depends_on:
+      - perceptor-mcp
+      - perceptor-upload
+    networks:
+      - internal
+
+volumes:
+  perceptor-workspace:
+  perceptor-tools:
+  opensearch-data:
+  evidence:
+  certs:
+  upload-staging:
+
+networks:
+  internal:

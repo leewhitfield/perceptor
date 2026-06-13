@@ -45,6 +45,9 @@ from .mounting.vsc_search import run_vsc_windows_search_scan
 from .mounting.vsc_file_history import build_vsc_file_history_report
 from .mounting.vsc_profile import VSC_PROFILES, run_vsc_profile_scan
 from .mcp_server import PerceptorMcpServer, run_mcp_server
+from .mcp_http import run_mcp_http_server
+from .tenants import TenantManager
+from .upload_server import run_upload_server
 from .paths import WorkspacePaths
 from .processing_scheduler import ProcessingTask, run_processing_tasks
 from .report_paths import sanitize_report_paths, sanitize_report_text
@@ -379,6 +382,7 @@ from .standalone import (
     standalone_backlog_report,
     tool_status_report,
     version_report,
+    health_report,
 )
 from .timeline_dedupe import rebuild_timeline_windows_old_dedupe
 from .tools.profiles import profile_extraction_preview, run_profile
@@ -2586,6 +2590,33 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_serve.add_argument("--allow-external-ai", action="store_true", help="Reserve permission for future external-AI MCP tools")
     mcp_serve.add_argument("--auth-token", help="Require this token on MCP JSON-RPC requests; PERCEPTOR_MCP_TOKEN is also honored")
     mcp_serve.add_argument("--max-running-jobs", type=int, help="Maximum concurrent MCP-launched processing jobs; defaults to PERCEPTOR_MCP_MAX_RUNNING_JOBS or 4")
+    mcp_serve.add_argument("--max-running-jobs", type=int, help="Maximum concurrent MCP-launched processing jobs; defaults to PERCEPTOR_MCP_MAX_RUNNING_JOBS or 4")
+
+    mcp_serve_http = mcp_sub.add_parser("serve-http")
+    mcp_serve_http.add_argument("--port", type=int, default=8080, help="Port to run the HTTP server on")
+    mcp_serve_http.add_argument("--host", default="0.0.0.0", help="Host interface to bind to")
+    mcp_serve_http.add_argument("--allow-processing", action="store_true", help="Permit MCP import and processing tools")
+    mcp_serve_http.add_argument("--allow-sensitive", action="store_true", help="Reserve permission for future sensitive MCP tools")
+    mcp_serve_http.add_argument("--allow-external-ai", action="store_true", help="Reserve permission for future external-AI MCP tools")
+    mcp_serve_http.add_argument("--auth-token", help="Require this token on MCP requests; PERCEPTOR_MCP_TOKEN is also honored")
+    mcp_serve_http.add_argument("--max-running-jobs", type=int, help="Maximum concurrent MCP-launched processing jobs")
+
+    tenant = subparsers.add_parser("tenant")
+    tenant_sub = tenant.add_subparsers(dest="action", required=True)
+    tenant_create = tenant_sub.add_parser("create")
+    tenant_create.add_argument("--name", required=True)
+    tenant_list = tenant_sub.add_parser("list")
+    tenant_list.add_argument("--format", choices=["table", "json"], default="table")
+    tenant_delete = tenant_sub.add_parser("delete")
+    tenant_delete.add_argument("--tenant-id", required=True)
+    tenant_token = tenant_sub.add_parser("token")
+    tenant_token.add_argument("--tenant-id", required=True)
+
+    upload = subparsers.add_parser("upload")
+    upload_sub = upload.add_subparsers(dest="action", required=True)
+    upload_serve = upload_sub.add_parser("serve")
+    upload_serve.add_argument("--port", type=int, default=8081)
+    upload_serve.add_argument("--host", default="0.0.0.0")
 
     case = subparsers.add_parser("case")
     case_sub = case.add_subparsers(dest="action", required=True)
@@ -4623,6 +4654,9 @@ def build_parser() -> argparse.ArgumentParser:
     standalone_version = standalone_sub.add_parser("version")
     standalone_version.add_argument("--format", choices=["json", "table"], default="json")
     standalone_version.add_argument("--output")
+    standalone_health = standalone_sub.add_parser("health")
+    standalone_health.add_argument("--format", choices=["json", "table"], default="json")
+    standalone_health.add_argument("--output")
     standalone_dependencies = standalone_sub.add_parser("dependencies")
     standalone_dependencies.add_argument("--env-file", help="Read tool environment variables from this file before checking")
     standalone_dependencies.add_argument("--format", choices=["json", "table", "csv"], default="json")
@@ -4826,6 +4860,55 @@ def run(args: argparse.Namespace) -> int:
             auth_token=args.auth_token,
             max_running_jobs=args.max_running_jobs,
         )
+    if args.resource == "mcp" and args.action == "serve-http":
+        server = PerceptorMcpServer(
+            root=paths.root,
+            allow_processing=args.allow_processing,
+            allow_sensitive=args.allow_sensitive,
+            allow_external_ai=args.allow_external_ai,
+            plugin_paths=config.plugin_paths,
+            auth_token=args.auth_token,
+            max_running_jobs=args.max_running_jobs,
+        )
+        tenant_mode = os.environ.get("PERCEPTOR_TENANT_MODE", "single") == "multi"
+        return run_mcp_http_server(server, host=args.host, port=args.port, tenant_mode=tenant_mode, root=paths.root)
+
+    if args.resource == "tenant":
+        tenant_manager = TenantManager(paths.root)
+        if args.action == "create":
+            tenant_obj = tenant_manager.create_tenant(args.name)
+            print_json({"status": "created", "tenant": tenant_obj.id, "name": tenant_obj.name, "token": tenant_obj.mcp_token})
+            return 0
+        if args.action == "list":
+            tenants = tenant_manager.list_tenants()
+            if args.format == "json":
+                print_json([{"id": t.id, "name": t.name, "enabled": t.enabled} for t in tenants])
+            else:
+                print(generic_table("Tenants", [{"id": t.id, "name": t.name, "enabled": t.enabled} for t in tenants], ["id", "name", "enabled"]))
+            return 0
+        if args.action == "delete":
+            tenant_manager.delete_tenant(args.tenant_id)
+            print_json({"status": "deleted", "tenant": args.tenant_id})
+            return 0
+        if args.action == "token":
+            tenant_obj = tenant_manager.get_tenant(args.tenant_id)
+            if not tenant_obj:
+                print(f"error: tenant {args.tenant_id} not found", file=sys.stderr)
+                return 1
+            print(tenant_obj.mcp_token)
+            return 0
+
+    if args.resource == "upload" and args.action == "serve":
+        tenant_mode = os.environ.get("PERCEPTOR_TENANT_MODE", "single") == "multi"
+        return run_upload_server(
+            host=args.host,
+            port=args.port,
+            staging_dir=Path(os.environ.get("PERCEPTOR_UPLOAD_STAGING", "/tmp/perceptor-uploads")),
+            evidence_dir=Path(os.environ.get("PERCEPTOR_EVIDENCE_DIR", "/evidence")),
+            tenant_mode=tenant_mode,
+            root=paths.root
+        )
+
     if args.resource == "report-bundle" and args.action == "coverage":
         report = parser_coverage_report(Path(args.path) if args.path else None)
         write_report_output(
@@ -5060,6 +5143,14 @@ def run(args: argparse.Namespace) -> int:
             report = version_report(paths.root, config.plugin_paths)
             if args.format == "table":
                 write_report_output(report, [report], "table", args.output, title="Standalone version", columns=["application", "version", "python", "platform", "root"])
+            else:
+                write_text_output(json.dumps(report, indent=2, default=str), args.output)
+            return 0
+
+        if args.resource == "standalone" and args.action == "health":
+            report = health_report(paths.root)
+            if args.format == "table":
+                write_report_output(report, [report], "table", args.output, title="Standalone health", columns=["status", "version", "platform", "workspace_accessible", "database_accessible", "opensearch_reachable", "tenant_count"])
             else:
                 write_text_output(json.dumps(report, indent=2, default=str), args.output)
             return 0
