@@ -1,0 +1,13 @@
+.git
+.github
+tests
+docs
+*.pyc
+__pycache__
+.mypy_cache
+.ruff_cache
+*.egg-info
+deploy
+scripts
+uv.lock
+CHECKPOINT.md

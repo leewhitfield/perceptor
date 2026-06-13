@@ -1,0 +1,16 @@
+[Unit]
+Description=Perceptor Evidence Upload Server
+After=network.target
+
+[Service]
+Type=simple
+User=perceptor
+Group=perceptor
+EnvironmentFile=/etc/perceptor/perceptor.env
+WorkingDirectory=/opt/perceptor
+ExecStart=/root/.local/bin/uv run perceptor upload serve --port 8081 --host 0.0.0.0
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

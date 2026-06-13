@@ -1,0 +1,14 @@
+[Unit]
+Description=fast remote file copy program daemon
+ConditionPathExists=/etc/rsyncd.conf
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/rsync --daemon --no-detach --config=/opt/perceptor/deploy/rsync/rsyncd.conf
+RestartSec=1
+Restart=on-failure
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target
