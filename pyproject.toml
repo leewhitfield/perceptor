@@ -32,13 +32,15 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-  "pytest>=8.0",
+    "pytest>=8.0",
+    "pytest-cov>=6.0",
+    "ruff>=0.11",
+    "mypy>=1.15",
 ]
 
 [project.scripts]
 perceptor = "forensic_orchestrator.cli:main"
 forensic-orchestrator = "forensic_orchestrator.cli:main"
-relic = "forensic_orchestrator.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["forensic_orchestrator*"]

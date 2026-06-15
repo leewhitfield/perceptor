@@ -22,11 +22,10 @@ manifests, generated reports, and MCP job state.
 
 ## Executable Names
 
-Perceptor installs the preferred command name plus legacy compatibility aliases:
+Perceptor installs the preferred command name and the existing long-form CLI alias:
 
 ```bash
 perceptor
-relic
 forensic-orchestrator
 ```
 

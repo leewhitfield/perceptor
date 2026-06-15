@@ -11,6 +11,7 @@ markdown_extensions:
       permalink: true
 nav:
   - Home: index.md
+  - Architecture: architecture.md
   - Getting Started:
       - Overview: getting-started/overview.md
       - Ubuntu Install: getting-started/ubuntu-install.md
@@ -44,9 +45,11 @@ nav:
       - MCP Tool Reference: mcp/tools.md
   - Future:
       - Future Features: future-features.md
+      - AWS Deployment Design: design/aws-deployment.md
   - Operations:
       - Command Reference: reference/commands.md
       - Security Model: operations/security.md
+      - Evidence Ingress: operations/evidence-upload.md
       - Field Readiness: operations/field-readiness.md
       - Troubleshooting: operations/troubleshooting.md
       - Release Checklist: release-checklist.md

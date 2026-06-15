@@ -101,7 +101,7 @@ def test_standalone_reports_cover_profiles_schema_jobs_and_backups(tmp_path):
     assert profile_catalog_report(registry)["summary"]["profile_count"] > 0
     assert version_report(paths.root, [])["application"] == "Perceptor"
     assert "perceptor" in version_report(paths.root, [])["cli_aliases"]
-    assert "relic" in version_report(paths.root, [])["cli_aliases"]
+    assert "perceptor" in version_report(paths.root, [])["cli_aliases"]
     assert version_report(paths.root, [])["platform_support"]["supported_platform"] == "Ubuntu 24.04 LTS x86_64"
     assert artifact_capability_report(registry, profile="windows-full")["summary"]["artifact_count"] > 0
     assert schema_status_report(db)["schema_version"]["version"] >= 4

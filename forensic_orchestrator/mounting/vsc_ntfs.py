@@ -1137,7 +1137,6 @@ def _resolve_eztool(tool_dir: str, dll_name: str) -> Path | None:
         if os.environ.get("FORENSIC_ORCHESTRATOR_TOOLS_ROOT")
         else None,
         Path("/opt/perceptor-tools/eztools"),
-        Path("/opt/relic-tools/eztools"),
         Path("/opt/eztools"),
         Path.home() / "tools" / "eztools",
     ]

@@ -1,6 +1,6 @@
 # MCP Tool Reference
 
-Use `relic_mcp_tool_reference` for the live tool list exposed by the running
+Use `perceptor_mcp_tool_reference` for the live tool list exposed by the running
 server.
 
 ## Result Limits
@@ -16,148 +16,148 @@ evidence of absence.
 
 ## Routing and Discovery
 
-- `relic_route_question`
-- `relic_mcp_workflow_guide`
-- `relic_mcp_tool_reference`
-- `relic_workspace_summary`
-- `relic_workspace_map`
-- `relic_workspace_health`
-- `relic_case_evidence_map`
-- `relic_case_readiness`
-- `relic_list_cases`
-- `relic_list_computers`
-- `relic_list_images`
-- `relic_list_jobs`
-- `relic_get_job`
-- `relic_processing_progress`
-- `relic_resume_plan`
-- `relic_profile_preview`
-- `relic_doctor`
-- `relic_discover_reports`
-- `relic_discover_report_exports`
-- `relic_read_existing_report`
+- `perceptor_route_question`
+- `perceptor_mcp_workflow_guide`
+- `perceptor_mcp_tool_reference`
+- `perceptor_workspace_summary`
+- `perceptor_workspace_map`
+- `perceptor_workspace_health`
+- `perceptor_case_evidence_map`
+- `perceptor_case_readiness`
+- `perceptor_list_cases`
+- `perceptor_list_computers`
+- `perceptor_list_images`
+- `perceptor_list_jobs`
+- `perceptor_get_job`
+- `perceptor_processing_progress`
+- `perceptor_resume_plan`
+- `perceptor_profile_preview`
+- `perceptor_doctor`
+- `perceptor_discover_reports`
+- `perceptor_discover_report_exports`
+- `perceptor_read_existing_report`
 
 ## Case Review
 
-- `relic_case_dashboard`
-- `relic_case_review`
-- `relic_case_activity_digest`
-- `relic_case_next_actions`
-- `relic_case_runbook`
-- `relic_timeline`
-- `relic_timeline_window`
-- `relic_activity_windows`
+- `perceptor_case_dashboard`
+- `perceptor_case_review`
+- `perceptor_case_activity_digest`
+- `perceptor_case_next_actions`
+- `perceptor_case_runbook`
+- `perceptor_timeline`
+- `perceptor_timeline_window`
+- `perceptor_activity_windows`
 
 ## Artifact Queries
 
-- `relic_query_evidence_contents`
-- `relic_query_filesystem_listings`
-- `relic_search_artifacts`
-- `relic_search_content`
-- `relic_get_indexed_content`
-- `relic_lead_search`
-- `relic_artifact_search_sources`
-- `relic_file_dossier`
-- `relic_usb_dossier`
-- `relic_user_activity`
-- `relic_query_suspicious_executions`
-- `relic_query_external_storage`
-- `relic_query_usb_files`
-- `relic_query_usb_contents`
-- `relic_query_file_movement_identity`
-- `relic_query_opened_from_removable_media`
-- `relic_query_opened_from_cloud_storage`
-- `relic_query_cloud_artifacts`
-- `relic_query_memory_artifacts`
-- `relic_query_browser_activity`
-- `relic_query_registry_activity`
-- `relic_query_shortcuts`
-- `relic_query_communications`
-- `relic_query_system_users`
+- `perceptor_query_evidence_contents`
+- `perceptor_query_filesystem_listings`
+- `perceptor_search_artifacts`
+- `perceptor_search_content`
+- `perceptor_get_indexed_content`
+- `perceptor_lead_search`
+- `perceptor_artifact_search_sources`
+- `perceptor_file_dossier`
+- `perceptor_usb_dossier`
+- `perceptor_user_activity`
+- `perceptor_query_suspicious_executions`
+- `perceptor_query_external_storage`
+- `perceptor_query_usb_files`
+- `perceptor_query_usb_contents`
+- `perceptor_query_file_movement_identity`
+- `perceptor_query_opened_from_removable_media`
+- `perceptor_query_opened_from_cloud_storage`
+- `perceptor_query_cloud_artifacts`
+- `perceptor_query_memory_artifacts`
+- `perceptor_query_browser_activity`
+- `perceptor_query_registry_activity`
+- `perceptor_query_shortcuts`
+- `perceptor_query_communications`
+- `perceptor_query_system_users`
 
 ## Packets and Jobs
 
-- `relic_write_review_packet`
-- `relic_list_review_packets`
-- `relic_read_review_packet`
-- `relic_write_search_packet`
-- `relic_list_search_packets`
-- `relic_read_search_packet`
-- `relic_rerun_search_packet`
-- `relic_list_mcp_jobs`
-- `relic_get_mcp_job`
-- `relic_get_mcp_job_output`
-- `relic_get_mcp_job_progress`
-- `relic_list_progress_manifests`
-- `relic_cancel_mcp_job`
+- `perceptor_write_review_packet`
+- `perceptor_list_review_packets`
+- `perceptor_read_review_packet`
+- `perceptor_write_search_packet`
+- `perceptor_list_search_packets`
+- `perceptor_read_search_packet`
+- `perceptor_rerun_search_packet`
+- `perceptor_list_mcp_jobs`
+- `perceptor_get_mcp_job`
+- `perceptor_get_mcp_job_output`
+- `perceptor_get_mcp_job_progress`
+- `perceptor_list_progress_manifests`
+- `perceptor_cancel_mcp_job`
 
 ## Gated Processing
 
 These require `--allow-processing`:
 
-- `relic_import_triage_zip`
-- `relic_import_report_bundle`
-- `relic_process_image`
-- `relic_run_profile`
-- `relic_recover_deleted_files`
+- `perceptor_import_triage_zip`
+- `perceptor_import_report_bundle`
+- `perceptor_process_image`
+- `perceptor_run_profile`
+- `perceptor_recover_deleted_files`
 
-`relic_recover_deleted_files` starts a tracked MCP job. The job record stores the
+`perceptor_recover_deleted_files` starts a tracked MCP job. The job record stores the
 Perceptor CLI command, and the recovery output manifest stores the exact `icat`
 command used for each recovered or failed candidate.
 
 ## Reports
 
-- `relic_list_report_types`
-- `relic_generate_report`
-- `relic_write_report_bundle`
-- `relic_report_bundle_coverage`
-- `relic_ingest_triage_zip_preflight`
+- `perceptor_list_report_types`
+- `perceptor_generate_report`
+- `perceptor_write_report_bundle`
+- `perceptor_report_bundle_coverage`
+- `perceptor_ingest_triage_zip_preflight`
 
-Use `relic_generate_report` with `report_name: "bits-activity"` for BITS,
+Use `perceptor_generate_report` with `report_name: "bits-activity"` for BITS,
 qmgr, OneDrive updater, component updater, or transfer-job questions. The report
 uses timestamped BITS Client EVTX rows and shows qmgr database/carved
 correlations when exact job ID or URL matches are available.
 
-Use `relic_generate_report` with `report_name: "examiner-edge-artifacts"` for
+Use `perceptor_generate_report` with `report_name: "examiner-edge-artifacts"` for
 Sticky Notes, Windows notifications, NetworkList, outbound RDP history,
 MountPoints2, Scheduled Task XML, CryptnetUrlCache, hosts, WSL, Windows Update,
 Credential/Vault metadata, Bluetooth paired devices, installed applications, or
 SwiftKey/InputPersonalization questions.
 
-Use `relic_generate_report` with `report_name: "mapped-network-paths"` for
+Use `perceptor_generate_report` with `report_name: "mapped-network-paths"` for
 mapped network drives, UNC shares, or MountPoints2 keys that look like
 `##host#share#path`. Perceptor decodes those keys into `\\host\share\path` and
 returns the user profile plus first/last observed registry timestamps.
 
-Use `relic_generate_report` with `report_name: "non-standard-ads"` for hidden
+Use `perceptor_generate_report` with `report_name: "non-standard-ads"` for hidden
 or alternate data stream questions. This report filters common
 `Zone.Identifier` streams and classifies Cloud Files/OneDrive metadata, WOF
 compression, SmartScreen, and NTFS metadata streams separately from
 high-priority unclassified ADS rows.
 
-Use `relic_generate_report` with `report_name: "ntfs-security-descriptors"` for
+Use `perceptor_generate_report` with `report_name: "ntfs-security-descriptors"` for
 `$Secure`, `$SDS`, ACL, or NTFS permission-change questions. This report
 inventories security descriptor streams from MFT ADS rows and clearly marks that
 current output is presence/metadata-only, not decoded ACL content.
 
-Use `relic_generate_report` with `report_name: "remote-access-tool-logs"` for
+Use `perceptor_generate_report` with `report_name: "remote-access-tool-logs"` for
 AnyDesk, TeamViewer, LogMeIn, ConnectWise Control, Splashtop, RustDesk, VNC, and
 similar remote-support application log questions. Parsed log lines are
 categorized into connection, authentication, transfer, and identity/routing
 leads when possible.
 
-Use `relic_generate_report` with `report_name: "structured-memory"` for
+Use `perceptor_generate_report` with `report_name: "structured-memory"` for
 Volatility and MemProcFS structured memory questions. The report returns parsed
 rows when available and also lists tool run attempts, failures, and no-row
 results so analysts can distinguish "not run" from "run but unsupported for this
 dump."
 
-Use `relic_generate_report` with `report_name: "event-interpretation"` for
+Use `perceptor_generate_report` with `report_name: "event-interpretation"` for
 high-value EVTX questions involving account manipulation, log clearing,
 PowerShell, scheduled tasks, WMI persistence indicators, print-service history,
 service installs, or 4688 process creation.
 
-Use `relic_generate_report` with `report_name: "clipboard"` for clipboard
+Use `perceptor_generate_report` with `report_name: "clipboard"` for clipboard
 history, copied/pasted content, or cloud clipboard sync questions. The report
 uses the dedicated Windows clipboard store where available; Windows Activities
 is secondary context.

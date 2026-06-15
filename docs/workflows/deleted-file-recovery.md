@@ -60,8 +60,8 @@ records the final `icat` command used to recover the file.
 
 ## MCP Behavior
 
-MCP clients should first use `relic_query_evidence_contents` to identify the
-target. `relic_recover_deleted_files` requires the MCP server to be started with
+MCP clients should first use `perceptor_query_evidence_contents` to identify the
+target. `perceptor_recover_deleted_files` requires the MCP server to be started with
 `--allow-processing`.
 
 MCP also records the launched Perceptor command under `ROOT/mcp-jobs/<job-id>/` and

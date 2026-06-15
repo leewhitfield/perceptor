@@ -181,7 +181,7 @@ Use both search layers:
 - `report artifact-search`: searches parsed artifact fields such as file paths,
   shortcut targets, browser URLs, registry values, usernames, device IDs, and
   event-log text.
-- `search query` / MCP `relic_search_content`: searches OpenSearch indexed
+- `search query` / MCP `perceptor_search_content`: searches OpenSearch indexed
   content such as email bodies, attachment text, document text, messaging text,
   selected temporary Office content, and imported Takeout content.
 

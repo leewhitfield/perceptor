@@ -497,7 +497,7 @@ def _file_size(path: Path) -> str:
 
 
 def _command_timeout() -> int:
-    raw = os.environ.get("PERCEPTOR_COMMAND_TIMEOUT_SECONDS") or os.environ.get("RELIC_COMMAND_TIMEOUT_SECONDS", "3600")
+    raw = os.environ.get("PERCEPTOR_COMMAND_TIMEOUT_SECONDS", "3600")
     try:
         return max(1, int(raw))
     except ValueError:

@@ -8,7 +8,7 @@ tool that returns the correct source order for a question.
 Use:
 
 ```text
-relic_route_question
+perceptor_route_question
 ```
 
 Inputs:
@@ -37,8 +37,8 @@ report/export, or request a dossier/full context for material findings.
 For questions like "pull a list of contents for the USB drive", use:
 
 ```text
-relic_query_evidence_contents
-relic_query_filesystem_listings
+perceptor_query_evidence_contents
+perceptor_query_filesystem_listings
 ```
 
 These read `filesystem_entries` and avoid slow FLS/mount behavior.
@@ -48,8 +48,8 @@ These read `filesystem_entries` and avoid slow FLS/mount behavior.
 For report-backed questions, use:
 
 ```text
-relic_read_existing_report
-relic_discover_report_exports
+perceptor_read_existing_report
+perceptor_discover_report_exports
 ```
 
 Generate or regenerate reports only when existing reports are absent, stale, or
@@ -61,12 +61,12 @@ For questions about file content, search the OpenSearch-backed content index
 before attempting direct file extraction:
 
 ```text
-relic_search_content
-relic_get_indexed_content
+perceptor_search_content
+perceptor_get_indexed_content
 ```
 
-`relic_search_content` returns snippets and reports when full indexed content is
-available. Snippets are not the whole body. Use `relic_get_indexed_content` with
+`perceptor_search_content` returns snippets and reports when full indexed content is
+available. Snippets are not the whole body. Use `perceptor_get_indexed_content` with
 the returned document ID when the user asks to read the full indexed content.
 
 ## BITS and qmgr Questions
@@ -75,7 +75,7 @@ For Background Intelligent Transfer Service, qmgr, OneDrive updater, component
 updater, or transfer-job questions, use:
 
 ```text
-relic_generate_report
+perceptor_generate_report
 ```
 
 with `report_name: "bits-activity"`.
@@ -93,8 +93,8 @@ history, service installs, or process creation with command-line context, use
 existing/generated reports first:
 
 ```text
-relic_read_existing_report
-relic_generate_report
+perceptor_read_existing_report
+perceptor_generate_report
 ```
 
 with `report_name: "event-interpretation"`.
@@ -109,13 +109,13 @@ For clipboard, copied, pasted, cloud clipboard, or sync-across-devices
 questions, use existing/generated reports first:
 
 ```text
-relic_read_existing_report
-relic_generate_report
+perceptor_read_existing_report
+perceptor_generate_report
 ```
 
 with `report_name: "clipboard"`.
 
-Use `relic_timeline_window` for time-window context after the clipboard report.
+Use `perceptor_timeline_window` for time-window context after the clipboard report.
 Treat Windows Activities clipboard payloads as secondary clipboard-adjacent
 evidence, not the primary dedicated clipboard store.
 
@@ -128,7 +128,7 @@ Processing tools require both:
   recovery.
 
 Deleted-file recovery should first identify the target in parsed listings, then
-run `relic_recover_deleted_files` only when requested.
+run `perceptor_recover_deleted_files` only when requested.
 
 The MCP job log records the Perceptor recovery command. The recovery manifest records
 the exact `icat` command for each file candidate.

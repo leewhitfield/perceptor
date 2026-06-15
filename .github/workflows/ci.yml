@@ -40,10 +40,10 @@ jobs:
         run: uv run pytest -q
 
       - name: Standalone smoke
-        run: uv run relic standalone smoke-regression --format json
+        run: uv run perceptor standalone smoke-regression --format json
 
       - name: Documentation command sanity
         run: |
-          uv run relic standalone version --format json
-          uv run relic standalone backlog --format json
-          uv run relic report-bundle coverage --format json
+          uv run perceptor standalone version --format json
+          uv run perceptor standalone backlog --format json
+          uv run perceptor report-bundle coverage --format json

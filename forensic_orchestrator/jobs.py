@@ -17,7 +17,6 @@ def command_timeout_seconds() -> int:
     try:
         value = int(
             os.environ.get("PERCEPTOR_COMMAND_TIMEOUT_SECONDS")
-            or os.environ.get("RELIC_COMMAND_TIMEOUT_SECONDS", "")
             or DEFAULT_COMMAND_TIMEOUT_SECONDS
         )
     except ValueError:

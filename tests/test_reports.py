@@ -550,7 +550,7 @@ def test_timeline_report_adds_memory_source_labels(tmp_path):
     assert report["events"][0]["artifact_reference"]["source_table"] == "memory_string_hits"
     assert report["events"][0]["artifact_reference"]["source_row_id"] == "mem-1"
     assert report["events"][0]["report_hints"][0]["report"] == "memory_artifacts"
-    assert report["events"][0]["report_hints"][0]["tool"] == "relic_query_memory_artifacts"
+    assert report["events"][0]["report_hints"][0]["tool"] == "perceptor_query_memory_artifacts"
 
 
 def test_timeline_report_adds_report_hints_for_browser_usb_and_files(tmp_path):
@@ -8322,13 +8322,13 @@ def test_wifi_activity_report_reconciles_evtx_srum_and_registry(tmp_path):
     assert report["activity_scope"]["default_for_network_activity_questions"] == "all_matching_sessions"
     assert "first connection_session" in report["activity_scope"]["warning"]
     assert report["session_activity_plan"]["mode"] == "all_matching_sessions"
-    assert report["session_activity_plan"]["aggregate_tool"]["tool"] == "relic_activity_windows"
+    assert report["session_activity_plan"]["aggregate_tool"]["tool"] == "perceptor_activity_windows"
     assert report["session_activity_plan"]["calls"][0]["arguments"]["case_id"] == case.id
     by_name = {row["network_name"]: row for row in report["reconciled_networks"]}
     assert by_name["@Hyatt_WiFi"]["assessment"] == "connected"
     assert by_name["@Hyatt_WiFi"]["successful_connection_events"] == 2
     assert by_name["@Hyatt_WiFi"]["connection_session_count"] == 1
-    assert by_name["@Hyatt_WiFi"]["timeline_window_tools"][0]["tool"] == "relic_timeline_window"
+    assert by_name["@Hyatt_WiFi"]["timeline_window_tools"][0]["tool"] == "perceptor_timeline_window"
     assert by_name["Lemonade"]["assessment"] == "attempted_failed"
     assert by_name["Lemonade"]["failed_connection_events"] == 1
     assert by_name["Lemonade"]["srum_observations"] == 1
@@ -8340,7 +8340,7 @@ def test_wifi_activity_report_reconciles_evtx_srum_and_registry(tmp_path):
     session = report["connection_sessions"][0]
     assert session["network_name"] == "@Hyatt_WiFi"
     assert session["start"] == "2025-11-17T13:13:36.404164Z"
-    assert session["timeline_window_tool"]["tool"] == "relic_timeline_window"
+    assert session["timeline_window_tool"]["tool"] == "perceptor_timeline_window"
     assert session["timeline_window_tool"]["arguments"]["start"] == session["start"]
     assert "start_row" not in session
 

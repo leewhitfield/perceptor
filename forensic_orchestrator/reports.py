@@ -3827,14 +3827,14 @@ def _public_wifi_connection_sessions(
             "supporting_event_count": session.get("supporting_event_count"),
             "source_table": "evtx_events",
             "timeline_window_tool": {
-                "tool": "relic_timeline_window",
+                "tool": "perceptor_timeline_window",
                 "arguments": {
                     "start": start,
                     "end": end,
                     "limit": 250,
                 },
             },
-            "guidance": "Use relic_timeline_window with this start/end to answer what happened during the connection.",
+            "guidance": "Use perceptor_timeline_window with this start/end to answer what happened during the connection.",
         }
         sessions.append(row)
         if len(sessions) >= limit:
@@ -3857,7 +3857,7 @@ def _wifi_session_activity_plan(sessions: list[dict[str, Any]], *, case_id: str)
                 "network_name": session.get("network_name"),
                 "start": start,
                 "end": end,
-                "tool": "relic_timeline_window",
+                "tool": "perceptor_timeline_window",
                 "arguments": {
                     "case_id": case_id,
                     "start": start,
@@ -3870,7 +3870,7 @@ def _wifi_session_activity_plan(sessions: list[dict[str, Any]], *, case_id: str)
         "mode": "all_matching_sessions",
         "session_count": len(calls),
         "aggregate_tool": {
-            "tool": "relic_activity_windows",
+            "tool": "perceptor_activity_windows",
             "arguments": {
                 "case_id": case_id,
                 "windows": windows,
@@ -13900,24 +13900,24 @@ def _timeline_report_hints(event: dict[str, Any], details: dict[str, Any]) -> li
         hints.append({"report": report, "tool": tool or report, "reason": reason})
 
     if source_table in {"memory_string_hits"} or event.get("source_origin") == "memory":
-        add("memory_artifacts", "Review memory/pagefile/hiberfil/crash-dump context and caveats.", tool="relic_query_memory_artifacts")
+        add("memory_artifacts", "Review memory/pagefile/hiberfil/crash-dump context and caveats.", tool="perceptor_query_memory_artifacts")
     if source_table in {"browser_history", "browser_downloads", "browser_cache_entries", "webcache_entries", "webcache_file_accesses"} or "browser" in text or "http" in text:
-        add("browser_activity", "Review browser/profile context, downloads, cache, and browser attribution warnings.", tool="relic_query_browser_activity")
+        add("browser_activity", "Review browser/profile context, downloads, cache, and browser attribution warnings.", tool="perceptor_query_browser_activity")
     if source_table in {"firefox_history"}:
-        add("browser_activity", "Review browser/profile context and browser attribution.", tool="relic_query_browser_activity")
+        add("browser_activity", "Review browser/profile context and browser attribution.", tool="perceptor_query_browser_activity")
     if source_table in {"shortcut_items", "windows_search_files", "windows_search_gather_logs", "filesystem_entries", "usn_journal_entries", "mft_entries"} or any(token in text for token in ("lnk", "jumplist", "shellbag", "file", "docx", "xlsx", "pdf")):
-        add("file_dossier", "Review filesystem metadata, internal metadata, file references, and indexed content for this path/name.", tool="relic_file_dossier")
+        add("file_dossier", "Review filesystem metadata, internal metadata, file references, and indexed content for this path/name.", tool="perceptor_file_dossier")
     has_volume_metadata = any(details.get(key) for key in ("volume_serial_number", "drive_letter", "volume_name", "volume_guid"))
     if source_table.startswith("usb_") or has_volume_metadata or any(token in text for token in ("usb", "usbstor", "uasp", "removable", "volume_serial", "drive_letter")):
-        add("usb_timeline", "Review USB device connection, volume, and file-correlation context.", tool="relic_query_external_storage")
+        add("usb_timeline", "Review USB device connection, volume, and file-correlation context.", tool="perceptor_query_external_storage")
     if source_table in {"mailbox_messages", "mailbox_attachments", "messaging_messages"} or any(token in text for token in ("mail", "email", "message", "outlook", "mapi")):
-        add("communications", "Review parsed messages, attachments, conversations, and indexed communication fragments.", tool="relic_query_communications")
+        add("communications", "Review parsed messages, attachments, conversations, and indexed communication fragments.", tool="perceptor_query_communications")
     if source_table in {"prefetch_items", "registry_artifacts", "sam_accounts"} or any(token in text for token in ("prefetch", "userassist", "runmru", ".exe", "execution")):
-        add("execution", "Review execution and persistence context for the program or registry activity.", tool="relic_user_activity")
+        add("execution", "Review execution and persistence context for the program or registry activity.", tool="perceptor_user_activity")
     if source_table in {"evtx_events", "srum_records", "etl_events"} and any(token in text for token in ("wifi", "wi-fi", "wlan", "network", "ssid", "srum_network")):
-        add("wifi_activity", "Resolve network sessions and then query the master timeline for the full activity window.", tool="relic_query_wifi_activity")
+        add("wifi_activity", "Resolve network sessions and then query the master timeline for the full activity window.", tool="perceptor_query_wifi_activity")
     if not hints:
-        add("timeline", "Use source_table/source_row_id for direct artifact drilldown, then query the relevant artifact family report.", tool="relic_timeline_window")
+        add("timeline", "Use source_table/source_row_id for direct artifact drilldown, then query the relevant artifact family report.", tool="perceptor_timeline_window")
     return hints
 
 
@@ -23138,7 +23138,6 @@ def workspace_health_report(db: Database, case_id: str | None = None, *, min_fre
     workspace_root = db_path.parent
     temp_root = Path(
         os.environ.get("PERCEPTOR_TMPDIR")
-        or os.environ.get("RELIC_TMPDIR")
         or os.environ.get("DUCKDB_TMPDIR")
         or os.environ.get("TMPDIR")
         or "/tmp"
@@ -23192,7 +23191,6 @@ def workspace_health_report(db: Database, case_id: str | None = None, *, min_fre
             "tmpdir": os.environ.get("TMPDIR") or "",
             "duckdb_tmpdir": os.environ.get("DUCKDB_TMPDIR") or "",
             "perceptor_tmpdir": os.environ.get("PERCEPTOR_TMPDIR") or "",
-            "relic_tmpdir": os.environ.get("RELIC_TMPDIR") or "",
         },
         "paths": paths,
         "mounts": mount_rows,
@@ -26262,7 +26260,7 @@ def _tool_root_candidates(*relative_paths: str) -> list[str]:
         roots.append(Path(os.environ["PERCEPTOR_TOOLS_ROOT"]).expanduser())
     if os.environ.get("FORENSIC_ORCHESTRATOR_TOOLS_ROOT"):
         roots.append(Path(os.environ["FORENSIC_ORCHESTRATOR_TOOLS_ROOT"]).expanduser())
-    roots.extend([Path("/opt/perceptor-tools"), Path("/opt/relic-tools"), Path.home() / "tools"])
+    roots.extend([Path("/opt/perceptor-tools"), Path.home() / "tools"])
     output: list[str] = []
     seen: set[str] = set()
     for root in roots:
@@ -36653,26 +36651,26 @@ def _artifact_drilldown_hint(row: dict[str, Any]) -> dict[str, Any]:
         artifact = str(row.get("artifact") or "")
         if not artifact and table.startswith("registry_"):
             artifact = table.replace("registry_", "").replace("_", "-")
-        return {"tool": "relic_query_registry_activity", "report": "registry-activity", "arguments": _non_empty({"artifact": artifact, "user": user})}
+        return {"tool": "perceptor_query_registry_activity", "report": "registry-activity", "arguments": _non_empty({"artifact": artifact, "user": user})}
     if table == "srum_records":
-        return {"tool": "relic_timeline_window", "report": "srum-context", "arguments": _non_empty({"contains": row.get("app_name") or row.get("app_path") or row.get("user_name")})}
+        return {"tool": "perceptor_timeline_window", "report": "srum-context", "arguments": _non_empty({"contains": row.get("app_name") or row.get("app_path") or row.get("user_name")})}
     if table.startswith("mailbox_"):
-        return {"tool": "relic_query_communications", "report": "communications", "arguments": _non_empty({"user": user, "contains": row.get("subject") or row.get("sender") or row.get("message_id")})}
+        return {"tool": "perceptor_query_communications", "report": "communications", "arguments": _non_empty({"user": user, "contains": row.get("subject") or row.get("sender") or row.get("message_id")})}
     if table.startswith("cloud_"):
-        return {"tool": "relic_query_cloud_artifacts", "report": "cloud-artifacts", "arguments": _non_empty({"contains": row.get("file_name") or row.get("target") or row.get("provider")})}
+        return {"tool": "perceptor_query_cloud_artifacts", "report": "cloud-artifacts", "arguments": _non_empty({"contains": row.get("file_name") or row.get("target") or row.get("provider")})}
     if table.startswith("rdp_"):
-        return {"tool": "relic_timeline_window", "report": "remote-access", "arguments": _non_empty({"preset": "remote_access", "contains": row.get("observed_text") or row.get("observed_path") or row.get("file_name")})}
+        return {"tool": "perceptor_timeline_window", "report": "remote-access", "arguments": _non_empty({"preset": "remote_access", "contains": row.get("observed_text") or row.get("observed_path") or row.get("file_name")})}
     if table == "shortcut_items":
-        return {"tool": "relic_query_shortcuts", "report": "shortcuts", "arguments": _non_empty({"artifact_type": row.get("artifact_type")})}
+        return {"tool": "perceptor_query_shortcuts", "report": "shortcuts", "arguments": _non_empty({"artifact_type": row.get("artifact_type")})}
     if category == "external_storage" or table.startswith("usb_"):
-        return {"tool": "relic_usb_dossier", "report": "usb-dossier", "arguments": _non_empty({"serial": serial, "volume_serial_number": row.get("volume_serial_number"), "volume_guid": row.get("volume_guid")})}
+        return {"tool": "perceptor_usb_dossier", "report": "usb-dossier", "arguments": _non_empty({"serial": serial, "volume_serial_number": row.get("volume_serial_number"), "volume_guid": row.get("volume_guid")})}
     if path or file_name:
-        return {"tool": "relic_file_dossier", "report": "file-dossier", "arguments": _non_empty({"path": path, "name": file_name})}
+        return {"tool": "perceptor_file_dossier", "report": "file-dossier", "arguments": _non_empty({"path": path, "name": file_name})}
     if user:
-        return {"tool": "relic_user_activity", "report": "user-activity", "arguments": {"user": user}}
+        return {"tool": "perceptor_user_activity", "report": "user-activity", "arguments": {"user": user}}
     if timestamp:
-        return {"tool": "relic_timeline_window", "report": "timeline-review", "arguments": {"center": timestamp}}
-    return {"tool": "relic_case_activity_digest", "report": "activity-digest", "arguments": {}}
+        return {"tool": "perceptor_timeline_window", "report": "timeline-review", "arguments": {"center": timestamp}}
+    return {"tool": "perceptor_case_activity_digest", "report": "activity-digest", "arguments": {}}
 
 
 def _artifact_search_score(row: dict[str, Any], query: str, user: str) -> tuple[int, list[str]]:

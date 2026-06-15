@@ -19,7 +19,6 @@ Useful topic pages:
 The executable names are:
 
 - `perceptor`
-- `relic` (legacy alias)
 - `forensic-orchestrator`
 
 Examples below use `uv run perceptor`. If Perceptor is installed as a console script,
@@ -624,7 +623,7 @@ context but are not disk image mounts.
 Perceptor's supported install target is Ubuntu 24.04 LTS on x86_64, either bare
 metal or VM. Native macOS, native Windows, Docker full-image mounting, WSL full
 mounting, ARM64, and non-Ubuntu Linux are not primary support targets. See
-`docs/ubuntu-install.md` for the current install contract and
+`docs/getting-started/ubuntu-install.md` for the current install contract and
 `docs/release-checklist.md` for release verification.
 
 ```bash
@@ -698,161 +697,161 @@ Opt-in switches:
 
 Read-only MCP tools:
 
-- `relic_workspace_summary`
-- `relic_route_question`
-- `relic_mcp_workflow_guide`
-- `relic_list_cases`
-- `relic_case_summary`
-- `relic_case_evidence_map`
-- `relic_case_readiness`
-- `relic_discover_reports`
-- `relic_discover_report_exports`
-- `relic_read_existing_report`
-- `relic_case_dashboard`
-- `relic_processing_progress`
-- `relic_resume_plan`
-- `relic_workspace_health`
-- `relic_list_computers`
-- `relic_list_images`
-- `relic_list_jobs`
-- `relic_get_job`
-- `relic_timeline`
-- `relic_timeline_window`
-- `relic_activity_windows`
-- `relic_file_dossier`
-- `relic_usb_dossier`
-- `relic_user_activity`
-- `relic_ingest_triage_zip_preflight`
-- `relic_report_bundle_coverage`
-- `relic_profile_preview`
-- `relic_doctor`
-- `relic_list_report_types`
-- `relic_query_evidence_contents`
-- `relic_query_filesystem_listings`
-- `relic_query_suspicious_executions`
-- `relic_query_external_storage`
-- `relic_query_usb_files`
-- `relic_query_usb_contents`
-- `relic_query_file_movement_identity`
-- `relic_query_opened_from_removable_media`
-- `relic_query_opened_from_cloud_storage`
-- `relic_query_cloud_artifacts`
-- `relic_query_memory_artifacts`
-- `relic_query_browser_activity`
-- `relic_query_registry_activity`
-- `relic_query_shortcuts`
-- `relic_query_communications`
-- `relic_query_system_users`
-- `relic_case_review`
-- `relic_workspace_map`
-- `relic_artifact_search_sources`
-- `relic_search_artifacts`
-- `relic_search_content`
-- `relic_get_indexed_content`
-- `relic_lead_search`
-- `relic_case_activity_digest`
-- `relic_case_next_actions`
-- `relic_case_runbook`
-- `relic_list_search_packets`
-- `relic_read_search_packet`
-- `relic_rerun_search_packet`
-- `relic_list_review_packets`
-- `relic_read_review_packet`
-- `relic_get_mcp_job`
-- `relic_list_mcp_jobs`
-- `relic_get_mcp_job_output`
-- `relic_get_mcp_job_progress`
-- `relic_list_progress_manifests`
-- `relic_mcp_tool_reference`
+- `perceptor_workspace_summary`
+- `perceptor_route_question`
+- `perceptor_mcp_workflow_guide`
+- `perceptor_list_cases`
+- `perceptor_case_summary`
+- `perceptor_case_evidence_map`
+- `perceptor_case_readiness`
+- `perceptor_discover_reports`
+- `perceptor_discover_report_exports`
+- `perceptor_read_existing_report`
+- `perceptor_case_dashboard`
+- `perceptor_processing_progress`
+- `perceptor_resume_plan`
+- `perceptor_workspace_health`
+- `perceptor_list_computers`
+- `perceptor_list_images`
+- `perceptor_list_jobs`
+- `perceptor_get_job`
+- `perceptor_timeline`
+- `perceptor_timeline_window`
+- `perceptor_activity_windows`
+- `perceptor_file_dossier`
+- `perceptor_usb_dossier`
+- `perceptor_user_activity`
+- `perceptor_ingest_triage_zip_preflight`
+- `perceptor_report_bundle_coverage`
+- `perceptor_profile_preview`
+- `perceptor_doctor`
+- `perceptor_list_report_types`
+- `perceptor_query_evidence_contents`
+- `perceptor_query_filesystem_listings`
+- `perceptor_query_suspicious_executions`
+- `perceptor_query_external_storage`
+- `perceptor_query_usb_files`
+- `perceptor_query_usb_contents`
+- `perceptor_query_file_movement_identity`
+- `perceptor_query_opened_from_removable_media`
+- `perceptor_query_opened_from_cloud_storage`
+- `perceptor_query_cloud_artifacts`
+- `perceptor_query_memory_artifacts`
+- `perceptor_query_browser_activity`
+- `perceptor_query_registry_activity`
+- `perceptor_query_shortcuts`
+- `perceptor_query_communications`
+- `perceptor_query_system_users`
+- `perceptor_case_review`
+- `perceptor_workspace_map`
+- `perceptor_artifact_search_sources`
+- `perceptor_search_artifacts`
+- `perceptor_search_content`
+- `perceptor_get_indexed_content`
+- `perceptor_lead_search`
+- `perceptor_case_activity_digest`
+- `perceptor_case_next_actions`
+- `perceptor_case_runbook`
+- `perceptor_list_search_packets`
+- `perceptor_read_search_packet`
+- `perceptor_rerun_search_packet`
+- `perceptor_list_review_packets`
+- `perceptor_read_review_packet`
+- `perceptor_get_mcp_job`
+- `perceptor_list_mcp_jobs`
+- `perceptor_get_mcp_job_output`
+- `perceptor_get_mcp_job_progress`
+- `perceptor_list_progress_manifests`
+- `perceptor_mcp_tool_reference`
 
 Safe-write MCP tools:
 
-- `relic_generate_report`
-- `relic_write_report_bundle`
-- `relic_write_search_packet`
-- `relic_write_review_packet`
+- `perceptor_generate_report`
+- `perceptor_write_report_bundle`
+- `perceptor_write_search_packet`
+- `perceptor_write_review_packet`
 
 Processing-gated MCP tools:
 
-- `relic_import_triage_zip`
-- `relic_import_report_bundle`
-- `relic_process_image`
-- `relic_run_profile`
-- `relic_cancel_mcp_job`
+- `perceptor_import_triage_zip`
+- `perceptor_import_report_bundle`
+- `perceptor_process_image`
+- `perceptor_run_profile`
+- `perceptor_cancel_mcp_job`
 
 Processing tools start background subprocesses and return an `mcp_job_id`, PID,
 command, and stdout/stderr paths under `ROOT/mcp-jobs/`. MCP job metadata is
 persisted in `ROOT/mcp-jobs/index.json`, so a new MCP server process can still
 inspect jobs launched earlier.
-Add `dry_run: true` to `relic_process_image` arguments to launch the normal
+Add `dry_run: true` to `perceptor_process_image` arguments to launch the normal
 Perceptor process command in CLI dry-run mode before real processing.
 
 Operational MCP tools:
 
-- `relic_get_mcp_job`: poll persisted MCP subprocess state.
-- `relic_list_mcp_jobs`: list persisted MCP subprocess jobs, optionally filtered
+- `perceptor_get_mcp_job`: poll persisted MCP subprocess state.
+- `perceptor_list_mcp_jobs`: list persisted MCP subprocess jobs, optionally filtered
   by status.
-- `relic_get_mcp_job_output`: read stdout/stderr tails and parsed JSON stdout
+- `perceptor_get_mcp_job_output`: read stdout/stderr tails and parsed JSON stdout
   when available.
-- `relic_get_mcp_job_progress`: parse structured progress from MCP-launched
+- `perceptor_get_mcp_job_progress`: parse structured progress from MCP-launched
   job output, including bulk report ZIP computer counts where available.
-- `relic_cancel_mcp_job`: terminate a running MCP-launched subprocess; requires
+- `perceptor_cancel_mcp_job`: terminate a running MCP-launched subprocess; requires
   `--allow-processing`.
-- `relic_mcp_tool_reference`: export MCP tool names, permissions, schemas, and
+- `perceptor_mcp_tool_reference`: export MCP tool names, permissions, schemas, and
   annotations.
 
 Case-navigation MCP tools:
 
-- `relic_case_evidence_map`: returns computers, images, image metadata, report
+- `perceptor_case_evidence_map`: returns computers, images, image metadata, report
   resources, memory-source activity, job status, and processing progress in one
   response.
-- `relic_case_readiness`: combines doctor, workspace health, processing
+- `perceptor_case_readiness`: combines doctor, workspace health, processing
   readiness, processing progress, and resume-plan signals.
-- `relic_discover_reports`: returns report bundle files as
+- `perceptor_discover_reports`: returns report bundle files as
   `perceptor://workspace/...` resource URIs, optionally filtered by bundle purpose.
-- `relic_workspace_map`: returns cases, computers, images, generated reports,
+- `perceptor_workspace_map`: returns cases, computers, images, generated reports,
   saved packets, progress manifests, and MCP jobs in one structure.
-- `relic_artifact_search_sources`: returns the artifact tables, categories,
+- `perceptor_artifact_search_sources`: returns the artifact tables, categories,
   searchable fields, and row counts available to artifact and lead search.
-- `relic_search_artifacts` and `relic_lead_search`: run general or preset lead
+- `perceptor_search_artifacts` and `perceptor_lead_search`: run general or preset lead
   searches. Results include score, score reasons, matched fields, and drilldown
   hints.
-- `relic_file_dossier`, `relic_usb_dossier`, `relic_user_activity`, and
-  `relic_timeline_window`: focused drilldowns for following leads without
+- `perceptor_file_dossier`, `perceptor_usb_dossier`, `perceptor_user_activity`, and
+  `perceptor_timeline_window`: focused drilldowns for following leads without
   knowing the matching CLI report names.
-- `relic_timeline_window` is the first source for “what happened during this
+- `perceptor_timeline_window` is the first source for “what happened during this
   time/window/session?” questions. It accepts `start` and `end` and matches
   interval events by overlap where the source has an end time. Use domain tools
-  such as `relic_query_wifi_activity` or USB reports to resolve session/window
+  such as `perceptor_query_wifi_activity` or USB reports to resolve session/window
   bounds, then query the master timeline with those bounds.
-- `relic_case_next_actions`: ranks likely next investigative steps from
+- `perceptor_case_next_actions`: ranks likely next investigative steps from
   readiness, evidence gaps, unmapped imports, suspicious execution, and storage
   findings.
-- `relic_write_review_packet`: writes selected findings, report URIs, timeline
+- `perceptor_write_review_packet`: writes selected findings, report URIs, timeline
   rows, and notes to JSON/Markdown under the case reports folder.
-- `relic_write_search_packet`: saves repeatable search arguments, result sets,
+- `perceptor_write_search_packet`: saves repeatable search arguments, result sets,
   result hash sets, case/image/tool-output counts, and JSON/Markdown work
   product under `reports/mcp-search-packets`.
-- `relic_rerun_search_packet`: reruns a saved search packet and reports added,
+- `perceptor_rerun_search_packet`: reruns a saved search packet and reports added,
   removed, changed, and unchanged results. Use `report changed-search-packets`
   to rerun all saved search packets for a case from the CLI.
 
 Recommended MCP review sequence:
 
-1. `relic_workspace_map`
-2. `relic_case_runbook`
-3. `relic_artifact_search_sources`
-4. `relic_lead_search` or `relic_search_artifacts`
+1. `perceptor_workspace_map`
+2. `perceptor_case_runbook`
+3. `perceptor_artifact_search_sources`
+4. `perceptor_lead_search` or `perceptor_search_artifacts`
 5. Follow each result's drilldown hint.
-6. `relic_write_search_packet`
-7. `relic_rerun_search_packet`
-8. `relic_write_report_bundle` with `purpose: "review"`
+6. `perceptor_write_search_packet`
+7. `perceptor_rerun_search_packet`
+8. `perceptor_write_report_bundle` with `purpose: "review"`
 
 MCP audit entries are written to `ROOT/mcp-jobs/audit.jsonl`. Each entry records
 the tool name, permission tier, status, timestamp, argument keys, and bounded
 case/path context.
 
-Use `relic_list_jobs` or `relic_processing_progress` for Perceptor's internal
+Use `perceptor_list_jobs` or `perceptor_processing_progress` for Perceptor's internal
 parser/tool job records created by the subprocess itself.
 
 MCP resources:

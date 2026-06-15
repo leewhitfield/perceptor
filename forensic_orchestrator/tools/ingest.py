@@ -110,7 +110,7 @@ LOGGER = logging.getLogger(__name__)
 INGEST_BATCH_SIZE = 5000
 DEFAULT_CSV_FIELD_SIZE_LIMIT = 100 * 1024 * 1024
 csv.field_size_limit(
-    int(os.environ.get("PERCEPTOR_CSV_FIELD_SIZE_LIMIT") or os.environ.get("RELIC_CSV_FIELD_SIZE_LIMIT", DEFAULT_CSV_FIELD_SIZE_LIMIT))
+    int(os.environ.get("PERCEPTOR_CSV_FIELD_SIZE_LIMIT", DEFAULT_CSV_FIELD_SIZE_LIMIT))
 )
 
 

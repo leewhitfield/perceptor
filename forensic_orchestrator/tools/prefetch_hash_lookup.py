@@ -11,7 +11,7 @@ from pathlib import Path
 DEFAULT_LOOKUP_PATHS: tuple[Path, ...] = ()
 DEFAULT_LOOKUP_DIRS = (
     Path("/opt/perceptor-reference"),
-    Path("/opt/relic-reference"),
+    Path("/opt/perceptor-reference"),
     Path.home() / "reference",
 )
 LOOKUP_FILE_RE = re.compile(r"(?i)(prefetch|pf).*(hash|lookup).*\.(txt|tsv|csv)$")

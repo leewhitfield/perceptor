@@ -482,7 +482,6 @@ def _volatility_symbol_dirs() -> str:
     for root in (
         os.environ.get("PERCEPTOR_TOOLS_ROOT") or os.environ.get("FORENSIC_ORCHESTRATOR_TOOLS_ROOT"),
         "/opt/perceptor-tools",
-        "/opt/relic-tools",
         str(Path.home() / "tools"),
     ):
         if not root:
@@ -502,7 +501,6 @@ def _memprocfs_command() -> list[str] | None:
     for root in (
         os.environ.get("PERCEPTOR_TOOLS_ROOT") or os.environ.get("FORENSIC_ORCHESTRATOR_TOOLS_ROOT"),
         "/opt/perceptor-tools",
-        "/opt/relic-tools",
         str(Path.home() / "tools"),
     ):
         if not root:

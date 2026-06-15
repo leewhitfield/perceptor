@@ -674,7 +674,7 @@ class OpenSearchRestClient:
             token = base64.b64encode(f"{self.config.username}:{self.config.password}".encode()).decode()
             request.add_header("Authorization", f"Basic {token}")
         raw = ""
-        attempts = int(os.environ.get("PERCEPTOR_OPENSEARCH_RETRIES") or os.environ.get("RELIC_OPENSEARCH_RETRIES", "2") or "2") + 1
+        attempts = int(os.environ.get("PERCEPTOR_OPENSEARCH_RETRIES") or "2") + 1
         for attempt in range(1, max(1, attempts) + 1):
             try:
                 with urllib.request.urlopen(request, context=self.context, timeout=120) as response:

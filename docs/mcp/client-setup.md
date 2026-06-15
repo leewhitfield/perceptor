@@ -35,13 +35,13 @@ ssh
 Arguments:
 
 ```text
--i ~/.ssh/id_ed25519_relic analyst@UBUNTU_HOST cd /opt/perceptor && uv run perceptor --root /path/to/workspace mcp serve
+-i ~/.ssh/id_ed25519_perceptor analyst@UBUNTU_HOST cd /opt/perceptor && uv run perceptor --root /path/to/workspace mcp serve
 ```
 
 For processing:
 
 ```text
--i ~/.ssh/id_ed25519_relic analyst@UBUNTU_HOST cd /opt/perceptor && uv run perceptor --root /path/to/workspace mcp serve --allow-processing
+-i ~/.ssh/id_ed25519_perceptor analyst@UBUNTU_HOST cd /opt/perceptor && uv run perceptor --root /path/to/workspace mcp serve --allow-processing
 ```
 
 Use the private key path, not the `.pub` file. The public key must be installed

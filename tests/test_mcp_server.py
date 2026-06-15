@@ -29,92 +29,90 @@ def test_mcp_initialize_and_list_tools(tmp_path):
     listed = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
     tools = listed["result"]["tools"]
     names = {tool["name"] for tool in tools}
-    assert "relic_workspace_summary" in names
     assert "perceptor_workspace_summary" in names
-    assert "relic_case_summary" in names
     assert "perceptor_case_summary" in names
-    assert "relic_ingest_triage_zip_preflight" in names
-    assert "relic_import_triage_zip" in names
-    assert "relic_query_suspicious_executions" in names
-    assert "relic_query_external_storage" in names
-    assert "relic_query_wifi_activity" in names
-    assert "relic_case_review" in names
-    assert "relic_case_evidence_map" in names
-    assert "relic_workspace_map" in names
-    assert "relic_mcp_workflow_guide" in names
-    assert "relic_route_question" in names
-    assert "relic_case_readiness" in names
-    assert "relic_discover_reports" in names
-    assert "relic_discover_report_exports" in names
-    assert "relic_read_existing_report" in names
-    assert "relic_file_dossier" in names
-    assert "relic_query_filesystem_listings" in names
-    assert "relic_query_evidence_contents" in names
-    assert "relic_query_usb_contents" in names
-    assert "relic_usb_dossier" in names
-    assert "relic_user_activity" in names
-    assert "relic_query_system_users" in names
-    assert "relic_timeline_window" in names
-    assert "relic_activity_windows" in names
-    assert "relic_lead_search" in names
-    assert "relic_case_activity_digest" in names
-    assert "relic_case_next_actions" in names
-    assert "relic_case_runbook" in names
-    assert "relic_write_review_packet" in names
-    assert "relic_search_artifacts" in names
-    assert "relic_artifact_search_sources" in names
-    assert "relic_list_review_packets" in names
-    assert "relic_read_review_packet" in names
-    assert "relic_write_search_packet" in names
-    assert "relic_list_search_packets" in names
-    assert "relic_read_search_packet" in names
-    assert "relic_rerun_search_packet" in names
-    assert "relic_search_content" in names
-    assert "relic_get_indexed_content" in names
-    assert "relic_list_progress_manifests" in names
-    assert "relic_list_mcp_jobs" in names
-    assert "relic_get_mcp_job_progress" in names
-    assert "relic_recover_deleted_files" in names
-    assert "relic_mcp_tool_reference" in names
+    assert "perceptor_ingest_triage_zip_preflight" in names
+    assert "perceptor_import_triage_zip" in names
+    assert "perceptor_query_suspicious_executions" in names
+    assert "perceptor_query_external_storage" in names
+    assert "perceptor_query_wifi_activity" in names
+    assert "perceptor_case_review" in names
+    assert "perceptor_case_evidence_map" in names
+    assert "perceptor_workspace_map" in names
+    assert "perceptor_mcp_workflow_guide" in names
+    assert "perceptor_route_question" in names
+    assert "perceptor_case_readiness" in names
+    assert "perceptor_discover_reports" in names
+    assert "perceptor_discover_report_exports" in names
+    assert "perceptor_read_existing_report" in names
+    assert "perceptor_file_dossier" in names
+    assert "perceptor_query_filesystem_listings" in names
+    assert "perceptor_query_evidence_contents" in names
+    assert "perceptor_query_usb_contents" in names
+    assert "perceptor_usb_dossier" in names
+    assert "perceptor_user_activity" in names
+    assert "perceptor_query_system_users" in names
+    assert "perceptor_timeline_window" in names
+    assert "perceptor_activity_windows" in names
+    assert "perceptor_lead_search" in names
+    assert "perceptor_case_activity_digest" in names
+    assert "perceptor_case_next_actions" in names
+    assert "perceptor_case_runbook" in names
+    assert "perceptor_write_review_packet" in names
+    assert "perceptor_search_artifacts" in names
+    assert "perceptor_artifact_search_sources" in names
+    assert "perceptor_list_review_packets" in names
+    assert "perceptor_read_review_packet" in names
+    assert "perceptor_write_search_packet" in names
+    assert "perceptor_list_search_packets" in names
+    assert "perceptor_read_search_packet" in names
+    assert "perceptor_rerun_search_packet" in names
+    assert "perceptor_search_content" in names
+    assert "perceptor_get_indexed_content" in names
+    assert "perceptor_list_progress_manifests" in names
+    assert "perceptor_list_mcp_jobs" in names
+    assert "perceptor_get_mcp_job_progress" in names
+    assert "perceptor_recover_deleted_files" in names
+    assert "perceptor_mcp_tool_reference" in names
     assert any(tool["annotations"]["readOnlyHint"] is False for tool in tools)
-    report_tool = next(tool for tool in tools if tool["name"] == "relic_read_existing_report")
+    report_tool = next(tool for tool in tools if tool["name"] == "perceptor_read_existing_report")
     assert "first source of truth" in report_tool["description"]
-    fs_tool = next(tool for tool in tools if tool["name"] == "relic_query_filesystem_listings")
+    fs_tool = next(tool for tool in tools if tool["name"] == "perceptor_query_filesystem_listings")
     assert "first source of truth" in fs_tool["description"]
-    contents_tool = next(tool for tool in tools if tool["name"] == "relic_query_evidence_contents")
+    contents_tool = next(tool for tool in tools if tool["name"] == "perceptor_query_evidence_contents")
     assert "stored filesystem_entries only" in contents_tool["description"]
-    usb_contents_tool = next(tool for tool in tools if tool["name"] == "relic_query_usb_contents")
+    usb_contents_tool = next(tool for tool in tools if tool["name"] == "perceptor_query_usb_contents")
     assert "stored filesystem_entries" in usb_contents_tool["description"]
     assert "volume_name" in usb_contents_tool["inputSchema"]["properties"]
-    usb_files_tool = next(tool for tool in tools if tool["name"] == "relic_query_usb_files")
+    usb_files_tool = next(tool for tool in tools if tool["name"] == "perceptor_query_usb_files")
     assert "volume name" in usb_files_tool["description"]
     assert "contains" in usb_files_tool["inputSchema"]["properties"]
     assert "volume_name" in usb_files_tool["inputSchema"]["properties"]
-    wifi_tool = next(tool for tool in tools if tool["name"] == "relic_query_wifi_activity")
+    wifi_tool = next(tool for tool in tools if tool["name"] == "perceptor_query_wifi_activity")
     assert wifi_tool["metadata"]["category"] == "network"
     assert "ssid" in wifi_tool["inputSchema"]["properties"]
     assert "connection_sessions" in wifi_tool["description"]
     assert "session_activity_plan" in wifi_tool["description"]
-    user_activity_tool = next(tool for tool in tools if tool["name"] == "relic_user_activity")
+    user_activity_tool = next(tool for tool in tools if tool["name"] == "perceptor_user_activity")
     assert "not the source of truth for bounded activity-window questions" in user_activity_tool["description"]
-    timeline_window_tool = next(tool for tool in tools if tool["name"] == "relic_timeline_window")
+    timeline_window_tool = next(tool for tool in tools if tool["name"] == "perceptor_timeline_window")
     assert "start" in timeline_window_tool["inputSchema"]["properties"]
     assert "end" in timeline_window_tool["inputSchema"]["properties"]
     assert "filter_within_window" in timeline_window_tool["inputSchema"]["properties"]
     assert "contains is only applied when filter_within_window is true" in timeline_window_tool["description"]
-    activity_windows_tool = next(tool for tool in tools if tool["name"] == "relic_activity_windows")
+    activity_windows_tool = next(tool for tool in tools if tool["name"] == "perceptor_activity_windows")
     assert "multiple resolved time windows" in activity_windows_tool["description"]
     assert "windows" in activity_windows_tool["inputSchema"]["properties"]
-    content_search_tool = next(tool for tool in tools if tool["name"] == "relic_search_content")
+    content_search_tool = next(tool for tool in tools if tool["name"] == "perceptor_search_content")
     assert "OpenSearch" in content_search_tool["description"]
     assert "password" not in content_search_tool["inputSchema"]["properties"]
     assert content_search_tool["metadata"]["category"] == "search"
-    indexed_content_tool = next(tool for tool in tools if tool["name"] == "relic_get_indexed_content")
+    indexed_content_tool = next(tool for tool in tools if tool["name"] == "perceptor_get_indexed_content")
     assert "opensearch_document_id" in indexed_content_tool["inputSchema"]["properties"]
     assert "password" not in indexed_content_tool["inputSchema"]["properties"]
-    route_tool = next(tool for tool in tools if tool["name"] == "relic_route_question")
+    route_tool = next(tool for tool in tools if tool["name"] == "perceptor_route_question")
     assert "source-of-truth order" in route_tool["description"]
-    process_tool = next(tool for tool in tools if tool["name"] == "relic_process_image")
+    process_tool = next(tool for tool in tools if tool["name"] == "perceptor_process_image")
     assert process_tool["metadata"]["version"] == "1.0"
     assert "perceptor CLI" in process_tool["metadata"]["dependencies"]
     assert process_tool["metadata"]["examples"]
@@ -135,7 +133,7 @@ def test_mcp_workspace_and_case_summary_tools(tmp_path):
             "jsonrpc": "2.0",
             "id": 1,
             "method": "tools/call",
-            "params": {"name": "relic_workspace_summary", "arguments": {}},
+            "params": {"name": "perceptor_workspace_summary", "arguments": {}},
         }
     )
     structured = workspace["result"]["structuredContent"]
@@ -148,7 +146,7 @@ def test_mcp_workspace_and_case_summary_tools(tmp_path):
             "jsonrpc": "2.0",
             "id": 2,
             "method": "tools/call",
-            "params": {"name": "relic_case_summary", "arguments": {"case_id": "case-1"}},
+            "params": {"name": "perceptor_case_summary", "arguments": {"case_id": "case-1"}},
         }
     )
     case_summary = summary["result"]["structuredContent"]
@@ -160,7 +158,7 @@ def test_mcp_workspace_and_case_summary_tools(tmp_path):
             "jsonrpc": "2.0",
             "id": 3,
             "method": "tools/call",
-            "params": {"name": "relic_case_evidence_map", "arguments": {"case_id": "case-1"}},
+            "params": {"name": "perceptor_case_evidence_map", "arguments": {"case_id": "case-1"}},
         }
     )
     mapped = evidence_map["result"]["structuredContent"]
@@ -328,7 +326,7 @@ def test_mcp_stdio_server_roundtrip(tmp_path):
                         "jsonrpc": "2.0",
                         "id": 2,
                         "method": "tools/call",
-                        "params": {"name": "relic_list_cases", "arguments": {"limit": 5}},
+                        "params": {"name": "perceptor_list_cases", "arguments": {"limit": 5}},
                     }
                 ),
                 "",
@@ -351,7 +349,7 @@ def test_mcp_processing_tool_requires_opt_in(tmp_path):
             "jsonrpc": "2.0",
             "id": 1,
             "method": "tools/call",
-            "params": {"name": "relic_import_triage_zip", "arguments": {"path": str(tmp_path / "case.zip")}},
+            "params": {"name": "perceptor_import_triage_zip", "arguments": {"path": str(tmp_path / "case.zip")}},
         }
     )
 
@@ -370,7 +368,7 @@ def test_mcp_triage_zip_preflight(tmp_path):
             "jsonrpc": "2.0",
             "id": 1,
             "method": "tools/call",
-            "params": {"name": "relic_ingest_triage_zip_preflight", "arguments": {"path": str(zip_path)}},
+            "params": {"name": "perceptor_ingest_triage_zip_preflight", "arguments": {"path": str(zip_path)}},
         }
     )
 
@@ -390,7 +388,7 @@ def test_mcp_artifact_queries_and_case_review_are_structured(tmp_path):
             "jsonrpc": "2.0",
             "id": 1,
             "method": "tools/call",
-            "params": {"name": "relic_query_suspicious_executions", "arguments": {"case_id": "case-1"}},
+            "params": {"name": "perceptor_query_suspicious_executions", "arguments": {"case_id": "case-1"}},
         }
     )
     assert suspicious["result"]["structuredContent"]["case_id"] == "case-1"
@@ -400,7 +398,7 @@ def test_mcp_artifact_queries_and_case_review_are_structured(tmp_path):
             "jsonrpc": "2.0",
             "id": 2,
             "method": "tools/call",
-            "params": {"name": "relic_case_review", "arguments": {"case_id": "case-1", "limit": 5}},
+            "params": {"name": "perceptor_case_review", "arguments": {"case_id": "case-1", "limit": 5}},
         }
     )
     structured = review["result"]["structuredContent"]
@@ -499,7 +497,7 @@ def test_mcp_usb_files_filters_existing_report_rows(tmp_path):
             "id": 1,
             "method": "tools/call",
             "params": {
-                "name": "relic_query_usb_files",
+                "name": "perceptor_query_usb_files",
                 "arguments": {"case_id": case.id, "contains": "ANYVOL", "volume_name": "ANYVOL"},
             },
         }
@@ -625,7 +623,7 @@ def test_mcp_cancel_job_requires_processing_and_records_cancelled(tmp_path):
             "jsonrpc": "2.0",
             "id": 1,
             "method": "tools/call",
-            "params": {"name": "relic_cancel_mcp_job", "arguments": {"mcp_job_id": started["mcp_job_id"]}},
+            "params": {"name": "perceptor_cancel_mcp_job", "arguments": {"mcp_job_id": started["mcp_job_id"]}},
         }
     )
 
@@ -647,9 +645,6 @@ def test_mcp_resources_list_and_read_workspace_reports(tmp_path):
 
     read = server.handle_message({"jsonrpc": "2.0", "id": 2, "method": "resources/read", "params": {"uri": uri}})
     assert read["result"]["contents"][0]["text"] == "# Summary\n"
-    legacy_uri = uri.replace("perceptor://workspace/", "relic://workspace/")
-    legacy_read = server.handle_message({"jsonrpc": "2.0", "id": 3, "method": "resources/read", "params": {"uri": legacy_uri}})
-    assert legacy_read["result"]["contents"][0]["text"] == "# Summary\n"
 
 
 def test_mcp_discover_reports_returns_resource_uris(tmp_path):
@@ -789,7 +784,7 @@ def test_mcp_artifact_search_and_progress_manifests(tmp_path, monkeypatch):
     assert found["summary"]["result_count"] == 1
     assert found["results"][0]["computer_label"] == "HOST01"
     assert found["results"][0]["matched_fields"] == ["absolute_path"]
-    assert found["results"][0]["drilldown"]["tool"] == "relic_file_dossier"
+    assert found["results"][0]["drilldown"]["tool"] == "perceptor_file_dossier"
     assert found["results"][0]["score"] > 0
 
     manifests = server.list_progress_manifests({})
@@ -822,13 +817,13 @@ def test_mcp_artifact_search_and_progress_manifests(tmp_path, monkeypatch):
     assert any(row["kind"] == "packet" for row in exports["resources"])
     assert workspace["summary"]["case_count"] == 1
     assert guide["summary"]["step_count"] >= 8
-    assert any(step["tool"] == "relic_artifact_search_sources" for step in guide["steps"])
-    assert guide["route_first_tool"] == "relic_route_question"
-    assert guide["reports_first_tool"] == "relic_read_existing_report"
-    assert guide["evidence_contents_first_tool"] == "relic_query_evidence_contents"
-    assert guide["filesystem_first_tool"] == "relic_query_filesystem_listings"
-    assert guide["wifi_activity_tool"] == "relic_query_wifi_activity"
-    assert guide["content_search_tool"] == "relic_search_content"
+    assert any(step["tool"] == "perceptor_artifact_search_sources" for step in guide["steps"])
+    assert guide["route_first_tool"] == "perceptor_route_question"
+    assert guide["reports_first_tool"] == "perceptor_read_existing_report"
+    assert guide["evidence_contents_first_tool"] == "perceptor_query_evidence_contents"
+    assert guide["filesystem_first_tool"] == "perceptor_query_filesystem_listings"
+    assert guide["wifi_activity_tool"] == "perceptor_query_wifi_activity"
+    assert guide["content_search_tool"] == "perceptor_search_content"
 
 
 def test_mcp_route_question_enforces_truth_order(tmp_path):
@@ -837,35 +832,35 @@ def test_mcp_route_question_enforces_truth_order(tmp_path):
     contents = server.route_question({"case_id": "case-1", "question": "Can you pull a list of contents for the USB drive?"})
     assert contents["intent"] == "evidence_contents"
     assert contents["first_source"] == "generated_usb_filesystem_listings"
-    assert contents["recommended_tool"] == "relic_query_usb_contents"
-    assert contents["source_order"][0]["tools"] == ["relic_query_usb_contents"]
+    assert contents["recommended_tool"] == "perceptor_query_usb_contents"
+    assert contents["source_order"][0]["tools"] == ["perceptor_query_usb_contents"]
     assert contents["processing_allowed"] is False
 
     usb_else = server.route_question({"case_id": "case-1", "question": "What else was on the USB drive?"})
     assert usb_else["intent"] == "evidence_contents"
-    assert usb_else["recommended_tool"] == "relic_query_usb_contents"
+    assert usb_else["recommended_tool"] == "perceptor_query_usb_contents"
     assert usb_else["source_order"][0]["source"] == "generated_usb_filesystem_listings"
 
     suspicious = server.route_question({"case_id": "case-1", "question": "Show me suspicious executables"})
     assert suspicious["intent"] == "execution"
     assert suspicious["first_source"] == "existing_reports"
-    assert suspicious["recommended_tool"] == "relic_read_existing_report"
+    assert suspicious["recommended_tool"] == "perceptor_read_existing_report"
     assert "suspicious-executions" in suspicious["report_names"]
-    assert "relic_query_suspicious_executions" in suspicious["fallback_tools"]
+    assert "perceptor_query_suspicious_executions" in suspicious["fallback_tools"]
 
     content = server.route_question({"case_id": "case-1", "question": "Search file contents for confidential notes"})
     assert content["intent"] == "content_search"
-    assert content["recommended_tool"] == "relic_search_content"
+    assert content["recommended_tool"] == "perceptor_search_content"
     assert content["source_order"][1]["source"] == "opensearch_content_index"
 
     file_info = server.route_question({"case_id": "case-1", "question": "What can you tell me about _WRD0001.tmp filesystem and internal metadata?"})
     assert file_info["intent"] == "file_information"
-    assert file_info["recommended_tool"] == "relic_file_dossier"
+    assert file_info["recommended_tool"] == "perceptor_file_dossier"
     assert file_info["source_order"][0]["source"] == "file_dossier"
 
     file_content = server.route_question({"case_id": "case-1", "question": "What is the content of _WRD0001.tmp?"})
     assert file_content["intent"] == "file_content_and_information"
-    assert file_content["recommended_tool"] == "relic_file_dossier"
+    assert file_content["recommended_tool"] == "perceptor_file_dossier"
     assert file_content["source_order"][2]["source"] == "opensearch_content_index"
     assert "do not stop at metadata" in file_content["reason"]
     assert file_content["source_order"][2]["followup"].startswith("If a hit is returned")
@@ -873,30 +868,30 @@ def test_mcp_route_question_enforces_truth_order(tmp_path):
     wifi = server.route_question({"case_id": "case-1", "question": "Were wifi networks connected on November 17?"})
     assert wifi["intent"] == "wifi_network_activity"
     assert wifi["first_source"] == "parsed_network_artifact_tables"
-    assert wifi["recommended_tool"] == "relic_query_wifi_activity"
-    assert wifi["source_order"][0]["tools"] == ["relic_query_wifi_activity"]
+    assert wifi["recommended_tool"] == "perceptor_query_wifi_activity"
+    assert wifi["source_order"][0]["tools"] == ["perceptor_query_wifi_activity"]
 
     wifi_activity = server.route_question({"case_id": "case-1", "question": "What activity occurred while the computer was connected to Hyatt wifi?"})
     assert wifi_activity["intent"] == "wifi_network_activity"
-    assert wifi_activity["recommended_tool"] == "relic_query_wifi_activity"
+    assert wifi_activity["recommended_tool"] == "perceptor_query_wifi_activity"
     assert wifi_activity["source_order"][1]["source"] == "normalized_master_timeline"
-    assert wifi_activity["source_order"][1]["tools"] == ["relic_activity_windows", "relic_timeline_window"]
+    assert wifi_activity["source_order"][1]["tools"] == ["perceptor_activity_windows", "perceptor_timeline_window"]
     assert "session_activity_plan.aggregate_tool" in wifi_activity["source_order"][1]["requires"]
 
     users = server.route_question({"case_id": "case-1", "question": "Who are the users on this computer and what are their SIDs?"})
     assert users["intent"] == "system_users"
-    assert users["recommended_tool"] == "relic_query_system_users"
+    assert users["recommended_tool"] == "perceptor_query_system_users"
     assert users["source_order"][0]["source"] == "consolidated_user_inventory"
 
     sds = server.route_question({"case_id": "case-1", "question": "Were NTFS permissions or $Secure:$SDS entries present?"})
     assert sds["intent"] == "ntfs_security_descriptors"
-    assert sds["recommended_tool"] == "relic_generate_report"
+    assert sds["recommended_tool"] == "perceptor_generate_report"
     assert "ntfs-security-descriptors" in sds["report_names"]
     assert sds["source_order"][0]["source"] == "generated_reports"
 
     recovery = server.route_question({"case_id": "case-1", "question": "Recover the deleted timeline.docx file"})
     assert recovery["intent"] == "deleted_file_recovery"
-    assert recovery["recommended_tool"] == "relic_query_evidence_contents"
+    assert recovery["recommended_tool"] == "perceptor_query_evidence_contents"
     assert recovery["processing_requested"] is True
     assert recovery["processing_allowed"] is False
     assert recovery["blocked_actions"][0]["action"] == "processing_or_recovery"
@@ -909,7 +904,7 @@ def test_mcp_route_question_enforces_truth_order(tmp_path):
         }
     )
     assert recovery_allowed["processing_allowed"] is True
-    assert "relic_recover_deleted_files" in recovery_allowed["fallback_tools"]
+    assert "perceptor_recover_deleted_files" in recovery_allowed["fallback_tools"]
 
 def test_mcp_search_content_wraps_opensearch_without_password_argument(tmp_path, monkeypatch):
     captured = {}
@@ -972,7 +967,7 @@ def test_mcp_search_content_wraps_opensearch_without_password_argument(tmp_path,
     assert result["hits"][0]["evidence_nature"] == "direct_file_content_extraction"
     assert "direct file-content extraction" in result["hits"][0]["provenance_summary"]
     assert result["hits"][0]["full_content_available"] is True
-    assert result["hits"][0]["full_content_tool"]["tool"] == "relic_get_indexed_content"
+    assert result["hits"][0]["full_content_tool"]["tool"] == "perceptor_get_indexed_content"
     assert result["hits"][0]["full_content_tool"]["arguments"] == {
         "case_id": "case-1",
         "opensearch_document_id": "os-doc-1",
@@ -1131,9 +1126,9 @@ def test_mcp_filesystem_listing_uses_generated_inventory(tmp_path, monkeypatch):
     assert [row["file_name"] for row in contents["filesystem_entries"]] == ["Alex.docx"]
 
     dossier = server.file_dossier({"case_id": "case-1", "name": "Alex.docx"})
-    assert dossier["content_followup"]["tool"] == "relic_search_content"
+    assert dossier["content_followup"]["tool"] == "perceptor_search_content"
     assert dossier["content_followup"]["arguments"]["query"] == "Alex.docx"
-    assert "relic_get_indexed_content" in dossier["content_followup"]["next_step"]
+    assert "perceptor_get_indexed_content" in dossier["content_followup"]["next_step"]
 
 
 def test_mcp_tool_reference_and_audit_log(tmp_path):
@@ -1143,12 +1138,12 @@ def test_mcp_tool_reference_and_audit_log(tmp_path):
             "jsonrpc": "2.0",
             "id": 1,
             "method": "tools/call",
-            "params": {"name": "relic_mcp_tool_reference", "arguments": {}},
+            "params": {"name": "perceptor_mcp_tool_reference", "arguments": {}},
         }
     )
 
     tools = response["result"]["structuredContent"]["tools"]
-    process_tool = next(tool for tool in tools if tool["name"] == "relic_process_image")
+    process_tool = next(tool for tool in tools if tool["name"] == "perceptor_process_image")
     assert process_tool["permission"] == "processing"
     assert process_tool["category"] == "processing"
     assert process_tool["dependencies"]
@@ -1157,7 +1152,7 @@ def test_mcp_tool_reference_and_audit_log(tmp_path):
     audit = tmp_path / "mcp-jobs" / "audit.jsonl"
     assert audit.exists()
     row = json.loads(audit.read_text(encoding="utf-8").splitlines()[0])
-    assert row["tool"] == "relic_mcp_tool_reference"
+    assert row["tool"] == "perceptor_mcp_tool_reference"
     assert row["correlation_id"]
     assert row["category"] == "operations"
     assert row["duration_ms"] >= 0
@@ -1172,7 +1167,7 @@ def test_mcp_error_payload_and_audit_redacts_sensitive_arguments(tmp_path):
             "id": 1,
             "method": "tools/call",
             "params": {
-                "name": "relic_case_summary",
+                "name": "perceptor_case_summary",
                 "arguments": {"case_id": "missing-case", "api_key": "secret-value"},
             },
         }
@@ -1192,7 +1187,7 @@ def test_mcp_error_payload_and_audit_redacts_sensitive_arguments(tmp_path):
 
 def test_mcp_policy_blocks_tool_category_and_case(tmp_path):
     (tmp_path / "mcp-policy.json").write_text(
-        json.dumps({"blocked_tools": ["relic_list_cases"], "blocked_categories": ["processing"], "blocked_case_ids": ["case-blocked"]}),
+        json.dumps({"blocked_tools": ["perceptor_list_cases"], "blocked_categories": ["processing"], "blocked_case_ids": ["case-blocked"]}),
         encoding="utf-8",
     )
     server = PerceptorMcpServer(root=tmp_path, allow_processing=True)
@@ -1202,7 +1197,7 @@ def test_mcp_policy_blocks_tool_category_and_case(tmp_path):
             "jsonrpc": "2.0",
             "id": 1,
             "method": "tools/call",
-            "params": {"name": "relic_list_cases", "arguments": {}},
+            "params": {"name": "perceptor_list_cases", "arguments": {}},
         }
     )
     assert blocked_tool["error"]["code"] == -32602
@@ -1213,7 +1208,7 @@ def test_mcp_policy_blocks_tool_category_and_case(tmp_path):
             "jsonrpc": "2.0",
             "id": 2,
             "method": "tools/call",
-            "params": {"name": "relic_process_image", "arguments": {"path": str(tmp_path / "disk.E01")}},
+            "params": {"name": "perceptor_process_image", "arguments": {"path": str(tmp_path / "disk.E01")}},
         }
     )
     assert blocked_category["error"]["code"] == -32602
@@ -1224,7 +1219,7 @@ def test_mcp_policy_blocks_tool_category_and_case(tmp_path):
             "jsonrpc": "2.0",
             "id": 3,
             "method": "tools/call",
-            "params": {"name": "relic_case_summary", "arguments": {"case_id": "case-blocked"}},
+            "params": {"name": "perceptor_case_summary", "arguments": {"case_id": "case-blocked"}},
         }
     )
     assert blocked_case["error"]["code"] == -32602
@@ -1254,7 +1249,7 @@ def test_mcp_recover_deleted_files_requires_processing_and_builds_command(tmp_pa
             "jsonrpc": "2.0",
             "id": 1,
             "method": "tools/call",
-            "params": {"name": "relic_recover_deleted_files", "arguments": {"case_id": "case-1", "name": "report.docx"}},
+            "params": {"name": "perceptor_recover_deleted_files", "arguments": {"case_id": "case-1", "name": "report.docx"}},
         }
     )
     assert denied["error"]["code"] == -32602

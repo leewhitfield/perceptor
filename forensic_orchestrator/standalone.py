@@ -141,7 +141,7 @@ def version_report(root: Path, plugin_paths: list[Path]) -> dict[str, Any]:
     return {
         "application": "Perceptor",
         "package": "perceptor",
-        "cli_aliases": ["perceptor", "relic", "forensic-orchestrator"],
+        "cli_aliases": ["perceptor", "forensic-orchestrator"],
         "version": _package_version(),
         "python": sys.version.split()[0],
         "python_supported": sys.version_info >= (3, 11),
@@ -1586,7 +1586,7 @@ def _which(name: str) -> str | None:
         "volatility3-symbols": [
             _tools_dir(None) / "volatility3-symbols" / "windows.zip",
             Path("/opt/perceptor-tools") / "volatility3-symbols" / "windows.zip",
-            Path("/opt/relic-tools") / "volatility3-symbols" / "windows.zip",
+            Path("/opt/perceptor-tools") / "volatility3-symbols" / "windows.zip",
             Path.home() / "tools" / "volatility3-symbols" / "windows.zip",
         ],
         "ual-timeliner": [

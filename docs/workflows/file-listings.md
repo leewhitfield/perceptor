@@ -21,8 +21,8 @@ image tooling.
 Use:
 
 ```text
-relic_query_evidence_contents
-relic_query_filesystem_listings
+perceptor_query_evidence_contents
+perceptor_query_filesystem_listings
 ```
 
 The MCP router will recommend these tools for contents and filesystem questions.

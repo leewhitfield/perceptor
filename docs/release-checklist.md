@@ -7,7 +7,7 @@ Use this checklist before tagging a Perceptor release.
 - Supported target remains Ubuntu 24.04 LTS x86_64.
 - `standalone version --format json` reports `platform_support.status` as
   `supported` on the release workstation.
-- `docs/ubuntu-install.md` matches the tested install path.
+- `docs/getting-started/ubuntu-install.md` matches the tested install path.
 
 ## Verification
 
@@ -45,7 +45,7 @@ uv run perceptor --root ~/analysis/release-check report handoff-package --case "
 
 - README support statement is current.
 - `docs/user-manual.md` command examples match the CLI.
-- `docs/dependencies.md` and `docs/ubuntu-install.md` reflect current
+- `docs/dependencies.md` and `docs/getting-started/ubuntu-install.md` reflect current
   third-party tool behavior.
 - Any known unsupported formats or case-specific limitations are documented.
 

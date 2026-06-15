@@ -8,7 +8,7 @@ import secrets
 import signal
 import subprocess
 import sys
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -150,24 +150,7 @@ class McpTool:
 
 
 def _mcp_tool_aliases(tools: list[McpTool]) -> dict[str, McpTool]:
-    aliases: dict[str, McpTool] = {}
-    for tool in tools:
-        if tool.name.startswith("relic_"):
-            perceptor_name = "perceptor_" + tool.name.removeprefix("relic_")
-            aliases[perceptor_name] = replace(
-                tool,
-                name=perceptor_name,
-                title=tool.title.replace("relic", "perceptor"),
-                description=tool.description.replace("relic_", "perceptor_").replace("perceptor CLI", "perceptor CLI"),
-            )
-        aliases[tool.name] = tool
-    return aliases
-
-
-def _legacy_mcp_tool_name(name: str) -> str:
-    if name.startswith("perceptor_"):
-        return "relic_" + name.removeprefix("perceptor_")
-    return name
+    return {tool.name: tool for tool in tools}
 
 
 class PerceptorMcpServer:
@@ -187,12 +170,10 @@ class PerceptorMcpServer:
         self.allow_sensitive = allow_sensitive
         self.allow_external_ai = allow_external_ai
         self.plugin_paths = plugin_paths or [default_plugin_path()]
-        self.auth_token = auth_token if auth_token is not None else (
-            os.environ.get("PERCEPTOR_MCP_TOKEN") or os.environ.get("RELIC_MCP_TOKEN")
-        )
+        self.auth_token = auth_token if auth_token is not None else os.environ.get("PERCEPTOR_MCP_TOKEN")
         self.max_running_jobs = max_running_jobs or _env_int(
             "PERCEPTOR_MCP_MAX_RUNNING_JOBS",
-            _env_int("RELIC_MCP_MAX_RUNNING_JOBS", DEFAULT_MCP_MAX_RUNNING_JOBS),
+            DEFAULT_MCP_MAX_RUNNING_JOBS,
         )
         self.policy = self._load_mcp_policy()
         self._mcp_jobs: dict[str, dict[str, Any]] = self._load_mcp_job_index()
@@ -278,7 +259,7 @@ class PerceptorMcpServer:
         arguments = params.get("arguments") or {}
         if not isinstance(arguments, dict):
             raise ValueError("tools/call arguments must be an object")
-        tool = self.tools.get(name) or self.tools.get(_legacy_mcp_tool_name(name))
+        tool = self.tools.get(name)
         if tool is None:
             raise ValueError(f"Unknown tool: {name}")
         correlation_id = str(uuid.uuid4())
@@ -302,7 +283,7 @@ class PerceptorMcpServer:
         processing = {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False}
         return [
             McpTool(
-                name="relic_workspace_summary",
+                name="perceptor_workspace_summary",
                 title="Perceptor Workspace Summary",
                 description="Summarize the configured Perceptor workspace and top-level case/job counts.",
                 input_schema=_object_schema({}),
@@ -310,7 +291,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_list_cases",
+                name="perceptor_list_cases",
                 title="List Perceptor Cases",
                 description="List cases in the configured Perceptor workspace.",
                 input_schema=_object_schema({"limit": _integer_schema("Maximum cases to return.", default=100, minimum=1, maximum=1000)}),
@@ -318,7 +299,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_case_summary",
+                name="perceptor_case_summary",
                 title="Perceptor Case Summary",
                 description="Return computers, images, parsed row counts, artifacts, jobs, warnings, and errors for a case.",
                 input_schema=_object_schema({"case_id": _string_schema("Perceptor case ID.")}, required=["case_id"]),
@@ -326,7 +307,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_case_evidence_map",
+                name="perceptor_case_evidence_map",
                 title="Perceptor Case Evidence Map",
                 description="Return case computers, images, report resources, memory sources, jobs, and processing state in one response.",
                 input_schema=_case_limit_schema(default=100),
@@ -334,7 +315,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_workspace_map",
+                name="perceptor_workspace_map",
                 title="Perceptor Workspace Map",
                 description="Return cases, computers, images, reports, progress manifests, MCP packets, and active jobs in one structure.",
                 input_schema=_object_schema(
@@ -347,7 +328,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_mcp_workflow_guide",
+                name="perceptor_mcp_workflow_guide",
                 title="Perceptor MCP Workflow Guide",
                 description="Return the recommended MCP workflow for case review, lead searches, drilldowns, packets, and exports.",
                 input_schema=_object_schema({}),
@@ -355,7 +336,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_route_question",
+                name="perceptor_route_question",
                 title="Perceptor Route Question",
                 description=(
                     "Classify an examiner question and return the correct Perceptor source-of-truth order. "
@@ -375,7 +356,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_case_readiness",
+                name="perceptor_case_readiness",
                 title="Perceptor Case Readiness",
                 description="Return MCP-friendly doctor, workspace health, processing readiness, progress, and resume signals.",
                 input_schema=_object_schema(
@@ -390,7 +371,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_discover_reports",
+                name="perceptor_discover_reports",
                 title="Perceptor Discover Reports",
                 description="Discover existing report bundle files and resource URIs for a case. Use this before raw artifact queries or report generation.",
                 input_schema=_object_schema(
@@ -405,7 +386,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_discover_report_exports",
+                name="perceptor_discover_report_exports",
                 title="Perceptor Discover Report Exports",
                 description="Discover existing report bundle exports by purpose and report-index tags. Use this before raw artifact queries or report generation.",
                 input_schema=_object_schema(
@@ -421,7 +402,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_read_existing_report",
+                name="perceptor_read_existing_report",
                 title="Read Existing Perceptor Report",
                 description=(
                     "Find and read an existing generated report for a case by report name, purpose, tag, or text. "
@@ -442,7 +423,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_case_dashboard",
+                name="perceptor_case_dashboard",
                 title="Perceptor Case Dashboard",
                 description="Return the high-level investigation dashboard for a case.",
                 input_schema=_case_limit_schema(default=25),
@@ -450,7 +431,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_processing_progress",
+                name="perceptor_processing_progress",
                 title="Perceptor Processing Progress",
                 description="Return active/failed timings and recent jobs for a case.",
                 input_schema=_case_limit_schema(default=50),
@@ -458,7 +439,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_resume_plan",
+                name="perceptor_resume_plan",
                 title="Perceptor Resume Plan",
                 description="Return recommended next commands after interrupted or partial processing.",
                 input_schema=_case_limit_schema(default=50),
@@ -466,7 +447,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_workspace_health",
+                name="perceptor_workspace_health",
                 title="Perceptor Workspace Health",
                 description="Check workspace disk, temp, and case health indicators.",
                 input_schema=_object_schema(
@@ -479,7 +460,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_list_computers",
+                name="perceptor_list_computers",
                 title="List Perceptor Computers",
                 description="List computers attached to a case.",
                 input_schema=_object_schema({"case_id": _string_schema("Perceptor case ID.")}, required=["case_id"]),
@@ -487,7 +468,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_list_images",
+                name="perceptor_list_images",
                 title="List Perceptor Images",
                 description="List images attached to a case.",
                 input_schema=_object_schema({"case_id": _string_schema("Perceptor case ID.")}, required=["case_id"]),
@@ -495,7 +476,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_list_jobs",
+                name="perceptor_list_jobs",
                 title="List Perceptor Jobs",
                 description="List recent jobs for a case.",
                 input_schema=_case_limit_schema(default=100),
@@ -503,7 +484,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_get_job",
+                name="perceptor_get_job",
                 title="Get Perceptor Job",
                 description="Return one job record by case ID and job ID.",
                 input_schema=_object_schema(
@@ -514,7 +495,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_timeline",
+                name="perceptor_timeline",
                 title="Perceptor Timeline",
                 description="Query the normalized timeline for a case.",
                 input_schema=_object_schema(
@@ -531,7 +512,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_timeline_window",
+                name="perceptor_timeline_window",
                 title="Perceptor Timeline Window",
                 description=(
                     "Return normalized master-timeline events for a case, optionally bounded by start/end. "
@@ -562,11 +543,11 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_activity_windows",
+                name="perceptor_activity_windows",
                 title="Perceptor Activity Windows",
                 description=(
                     "Aggregate activity across multiple resolved time windows. Use this after tools such as "
-                    "relic_query_wifi_activity return session_activity_plan.calls. This is the preferred tool for "
+                    "perceptor_query_wifi_activity return session_activity_plan.calls. This is the preferred tool for "
                     "questions like what happened while connected to a network when there are multiple sessions."
                 ),
                 input_schema=_object_schema(
@@ -592,12 +573,12 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_file_dossier",
+                name="perceptor_file_dossier",
                 title="Perceptor File Dossier",
                 description=(
                     "Return a file-centric dossier by path or name. Use this for questions such as what can you tell me "
                     "about this file, file metadata, filesystem metadata for a file, internal metadata, and file provenance. "
-                    "For broad filesystem listings, use relic_query_filesystem_listings first."
+                    "For broad filesystem listings, use perceptor_query_filesystem_listings first."
                 ),
                 input_schema=_object_schema(
                     {
@@ -612,7 +593,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_query_filesystem_listings",
+                name="perceptor_query_filesystem_listings",
                 title="Query Filesystem Listings",
                 description=(
                     "Return generated file listings from filesystem_entries. This is the first source of truth for "
@@ -635,11 +616,11 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_query_evidence_contents",
+                name="perceptor_query_evidence_contents",
                 title="Query Evidence Contents",
                 description=(
                     "Return file listings / drive contents for any evidence image, drive, volume, or filesystem from stored filesystem_entries only. "
-                    "This does not return file text. For the text/content inside a specific file, use relic_file_dossier for metadata and then relic_search_content."
+                    "This does not return file text. For the text/content inside a specific file, use perceptor_file_dossier for metadata and then perceptor_search_content."
                 ),
                 input_schema=_object_schema(
                     {
@@ -658,12 +639,12 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_query_usb_contents",
+                name="perceptor_query_usb_contents",
                 title="Query USB Contents",
                 description=(
                     "Resolve a USB volume/device such as BYEBYE to stored filesystem_entries and USB file correlations. "
-                    "Use this for questions like what else was on the USB drive, especially after relic_activity_windows "
-                    "or relic_query_wifi_activity identifies a USB volume name or drive letter."
+                    "Use this for questions like what else was on the USB drive, especially after perceptor_activity_windows "
+                    "or perceptor_query_wifi_activity identifies a USB volume name or drive letter."
                 ),
                 input_schema=_object_schema(
                     {
@@ -680,7 +661,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_usb_dossier",
+                name="perceptor_usb_dossier",
                 title="Perceptor USB Dossier",
                 description="Return a USB/storage-device dossier by serial, volume serial, or volume GUID.",
                 input_schema=_object_schema(
@@ -697,13 +678,13 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_user_activity",
+                name="perceptor_user_activity",
                 title="Perceptor User Activity",
                 description=(
                     "Return user-focused execution, file, browser, logon, communication, and USB activity. "
                     "This is not the source of truth for bounded activity-window questions such as what happened "
                     "during a Wi-Fi connection, USB attachment, logon session, or other resolved time span; use "
-                    "relic_timeline_window with start/end for those questions."
+                    "perceptor_timeline_window with start/end for those questions."
                 ),
                 input_schema=_object_schema(
                     {
@@ -717,7 +698,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_query_system_users",
+                name="perceptor_query_system_users",
                 title="Query System Users",
                 description=(
                     "Return consolidated Windows local and Microsoft-account users for a case/computer. "
@@ -747,7 +728,7 @@ class PerceptorMcpServer:
                 ),
             ),
             McpTool(
-                name="relic_query_suspicious_executions",
+                name="perceptor_query_suspicious_executions",
                 title="Query Suspicious Executions",
                 description="Return suspicious execution findings for a case.",
                 input_schema=_case_limit_schema(default=100),
@@ -755,7 +736,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_investigation_findings",
+                name="perceptor_investigation_findings",
                 title="Query Investigation Findings",
                 description=(
                     "Return Perceptor's deterministic evidence-backed findings, entities, and relationship counts. "
@@ -785,7 +766,7 @@ class PerceptorMcpServer:
                 ),
             ),
             McpTool(
-                name="relic_query_external_storage",
+                name="perceptor_query_external_storage",
                 title="Query External Storage",
                 description="Return external/removable storage summary and timeline context.",
                 input_schema=_object_schema(
@@ -800,7 +781,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_query_wifi_activity",
+                name="perceptor_query_wifi_activity",
                 title="Query Wi-Fi Activity",
                 description=(
                     "Return reconciled Wi-Fi/network activity from WLAN and NetworkProfile EVTX events, SRUM "
@@ -838,7 +819,7 @@ class PerceptorMcpServer:
                 ),
             ),
             McpTool(
-                name="relic_query_usb_files",
+                name="perceptor_query_usb_files",
                 title="Query USB Files",
                 description=(
                     "Return USB/removable-media file correlations from LNK, Jump List, and Shellbag artifacts. "
@@ -863,7 +844,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_query_file_movement_identity",
+                name="perceptor_query_file_movement_identity",
                 title="Query File Movement Identity",
                 description="Return identity and movement correlations from shortcuts, DROID, and related artifacts.",
                 input_schema=_object_schema(
@@ -880,7 +861,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_query_opened_from_removable_media",
+                name="perceptor_query_opened_from_removable_media",
                 title="Query Opened From Removable Media",
                 description="Return files or artifacts indicating user-opened content from removable media.",
                 input_schema=_user_contains_schema(default=100),
@@ -888,7 +869,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_query_opened_from_cloud_storage",
+                name="perceptor_query_opened_from_cloud_storage",
                 title="Query Opened From Cloud Storage",
                 description="Return files or artifacts indicating user-opened content from cloud-synced storage.",
                 input_schema=_object_schema(
@@ -905,7 +886,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_query_cloud_artifacts",
+                name="perceptor_query_cloud_artifacts",
                 title="Query Cloud Artifacts",
                 description="Return cloud storage and cloud application artifacts.",
                 input_schema=_case_limit_schema(default=100),
@@ -913,7 +894,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_query_memory_artifacts",
+                name="perceptor_query_memory_artifacts",
                 title="Query Memory Artifacts",
                 description="Return memory artifact inventory rows.",
                 input_schema=_case_limit_schema(default=100),
@@ -921,7 +902,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_query_browser_activity",
+                name="perceptor_query_browser_activity",
                 title="Query Browser Activity",
                 description=(
                     "Return browser host, download, WebCache, and cache correlation summary. Includes "
@@ -942,7 +923,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_query_registry_activity",
+                name="perceptor_query_registry_activity",
                 title="Query Registry Activity",
                 description="Return targeted registry activity such as RunMRU, RecentDocs, UserAssist, or Office MRU.",
                 input_schema=_object_schema(
@@ -958,7 +939,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_query_shortcuts",
+                name="perceptor_query_shortcuts",
                 title="Query Shortcuts",
                 description="Return LNK or JumpList shortcut artifacts.",
                 input_schema=_object_schema(
@@ -973,7 +954,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_query_communications",
+                name="perceptor_query_communications",
                 title="Query Communications",
                 description="Return communication artifacts from mailbox, Windows Search, messaging, and related sources.",
                 input_schema=_object_schema(
@@ -991,7 +972,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_case_review",
+                name="perceptor_case_review",
                 title="Perceptor Case Review",
                 description="Return a combined investigative review across dashboard, suspicious execution, storage, cloud, movement, memory, browser, and communications.",
                 input_schema=_case_limit_schema(default=25),
@@ -999,12 +980,12 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_search_artifacts",
+                name="perceptor_search_artifacts",
                 title="Perceptor Artifact Search",
                 description=(
                     "Search parsed artifact tables by text, user, computer, source type, and time bounds without requiring OpenSearch. "
-                    "Use relic_route_question and existing reports first for broad review questions; for filesystem questions, use "
-                    "relic_query_filesystem_listings first."
+                    "Use perceptor_route_question and existing reports first for broad review questions; for filesystem questions, use "
+                    "perceptor_query_filesystem_listings first."
                 ),
                 input_schema=_object_schema(
                     {
@@ -1023,7 +1004,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_artifact_search_sources",
+                name="perceptor_artifact_search_sources",
                 title="Perceptor Artifact Search Sources",
                 description="Return the artifact tables, categories, fields, and row counts covered by artifact and lead search.",
                 input_schema=_object_schema({"case_id": _string_schema("Perceptor case ID.")}, required=["case_id"]),
@@ -1031,11 +1012,11 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_lead_search",
+                name="perceptor_lead_search",
                 title="Perceptor Lead Search",
                 description=(
                     "Run preset artifact searches for execution, USB, cloud, documents, browser, or communications leads. "
-                    "Use relic_route_question and existing reports first for broad review questions."
+                    "Use perceptor_route_question and existing reports first for broad review questions."
                 ),
                 input_schema=_object_schema(
                     {
@@ -1054,7 +1035,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_search_content",
+                name="perceptor_search_content",
                 title="Perceptor OpenSearch Content Search",
                 description=(
                     "Search full-text content indexed in OpenSearch, including extracted document text, mailbox bodies, "
@@ -1089,17 +1070,17 @@ class PerceptorMcpServer:
                 ),
             ),
             McpTool(
-                name="relic_get_indexed_content",
+                name="perceptor_get_indexed_content",
                 title="Perceptor Get Indexed Content",
                 description=(
                     "Return the stored full-text content for one OpenSearch content hit. Use the opensearch_document_id "
-                    "returned by relic_search_content when the user wants to read more than the search snippet. "
+                    "returned by perceptor_search_content when the user wants to read more than the search snippet. "
                     "Credentials are read from FORENSIC_OPENSEARCH_* environment variables and are not accepted as MCP arguments."
                 ),
                 input_schema=_object_schema(
                     {
                         "case_id": _string_schema("Perceptor case ID. The OpenSearch document must belong to this case."),
-                        "opensearch_document_id": _string_schema("OpenSearch document ID returned by relic_search_content."),
+                        "opensearch_document_id": _string_schema("OpenSearch document ID returned by perceptor_search_content."),
                         "max_chars": _integer_schema("Maximum indexed-content characters to return.", default=20000, minimum=1, maximum=1000000),
                         "url": _string_schema("Optional OpenSearch URL. Defaults to FORENSIC_OPENSEARCH_URL or http://localhost:9200."),
                         "index": _string_schema("Optional OpenSearch index. Defaults to FORENSIC_OPENSEARCH_INDEX or forensic-content."),
@@ -1121,7 +1102,7 @@ class PerceptorMcpServer:
                 ),
             ),
             McpTool(
-                name="relic_case_activity_digest",
+                name="perceptor_case_activity_digest",
                 title="Perceptor Case Activity Digest",
                 description="Return a compact digest of recent activity, suspicious execution, storage, cloud/removable opens, gaps, and next actions.",
                 input_schema=_case_limit_schema(default=25),
@@ -1129,7 +1110,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_case_next_actions",
+                name="perceptor_case_next_actions",
                 title="Perceptor Case Next Actions",
                 description="Return ranked next investigative actions from readiness, gaps, unmapped imports, suspicious execution, USB, and cloud findings.",
                 input_schema=_case_limit_schema(default=25),
@@ -1137,7 +1118,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_case_runbook",
+                name="perceptor_case_runbook",
                 title="Perceptor Case Runbook",
                 description="Return safe next commands and reasons based on review status, readiness, packets, reports, and gaps.",
                 input_schema=_case_limit_schema(default=25),
@@ -1145,7 +1126,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_write_review_packet",
+                name="perceptor_write_review_packet",
                 title="Write Perceptor Review Packet",
                 description="Write a small MCP review packet with selected findings, report URIs, timeline slices, and examiner notes.",
                 input_schema=_object_schema(
@@ -1164,7 +1145,7 @@ class PerceptorMcpServer:
                 permission="safe_write",
             ),
             McpTool(
-                name="relic_list_review_packets",
+                name="perceptor_list_review_packets",
                 title="List Perceptor Review Packets",
                 description="List MCP review packets previously written for a case.",
                 input_schema=_case_limit_schema(default=50),
@@ -1172,7 +1153,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_read_review_packet",
+                name="perceptor_read_review_packet",
                 title="Read Perceptor Review Packet",
                 description="Read a saved MCP review packet JSON or Markdown resource.",
                 input_schema=_object_schema({"uri": _string_schema("Review packet resource URI.")}, required=["uri"]),
@@ -1180,7 +1161,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_write_search_packet",
+                name="perceptor_write_search_packet",
                 title="Write Perceptor Search Packet",
                 description="Run and save an artifact or preset lead search packet with filters and result counts.",
                 input_schema=_object_schema(
@@ -1203,7 +1184,7 @@ class PerceptorMcpServer:
                 permission="safe_write",
             ),
             McpTool(
-                name="relic_list_search_packets",
+                name="perceptor_list_search_packets",
                 title="List Perceptor Search Packets",
                 description="List MCP search packets previously written for a case.",
                 input_schema=_case_limit_schema(default=50),
@@ -1211,7 +1192,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_read_search_packet",
+                name="perceptor_read_search_packet",
                 title="Read Perceptor Search Packet",
                 description="Read a saved MCP search packet JSON or Markdown resource.",
                 input_schema=_object_schema({"uri": _string_schema("Search packet resource URI.")}, required=["uri"]),
@@ -1219,7 +1200,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_rerun_search_packet",
+                name="perceptor_rerun_search_packet",
                 title="Rerun Perceptor Search Packet",
                 description="Rerun a saved MCP search packet and compare added, removed, changed, and unchanged result IDs.",
                 input_schema=_object_schema(
@@ -1233,7 +1214,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_ingest_triage_zip_preflight",
+                name="perceptor_ingest_triage_zip_preflight",
                 title="Perceptor Triage ZIP Preflight",
                 description="Validate a live-case/report ZIP without importing it.",
                 input_schema=_object_schema(
@@ -1247,7 +1228,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_report_bundle_coverage",
+                name="perceptor_report_bundle_coverage",
                 title="Perceptor Report Bundle Coverage",
                 description="Inspect report-bundle parser coverage for a folder or ZIP.",
                 input_schema=_object_schema({"path": _string_schema("Optional report bundle folder or ZIP path.")}),
@@ -1255,7 +1236,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_profile_preview",
+                name="perceptor_profile_preview",
                 title="Perceptor Profile Preview",
                 description="Preview extraction and tool coverage for a Perceptor processing profile.",
                 input_schema=_object_schema({"profile": _string_schema("Perceptor profile name.")}, required=["profile"]),
@@ -1263,7 +1244,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_doctor",
+                name="perceptor_doctor",
                 title="Perceptor Doctor",
                 description="Run Perceptor doctor checks. This MCP tool does not repair dependencies.",
                 input_schema=_object_schema(
@@ -1277,7 +1258,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_list_report_types",
+                name="perceptor_list_report_types",
                 title="Perceptor Report Types",
                 description="List report types supported by the generic MCP report runner.",
                 input_schema=_object_schema({}),
@@ -1285,7 +1266,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_mcp_tool_reference",
+                name="perceptor_mcp_tool_reference",
                 title="Perceptor MCP Tool Reference",
                 description="Return MCP tool names, permission tiers, annotations, and schemas.",
                 input_schema=_object_schema({}),
@@ -1293,7 +1274,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_generate_report",
+                name="perceptor_generate_report",
                 title="Perceptor Generate Report",
                 description="Return an existing generated report when available; regenerate through the Perceptor CLI only when regenerate=true or no matching report exists.",
                 input_schema=_object_schema(
@@ -1319,7 +1300,7 @@ class PerceptorMcpServer:
                 permission="safe_write",
             ),
             McpTool(
-                name="relic_write_report_bundle",
+                name="perceptor_write_report_bundle",
                 title="Perceptor Write Report Bundle",
                 description="Write a purpose-built report bundle under the workspace root.",
                 input_schema=_object_schema(
@@ -1341,7 +1322,7 @@ class PerceptorMcpServer:
                 permission="safe_write",
             ),
             McpTool(
-                name="relic_get_mcp_job",
+                name="perceptor_get_mcp_job",
                 title="Get Perceptor MCP Job",
                 description="Return persisted status for a long-running process launched by MCP.",
                 input_schema=_object_schema({"mcp_job_id": _string_schema("MCP job ID returned by a processing tool.")}, required=["mcp_job_id"]),
@@ -1349,7 +1330,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_list_mcp_jobs",
+                name="perceptor_list_mcp_jobs",
                 title="List Perceptor MCP Jobs",
                 description="List persisted MCP-launched subprocess jobs.",
                 input_schema=_object_schema(
@@ -1362,7 +1343,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_get_mcp_job_output",
+                name="perceptor_get_mcp_job_output",
                 title="Get Perceptor MCP Job Output",
                 description="Return stdout/stderr tails and parsed JSON stdout when available for an MCP job.",
                 input_schema=_object_schema(
@@ -1376,7 +1357,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_get_mcp_job_progress",
+                name="perceptor_get_mcp_job_progress",
                 title="Get Perceptor MCP Job Progress",
                 description="Return structured progress signals parsed from MCP-launched job output.",
                 input_schema=_object_schema(
@@ -1390,7 +1371,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_list_progress_manifests",
+                name="perceptor_list_progress_manifests",
                 title="List Perceptor Progress Manifests",
                 description="List live report-bundle/import progress manifests under the workspace progress directory.",
                 input_schema=_object_schema(
@@ -1403,7 +1384,7 @@ class PerceptorMcpServer:
                 annotations=read_only,
             ),
             McpTool(
-                name="relic_cancel_mcp_job",
+                name="perceptor_cancel_mcp_job",
                 title="Cancel Perceptor MCP Job",
                 description="Cancel a running MCP-launched subprocess. Requires --allow-processing.",
                 input_schema=_object_schema({"mcp_job_id": _string_schema("MCP job ID returned by a processing tool.")}, required=["mcp_job_id"]),
@@ -1412,7 +1393,7 @@ class PerceptorMcpServer:
                 permission="processing",
             ),
             McpTool(
-                name="relic_import_triage_zip",
+                name="perceptor_import_triage_zip",
                 title="Perceptor Import Triage ZIP",
                 description=(
                     "Start a gated bulk live-case/report ZIP import as a background MCP job. Do not use this to answer review "
@@ -1436,7 +1417,7 @@ class PerceptorMcpServer:
                 permission="processing",
             ),
             McpTool(
-                name="relic_import_report_bundle",
+                name="perceptor_import_report_bundle",
                 title="Perceptor Import Report Bundle",
                 description=(
                     "Start a gated single-computer report bundle import as a background MCP job. Do not use this to answer review "
@@ -1458,7 +1439,7 @@ class PerceptorMcpServer:
                 permission="processing",
             ),
             McpTool(
-                name="relic_process_image",
+                name="perceptor_process_image",
                 title="Perceptor Process Image",
                 description=(
                     "Start a gated image processing run as a background MCP job only when the user explicitly asks to process or "
@@ -1487,7 +1468,7 @@ class PerceptorMcpServer:
                 permission="processing",
             ),
             McpTool(
-                name="relic_run_profile",
+                name="perceptor_run_profile",
                 title="Perceptor Run Profile",
                 description=(
                     "Start a gated profile run against an existing case image as a background MCP job only when the user explicitly "
@@ -1508,7 +1489,7 @@ class PerceptorMcpServer:
                 permission="processing",
             ),
             McpTool(
-                name="relic_recover_deleted_files",
+                name="perceptor_recover_deleted_files",
                 title="Recover Deleted Files",
                 description=(
                     "Start a gated deleted-file recovery job from parsed filesystem_entries and mft_entries. Use only when the user "
@@ -2167,13 +2148,13 @@ class PerceptorMcpServer:
             query_text = _optional_text(arguments, "path") or _optional_text(arguments, "name") or ""
             result["content_followup"] = {
                 "required_for_content_questions": True,
-                "tool": "relic_search_content",
+                "tool": "perceptor_search_content",
                 "arguments": {
                     "case_id": result.get("case_id"),
                     "query": query_text,
                     "limit": 10,
                 },
-                "next_step": "If relic_search_content returns full_content_available=true, call relic_get_indexed_content with that hit's opensearch_document_id.",
+                "next_step": "If perceptor_search_content returns full_content_available=true, call perceptor_get_indexed_content with that hit's opensearch_document_id.",
                 "reason": "A file dossier focuses on metadata/provenance. File text/content lives in the OpenSearch content index when extracted or indexed.",
             }
             return result
@@ -2373,14 +2354,14 @@ class PerceptorMcpServer:
                 "Use reconciled_networks first. Treat EVTX WLAN 8001 and NetworkProfile 10000 as stronger "
                 "successful-connection evidence than SRUM alone; treat WLAN 8002 as failed-attempt evidence. "
                 "For what happened while connected to a network, call session_activity_plan.aggregate_tool first. "
-                "Use per-session relic_timeline_window calls only for drilldown. Do not answer from only the first "
-                "session when multiple sessions are present. Do not use relic_user_activity for bounded activity-window questions."
+                "Use per-session perceptor_timeline_window calls only for drilldown. Do not answer from only the first "
+                "session when multiple sessions are present. Do not use perceptor_user_activity for bounded activity-window questions."
             )
             result["next_step"] = {
                 "for_activity_during_connection": "Call session_activity_plan.aggregate_tool to aggregate every matching session.",
-                "tool": "relic_activity_windows",
+                "tool": "perceptor_activity_windows",
                 "argument_source": "session_activity_plan.aggregate_tool.arguments",
-                "avoid": "relic_user_activity is narrower and can miss browser, cache, USB, filesystem, and other timeline events in the window.",
+                "avoid": "perceptor_user_activity is narrower and can miss browser, cache, USB, filesystem, and other timeline events in the window.",
             }
             return result
         finally:
@@ -2620,7 +2601,7 @@ class PerceptorMcpServer:
             )
             hit["full_content_available"] = bool(opensearch_document_id and content_length > 0)
             hit["full_content_tool"] = {
-                "tool": "relic_get_indexed_content",
+                "tool": "perceptor_get_indexed_content",
                 "arguments": {
                     "case_id": result.get("case_id"),
                     "opensearch_document_id": opensearch_document_id,
@@ -2628,7 +2609,7 @@ class PerceptorMcpServer:
                 "note": "Call this tool when the user wants to read the full indexed content for this hit.",
             }
             hit["drilldown"] = {
-                "tool": "relic_file_dossier" if source_table in {"windows_search_indexed_content", "mailbox_attachments"} else "relic_search_artifacts",
+                "tool": "perceptor_file_dossier" if source_table in {"windows_search_indexed_content", "mailbox_attachments"} else "perceptor_search_artifacts",
                 "source_table": source_table,
                 "source_record_id": source_record_id,
                 "note": "Use source_table and source_record_id to pivot into parsed metadata or related reports.",
@@ -2636,7 +2617,7 @@ class PerceptorMcpServer:
         result["source_of_truth"] = "opensearch_content_index"
         result["guidance"] = (
             "These hits come from OpenSearch indexed content. Highlight values are snippets only and are not the full "
-            "indexed content. If the user wants to read the full indexed text for a hit, call relic_get_indexed_content "
+            "indexed content. If the user wants to read the full indexed text for a hit, call perceptor_get_indexed_content "
             "with that hit's opensearch_document_id. Use generated reports/listings for high-level conclusions, then "
             "pivot from source_table/source_record_id into parsed metadata for provenance."
         )
@@ -3447,9 +3428,6 @@ class PerceptorMcpServer:
         return {"jsonrpc": "2.0", "id": request_id, "error": error}
 
 
-RelicMcpServer = PerceptorMcpServer
-
-
 def run_mcp_server(
     *,
     root: Path,
@@ -3937,8 +3915,7 @@ def _tool_metadata(tool: McpTool) -> dict[str, Any]:
 
 
 def _infer_tool_category(name: str) -> str:
-    name = _legacy_mcp_tool_name(name)
-    if "mcp_job" in name or name.startswith("relic_mcp_") or "progress" in name or "readiness" in name or "doctor" in name:
+    if "mcp_job" in name or name.startswith("perceptor_mcp_") or "progress" in name or "readiness" in name or "doctor" in name:
         return "operations"
     if "report" in name or "packet" in name or "review" in name or "dashboard" in name or "digest" in name or "runbook" in name:
         return "reports"
@@ -3962,18 +3939,16 @@ def _infer_tool_category(name: str) -> str:
 
 
 def _infer_tool_tags(name: str, category: str, permission: str) -> tuple[str, ...]:
-    name = _legacy_mcp_tool_name(name)
     tags = {category, permission}
     for token in ("source_of_truth", "filesystem", "cloud", "usb", "memory", "timeline", "report", "processing", "recovery"):
         if token.replace("_", "-") in name or token in name:
             tags.add(token)
-    if name in {"relic_read_existing_report", "relic_discover_reports", "relic_query_filesystem_listings", "relic_query_evidence_contents", "relic_query_usb_contents"}:
+    if name in {"perceptor_read_existing_report", "perceptor_discover_reports", "perceptor_query_filesystem_listings", "perceptor_query_evidence_contents", "perceptor_query_usb_contents"}:
         tags.add("source_of_truth")
     return tuple(tags)
 
 
 def _infer_tool_dependencies(name: str, permission: str) -> tuple[str, ...]:
-    name = _legacy_mcp_tool_name(name)
     deps = ["orchestrator.sqlite3"]
     if permission == "processing":
         deps.append("perceptor CLI")
@@ -4024,7 +3999,7 @@ def _indexed_content_provenance_summary(
 
 
 def _infer_source_priority(name: str, category: str) -> tuple[str, ...]:
-    if name in {"relic_read_existing_report", "relic_discover_reports", "relic_generate_report"} or category == "reports":
+    if name in {"perceptor_read_existing_report", "perceptor_discover_reports", "perceptor_generate_report"} or category == "reports":
         return ("existing_reports", "parsed_artifacts", "processing")
     if category == "filesystem":
         return ("filesystem_entries", "mft_entries", "mounted_image_or_tsk")
@@ -4160,13 +4135,13 @@ def _contains_capped_collection(result: dict[str, Any], limit: int) -> bool:
 
 
 def _full_picture_options(tool_name: str) -> list[str]:
-    options = ["Increase the limit and rerun the same MCP tool.", "Use relic_discover_reports and relic_read_existing_report to inspect generated reports before raw artifact queries."]
+    options = ["Increase the limit and rerun the same MCP tool.", "Use perceptor_discover_reports and perceptor_read_existing_report to inspect generated reports before raw artifact queries."]
     if any(token in tool_name for token in ("file", "content", "filesystem", "usb")):
-        options.append("Use relic_file_dossier or relic_query_evidence_contents for full file/device context.")
+        options.append("Use perceptor_file_dossier or perceptor_query_evidence_contents for full file/device context.")
     if "timeline" in tool_name or "activity" in tool_name:
-        options.append("Use a wider relic_timeline_window and then follow report_hints/artifact_reference entries for supporting artifacts.")
+        options.append("Use a wider perceptor_timeline_window and then follow report_hints/artifact_reference entries for supporting artifacts.")
     if "search" in tool_name or "content" in tool_name:
-        options.append("Use relic_get_indexed_content for the full indexed body when search_content reports full_content_available.")
+        options.append("Use perceptor_get_indexed_content for the full indexed body when search_content reports full_content_available.")
     return options
 
 
@@ -4424,7 +4399,7 @@ def _input_path(root: Path, value: str) -> Path:
 
 
 def _allowed_input_roots(root: Path) -> list[Path]:
-    configured = os.environ.get("PERCEPTOR_MCP_ALLOWED_INPUT_ROOTS") or os.environ.get("RELIC_MCP_ALLOWED_INPUT_ROOTS", "")
+    configured = os.environ.get("PERCEPTOR_MCP_ALLOWED_INPUT_ROOTS", "")
     values = [value for value in configured.split(os.pathsep) if value.strip()]
     if not values:
         values = [str(root), str(Path.cwd()), str(Path.home()), "/mnt", "/media", "/tmp"]
@@ -4946,14 +4921,14 @@ def _route_mcp_question(
     intent = "general_review"
     report_purpose = "full"
     report_names: list[str] = []
-    recommended_tool = "relic_read_existing_report"
-    fallback_tools = ["relic_discover_report_exports", "relic_lead_search", "relic_search_artifacts"]
+    recommended_tool = "perceptor_read_existing_report"
+    fallback_tools = ["perceptor_discover_report_exports", "perceptor_lead_search", "perceptor_search_artifacts"]
     first_source = "existing_reports"
     reason = "Generated reports are the highest-level source of truth for broad case questions."
     source_order = [
-        {"order": 1, "source": "generated_reports", "tools": ["relic_read_existing_report", "relic_discover_report_exports"]},
-        {"order": 2, "source": "parsed_artifact_tables", "tools": ["relic_lead_search", "relic_search_artifacts", "domain query tools"]},
-        {"order": 3, "source": "case_resources_and_packets", "tools": ["resources/list", "resources/read", "relic_list_review_packets", "relic_list_search_packets"]},
+        {"order": 1, "source": "generated_reports", "tools": ["perceptor_read_existing_report", "perceptor_discover_report_exports"]},
+        {"order": 2, "source": "parsed_artifact_tables", "tools": ["perceptor_lead_search", "perceptor_search_artifacts", "domain query tools"]},
+        {"order": 3, "source": "case_resources_and_packets", "tools": ["resources/list", "resources/read", "perceptor_list_review_packets", "perceptor_list_search_packets"]},
         {"order": 4, "source": "processing_or_image_access", "tools": ["processing tools"], "requires_explicit_user_request": True},
     ]
 
@@ -4962,53 +4937,53 @@ def _route_mcp_question(
         first_source = "parsed_identity_artifact_tables"
         report_purpose = "identity"
         report_names = ["case-overview"]
-        recommended_tool = "relic_query_system_users"
-        fallback_tools = ["relic_user_activity", "relic_search_artifacts"]
+        recommended_tool = "perceptor_query_system_users"
+        fallback_tools = ["perceptor_user_activity", "perceptor_search_artifacts"]
         reason = (
             "User/account inventory questions should use the consolidated system-users view, which joins SAM accounts "
             "with registry cloud-account details and SID evidence before falling back to raw artifact searches."
         )
         source_order = [
-            {"order": 1, "source": "consolidated_user_inventory", "tools": ["relic_query_system_users"]},
-            {"order": 2, "source": "user_activity_if_named_user", "tools": ["relic_user_activity"]},
-            {"order": 3, "source": "parsed_artifact_tables", "tools": ["relic_search_artifacts"], "tables": ["sam_accounts", "registry_artifacts"]},
-            {"order": 4, "source": "processing_or_reparse", "tools": ["relic_process_image", "relic_run_profile"], "requires_explicit_user_request": True},
+            {"order": 1, "source": "consolidated_user_inventory", "tools": ["perceptor_query_system_users"]},
+            {"order": 2, "source": "user_activity_if_named_user", "tools": ["perceptor_user_activity"]},
+            {"order": 3, "source": "parsed_artifact_tables", "tools": ["perceptor_search_artifacts"], "tables": ["sam_accounts", "registry_artifacts"]},
+            {"order": 4, "source": "processing_or_reparse", "tools": ["perceptor_process_image", "perceptor_run_profile"], "requires_explicit_user_request": True},
         ]
     elif wants_recovery:
         intent = "deleted_file_recovery"
         first_source = "generated_filesystem_listings"
-        recommended_tool = "relic_query_evidence_contents"
-        fallback_tools = ["relic_query_filesystem_listings", "relic_file_dossier"]
+        recommended_tool = "perceptor_query_evidence_contents"
+        fallback_tools = ["perceptor_query_filesystem_listings", "perceptor_file_dossier"]
         if allow_processing and server_allows_processing:
-            fallback_tools.append("relic_recover_deleted_files")
+            fallback_tools.append("perceptor_recover_deleted_files")
         report_names = ["opened-from-removable-media", "file-movement-identity"]
         report_purpose = "usb" if _contains_any(text, {"usb", "removable", "external", "drive"}) else "full"
         reason = "Deleted-file recovery should first identify the target in parsed listings, then run recovery only on explicit request."
         source_order = [
-            {"order": 1, "source": "generated_filesystem_listings", "tools": ["relic_query_evidence_contents", "relic_query_filesystem_listings"]},
-            {"order": 2, "source": "file_context_reports", "tools": ["relic_read_existing_report"], "report_names": report_names},
-            {"order": 3, "source": "file_dossier", "tools": ["relic_file_dossier"]},
-            {"order": 4, "source": "deleted_file_recovery", "tools": ["relic_recover_deleted_files"], "requires_explicit_user_request": True},
+            {"order": 1, "source": "generated_filesystem_listings", "tools": ["perceptor_query_evidence_contents", "perceptor_query_filesystem_listings"]},
+            {"order": 2, "source": "file_context_reports", "tools": ["perceptor_read_existing_report"], "report_names": report_names},
+            {"order": 3, "source": "file_dossier", "tools": ["perceptor_file_dossier"]},
+            {"order": 4, "source": "deleted_file_recovery", "tools": ["perceptor_recover_deleted_files"], "requires_explicit_user_request": True},
         ]
     elif _is_content_search_question(text) and not _is_file_information_question(text, tokens):
         intent = "content_search"
         first_source = "generated_reports"
-        recommended_tool = "relic_search_content"
-        fallback_tools = ["relic_search_artifacts", "relic_file_dossier", "relic_artifact_search_sources"]
+        recommended_tool = "perceptor_search_content"
+        fallback_tools = ["perceptor_search_artifacts", "perceptor_file_dossier", "perceptor_artifact_search_sources"]
         report_names = ["user-intent", "communications", "cloud-files", "windows-search", "case-overview"]
         report_purpose = "documents"
         reason = "File-content and body-text search should query the OpenSearch content index after checking generated report context."
         source_order = [
-            {"order": 1, "source": "generated_reports", "tools": ["relic_read_existing_report", "relic_discover_report_exports"], "report_names": report_names},
-            {"order": 2, "source": "opensearch_content_index", "tools": ["relic_search_content"]},
-            {"order": 3, "source": "parsed_artifact_tables", "tools": ["relic_search_artifacts", "relic_file_dossier"]},
-            {"order": 4, "source": "processing_or_reindexing", "tools": ["relic_process_image", "relic_run_profile"], "requires_explicit_user_request": True},
+            {"order": 1, "source": "generated_reports", "tools": ["perceptor_read_existing_report", "perceptor_discover_report_exports"], "report_names": report_names},
+            {"order": 2, "source": "opensearch_content_index", "tools": ["perceptor_search_content"]},
+            {"order": 3, "source": "parsed_artifact_tables", "tools": ["perceptor_search_artifacts", "perceptor_file_dossier"]},
+            {"order": 4, "source": "processing_or_reindexing", "tools": ["perceptor_process_image", "perceptor_run_profile"], "requires_explicit_user_request": True},
         ]
     elif _is_file_information_question(text, tokens):
         intent = "file_content_and_information" if wants_file_content else "file_information"
         first_source = "file_dossier"
-        recommended_tool = "relic_file_dossier"
-        fallback_tools = ["relic_query_filesystem_listings", "relic_search_content", "relic_search_artifacts", "relic_read_existing_report"]
+        recommended_tool = "perceptor_file_dossier"
+        fallback_tools = ["perceptor_query_filesystem_listings", "perceptor_search_content", "perceptor_search_artifacts", "perceptor_read_existing_report"]
         report_names = ["file-movement-identity", "opened-from-removable-media", "opened-from-cloud-storage", "windows-search"]
         report_purpose = "documents"
         reason = (
@@ -5016,30 +4991,30 @@ def _route_mcp_question(
             "MFT/USN/Search/shortcut/cloud evidence, and internal file metadata when available."
         )
         source_order = [
-            {"order": 1, "source": "file_dossier", "tools": ["relic_file_dossier"]},
-            {"order": 2, "source": "generated_filesystem_listings", "tools": ["relic_query_filesystem_listings"]},
+            {"order": 1, "source": "file_dossier", "tools": ["perceptor_file_dossier"]},
+            {"order": 2, "source": "generated_filesystem_listings", "tools": ["perceptor_query_filesystem_listings"]},
             {
                 "order": 3,
                 "source": "opensearch_content_index",
-                "tools": ["relic_search_content"],
+                "tools": ["perceptor_search_content"],
                 "required_when": "The user asks for file contents, text inside the file, full content, or what the file says.",
-                "followup": "If a hit is returned and full_content_available is true, call relic_get_indexed_content with that hit's opensearch_document_id.",
+                "followup": "If a hit is returned and full_content_available is true, call perceptor_get_indexed_content with that hit's opensearch_document_id.",
             },
-            {"order": 4, "source": "parsed_artifact_tables", "tools": ["relic_search_artifacts"]},
-            {"order": 5, "source": "generated_reports", "tools": ["relic_read_existing_report"], "report_names": report_names},
-            {"order": 6, "source": "processing_or_image_access", "tools": ["relic_process_image", "relic_run_profile"], "requires_explicit_user_request": True},
+            {"order": 4, "source": "parsed_artifact_tables", "tools": ["perceptor_search_artifacts"]},
+            {"order": 5, "source": "generated_reports", "tools": ["perceptor_read_existing_report"], "report_names": report_names},
+            {"order": 6, "source": "processing_or_image_access", "tools": ["perceptor_process_image", "perceptor_run_profile"], "requires_explicit_user_request": True},
         ]
         if wants_file_content:
-            reason += " Because the question asks for content, do not stop at metadata; query relic_search_content with the file name/path and use relic_get_indexed_content when available."
+            reason += " Because the question asks for content, do not stop at metadata; query perceptor_search_content with the file name/path and use perceptor_get_indexed_content when available."
     elif _contains_any(text, {"contents", "content", "list files", "files on", "folder", "directory", "filesystem", "file listing", "drive contents", "volume contents"}) or "files" in tokens and _contains_any(text, {"usb", "drive", "volume", "image"}) or _contains_any(text, {"what else", "what was on", "what is on", "anything else"}) and _contains_any(text, {"usb", "removable", "external", "drive", "volume"}):
         intent = "evidence_contents"
         usb_scoped = _contains_any(text, {"usb", "removable", "external"})
         first_source = "generated_usb_filesystem_listings" if usb_scoped else "generated_filesystem_listings"
-        recommended_tool = "relic_query_usb_contents" if usb_scoped else "relic_query_evidence_contents"
+        recommended_tool = "perceptor_query_usb_contents" if usb_scoped else "perceptor_query_evidence_contents"
         fallback_tools = (
-            ["relic_query_evidence_contents", "relic_query_filesystem_listings", "relic_query_usb_files", "relic_file_dossier", "relic_search_artifacts"]
+            ["perceptor_query_evidence_contents", "perceptor_query_filesystem_listings", "perceptor_query_usb_files", "perceptor_file_dossier", "perceptor_search_artifacts"]
             if usb_scoped
-            else ["relic_query_filesystem_listings", "relic_file_dossier", "relic_search_artifacts"]
+            else ["perceptor_query_filesystem_listings", "perceptor_file_dossier", "perceptor_search_artifacts"]
         )
         report_names = ["opened-from-removable-media", "file-movement-identity", "usb-files"]
         report_purpose = "usb" if usb_scoped else "full"
@@ -5052,24 +5027,24 @@ def _route_mcp_question(
             {
                 "order": 1,
                 "source": "generated_usb_filesystem_listings" if usb_scoped else "generated_filesystem_listings",
-                "tools": ["relic_query_usb_contents"] if usb_scoped else ["relic_query_evidence_contents", "relic_query_filesystem_listings"],
+                "tools": ["perceptor_query_usb_contents"] if usb_scoped else ["perceptor_query_evidence_contents", "perceptor_query_filesystem_listings"],
             },
             {
                 "order": 2,
                 "source": "usb_file_correlations" if usb_scoped else "generated_reports",
-                "tools": ["relic_query_usb_files", "relic_query_evidence_contents", "relic_query_filesystem_listings"] if usb_scoped else ["relic_read_existing_report"],
+                "tools": ["perceptor_query_usb_files", "perceptor_query_evidence_contents", "perceptor_query_filesystem_listings"] if usb_scoped else ["perceptor_read_existing_report"],
                 "report_names": report_names,
             },
-            {"order": 3, "source": "generated_reports", "tools": ["relic_read_existing_report"], "report_names": report_names},
-            {"order": 4, "source": "parsed_artifact_tables", "tools": ["relic_file_dossier", "relic_search_artifacts"]},
-            {"order": 5, "source": "image_processing_or_fls", "tools": ["relic_process_image", "relic_run_profile"], "requires_explicit_user_request": True},
+            {"order": 3, "source": "generated_reports", "tools": ["perceptor_read_existing_report"], "report_names": report_names},
+            {"order": 4, "source": "parsed_artifact_tables", "tools": ["perceptor_file_dossier", "perceptor_search_artifacts"]},
+            {"order": 5, "source": "image_processing_or_fls", "tools": ["perceptor_process_image", "perceptor_run_profile"], "requires_explicit_user_request": True},
         ]
     elif not (has_wifi_terms and wants_activity_during_connection) and _contains_any(text, {"usb", "removable", "external storage", "thumb drive", "flash drive", "uasp", "usbstor", "volume serial"}):
         intent = "usb_storage"
         report_purpose = "usb"
         report_names = ["external-storage", "usb-files", "usb-timeline", "opened-from-removable-media", "file-movement-identity"]
-        recommended_tool = "relic_read_existing_report"
-        fallback_tools = ["relic_query_external_storage", "relic_query_usb_files", "relic_usb_dossier", "relic_query_evidence_contents"]
+        recommended_tool = "perceptor_read_existing_report"
+        fallback_tools = ["perceptor_query_external_storage", "perceptor_query_usb_files", "perceptor_usb_dossier", "perceptor_query_evidence_contents"]
         reason = "USB/storage questions should begin with deduped storage reports, then storage-specific parsed tables."
     elif _contains_any(
         text,
@@ -5090,17 +5065,17 @@ def _route_mcp_question(
         intent = "software_footprint"
         report_purpose = "execution"
         report_names = ["software-footprint-review", "program-provenance", "execution", "suspicious-executions"]
-        recommended_tool = "relic_read_existing_report"
-        fallback_tools = ["relic_generate_report", "relic_search_artifacts", "relic_timeline_window"]
+        recommended_tool = "perceptor_read_existing_report"
+        fallback_tools = ["perceptor_generate_report", "perceptor_search_artifacts", "perceptor_timeline_window"]
         reason = (
             "Software residue and post-uninstall questions should start with the software-footprint-review report, "
             "which compares current installed-program inventory against execution, persistence, user-activity, "
             "presence, download, and filesystem remnants."
         )
         source_order = [
-            {"order": 1, "source": "generated_reports", "tools": ["relic_read_existing_report", "relic_generate_report"], "report_names": report_names},
-            {"order": 2, "source": "software_footprint_review", "tools": ["relic_generate_report"], "report_names": ["software-footprint-review"]},
-            {"order": 3, "source": "parsed_artifact_tables", "tools": ["relic_search_artifacts"], "tables": ["registry_artifacts", "prefetch_items", "amcache_entries", "shimcache_entries", "srum_records", "shortcut_items"]},
+            {"order": 1, "source": "generated_reports", "tools": ["perceptor_read_existing_report", "perceptor_generate_report"], "report_names": report_names},
+            {"order": 2, "source": "software_footprint_review", "tools": ["perceptor_generate_report"], "report_names": ["software-footprint-review"]},
+            {"order": 3, "source": "parsed_artifact_tables", "tools": ["perceptor_search_artifacts"], "tables": ["registry_artifacts", "prefetch_items", "amcache_entries", "shimcache_entries", "srum_records", "shortcut_items"]},
         ]
     elif _contains_any(
         text,
@@ -5147,40 +5122,40 @@ def _route_mcp_question(
         intent = "execution"
         report_purpose = "execution"
         report_names = ["event-interpretation", "suspicious-executions", "execution", "execution-correlation", "program-provenance", "software-footprint-review"]
-        recommended_tool = "relic_read_existing_report"
-        fallback_tools = ["relic_generate_report", "relic_query_suspicious_executions", "relic_lead_search", "relic_query_registry_activity"]
+        recommended_tool = "perceptor_read_existing_report"
+        fallback_tools = ["perceptor_generate_report", "perceptor_query_suspicious_executions", "perceptor_lead_search", "perceptor_query_registry_activity"]
         reason = "Execution and high-value event-log questions should start with generated event-interpretation, execution, and suspicious-execution reports."
     elif _contains_any(text, {"bits", "background intelligent transfer", "qmgr", "download transfer", "transfer job", "onedrive setup", "component updater"}):
         intent = "bits_activity"
         report_purpose = "full"
         report_names = ["bits-activity"]
-        recommended_tool = "relic_generate_report"
-        fallback_tools = ["relic_timeline_window", "relic_search_artifacts", "relic_read_existing_report"]
+        recommended_tool = "perceptor_generate_report"
+        fallback_tools = ["perceptor_timeline_window", "perceptor_search_artifacts", "perceptor_read_existing_report"]
         reason = (
             "BITS questions should use the BITS activity report because it correlates timestamped BITS Client EVTX rows "
             "with qmgr database/carved rows by exact job ID or URL where available."
         )
         source_order = [
-            {"order": 1, "source": "generated_reports", "tools": ["relic_read_existing_report", "relic_generate_report"], "report_names": report_names},
-            {"order": 2, "source": "bits_activity_table", "tools": ["relic_generate_report"], "report_names": report_names},
-            {"order": 3, "source": "normalized_master_timeline", "tools": ["relic_timeline_window"], "tables": ["bits_activity"]},
-            {"order": 4, "source": "parsed_artifact_tables", "tools": ["relic_search_artifacts"], "tables": ["bits_activity", "bits_jobs", "evtx_events"]},
+            {"order": 1, "source": "generated_reports", "tools": ["perceptor_read_existing_report", "perceptor_generate_report"], "report_names": report_names},
+            {"order": 2, "source": "bits_activity_table", "tools": ["perceptor_generate_report"], "report_names": report_names},
+            {"order": 3, "source": "normalized_master_timeline", "tools": ["perceptor_timeline_window"], "tables": ["bits_activity"]},
+            {"order": 4, "source": "parsed_artifact_tables", "tools": ["perceptor_search_artifacts"], "tables": ["bits_activity", "bits_jobs", "evtx_events"]},
         ]
     elif _contains_any(text, {"clipboard", "copied", "paste", "pasted", "clip history", "cloud clipboard", "sync across devices"}):
         intent = "clipboard_activity"
         report_purpose = "full"
         report_names = ["clipboard", "windows-activities"]
-        recommended_tool = "relic_read_existing_report"
-        fallback_tools = ["relic_generate_report", "relic_timeline_window", "relic_search_artifacts"]
+        recommended_tool = "perceptor_read_existing_report"
+        fallback_tools = ["perceptor_generate_report", "perceptor_timeline_window", "perceptor_search_artifacts"]
         reason = (
             "Clipboard questions should start with the dedicated clipboard report, then use the normalized master timeline "
             "for time-window context and Windows Activities only as secondary clipboard-adjacent evidence."
         )
         source_order = [
-            {"order": 1, "source": "generated_reports", "tools": ["relic_read_existing_report", "relic_generate_report"], "report_names": ["clipboard"]},
-            {"order": 2, "source": "clipboard_items_table", "tools": ["relic_generate_report", "relic_search_artifacts"], "tables": ["clipboard_items"]},
-            {"order": 3, "source": "normalized_master_timeline", "tools": ["relic_timeline_window"], "tables": ["clipboard_items"]},
-            {"order": 4, "source": "secondary_activity_artifacts", "tools": ["relic_generate_report", "relic_search_artifacts"], "tables": ["windows_activities", "browser_site_settings", "evtx_events"]},
+            {"order": 1, "source": "generated_reports", "tools": ["perceptor_read_existing_report", "perceptor_generate_report"], "report_names": ["clipboard"]},
+            {"order": 2, "source": "clipboard_items_table", "tools": ["perceptor_generate_report", "perceptor_search_artifacts"], "tables": ["clipboard_items"]},
+            {"order": 3, "source": "normalized_master_timeline", "tools": ["perceptor_timeline_window"], "tables": ["clipboard_items"]},
+            {"order": 4, "source": "secondary_activity_artifacts", "tools": ["perceptor_generate_report", "perceptor_search_artifacts"], "tables": ["windows_activities", "browser_site_settings", "evtx_events"]},
         ]
     elif _contains_any(
         text,
@@ -5201,53 +5176,53 @@ def _route_mcp_question(
         intent = "mapped_network_paths"
         report_purpose = "network"
         report_names = ["mapped-network-paths", "examiner-edge-artifacts"]
-        recommended_tool = "relic_generate_report"
-        fallback_tools = ["relic_read_existing_report", "relic_search_artifacts", "relic_timeline_window"]
+        recommended_tool = "perceptor_generate_report"
+        fallback_tools = ["perceptor_read_existing_report", "perceptor_search_artifacts", "perceptor_timeline_window"]
         reason = (
             "Mapped network path questions should start with the mapped-network-paths report, "
             "which decodes MountPoints2 ##host#share#path registry keys into UNC-style network paths."
         )
         source_order = [
-            {"order": 1, "source": "generated_reports", "tools": ["relic_read_existing_report", "relic_generate_report"], "report_names": report_names},
-            {"order": 2, "source": "registry_artifacts_mountpoints2_rows", "tools": ["relic_search_artifacts"], "tables": ["registry_artifacts"]},
-            {"order": 3, "source": "normalized_master_timeline", "tools": ["relic_timeline_window"], "tables": ["registry_artifacts"]},
+            {"order": 1, "source": "generated_reports", "tools": ["perceptor_read_existing_report", "perceptor_generate_report"], "report_names": report_names},
+            {"order": 2, "source": "registry_artifacts_mountpoints2_rows", "tools": ["perceptor_search_artifacts"], "tables": ["registry_artifacts"]},
+            {"order": 3, "source": "normalized_master_timeline", "tools": ["perceptor_timeline_window"], "tables": ["registry_artifacts"]},
         ]
     elif _contains_any(text, {"$secure", "$sds", "$sii", "$sdh", "security descriptor", "security descriptors", "ntfs permissions", "file permissions", "acl", "access control list"}):
         intent = "ntfs_security_descriptors"
         report_purpose = "filesystem"
         report_names = ["ntfs-security-descriptors", "non-standard-ads"]
-        recommended_tool = "relic_generate_report"
-        fallback_tools = ["relic_read_existing_report", "relic_search_artifacts", "relic_timeline_window"]
+        recommended_tool = "perceptor_generate_report"
+        fallback_tools = ["perceptor_read_existing_report", "perceptor_search_artifacts", "perceptor_timeline_window"]
         reason = "NTFS permission/security descriptor questions should start with the ntfs-security-descriptors report, which inventories $Secure stream presence and states the current structured parsing caveat."
         source_order = [
-            {"order": 1, "source": "generated_reports", "tools": ["relic_read_existing_report", "relic_generate_report"], "report_names": report_names},
-            {"order": 2, "source": "mft_security_descriptor_stream_rows", "tools": ["relic_search_artifacts"], "tables": ["mft_entries"]},
-            {"order": 3, "source": "normalized_master_timeline", "tools": ["relic_timeline_window"], "tables": ["mft_entries"]},
+            {"order": 1, "source": "generated_reports", "tools": ["perceptor_read_existing_report", "perceptor_generate_report"], "report_names": report_names},
+            {"order": 2, "source": "mft_security_descriptor_stream_rows", "tools": ["perceptor_search_artifacts"], "tables": ["mft_entries"]},
+            {"order": 3, "source": "normalized_master_timeline", "tools": ["perceptor_timeline_window"], "tables": ["mft_entries"]},
         ]
     elif _contains_any(text, {"alternate data stream", "alternate data streams", "non-standard ads", "non standard ads", "hidden stream", "ads stream"}):
         intent = "non_standard_ads"
         report_purpose = "filesystem"
         report_names = ["non-standard-ads"]
-        recommended_tool = "relic_generate_report"
-        fallback_tools = ["relic_read_existing_report", "relic_search_artifacts", "relic_timeline_window"]
+        recommended_tool = "perceptor_generate_report"
+        fallback_tools = ["perceptor_read_existing_report", "perceptor_search_artifacts", "perceptor_timeline_window"]
         reason = "Alternate data stream questions should start with the non-standard-ads report, which filters MFT ADS rows beyond common Zone.Identifier/system streams."
         source_order = [
-            {"order": 1, "source": "generated_reports", "tools": ["relic_read_existing_report", "relic_generate_report"], "report_names": report_names},
-            {"order": 2, "source": "mft_ads_rows", "tools": ["relic_search_artifacts"], "tables": ["mft_entries"]},
-            {"order": 3, "source": "normalized_master_timeline", "tools": ["relic_timeline_window"], "tables": ["mft_entries"]},
+            {"order": 1, "source": "generated_reports", "tools": ["perceptor_read_existing_report", "perceptor_generate_report"], "report_names": report_names},
+            {"order": 2, "source": "mft_ads_rows", "tools": ["perceptor_search_artifacts"], "tables": ["mft_entries"]},
+            {"order": 3, "source": "normalized_master_timeline", "tools": ["perceptor_timeline_window"], "tables": ["mft_entries"]},
         ]
     elif _contains_any(text, {"anydesk", "teamviewer", "logmein", "screenconnect", "connectwise control", "splashtop", "rustdesk", "remote access tool", "remote support tool"}):
         intent = "remote_access_tool_logs"
         report_purpose = "remote_access"
         report_names = ["remote-access-tool-logs", "remote-access", "suspicious-executions"]
-        recommended_tool = "relic_generate_report"
-        fallback_tools = ["relic_read_existing_report", "relic_search_artifacts", "relic_timeline_window"]
+        recommended_tool = "perceptor_generate_report"
+        fallback_tools = ["perceptor_read_existing_report", "perceptor_search_artifacts", "perceptor_timeline_window"]
         reason = "Remote access tool questions should start with the remote-access-tool-logs report, then correlate with remote-access sessions and execution artifacts."
         source_order = [
-            {"order": 1, "source": "generated_reports", "tools": ["relic_read_existing_report", "relic_generate_report"], "report_names": report_names},
-            {"order": 2, "source": "messaging_records_remote_access_logs", "tools": ["relic_search_artifacts"], "tables": ["messaging_records", "messaging_messages"]},
-            {"order": 3, "source": "execution_and_filesystem_candidates", "tools": ["relic_search_artifacts"], "tables": ["mft_entries", "prefetch_items", "amcache_entries", "shimcache_entries"]},
-            {"order": 4, "source": "normalized_master_timeline", "tools": ["relic_timeline_window"]},
+            {"order": 1, "source": "generated_reports", "tools": ["perceptor_read_existing_report", "perceptor_generate_report"], "report_names": report_names},
+            {"order": 2, "source": "messaging_records_remote_access_logs", "tools": ["perceptor_search_artifacts"], "tables": ["messaging_records", "messaging_messages"]},
+            {"order": 3, "source": "execution_and_filesystem_candidates", "tools": ["perceptor_search_artifacts"], "tables": ["mft_entries", "prefetch_items", "amcache_entries", "shimcache_entries"]},
+            {"order": 4, "source": "normalized_master_timeline", "tools": ["perceptor_timeline_window"]},
         ]
     elif _contains_any(
         text,
@@ -5282,8 +5257,8 @@ def _route_mcp_question(
         intent = "examiner_edge_artifacts"
         report_purpose = "full"
         report_names = ["examiner-edge-artifacts", "mapped-network-paths"]
-        recommended_tool = "relic_generate_report"
-        fallback_tools = ["relic_read_existing_report", "relic_search_artifacts", "relic_timeline_window"]
+        recommended_tool = "perceptor_generate_report"
+        fallback_tools = ["perceptor_read_existing_report", "perceptor_search_artifacts", "perceptor_timeline_window"]
         reason = (
             "These high-value edge artifact questions should start with the examiner-edge-artifacts report, "
             "which consolidates Sticky Notes, notifications, NetworkList, outbound RDP, MountPoints2, task XML, "
@@ -5291,78 +5266,78 @@ def _route_mcp_question(
             "applications, and SwiftKey/InputPersonalization leads."
         )
         source_order = [
-            {"order": 1, "source": "generated_reports", "tools": ["relic_read_existing_report", "relic_generate_report"], "report_names": report_names},
-            {"order": 2, "source": "parsed_artifact_tables", "tools": ["relic_search_artifacts"], "tables": ["package_artifacts", "telemetry_artifacts", "registry_artifacts"]},
-            {"order": 3, "source": "normalized_master_timeline", "tools": ["relic_timeline_window"], "tables": ["package_artifacts", "telemetry_artifacts", "registry_artifacts"]},
+            {"order": 1, "source": "generated_reports", "tools": ["perceptor_read_existing_report", "perceptor_generate_report"], "report_names": report_names},
+            {"order": 2, "source": "parsed_artifact_tables", "tools": ["perceptor_search_artifacts"], "tables": ["package_artifacts", "telemetry_artifacts", "registry_artifacts"]},
+            {"order": 3, "source": "normalized_master_timeline", "tools": ["perceptor_timeline_window"], "tables": ["package_artifacts", "telemetry_artifacts", "registry_artifacts"]},
         ]
     elif has_wifi_terms:
         intent = "wifi_network_activity"
         first_source = "parsed_network_artifact_tables"
         report_purpose = "network"
         report_names = ["case-overview", "user-intent"]
-        recommended_tool = "relic_query_wifi_activity" if wants_activity_during_connection else "relic_query_wifi_activity"
-        fallback_tools = ["relic_timeline_window", "relic_timeline", "relic_search_artifacts", "relic_read_existing_report"]
+        recommended_tool = "perceptor_query_wifi_activity" if wants_activity_during_connection else "perceptor_query_wifi_activity"
+        fallback_tools = ["perceptor_timeline_window", "perceptor_timeline", "perceptor_search_artifacts", "perceptor_read_existing_report"]
         reason = (
             "Wi-Fi questions need reconciliation across WLAN/NetworkProfile EVTX, SRUM, and NetworkList registry rows. "
             "For questions about activity while connected to a network, resolve all matching connect/disconnect sessions first, then "
-            "call relic_activity_windows with session_activity_plan.aggregate_tool so normalized timeline and direct artifact activity are aggregated across sessions. "
+            "call perceptor_activity_windows with session_activity_plan.aggregate_tool so normalized timeline and direct artifact activity are aggregated across sessions. "
             "Do not pass the SSID as contains unless the user specifically asks to filter timeline results to that SSID."
         )
         source_order = [
-            {"order": 1, "source": "parsed_network_artifact_tables", "tools": ["relic_query_wifi_activity"]},
+            {"order": 1, "source": "parsed_network_artifact_tables", "tools": ["perceptor_query_wifi_activity"]},
             {
                 "order": 2,
                 "source": "normalized_master_timeline",
-                "tools": ["relic_activity_windows", "relic_timeline_window"],
+                "tools": ["perceptor_activity_windows", "perceptor_timeline_window"],
                 "requires": "Use session_activity_plan.aggregate_tool unless the user specified one session or exact start/end; interval events are matched by overlap. Leave contains unset and filter_within_window false for broad activity questions.",
             },
-            {"order": 3, "source": "generated_reports", "tools": ["relic_read_existing_report", "relic_discover_report_exports"], "report_names": report_names},
-            {"order": 4, "source": "artifact_drilldown", "tools": ["relic_search_artifacts", "domain query tools"]},
-            {"order": 5, "source": "broad_artifact_search", "tools": ["relic_search_artifacts"]},
+            {"order": 3, "source": "generated_reports", "tools": ["perceptor_read_existing_report", "perceptor_discover_report_exports"], "report_names": report_names},
+            {"order": 4, "source": "artifact_drilldown", "tools": ["perceptor_search_artifacts", "domain query tools"]},
+            {"order": 5, "source": "broad_artifact_search", "tools": ["perceptor_search_artifacts"]},
         ]
     elif _contains_any(text, {"timeline", "when", "between", "around", "date", "time window"}):
         intent = "timeline"
         report_names = ["case-overview", "external-storage", "suspicious-executions", "memory-analysis"]
-        recommended_tool = "relic_read_existing_report"
-        fallback_tools = ["relic_timeline_window", "relic_timeline", "relic_search_artifacts"]
+        recommended_tool = "perceptor_read_existing_report"
+        fallback_tools = ["perceptor_timeline_window", "perceptor_timeline", "perceptor_search_artifacts"]
         reason = "Timeline questions should use generated summaries first, then normalized timeline windows."
     elif _contains_any(text, {"memory", "ram", "pagefile", "hiberfil", "swapfile", "crash dump", "dump"}):
         intent = "memory"
         report_purpose = "memory"
         report_names = ["memory-analysis", "memory-artifacts", "memory-disk-correlations", "crash-dump-analysis"]
-        recommended_tool = "relic_read_existing_report"
-        fallback_tools = ["relic_query_memory_artifacts", "relic_search_artifacts"]
+        recommended_tool = "perceptor_read_existing_report"
+        fallback_tools = ["perceptor_query_memory_artifacts", "perceptor_search_artifacts"]
         reason = "Memory questions should start with generated memory reports and combined memory/disk artifacts."
     elif _contains_any(text, {"cloud", "onedrive", "google drive", "dropbox", "sync", "virtual drive"}):
         intent = "cloud_storage"
         report_purpose = "cloud"
         report_names = ["cloud-artifacts", "opened-from-cloud-storage", "cloud-mounts", "cloud-removable-overlap"]
-        recommended_tool = "relic_read_existing_report"
-        fallback_tools = ["relic_query_cloud_artifacts", "relic_query_opened_from_cloud_storage", "relic_lead_search"]
+        recommended_tool = "perceptor_read_existing_report"
+        fallback_tools = ["perceptor_query_cloud_artifacts", "perceptor_query_opened_from_cloud_storage", "perceptor_lead_search"]
         reason = "Cloud questions should start with cloud-specific reports because virtual drives can mimic removable media."
     elif _contains_any(text, {"browser", "download", "history", "cache", "webcache", "firefox", "chrome", "edge"}):
         intent = "browser"
         report_names = ["user-intent", "case-overview"]
-        recommended_tool = "relic_read_existing_report"
-        fallback_tools = ["relic_query_browser_activity", "relic_lead_search"]
+        recommended_tool = "perceptor_read_existing_report"
+        fallback_tools = ["perceptor_query_browser_activity", "perceptor_lead_search"]
         reason = "Browser questions should start with generated review reports, then browser activity tables."
     elif _contains_any(text, {"email", "mail", "message", "communications", "chat", "teams", "outlook"}):
         intent = "communications"
         report_names = ["user-intent", "case-overview"]
-        recommended_tool = "relic_read_existing_report"
-        fallback_tools = ["relic_query_communications", "relic_lead_search"]
+        recommended_tool = "perceptor_read_existing_report"
+        fallback_tools = ["perceptor_query_communications", "perceptor_lead_search"]
         reason = "Communication questions should start with existing review reports and then communications tables."
     elif explicit_processing:
         intent = "processing"
         first_source = "case_state"
-        recommended_tool = "relic_case_readiness"
-        fallback_tools = ["relic_profile_preview", "relic_process_image", "relic_run_profile", "relic_import_triage_zip"]
+        recommended_tool = "perceptor_case_readiness"
+        fallback_tools = ["perceptor_profile_preview", "perceptor_process_image", "perceptor_run_profile", "perceptor_import_triage_zip"]
         reason = "Processing requests should verify readiness and workspace health before starting a gated job."
         source_order = [
-            {"order": 1, "source": "readiness_and_workspace_health", "tools": ["relic_case_readiness", "relic_workspace_health"]},
-            {"order": 2, "source": "case_state", "tools": ["relic_case_evidence_map", "relic_workspace_map"]},
-            {"order": 3, "source": "processing_preview", "tools": ["relic_profile_preview", "relic_doctor"]},
-            {"order": 4, "source": "processing_job", "tools": ["relic_process_image", "relic_run_profile", "relic_import_triage_zip"], "requires_explicit_user_request": True},
+            {"order": 1, "source": "readiness_and_workspace_health", "tools": ["perceptor_case_readiness", "perceptor_workspace_health"]},
+            {"order": 2, "source": "case_state", "tools": ["perceptor_case_evidence_map", "perceptor_workspace_map"]},
+            {"order": 3, "source": "processing_preview", "tools": ["perceptor_profile_preview", "perceptor_doctor"]},
+            {"order": 4, "source": "processing_job", "tools": ["perceptor_process_image", "perceptor_run_profile", "perceptor_import_triage_zip"], "requires_explicit_user_request": True},
         ]
 
     processing_requested = explicit_processing or wants_recovery
@@ -5403,9 +5378,9 @@ def _route_mcp_question(
         "reason": reason,
         "guardrails": [
             "Use existing generated reports before raw artifact queries when a report can answer the question.",
-            "Use filesystem_entries through relic_query_evidence_contents for any file-listing or drive-contents question.",
-            "Use relic_query_wifi_activity for Wi-Fi, WLAN, SSID, or network-connection questions so EVTX, SRUM, and registry evidence are reconciled.",
-            "Use relic_search_content for file-content, document-text, body-text, attachment-text, or indexed-content search questions.",
+            "Use filesystem_entries through perceptor_query_evidence_contents for any file-listing or drive-contents question.",
+            "Use perceptor_query_wifi_activity for Wi-Fi, WLAN, SSID, or network-connection questions so EVTX, SRUM, and registry evidence are reconciled.",
+            "Use perceptor_search_content for file-content, document-text, body-text, attachment-text, or indexed-content search questions.",
             "Use parsed artifact tables before resources, packet files, or direct image tooling.",
             "Use processing, mounts, FLS, or recovery tools only after the user explicitly asks for that work and MCP processing is enabled.",
             "Do not reveal credentials or send data to external AI unless the corresponding MCP startup gate is enabled.",
@@ -5512,37 +5487,37 @@ def _dedupe_resource_rows(resources: list[dict[str, Any]]) -> list[dict[str, Any
 
 def _mcp_workflow_guide() -> dict[str, Any]:
     steps = [
-        {"order": 1, "tool": "relic_route_question", "purpose": "Classify the examiner question and follow the returned source-of-truth order."},
-        {"order": 2, "tool": "relic_case_readiness", "purpose": "Check doctor, workspace health, readiness, progress, and resume signals."},
-        {"order": 3, "tool": "relic_workspace_map", "purpose": "Get cases, evidence, reports, packets, progress manifests, and active jobs."},
-        {"order": 4, "tool": "relic_case_evidence_map", "purpose": "Review computers, images, report resources, memory sources, jobs, and processing state for one case."},
-        {"order": 5, "tool": "relic_read_existing_report", "purpose": "For report-backed questions, read an existing generated report first and treat it as the source of truth."},
-        {"order": 6, "tool": "relic_discover_report_exports", "purpose": "Find generated reports and packets by purpose and tags before querying lower-level artifacts."},
-        {"order": 7, "tool": "relic_case_runbook", "purpose": "Get safe next commands and reasons based on current case state."},
-        {"order": 8, "tool": "relic_artifact_search_sources", "purpose": "Check which source tables, fields, and row counts are available for search."},
-        {"order": 9, "tool": "relic_query_evidence_contents", "purpose": "For evidence contents, drive contents, volume contents, or file-listing questions, query generated filesystem_entries first before considering live image, mount, or SleuthKit processing."},
-        {"order": 10, "tool": "relic_query_wifi_activity", "purpose": "For Wi-Fi, WLAN, SSID, or network-connection questions, reconcile WLAN/NetworkProfile EVTX, SRUM, and NetworkList registry evidence before broad timeline search."},
-        {"order": 11, "tool": "relic_lead_search", "purpose": "Run preset execution, USB, cloud, document, browser, or communications searches after existing reports have been checked."},
-        {"order": 12, "tool": "relic_search_content", "purpose": "Search OpenSearch indexed file contents, document text, message bodies, attachments, and Windows Search indexed content after report context has been checked."},
-        {"order": 13, "tool": "relic_search_artifacts", "purpose": "Run ad hoc artifact searches with user, computer, source, and time filters after existing reports have been checked."},
+        {"order": 1, "tool": "perceptor_route_question", "purpose": "Classify the examiner question and follow the returned source-of-truth order."},
+        {"order": 2, "tool": "perceptor_case_readiness", "purpose": "Check doctor, workspace health, readiness, progress, and resume signals."},
+        {"order": 3, "tool": "perceptor_workspace_map", "purpose": "Get cases, evidence, reports, packets, progress manifests, and active jobs."},
+        {"order": 4, "tool": "perceptor_case_evidence_map", "purpose": "Review computers, images, report resources, memory sources, jobs, and processing state for one case."},
+        {"order": 5, "tool": "perceptor_read_existing_report", "purpose": "For report-backed questions, read an existing generated report first and treat it as the source of truth."},
+        {"order": 6, "tool": "perceptor_discover_report_exports", "purpose": "Find generated reports and packets by purpose and tags before querying lower-level artifacts."},
+        {"order": 7, "tool": "perceptor_case_runbook", "purpose": "Get safe next commands and reasons based on current case state."},
+        {"order": 8, "tool": "perceptor_artifact_search_sources", "purpose": "Check which source tables, fields, and row counts are available for search."},
+        {"order": 9, "tool": "perceptor_query_evidence_contents", "purpose": "For evidence contents, drive contents, volume contents, or file-listing questions, query generated filesystem_entries first before considering live image, mount, or SleuthKit processing."},
+        {"order": 10, "tool": "perceptor_query_wifi_activity", "purpose": "For Wi-Fi, WLAN, SSID, or network-connection questions, reconcile WLAN/NetworkProfile EVTX, SRUM, and NetworkList registry evidence before broad timeline search."},
+        {"order": 11, "tool": "perceptor_lead_search", "purpose": "Run preset execution, USB, cloud, document, browser, or communications searches after existing reports have been checked."},
+        {"order": 12, "tool": "perceptor_search_content", "purpose": "Search OpenSearch indexed file contents, document text, message bodies, attachments, and Windows Search indexed content after report context has been checked."},
+        {"order": 13, "tool": "perceptor_search_artifacts", "purpose": "Run ad hoc artifact searches with user, computer, source, and time filters after existing reports have been checked."},
         {"order": 14, "tool": "drilldown tools", "purpose": "Follow search result drilldown hints into file, USB, user, timeline, registry, cloud, communication, shortcut, or remote-access context."},
-        {"order": 15, "tool": "relic_write_search_packet", "purpose": "Save repeatable searches, result hash sets, case counts, and result sets as examiner work product."},
-        {"order": 16, "tool": "relic_rerun_search_packet", "purpose": "Rerun saved searches and compare added, removed, changed, and unchanged results."},
-        {"order": 17, "tool": "relic_write_review_packet", "purpose": "Save selected findings, notes, timeline slices, and report URIs."},
-        {"order": 18, "tool": "relic_write_report_bundle", "purpose": "Export a review bundle for handoff or UI consumption. Use purpose=review for MCP/operator review packs."},
+        {"order": 15, "tool": "perceptor_write_search_packet", "purpose": "Save repeatable searches, result hash sets, case counts, and result sets as examiner work product."},
+        {"order": 16, "tool": "perceptor_rerun_search_packet", "purpose": "Rerun saved searches and compare added, removed, changed, and unchanged results."},
+        {"order": 17, "tool": "perceptor_write_review_packet", "purpose": "Save selected findings, notes, timeline slices, and report URIs."},
+        {"order": 18, "tool": "perceptor_write_report_bundle", "purpose": "Export a review bundle for handoff or UI consumption. Use purpose=review for MCP/operator review packs."},
     ]
     return {
         "title": "Perceptor MCP Workflow Guide",
         "summary": {"step_count": len(steps)},
         "steps": steps,
         "recommended_presets": ["execution", "usb", "cloud", "documents", "browser", "communications"],
-        "route_first_tool": "relic_route_question",
-        "reports_first_tool": "relic_read_existing_report",
-        "evidence_contents_first_tool": "relic_query_evidence_contents",
-        "filesystem_first_tool": "relic_query_filesystem_listings",
-        "wifi_activity_tool": "relic_query_wifi_activity",
-        "content_search_tool": "relic_search_content",
-        "packet_tools": ["relic_write_search_packet", "relic_list_search_packets", "relic_rerun_search_packet", "relic_write_review_packet", "relic_list_review_packets"],
+        "route_first_tool": "perceptor_route_question",
+        "reports_first_tool": "perceptor_read_existing_report",
+        "evidence_contents_first_tool": "perceptor_query_evidence_contents",
+        "filesystem_first_tool": "perceptor_query_filesystem_listings",
+        "wifi_activity_tool": "perceptor_query_wifi_activity",
+        "content_search_tool": "perceptor_search_content",
+        "packet_tools": ["perceptor_write_search_packet", "perceptor_list_search_packets", "perceptor_rerun_search_packet", "perceptor_write_review_packet", "perceptor_list_review_packets"],
     }
 
 
@@ -5627,7 +5602,7 @@ def _resource_uri(relative: Path) -> str:
 
 
 def _path_from_resource_uri(root: Path, uri: str) -> Path:
-    prefixes = ("perceptor://workspace/", "relic://workspace/")
+    prefixes = ("perceptor://workspace/",)
     prefix = next((candidate for candidate in prefixes if uri.startswith(candidate)), "")
     if not prefix:
         raise ValueError(f"Unsupported resource URI: {uri}")

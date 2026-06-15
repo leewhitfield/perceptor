@@ -48,7 +48,7 @@ def test_cli_search_progress_and_gap_reports(tmp_path, monkeypatch, capsys):
     assert cli_main(["--root", str(paths.root), "report", "artifact-search", "--case", "case-1", "--query", "powershell", "--format", "json"]) == 0
     artifact = json.loads(capsys.readouterr().out)
     assert artifact["summary"]["result_count"] == 1
-    assert artifact["results"][0]["drilldown"]["tool"] == "relic_file_dossier"
+    assert artifact["results"][0]["drilldown"]["tool"] == "perceptor_file_dossier"
     assert artifact["results"][0]["score"] > 0
 
     assert cli_main(["--root", str(paths.root), "report", "lead-search", "--case", "case-1", "--preset", "usb", "--query", "powershell", "--format", "json"]) == 0
