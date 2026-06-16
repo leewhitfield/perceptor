@@ -43,6 +43,29 @@ def test_add_image_records_evidence_kind_and_raw_mountability(tmp_path):
     values = {(row["source"], row["key"]): row["value"] for row in db.image_metadata(case_id=case.id, image_id=image.id)}
     assert values[("evidence", "kind")] == "raw"
     assert values[("evidence", "mountable")] == "True"
+    hashes = db.image_hashes(case_id=case.id, image_id=image.id)
+    assert {row["algorithm"] for row in hashes} == {"md5", "sha1", "sha256"}
+    verifications = db.conn.execute(
+        "SELECT algorithm, status FROM image_verifications WHERE case_id = ? AND image_id = ?",
+        (case.id, image.id),
+    ).fetchall()
+    assert {row["algorithm"] for row in verifications} == {"md5", "sha1", "sha256"}
+    assert {row["status"] for row in verifications} == {"verified"}
+
+
+def test_add_image_records_aff4_verification_gap(tmp_path):
+    aff4_path = tmp_path / "disk.aff4"
+    aff4_path.write_bytes(b"aff4 placeholder")
+    db, _paths, case, image = _case_with_image(tmp_path, aff4_path)
+
+    verification = db.conn.execute(
+        "SELECT algorithm, status, error FROM image_verifications WHERE case_id = ? AND image_id = ?",
+        (case.id, image.id),
+    ).fetchone()
+    assert verification["algorithm"] == "aff4"
+    assert verification["status"] in {"unsupported", "verified", "mismatch", "error"}
+    if verification["status"] == "unsupported":
+        assert "AFF4 verification" in verification["error"]
 
 
 def test_add_image_records_virtual_disk_preparation_metadata(tmp_path):

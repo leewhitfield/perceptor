@@ -4,7 +4,7 @@ import uuid
 from pathlib import Path
 
 from .db import Database
-from .image_integrity import image_hash_rows
+from .image_integrity import image_hash_rows, record_initial_image_verification
 from .image_metadata import collect_image_metadata
 from .models import Computer, EvidenceImage
 from .paths import WorkspacePaths
@@ -49,6 +49,9 @@ def add_image(
     paths.ensure_case_tree(case_id)
     resolved = image_path.resolve()
     image = db.add_image(image_id, case_id, resolved, computer_id=computer_id)
-    db.replace_image_metadata(case_id=case_id, image_id=image.id, rows=collect_image_metadata(resolved))
-    db.replace_image_hashes(case_id=case_id, image_id=image.id, rows=image_hash_rows(resolved))
+    metadata_rows = collect_image_metadata(resolved)
+    hash_rows = image_hash_rows(resolved)
+    db.replace_image_metadata(case_id=case_id, image_id=image.id, rows=metadata_rows)
+    db.replace_image_hashes(case_id=case_id, image_id=image.id, rows=hash_rows)
+    record_initial_image_verification(db, case_id=case_id, image_id=image.id, metadata_rows=metadata_rows, hash_rows=hash_rows)
     return image

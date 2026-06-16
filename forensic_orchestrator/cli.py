@@ -461,6 +461,7 @@ def _structured_memory_rows_from_csv(
 
 def _cloud_or_memory_evidence_ids(
     db: Database,
+    paths: WorkspacePaths,
     *,
     case_id: str,
     evidence_path: Path,
@@ -483,8 +484,8 @@ def _cloud_or_memory_evidence_ids(
     else:
         db.get_computer(computer_id, case_id)
     if image_id is None:
-        image_id = str(uuid.uuid4())
-        db.add_image(image_id, case_id, evidence_path, computer_id=computer_id)
+        image = add_image(db, paths, case_id, evidence_path, computer_id=computer_id)
+        image_id = image.id
     else:
         db.get_image(image_id, case_id)
     return computer_id, image_id
@@ -2194,6 +2195,7 @@ def run_memory_processing_profile(
             extract_metadata = result.payload.get("extract_metadata") if isinstance(result.payload.get("extract_metadata"), dict) else {}
             local_computer_id, local_image_id = _cloud_or_memory_evidence_ids(
                 db,
+                paths,
                 case_id=case_id,
                 evidence_path=source,
                 computer_id=computer_id,
@@ -5528,6 +5530,7 @@ def run(args: argparse.Namespace) -> int:
                 raise OrchestratorError(f"Carve source does not exist: {source}")
             computer_id, image_id = _cloud_or_memory_evidence_ids(
                 db,
+                paths,
                 case_id=args.case_id,
                 evidence_path=source,
                 computer_id=args.computer_id,
@@ -5700,6 +5703,7 @@ def run(args: argparse.Namespace) -> int:
                 raise OrchestratorError(f"Carve source does not exist: {source}")
             computer_id, image_id = _cloud_or_memory_evidence_ids(
                 db,
+                paths,
                 case_id=args.case_id,
                 evidence_path=source,
                 computer_id=args.computer_id,
@@ -5834,6 +5838,7 @@ def run(args: argparse.Namespace) -> int:
             source = Path(args.path)
             computer_id, image_id = _cloud_or_memory_evidence_ids(
                 db,
+                paths,
                 case_id=args.case_id,
                 evidence_path=source,
                 computer_id=args.computer_id,
@@ -5896,6 +5901,7 @@ def run(args: argparse.Namespace) -> int:
                 return 0
             computer_id, image_id = _cloud_or_memory_evidence_ids(
                 db,
+                paths,
                 case_id=args.case_id,
                 evidence_path=source,
                 computer_id=args.computer_id,
@@ -5999,6 +6005,7 @@ def run(args: argparse.Namespace) -> int:
             source = Path(args.path)
             computer_id, image_id = _cloud_or_memory_evidence_ids(
                 db,
+                paths,
                 case_id=args.case_id,
                 evidence_path=source,
                 computer_id=args.computer_id,
@@ -6099,6 +6106,7 @@ def run(args: argparse.Namespace) -> int:
                 scan_source = source
                 computer_id, image_id = _cloud_or_memory_evidence_ids(
                     db,
+                    paths,
                     case_id=args.case_id,
                     evidence_path=scan_source,
                     computer_id=args.computer_id,
@@ -6203,6 +6211,7 @@ def run(args: argparse.Namespace) -> int:
                 raise OrchestratorError(f"Structured memory source does not exist: {source}")
             computer_id, image_id = _cloud_or_memory_evidence_ids(
                 db,
+                paths,
                 case_id=args.case_id,
                 evidence_path=source,
                 computer_id=args.computer_id,
@@ -6306,6 +6315,7 @@ def run(args: argparse.Namespace) -> int:
             source = Path(args.path)
             computer_id, image_id = _cloud_or_memory_evidence_ids(
                 db,
+                paths,
                 case_id=args.case_id,
                 evidence_path=source,
                 computer_id=args.computer_id,
