@@ -4,6 +4,7 @@ from pathlib import Path
 
 import duckdb
 
+import forensic_orchestrator.reports as reports_module
 from forensic_orchestrator.common_dialog import rebuild_common_dialog_items
 from forensic_orchestrator.copied_indicators import rebuild_copied_file_indicators
 from forensic_orchestrator.analytics_query import query_one, query_rows
@@ -1384,6 +1385,27 @@ def test_memory_disk_correlations_report_dedupes_memory_path_matches(tmp_path):
     assert report["correlations"][0]["match_type"] == "path"
     assert report["correlations"][0]["disk_table"] == "mft_entries"
     assert "Memory and Disk Correlations" in markdown
+
+
+def test_memory_disk_correlations_skips_disk_refs_when_no_memory_hits(tmp_path, monkeypatch):
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    db.create_computer(computer_id="computer-1", case_id=case.id, label="Desktop")
+    db.add_image("image-1", case.id, Path("/evidence/desktop.E01"), computer_id="computer-1")
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("disk references should not be collected without memory hits")
+
+    monkeypatch.setattr(reports_module, "_memory_disk_reference_rows", fail_if_called)
+
+    report = memory_disk_correlations_report(db, case.id, limit=10000)
+
+    assert report["summary"]["memory_hit_count"] == 0
+    assert report["summary"]["disk_reference_count"] == 0
+    assert report["summary"]["correlation_count"] == 0
+    assert report["correlations"] == []
+    assert report["summary"]["candidate_limits"]["memory_hit_limit"] == 5000
+    assert report["summary"]["candidate_limits"]["disk_reference_limit"] == 2500
 
 
 def test_storage_policy_report_counts_content_heavy_tables_and_output_files(tmp_path):

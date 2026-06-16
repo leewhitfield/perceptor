@@ -619,9 +619,10 @@ def case_executive_summary_report(
     *,
     limit: int = 25,
     memory_disk_report: dict[str, Any] | None = None,
+    overview_report: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     memory_disk = memory_disk_report or memory_disk_correlations_report(db, case_id, limit=max(limit * 10, 250))
-    overview = case_overview_report(db, case_id, limit=limit, memory_disk_report=memory_disk)
+    overview = overview_report or case_overview_report(db, case_id, limit=limit, memory_disk_report=memory_disk)
     suspicious = overview.get("top_suspicious_executions") if isinstance(overview.get("top_suspicious_executions"), list) else []
     gaps = overview.get("top_evidence_gaps") if isinstance(overview.get("top_evidence_gaps"), list) else []
     memory_findings = overview.get("memory_findings") if isinstance(overview.get("memory_findings"), list) else []
@@ -25538,6 +25539,8 @@ def memory_credentials_markdown(report: dict[str, Any]) -> str:
 
 def memory_disk_correlations_report(db: Database, case_id: str, *, limit: int = 100) -> dict[str, Any]:
     db.get_case(case_id)
+    memory_hit_limit = min(max(limit * 5, 1000), 5000)
+    disk_reference_limit = min(max(limit * 2, 1000), 2500)
     memory_hits = _query_report_rows(
         db,
         case_id,
@@ -25550,9 +25553,31 @@ def memory_disk_correlations_report(db: Database, case_id: str, *, limit: int = 
         ORDER BY hit_category, source_artifact_type, source_path
         LIMIT ?
         """,
-        (case_id, max(limit * 20, 1000)),
+        (case_id, memory_hit_limit),
     )
-    disk_refs = _memory_disk_reference_rows(db, case_id, max_rows=5000)
+    if not memory_hits:
+        return {
+            "case_id": case_id,
+            "summary": {
+                "memory_hit_count": 0,
+                "disk_reference_count": 0,
+                "correlation_count": 0,
+                "families": {},
+                "match_types": {},
+                "candidate_limits": {
+                    "memory_hit_limit": memory_hit_limit,
+                    "disk_reference_limit": disk_reference_limit,
+                },
+            },
+            "correlations": [],
+            "total_returned": 0,
+            "caveats": [
+                "No memory string hits were available, so disk reference collection was skipped.",
+                "Memory evidence corroborates that strings existed in memory or support files; it does not prove user action by itself.",
+                "Credential-looking memory hits are reviewed separately because most token/password term hits are labels, code names, or public metadata.",
+            ],
+        }
+    disk_refs = _memory_disk_reference_rows(db, case_id, max_rows=disk_reference_limit)
     correlations: list[dict[str, Any]] = []
     for hit in memory_hits:
         extracted = _memory_extracted_indicators(hit.get("string_value"))
@@ -25590,6 +25615,10 @@ def memory_disk_correlations_report(db: Database, case_id: str, *, limit: int = 
             "correlation_count": len(correlations),
             "families": _count_by_key(correlations, "disk_artifact_family"),
             "match_types": _count_by_key(correlations, "match_type"),
+            "candidate_limits": {
+                "memory_hit_limit": memory_hit_limit,
+                "disk_reference_limit": disk_reference_limit,
+            },
         },
         "correlations": correlations,
         "total_returned": len(correlations),

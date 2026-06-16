@@ -1251,6 +1251,18 @@ def write_case_report_bundle(
     def overview() -> dict[str, object]:
         return cached("overview", lambda: case_overview_report(db, case_id, limit=limit, memory_disk_report=memory_disk()))  # type: ignore[return-value]
 
+    def executive() -> dict[str, object]:
+        return cached(
+            "executive",
+            lambda: case_executive_summary_report(
+                db,
+                case_id,
+                limit=limit,
+                memory_disk_report=memory_disk(),
+                overview_report=overview(),
+            ),
+        )  # type: ignore[return-value]
+
     def credentials() -> dict[str, object]:
         return cached("credentials", lambda: memory_credentials_report(db, case_id, limit=limit))  # type: ignore[return-value]
 
@@ -1310,7 +1322,7 @@ def write_case_report_bundle(
         ("next-actions", "json", "Next actions", lambda: case_next_actions_report(db, case_id, limit=limit)),
         ("workspace-map", "json", "Workspace map", lambda: _workspace_map_report(db, _workspace_paths_from_case(db, case_id), case_id=case_id, limit=limit)),
         ("artifact-search-sources", "json", "Artifact search sources", lambda: artifact_search_source_inventory_report(db, case_id)),
-        ("executive-summary", "json", "Executive summary", lambda: case_executive_summary_report(db, case_id, limit=limit, memory_disk_report=memory_disk())),
+        ("executive-summary", "json", "Executive summary", lambda: executive()),
         ("case-overview", "json", "Case overview", lambda: overview()),
         ("evidence-gaps", "json", "Evidence gaps", lambda: gaps()),
         ("memory-analysis", "json", "Memory analysis", lambda: memory_analysis_report(db, case_id, limit=limit)),
@@ -1382,7 +1394,7 @@ def write_case_report_bundle(
         written.append({"name": stem, "title": title, "path": str(path), "format": extension})
     markdown_export_builders: list[tuple[str, str, Callable[[], str]]] = [
         ("activity-digest", "Activity digest Markdown", lambda: case_activity_digest_markdown(case_activity_digest_report(db, case_id, limit=limit))),
-        ("executive-summary", "Executive summary Markdown", lambda: case_executive_summary_markdown(case_executive_summary_report(db, case_id, limit=limit, memory_disk_report=memory_disk()))),
+        ("executive-summary", "Executive summary Markdown", lambda: case_executive_summary_markdown(executive())),
         ("case-overview", "Case overview Markdown", lambda: case_overview_markdown(overview())),
         ("evidence-gaps", "Evidence gaps Markdown", lambda: evidence_gaps_markdown(gaps())),
         ("memory-analysis", "Memory analysis Markdown", lambda: memory_analysis_markdown(memory_analysis_report(db, case_id, limit=limit))),
