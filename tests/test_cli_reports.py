@@ -105,6 +105,9 @@ def test_cli_search_progress_and_gap_reports(tmp_path, monkeypatch, capsys):
     assert cli_main(["--root", str(paths.root), "report", "next-actions", "--case", "case-1", "--format", "json"]) == 0
     actions = json.loads(capsys.readouterr().out)
     assert actions["case_id"] == "case-1"
+    priorities = [int(row["priority"]) for row in actions["actions"]]
+    assert priorities == sorted(priorities, reverse=True)
+    assert all(not str(row.get("detail") or "").startswith("{") for row in actions["actions"])
 
     assert cli_main(["--root", str(paths.root), "report", "activity-digest", "--case", "case-1", "--format", "json"]) == 0
     digest = json.loads(capsys.readouterr().out)

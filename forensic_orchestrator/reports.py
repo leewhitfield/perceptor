@@ -36531,11 +36531,14 @@ def case_next_actions_report(db: Database, case_id: str, *, limit: int = 25) -> 
     readiness = processing_readiness_report(db, case_id, limit=limit)
     for item in readiness.get("items") or readiness.get("checks") or []:
         if isinstance(item, dict) and str(item.get("status") or "").casefold() in {"needs_action", "failed", "missing"}:
+            detail = str(item.get("next_step") or item.get("summary") or item.get("message") or "").strip()
+            if not detail:
+                continue
             add(
-                10,
+                90,
                 "readiness",
-                str(item.get("label") or item.get("name") or "Readiness item needs action"),
-                str(item.get("summary") or item.get("details") or ""),
+                str(item.get("title") or item.get("label") or item.get("name") or "Readiness item needs action"),
+                detail,
                 f"perceptor --root <workspace> report processing-readiness --case {case_id}",
                 item,
             )
@@ -36543,7 +36546,7 @@ def case_next_actions_report(db: Database, case_id: str, *, limit: int = 25) -> 
     gaps = evidence_gaps_report(db, case_id, limit=limit)
     for gap in gaps.get("gaps") or []:
         severity = str(gap.get("severity") or "")
-        priority = 20 if severity == "error" else 30 if severity == "warning" else 60
+        priority = 85 if severity == "error" else 60 if severity == "warning" else 20
         add(
             priority,
             "evidence_gap",
@@ -36556,7 +36559,7 @@ def case_next_actions_report(db: Database, case_id: str, *, limit: int = 25) -> 
     unmapped = unmapped_imports_report(db, case_id, limit=limit)
     if int((unmapped.get("summary") or {}).get("unmapped_count") or 0):
         add(
-            25,
+            75,
             "parser_gap",
             "Unmapped live-response CSVs need parser review",
             f"{unmapped['summary']['unmapped_count']} unsupported CSV imports were recorded.",
@@ -36567,7 +36570,7 @@ def case_next_actions_report(db: Database, case_id: str, *, limit: int = 25) -> 
     suspicious = suspicious_executions_report(db, case_id, limit=limit)
     for finding in (suspicious.get("findings") or suspicious.get("items") or [])[:5]:
         add(
-            35,
+            70,
             "suspicious_execution",
             str(finding.get("application") or finding.get("display_path") or "Suspicious execution finding"),
             str(finding.get("reason") or finding.get("summary") or ""),
@@ -36579,7 +36582,7 @@ def case_next_actions_report(db: Database, case_id: str, *, limit: int = 25) -> 
     for device in (storage.get("devices") or storage.get("storage_devices") or [])[:5]:
         if device.get("file_activity_count") or device.get("matched_file_count") or device.get("serial_reliability") == "fake_or_generated":
             add(
-                45,
+                65,
                 "external_storage",
                 str(device.get("display_name") or device.get("serial") or "External storage lead"),
                 str(device.get("summary") or device.get("serial_reliability") or ""),
@@ -36587,7 +36590,7 @@ def case_next_actions_report(db: Database, case_id: str, *, limit: int = 25) -> 
                 device,
             )
 
-    actions.sort(key=lambda row: (int(row["priority"]), str(row["category"]), str(row["title"])))
+    actions.sort(key=lambda row: (int(row["priority"]), str(row["category"]), str(row["title"])), reverse=True)
     returned = actions[:limit]
     return {"case_id": case_id, "actions": returned, "summary": {"action_count": len(returned), "total_action_count": len(actions), "limit": limit}}
 
