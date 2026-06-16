@@ -111,4 +111,8 @@ def test_cli_search_progress_and_gap_reports(tmp_path, monkeypatch, capsys):
     assert digest["case_id"] == "case-1"
 
     assert cli_main(["--root", str(paths.root), "report", "activity-digest", "--case", "case-1", "--format", "md"]) == 0
-    assert "# Case Activity Digest" in capsys.readouterr().out
+    digest_md = capsys.readouterr().out
+    assert "# Case Activity Digest" in digest_md
+    assert "| Priority | Category | Title | Detail |" in digest_md
+    assert "## External Storage" in digest_md
+    assert '{"serial"' not in digest_md

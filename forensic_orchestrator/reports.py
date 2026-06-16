@@ -36492,7 +36492,20 @@ def case_activity_digest_markdown(report: dict[str, Any]) -> str:
     _markdown_digest_rows(lines, "Next Actions", report.get("next_actions"), ("priority", "category", "title", "detail"))
     _markdown_digest_rows(lines, "Recent Timeline", report.get("recent_timeline"), ("timestamp", "source", "event_type", "summary"))
     _markdown_digest_rows(lines, "Suspicious Executions", report.get("suspicious_executions"), ("application", "display_path", "reason", "summary"))
-    _markdown_digest_rows(lines, "External Storage", report.get("external_storage"), ("display_name", "serial", "volume_serial_number", "serial_reliability"))
+    _markdown_digest_rows(
+        lines,
+        "External Storage",
+        report.get("external_storage"),
+        (
+            "device_identity",
+            "raw_serial",
+            "volume_identity",
+            "cross_computer_confidence",
+            "first_observed_utc",
+            "last_observed_utc",
+            "file_activity_count",
+        ),
+    )
     _markdown_digest_rows(lines, "Opened From Removable Media", report.get("opened_from_removable_media"), ("timestamp", "file_path", "user_profile", "evidence"))
     _markdown_digest_rows(lines, "Opened From Cloud Storage", report.get("opened_from_cloud_storage"), ("timestamp", "file_path", "provider", "user_profile"))
     _markdown_digest_rows(lines, "Evidence Gaps", report.get("evidence_gaps"), ("severity", "title", "summary", "recommendation"))
@@ -36730,11 +36743,26 @@ def _markdown_digest_rows(lines: list[str], title: str, rows: Any, columns: tupl
     if not isinstance(rows, list) or not rows:
         lines.append("- None")
         return
+    lines.append("| " + " | ".join(column.replace("_", " ").title() for column in columns) + " |")
+    lines.append("| " + " | ".join("---" for _ in columns) + " |")
     for row in rows[:25]:
         if not isinstance(row, dict):
             continue
-        parts = [str(row.get(column) or "") for column in columns if row.get(column) not in (None, "")]
-        lines.append(f"- {' | '.join(parts) if parts else json.dumps(row, default=str)}")
+        values = [_markdown_table_cell(row.get(column)) for column in columns]
+        if not any(values):
+            fallback = json.dumps(row, default=str)
+            values = [fallback[:500]] + ["" for _ in columns[1:]]
+        lines.append("| " + " | ".join(values) + " |")
+
+
+def _markdown_table_cell(value: Any) -> str:
+    if value in (None, ""):
+        return ""
+    if isinstance(value, (dict, list, tuple)):
+        value = json.dumps(value, default=str)
+    text = str(value).replace("\r", " ").replace("\n", " ")
+    text = text.replace("|", "\\|")
+    return text.strip()
 
 
 def _table_has_column(db: Database, table: str, column: str) -> bool:
