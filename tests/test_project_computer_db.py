@@ -6,6 +6,7 @@ import pytest
 
 from forensic_orchestrator.db import Database
 from forensic_orchestrator.evidence import add_image
+import forensic_orchestrator.image_integrity as image_integrity_module
 from forensic_orchestrator.image_integrity import verify_image_hashes
 from forensic_orchestrator.paths import WorkspacePaths
 from forensic_orchestrator.reports import (
@@ -79,6 +80,35 @@ def test_add_image_records_and_verifies_image_hashes(tmp_path):
 
     assert result["status"] == "mismatch"
     assert db.image_verifications(case_id=case.id, image_id=image.id)[0]["status"] == "mismatch"
+
+
+def test_verify_existing_ewf_image_uses_internal_hash_metadata(tmp_path, monkeypatch):
+    monkeypatch.setattr(image_integrity_module, "which", lambda _name: None)
+    db = Database(tmp_path / "orchestrator.sqlite3")
+    case = db.create_case("case-1", tmp_path / "cases" / "case-1")
+    image_path = tmp_path / "evidence.E01"
+    image_path.write_bytes(b"fake ewf bytes")
+    image = db.add_image("image-1", case.id, image_path)
+    db.replace_image_metadata(
+        case_id=case.id,
+        image_id=image.id,
+        rows=[
+            {"source": "evidence", "key": "kind", "value": "ewf", "path": str(image_path)},
+            {
+                "source": "ewfinfo",
+                "key": "digest_hash_information.md5",
+                "value": "38b7132c94d61407446e16fb2879baf2",
+                "path": str(image_path),
+            },
+        ],
+    )
+
+    result = verify_image_hashes(db, case_id=case.id, image_id=image.id)
+
+    assert result["status"] == "unsupported"
+    verification = db.image_verifications(case_id=case.id, image_id=image.id)[0]
+    assert verification["algorithm"] == "ewf"
+    assert verification["status"] == "unsupported"
 
 
 def test_process_timings_record_start_end_and_report(tmp_path):

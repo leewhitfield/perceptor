@@ -213,6 +213,17 @@ def _record_aff4_verification(db: Database, *, case_id: str, image_id: str, imag
 
 def verify_image_hashes(db: Database, *, case_id: str, image_id: str) -> dict[str, Any]:
     image = db.get_image(image_id, case_id)
+    suffix = image.path.suffix.lower()
+    if suffix.startswith(".e") and suffix[2:].isdigit():
+        return _record_ewf_verification(
+            db,
+            case_id=case_id,
+            image_id=image_id,
+            image_path=image.path,
+            metadata_rows=db.image_metadata(case_id=case_id, image_id=image_id),
+        )
+    if suffix == ".aff4":
+        return _record_aff4_verification(db, case_id=case_id, image_id=image_id, image_path=image.path)
     expected_rows = db.image_hashes(case_id=case_id, image_id=image_id)
     algorithms = tuple(str(row["algorithm"]) for row in expected_rows if row.get("digest"))
     verified_at = utc_now()
